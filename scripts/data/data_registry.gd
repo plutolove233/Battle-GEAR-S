@@ -22,52 +22,73 @@ var last_error: String = ""
 
 func load_all() -> Dictionary:
 	last_error = ""
-	action_cards = _load_array_by_id(PATHS.action_cards)
-	event_cards = _load_array_by_id(PATHS.event_cards)
-	equipment_parts = _load_array_by_id(PATHS.equipment_parts)
-	equipment_weapons = _load_array_by_id(PATHS.equipment_weapons)
-	mech_frames = _load_array_by_id(PATHS.mech_frames)
-	history_nodes = _load_array_by_id(PATHS.history_nodes)
-	tutorial_campaign = _load_dictionary(PATHS.tutorial_campaign)
+	var loaded_action_cards := _load_array_by_id(PATHS.action_cards)
 	if last_error != "":
 		return {"ok": false, "message": last_error}
+	var loaded_event_cards := _load_array_by_id(PATHS.event_cards)
+	if last_error != "":
+		return {"ok": false, "message": last_error}
+	var loaded_equipment_parts := _load_array_by_id(PATHS.equipment_parts)
+	if last_error != "":
+		return {"ok": false, "message": last_error}
+	var loaded_equipment_weapons := _load_array_by_id(PATHS.equipment_weapons)
+	if last_error != "":
+		return {"ok": false, "message": last_error}
+	var loaded_mech_frames := _load_array_by_id(PATHS.mech_frames)
+	if last_error != "":
+		return {"ok": false, "message": last_error}
+	var loaded_history_nodes := _load_array_by_id(PATHS.history_nodes)
+	if last_error != "":
+		return {"ok": false, "message": last_error}
+	var loaded_tutorial_campaign := _load_dictionary(PATHS.tutorial_campaign)
+	if last_error != "":
+		return {"ok": false, "message": last_error}
+	action_cards = loaded_action_cards
+	event_cards = loaded_event_cards
+	equipment_parts = loaded_equipment_parts
+	equipment_weapons = loaded_equipment_weapons
+	mech_frames = loaded_mech_frames
+	history_nodes = loaded_history_nodes
+	tutorial_campaign = loaded_tutorial_campaign
 	return {"ok": true, "message": "loaded"}
 
 func get_action_card(id: String) -> Dictionary:
-	return action_cards.get(id, {})
+	return _copy_dictionary(action_cards.get(id, {}))
 
 func get_event_card(id: String) -> Dictionary:
-	return event_cards.get(id, {})
+	return _copy_dictionary(event_cards.get(id, {}))
 
 func get_equipment_part(id: String) -> Dictionary:
-	return equipment_parts.get(id, {})
+	return _copy_dictionary(equipment_parts.get(id, {}))
 
 func get_weapon(id: String) -> Dictionary:
-	return equipment_weapons.get(id, {})
+	return _copy_dictionary(equipment_weapons.get(id, {}))
 
 func get_mech_frame(id: String) -> Dictionary:
-	return mech_frames.get(id, {})
+	return _copy_dictionary(mech_frames.get(id, {}))
 
 func get_history_node(id: String) -> Dictionary:
-	return history_nodes.get(id, {})
+	return _copy_dictionary(history_nodes.get(id, {}))
 
 func get_tutorial_campaign() -> Dictionary:
-	return tutorial_campaign.duplicate(true)
+	return _copy_dictionary(tutorial_campaign)
 
 func get_tutorial_battle() -> Dictionary:
-	return tutorial_campaign.get("tutorial_battle", {}).duplicate(true)
+	return _copy_dictionary(tutorial_campaign.get("tutorial_battle", {}))
 
 func list_action_cards() -> Array:
-	return action_cards.values()
+	return _copy_dictionary_rows(action_cards.values())
 
 func list_parts() -> Array:
-	return equipment_parts.values()
+	return _copy_dictionary_rows(equipment_parts.values())
 
 func list_weapons() -> Array:
-	return equipment_weapons.values()
+	return _copy_dictionary_rows(equipment_weapons.values())
 
 func _load_array_by_id(path: String) -> Dictionary:
 	var rows = _read_json(path)
+	if last_error != "":
+		return {}
 	if typeof(rows) != TYPE_ARRAY:
 		last_error = "%s must contain a JSON array" % path
 		return {}
@@ -88,10 +109,21 @@ func _load_array_by_id(path: String) -> Dictionary:
 
 func _load_dictionary(path: String) -> Dictionary:
 	var value = _read_json(path)
+	if last_error != "":
+		return {}
 	if typeof(value) != TYPE_DICTIONARY:
 		last_error = "%s must contain a JSON object" % path
 		return {}
 	return value
+
+func _copy_dictionary(value: Dictionary) -> Dictionary:
+	return value.duplicate(true)
+
+func _copy_dictionary_rows(rows: Array) -> Array:
+	var copies: Array = []
+	for row in rows:
+		copies.append(_copy_dictionary(row))
+	return copies
 
 func _read_json(path: String):
 	if not FileAccess.file_exists(path):
