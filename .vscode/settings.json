@@ -1,0 +1,9 @@
+{
+	"godotTools.editorPath.godot4": "/Applications/Godot.app/Contents/MacOS/Godot",
+	"godotTools.lsp.serverHost": "127.0.0.1",
+	"godotTools.lsp.serverPort": 6008,
+	"godotTools.lsp.headless": true,
+	"godotTools.lsp.autoReconnect.enabled": true,
+	"godotTools.lsp.autoReconnect.cooldown": 3000,
+	"godotTools.lsp.autoReconnect.attempts": 10
+}

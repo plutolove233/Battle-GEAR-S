@@ -30,3 +30,4 @@ data_*/
 mono_crash.*.json
 __pycache__/
 *.uid
+*.log
