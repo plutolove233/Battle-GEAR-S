@@ -1,0 +1,53 @@
+extends RefCounted
+class_name HexGrid
+
+const DIRECTIONS: Array[Dictionary] = [
+	{"q": 1, "r": 0},
+	{"q": 1, "r": -1},
+	{"q": 0, "r": -1},
+	{"q": -1, "r": 0},
+	{"q": -1, "r": 1},
+	{"q": 0, "r": 1},
+]
+
+static func key(hex: Dictionary) -> String:
+	return "%s,%s" % [int(hex.get("q", 0)), int(hex.get("r", 0))]
+
+static func add(a: Dictionary, b: Dictionary) -> Dictionary:
+	return {"q": int(a.get("q", 0)) + int(b.get("q", 0)), "r": int(a.get("r", 0)) + int(b.get("r", 0))}
+
+static func distance(a: Dictionary, b: Dictionary) -> int:
+	var aq := int(a.get("q", 0))
+	var ar := int(a.get("r", 0))
+	var bq := int(b.get("q", 0))
+	var br := int(b.get("r", 0))
+	var as_ := -aq - ar
+	var bs := -bq - br
+	return int((abs(aq - bq) + abs(ar - br) + abs(as_ - bs)) / 2)
+
+static func neighbors(hex: Dictionary) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for direction in DIRECTIONS:
+		result.append(add(hex, direction))
+	return result
+
+static func generate_radius(radius: int, blocked: Array) -> Array[Dictionary]:
+	var blocked_keys := {}
+	for item in blocked:
+		blocked_keys[key(item)] = true
+	var result: Array[Dictionary] = []
+	for q in range(-radius, radius + 1):
+		var r_min = max(-radius, -q - radius)
+		var r_max = min(radius, -q + radius)
+		for r in range(r_min, r_max + 1):
+			var hex := {"q": q, "r": r}
+			if not blocked_keys.has(key(hex)):
+				result.append(hex)
+	return result
+
+static func contains_hex(tiles: Array, hex: Dictionary) -> bool:
+	var target := key(hex)
+	for tile in tiles:
+		if key(tile) == target:
+			return true
+	return false
