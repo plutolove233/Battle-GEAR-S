@@ -1,0 +1,28 @@
+[
+  {
+    "id": "weapon_001_光束军刀",
+    "name": "光束军刀",
+    "weapon_type": "近战",
+    "rarity": "N",
+    "count": 1,
+    "effect_text": "对此牌使用聚能时，本回合额外使此牌范围+1。",
+    "damage": 12,
+    "range": 2,
+    "durability": 3,
+    "cost": 3,
+    "effect_id": "effect_unimplemented"
+  },
+  {
+    "id": "weapon_002_光束步枪",
+    "name": "光束步枪",
+    "weapon_type": "远程",
+    "rarity": "N",
+    "count": 1,
+    "effect_text": "基础远程武器。",
+    "damage": 10,
+    "range": 4,
+    "durability": 3,
+    "cost": 3,
+    "effect_id": "effect_unimplemented"
+  }
+]
