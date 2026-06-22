@@ -99,6 +99,18 @@ def _row_dict(header: list[str], row: list[str]) -> dict[str, str]:
     return {header[index]: row[index] if index < len(row) else "" for index in range(len(header))}
 
 
+def _has_field_value(row: dict[str, str], fields: list[str]) -> bool:
+    return any(str(row.get(field, "")).strip() for field in fields)
+
+
+def _is_non_data_row(row: dict[str, str], identity_fields: list[str], validation_fields: list[str]) -> bool:
+    if not any(str(value).strip() for value in row.values()):
+        return True
+    if _has_field_value(row, identity_fields):
+        return False
+    return not _has_field_value(row, validation_fields)
+
+
 def export_from_rule_dir(rule_dir: Path, output_dir: Path) -> None:
     action_book = read_xlsx(rule_dir / "行动+事件牌.xlsx")
     equipment_book = read_xlsx(rule_dir / "装备牌+机甲框架.xlsx")
@@ -107,6 +119,8 @@ def export_from_rule_dir(rule_dir: Path, output_dir: Path) -> None:
     action_rows = []
     for index, row in enumerate(action_book["行动牌"][1:], start=1):
         source = _row_dict(action_book["行动牌"][0], row)
+        if _is_non_data_row(source, ["名称"], ["类型", "品质", "效果"]):
+            continue
         name = source.get("名称", "")
         item = {
             "id": normalize_id("action", name, index),
@@ -123,6 +137,8 @@ def export_from_rule_dir(rule_dir: Path, output_dir: Path) -> None:
     event_rows = []
     for index, row in enumerate(action_book["事件牌"][1:], start=1):
         source = _row_dict(action_book["事件牌"][0], row)
+        if _is_non_data_row(source, ["名称"], ["延时", "收益", "品质", "计时方式", "效果"]):
+            continue
         name = source.get("名称", "")
         item = {
             "id": normalize_id("event", name, index),
@@ -141,7 +157,15 @@ def export_from_rule_dir(rule_dir: Path, output_dir: Path) -> None:
     parts = []
     for index, row in enumerate(equipment_book["装备牌部件"][1:], start=1):
         source = _row_dict(equipment_book["装备牌部件"][0], row)
-        mech_name = source.get("机甲名称", "") or parts[-1]["set_name"]
+        if _is_non_data_row(source, ["机甲名称", "位置"], ["品质", "效果", "护甲", "动力", "耐久", "金币"]):
+            continue
+        if source.get("机甲名称", ""):
+            mech_name = source.get("机甲名称", "")
+        elif parts:
+            mech_name = parts[-1]["set_name"]
+        else:
+            row_number = index + 1
+            raise ValueError(f"equipment_parts missing set_name in sheet 装备牌部件 row {row_number}")
         item = {
             "id": normalize_id("part", f"{mech_name}_{source.get('位置', '')}", index),
             "set_name": mech_name,
@@ -161,6 +185,8 @@ def export_from_rule_dir(rule_dir: Path, output_dir: Path) -> None:
     weapons = []
     for index, row in enumerate(equipment_book["装备牌武器"][1:], start=1):
         source = _row_dict(equipment_book["装备牌武器"][0], row)
+        if _is_non_data_row(source, ["武器名称"], ["类型", "品质", "效果", "威力", "范围", "耐久", "金币"]):
+            continue
         item = {
             "id": normalize_id("weapon", source.get("武器名称", ""), index),
             "name": source.get("武器名称", ""),
@@ -178,12 +204,16 @@ def export_from_rule_dir(rule_dir: Path, output_dir: Path) -> None:
         weapons.append(item)
 
     history = []
+    last_history_year = ""
     for index, row in enumerate(history_book["Sheet1"][1:], start=1):
         source = _row_dict(history_book["Sheet1"][0], row)
+        if _is_non_data_row(source, ["事件"], ["纪元", "年份", "月份", "日期", "地点", "标签"]):
+            continue
+        year = source.get("年份", "") or last_history_year
         item = {
             "id": normalize_id("history", source.get("事件", "")[:12], index),
             "era": source.get("纪元", ""),
-            "year": source.get("年份", ""),
+            "year": year,
             "month": source.get("月份", ""),
             "day": source.get("日期", ""),
             "place": source.get("地点", ""),
@@ -191,6 +221,7 @@ def export_from_rule_dir(rule_dir: Path, output_dir: Path) -> None:
             "tag": source.get("标签", ""),
         }
         require_fields(item, ["id", "era", "year", "event"], "history_nodes")
+        last_history_year = item["year"]
         history.append(item)
 
     write_json(output_dir / "cards/action_cards.json", action_rows)
