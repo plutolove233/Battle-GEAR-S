@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**机斗战甲** (Mech Battle Suit) is a Godot 4.6 turn-based tactical mech combat game based on tabletop rules. The project is in the vertical slice phase: a minimal playable loop from menu → loadout → battle → result.
+**机斗战甲** (Battle-GEAR-S) is a Godot 4.6 turn-based tactical mech combat game based on tabletop rules. The project is in the vertical slice phase: a minimal playable loop from menu → loadout → battle → result.
 
 ## Commands
 
@@ -77,4 +77,4 @@ Records have `id`, `name`, `rarity`, and type-specific fields. DataRegistry inde
 
 ## Scope
 
-The vertical slice intentionally excludes: reward progression, collection unlocks, networking, full card effects, shop/event systems, and advanced AI. These are documented in `docs/superpowers/specs/2026-06-22-mech-battle-suit-initialization-design.md` for future phases.
+The vertical slice intentionally excludes: reward progression, collection unlocks, networking, full card effects, shop/event systems, and advanced AI.
