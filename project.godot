@@ -14,6 +14,9 @@ config/name="机斗战甲"
 run/main_scene="res://scenes/app/app_root.tscn"
 config/features=PackedStringArray("4.6", "Forward Plus")
 config/icon="res://icon.svg"
+window/size/viewport_width=1280
+window/size/viewport_height=800
+window/size/resizable=true
 
 [physics]
 

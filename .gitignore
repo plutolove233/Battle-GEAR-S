@@ -5,6 +5,7 @@
 rule/
 .omc/
 .omx/
+.claude/
 */**/superpowers/*
 .DS_Store
 

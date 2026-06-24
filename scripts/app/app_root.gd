@@ -96,13 +96,13 @@ func _show_battle() -> void:
 	_add_button(action_bar, "结束回合", Callable(self, "_end_player_turn"))
 	_add_button(action_bar, "返回主菜单", Callable(self, "_show_main_menu"))
 	battle_board = BattleBoard.new()
-	battle_board.custom_minimum_size = Vector2(640, 430)
+	battle_board.custom_minimum_size = Vector2(1280, 720)
 	battle_board.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	battle_board.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	battle_board.hex_clicked.connect(Callable(self, "_on_battle_hex_clicked"))
 	layout.add_child(battle_board)
 	battle_log = RichTextLabel.new()
-	battle_log.custom_minimum_size = Vector2(640, 150)
+	battle_log.custom_minimum_size = Vector2(1280, 200)
 	battle_log.fit_content = false
 	battle_log.scroll_following = true
 	layout.add_child(battle_log)

@@ -14,6 +14,7 @@ const TEXT_COLOR := Color(0.94, 0.96, 0.98)
 var tiles: Array[Dictionary] = []
 var units: Dictionary = {}
 var hovered_hex: Dictionary = {}
+var background_texture: Texture2D
 
 func configure(new_tiles: Array, new_units: Dictionary) -> void:
 	tiles = []
@@ -21,9 +22,16 @@ func configure(new_tiles: Array, new_units: Dictionary) -> void:
 		if typeof(tile) == TYPE_DICTIONARY:
 			tiles.append(_copy_hex(tile))
 	units = new_units.duplicate(true)
+	_load_background()
 	queue_redraw()
 
+func _load_background() -> void:
+	var path := "res://asset/BattleField/图层1-最底背景图/地图背景图.png"
+	if ResourceLoader.exists(path):
+		background_texture = load(path)
+
 func _draw() -> void:
+	_draw_background()
 	for tile in tiles:
 		var center := _hex_to_pixel(tile)
 		var points := _hex_points(center)
@@ -35,6 +43,15 @@ func _draw() -> void:
 		var unit = units[side]
 		if typeof(unit) == TYPE_DICTIONARY:
 			_draw_unit(String(side), unit)
+
+func _draw_background() -> void:
+	if background_texture == null:
+		return
+	var tex_size: Vector2 = background_texture.get_size()
+	var bg_scale: float = min(size.x / tex_size.x, size.y / tex_size.y)
+	var scaled_size: Vector2 = tex_size * bg_scale
+	var offset: Vector2 = (size - scaled_size) * 0.5
+	draw_texture_rect(background_texture, Rect2(offset, scaled_size), false)
 
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
@@ -63,10 +80,10 @@ func _draw_hex_label(hex: Dictionary, center: Vector2) -> void:
 	draw_string(font, center - text_size * 0.5 + Vector2(0, 4), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.62, 0.68, 0.72))
 
 func _draw_unit(side: String, unit: Dictionary) -> void:
-	var position = unit.get("position", {})
-	if typeof(position) != TYPE_DICTIONARY:
+	var unit_pos = unit.get("position", {})
+	if typeof(unit_pos) != TYPE_DICTIONARY:
 		return
-	var center := _hex_to_pixel(position)
+	var center := _hex_to_pixel(unit_pos)
 	var color := PLAYER_COLOR if side == "player" else ENEMY_COLOR
 	draw_circle(center, 18.0, color)
 	draw_arc(center, 18.0, 0.0, TAU, 48, Color.BLACK, 2.0)
