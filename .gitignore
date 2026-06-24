@@ -3,7 +3,7 @@
 /android/
 
 rule/
-.omx
+.omc/
 .omx/
 */**/superpowers/*
 .DS_Store
