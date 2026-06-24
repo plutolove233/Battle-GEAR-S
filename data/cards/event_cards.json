@@ -1,0 +1,13 @@
+[
+  {
+    "id": "event_001_增援",
+    "name": "增援",
+    "delay": 0,
+    "tone": "正",
+    "rarity": "SR",
+    "count": 4,
+    "timing": "此牌被设置时即刻生效并结算",
+    "effect_text": "选择抽2张行动牌或1张装备牌。",
+    "effect_id": "effect_unimplemented"
+  }
+]

@@ -1,0 +1,41 @@
+[
+  {
+    "id": "part_001_量产装_头部",
+    "set_name": "量产装",
+    "slot": "头部",
+    "rarity": "N",
+    "count": 1,
+    "effect_text": "此牌设置在区域中依然可以卖出。",
+    "armor": 2,
+    "power": 0,
+    "durability": 2,
+    "cost": 2,
+    "effect_id": "effect_unimplemented"
+  },
+  {
+    "id": "part_002_量产装_躯干",
+    "set_name": "量产装",
+    "slot": "躯干",
+    "rarity": "N",
+    "count": 1,
+    "effect_text": "此牌设置在区域中依然可以卖出。",
+    "armor": 3,
+    "power": 2,
+    "durability": 4,
+    "cost": 4,
+    "effect_id": "effect_unimplemented"
+  },
+  {
+    "id": "part_003_量产装_右腿",
+    "set_name": "量产装",
+    "slot": "右腿",
+    "rarity": "N",
+    "count": 1,
+    "effect_text": "此牌设置在区域中依然可以卖出。",
+    "armor": 1,
+    "power": 2,
+    "durability": 2,
+    "cost": 3,
+    "effect_id": "effect_unimplemented"
+  }
+]

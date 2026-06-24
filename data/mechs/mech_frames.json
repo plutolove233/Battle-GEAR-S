@@ -1,0 +1,90 @@
+[
+  {
+    "id": "frame_001_基础框架",
+    "name": "基础框架",
+    "faction": "联邦",
+    "life": 25,
+    "effect_text": "每设置有1张名称带有联邦的装备牌则护甲+1。",
+    "base_slots": {
+      "头部": {
+        "armor": 1,
+        "power": 0
+      },
+      "躯干": {
+        "armor": 3,
+        "power": 1
+      },
+      "右臂": {
+        "armor": 2,
+        "power": 0
+      },
+      "左臂": {
+        "armor": 1,
+        "power": 1
+      },
+      "右腿": {
+        "armor": 0,
+        "power": 1
+      },
+      "左腿": {
+        "armor": 0,
+        "power": 1
+      }
+    },
+    "base_weapons": [
+      {
+        "name": "振动匕首",
+        "weapon_type": "近战",
+        "damage": 10,
+        "range": 2
+      },
+      {
+        "name": "光束手枪",
+        "weapon_type": "远程",
+        "damage": 6,
+        "range": 4
+      }
+    ]
+  },
+  {
+    "id": "frame_002_原始框架",
+    "name": "原始框架",
+    "faction": "帝国",
+    "life": 25,
+    "effect_text": "教学敌方框架。",
+    "base_slots": {
+      "头部": {
+        "armor": 1,
+        "power": 0
+      },
+      "躯干": {
+        "armor": 2,
+        "power": 1
+      },
+      "右臂": {
+        "armor": 1,
+        "power": 1
+      },
+      "左臂": {
+        "armor": 1,
+        "power": 1
+      },
+      "右腿": {
+        "armor": 0,
+        "power": 1
+      },
+      "左腿": {
+        "armor": 0,
+        "power": 1
+      }
+    },
+    "base_weapons": [
+      {
+        "name": "热能战斧",
+        "weapon_type": "近战",
+        "damage": 11,
+        "range": 2
+      }
+    ]
+  }
+]

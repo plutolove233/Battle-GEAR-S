@@ -1,0 +1,53 @@
+{
+  "id": "campaign_001_tutorial",
+  "name": "教学战役",
+  "default_faction": "联邦",
+  "pilots": [
+	{
+	  "id": "pilot_001_克劳德",
+	  "name": "克劳德",
+	  "faction": "联邦",
+	  "rarity": "R",
+	  "attack_limit": 1,
+	  "action_card_limit": 5,
+	  "cost": 0,
+	  "effect_text": "教学用联邦机师。"
+	}
+  ],
+  "tutorial_battle": {
+	"id": "battle_001_tutorial",
+	"name": "首次出击",
+	"turn_limit": 12,
+	"player_start": {
+	  "q": 0,
+	  "r": 0
+	},
+	"enemy_start": {
+	  "q": 3,
+	  "r": 0
+	},
+	"player_frame_id": "frame_001_基础框架",
+	"enemy_frame_id": "frame_002_原始框架",
+	"starting_action_deck": [
+	  "action_001_进攻",
+	  "action_001_进攻",
+	  "action_013_维修",
+      "action_015_推进"
+	],
+	"starting_equipment_pool": [
+	  "part_001_量产装_头部",
+	  "part_002_量产装_躯干",
+	  "weapon_001_光束军刀",
+      "weapon_002_光束步枪"
+	],
+	"map": {
+	  "radius": 3,
+	  "blocked": [
+		{
+		  "q": 1,
+		  "r": -1
+		}
+	  ]
+	}
+  }
+}

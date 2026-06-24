@@ -1,0 +1,47 @@
+[
+  {
+    "id": "action_001_进攻",
+    "name": "进攻",
+    "type": "攻击",
+    "rarity": "N",
+    "count": 14,
+    "effect_text": "选择1把武器对1台范围内的机甲发动攻击。",
+    "effect_id": "basic_attack"
+  },
+  {
+    "id": "action_008_回避",
+    "name": "回避",
+    "type": "迎击",
+    "rarity": "N",
+    "count": 12,
+    "effect_text": "响应对我方的攻击，可以用当前1/2的动力（向下取整）进行移动。",
+    "effect_id": "evade_half_power"
+  },
+  {
+    "id": "action_009_防御",
+    "name": "防御",
+    "type": "迎击",
+    "rarity": "N",
+    "count": 8,
+    "effect_text": "响应对我方的攻击，在本次攻击结算前使机甲护甲+5，减少该攻击产生的1损伤。",
+    "effect_id": "defend_armor_bonus"
+  },
+  {
+    "id": "action_013_维修",
+    "name": "维修",
+    "type": "辅助",
+    "rarity": "N",
+    "count": 8,
+    "effect_text": "移除我方机甲1个区域上的1枚损伤。",
+    "effect_id": "repair_one_marker"
+  },
+  {
+    "id": "action_015_推进",
+    "name": "推进",
+    "type": "辅助",
+    "rarity": "N",
+    "count": 8,
+    "effect_text": "本回合机甲动力+2。",
+    "effect_id": "gain_power_2"
+  }
+]
