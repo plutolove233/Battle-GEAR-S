@@ -3,15 +3,17 @@ class_name BattleBoard
 
 signal hex_clicked(hex: Dictionary)  # 返回 q/r axial 坐标供战斗系统使用
 
-# 网格参数 - flat-top 坐标系（匹配 hex_grid_redrawn_crisp_1536x768.png）
-# 放大格子尺寸以便更清晰可见
-const HEX_RADIUS := 48.0  # 六边形外接圆半径（从32增加到48）
-const HEX_WIDTH := HEX_RADIUS * 2.0        # flat-top 宽度 = 2R
-const HEX_HEIGHT := sqrt(3.0) * HEX_RADIUS  # flat-top 高度 = √3 * R ≈ 83.1
-const STEP_X := HEX_WIDTH * 0.75           # flat-top 水平步长 = 1.5R ≈ 72
-const STEP_Y := HEX_HEIGHT                 # flat-top 垂直步长 ≈ 83.1
+# 网格参数 - flat-top 坐标系
+# 参照样例图放大格子以填满背景区域
+# 24列填满1536像素宽度：STEP_X = 1536/24 = 64，HEX_RADIUS = STEP_X/1.5 ≈ 42.7
+# 但样例图格子更大，使用更大的半径
+const HEX_RADIUS := 64.0  # 六边形外接圆半径（放大到64以匹配样例图）
+const HEX_WIDTH := HEX_RADIUS * 2.0        # flat-top 宽度 = 128
+const HEX_HEIGHT := sqrt(3.0) * HEX_RADIUS  # flat-top 高度 ≈ 110.85
+const STEP_X := HEX_WIDTH * 0.75           # flat-top 水平步长 = 96
+const STEP_Y := HEX_HEIGHT                 # flat-top 垂直步长 ≈ 110.85
 
-# 网格尺寸：24列 x 8行（放大后需要滚动或缩放查看）
+# 网格尺寸：24列 x 8行
 const GRID_COLS := 24
 const GRID_ROWS := 8
 const GRID_ORIGIN := Vector2(HEX_RADIUS, HEX_HEIGHT * 0.5)  # 左上角第一个格子中心
@@ -120,19 +122,26 @@ func _draw() -> void:
 			_draw_unit(String(side), unit)
 
 func _draw_background() -> void:
-	# 先绘制底层地图背景
+	# 计算网格实际需要的尺寸
+	var grid_width := GRID_COLS * STEP_X + HEX_RADIUS
+	var grid_height := GRID_ROWS * STEP_Y + STEP_Y * 0.5
+
+	# 先绘制底层地图背景 - 按网格尺寸缩放填满
 	if base_background_texture != null:
 		var tex_size: Vector2 = base_background_texture.get_size()
-		var bg_scale: float = min(size.x / tex_size.x, size.y / tex_size.y)
+		# 背景图按网格比例放大
+		var bg_scale: float = max(grid_width / tex_size.x, grid_height / tex_size.y)
 		var scaled_size: Vector2 = tex_size * bg_scale
-		var offset: Vector2 = (size - scaled_size) * 0.5
+		# 居中放置
+		var offset: Vector2 = Vector2(0, 0)  # 从左上角开始
 		draw_texture_rect(base_background_texture, Rect2(offset, scaled_size), false)
-	# 再绘制网格背景（半透明叠加）
+
+	# 再绘制网格背景 - 同样按网格尺寸缩放
 	if background_texture != null:
 		var tex_size: Vector2 = background_texture.get_size()
-		var bg_scale: float = min(size.x / tex_size.x, size.y / tex_size.y)
+		var bg_scale: float = max(grid_width / tex_size.x, grid_height / tex_size.y)
 		var scaled_size: Vector2 = tex_size * bg_scale
-		var offset: Vector2 = (size - scaled_size) * 0.5
+		var offset: Vector2 = Vector2(0, 0)
 		draw_texture_rect(background_texture, Rect2(offset, scaled_size), false)
 
 func _gui_input(event: InputEvent) -> void:
@@ -233,25 +242,8 @@ func _grid_to_world(col: int, row: int) -> Vector2:
 	return Vector2(x, y)
 
 func _calculate_grid_origin() -> Vector2:
-	# 根据实际格子范围计算起点
-	if tiles.is_empty():
-		return GRID_ORIGIN
-	var min_col: int = 999
-	var max_col: int = -999
-	var min_row: int = 999
-	var max_row: int = -999
-	for key in tiles.keys():
-		var tile: Dictionary = tiles[key]
-		min_col = mini(min_col, tile.col)
-		max_col = maxi(max_col, tile.col)
-		min_row = mini(min_row, tile.row)
-		max_row = maxi(max_row, tile.row)
-	# flat-top 网格尺寸计算
-	var grid_width := (max_col - min_col + 1) * STEP_X + HEX_RADIUS
-	var grid_height := (max_row - min_row + 1) * STEP_Y + STEP_Y * 0.5  # 额外半个高度因为奇数列偏移
-	var origin_x := (size.x - grid_width) * 0.5 + HEX_RADIUS
-	var origin_y := (size.y - grid_height) * 0.5 + HEX_HEIGHT * 0.5
-	return Vector2(origin_x, origin_y)
+	# 网格从左上角开始，匹配放大的背景图
+	return GRID_ORIGIN
 
 func _world_to_grid(point: Vector2) -> Dictionary:
 	# 反向转换 - 找到最近的格子
