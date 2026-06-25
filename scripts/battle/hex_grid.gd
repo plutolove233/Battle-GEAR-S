@@ -31,6 +31,25 @@ static func neighbors(hex: Dictionary) -> Array[Dictionary]:
 		result.append(add(hex, direction))
 	return result
 
+static func generate_rectangle(cols: int, rows: int, blocked: Array) -> Array[Dictionary]:
+	# 生成矩形网格 (flat-top odd-q offset)
+	# cols = q (列号), rows 范围根据 q 计算（奇数列向下偏移）
+	var blocked_keys := {}
+	for item in blocked:
+		blocked_keys[key(item)] = true
+	var result: Array[Dictionary] = []
+	for q in range(cols):
+		# odd-q: 奇数列向下偏移，所以行范围需要调整
+		var row_start := 0
+		var row_end := rows - 1
+		for r_offset in range(row_start, row_end + 1):
+			# 从偏移坐标反推 axial r
+			var r := r_offset - (q + (q % 2)) / 2
+			var hex := {"q": q, "r": r}
+			if not blocked_keys.has(key(hex)):
+				result.append(hex)
+	return result
+
 static func generate_radius(radius: int, blocked: Array) -> Array[Dictionary]:
 	var blocked_keys := {}
 	for item in blocked:

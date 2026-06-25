@@ -23,7 +23,13 @@ func start_tutorial(data_registry: DataRegistry) -> Dictionary:
 	units = {}
 	if config.is_empty():
 		return {"ok": false, "message": "tutorial battle config is missing"}
-	map_tiles = HexGrid.generate_radius(int(config.map.radius), config.map.get("blocked", []))
+	var config_map = config.get("map", {})
+	if config_map.has("cols") and config_map.has("rows"):
+		# 矩形网格
+		map_tiles = HexGrid.generate_rectangle(int(config_map.cols), int(config_map.rows), config_map.get("blocked", []))
+	else:
+		# 六边形半径（旧格式）
+		map_tiles = HexGrid.generate_radius(int(config_map.get("radius", 3)), config_map.get("blocked", []))
 	units = {
 		"player": _make_unit("player", config.player_frame_id, config.player_start),
 		"enemy": _make_unit("enemy", config.enemy_frame_id, config.enemy_start),

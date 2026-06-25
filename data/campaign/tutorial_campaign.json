@@ -19,12 +19,12 @@
 	"name": "首次出击",
 	"turn_limit": 12,
 	"player_start": {
-	  "q": 0,
-	  "r": 0
+	  "q": 2,
+	  "r": 2
 	},
 	"enemy_start": {
-	  "q": 3,
-	  "r": 0
+	  "q": 20,
+	  "r": 2
 	},
 	"player_frame_id": "frame_001_基础框架",
 	"enemy_frame_id": "frame_002_原始框架",
@@ -32,22 +32,18 @@
 	  "action_001_进攻",
 	  "action_001_进攻",
 	  "action_013_维修",
-      "action_015_推进"
+	  "action_015_推进"
 	],
 	"starting_equipment_pool": [
 	  "part_001_量产装_头部",
 	  "part_002_量产装_躯干",
 	  "weapon_001_光束军刀",
-      "weapon_002_光束步枪"
+	  "weapon_002_光束步枪"
 	],
 	"map": {
-	  "radius": 3,
-	  "blocked": [
-		{
-		  "q": 1,
-		  "r": -1
-		}
-	  ]
+	  "cols": 24,
+	  "rows": 8,
+	  "blocked": []
 	}
   }
 }
