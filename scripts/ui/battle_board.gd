@@ -29,6 +29,8 @@ const BLOCKED_FILL := Color(0.45, 0.05, 0.08, 0.42)
 const SPECIAL_BORDER := Color(0.75, 0.82, 0.95, 0.75)
 const HOVER_FILL := Color(0.16, 0.19, 0.22, 0.15)
 const HOVER_BORDER := Color(0.24, 0.32, 0.38, 0.6)
+const HIGHLIGHT_FILL := Color(0.2, 0.6, 0.3, 0.25)
+const HIGHLIGHT_BORDER := Color(0.3, 0.8, 0.4, 0.7)
 const TEXT_COLOR := Color(0.62, 0.68, 0.72)
 
 const BORDER_WIDTH := 2.0
@@ -39,6 +41,11 @@ var units: Dictionary = {}
 var hovered_hex: Dictionary = {}
 var background_texture: Texture2D  # 网格背景
 var base_background_texture: Texture2D  # 底层地图背景
+var highlighted_hexes: Dictionary = {}  # key: "q,r" → true
+
+# 缩放适配：将 2368×942 的网格缩放到控件实际大小
+var _grid_scale: float = 1.0
+var _grid_offset: Vector2 = Vector2.ZERO  # 居中偏移
 
 func configure(new_tiles: Array, new_units: Dictionary) -> void:
 	# 直接使用战斗系统的 axial 地图，转换为 odd-q 显示
@@ -77,6 +84,7 @@ func configure(new_tiles: Array, new_units: Dictionary) -> void:
 		else:
 			units[side] = unit.duplicate(true)
 	_load_background()
+	_update_grid_transform()
 	queue_redraw()
 
 func _axial_to_grid(q: int, r: int) -> Dictionary:
@@ -86,6 +94,30 @@ func _axial_to_grid(q: int, r: int) -> Dictionary:
 	var col := q
 	var row := r + (q + (q % 2)) / 2
 	return {"col": col, "row": row}
+
+## 网格自然（未缩放）尺寸
+func _grid_natural_size() -> Vector2:
+	var w := GRID_COLS * STEP_X + HEX_RADIUS
+	var h := GRID_ROWS * STEP_Y + STEP_Y * 0.5
+	return Vector2(w, h)
+
+## 根据控件实际大小计算缩放因子和居中偏移
+func _update_grid_transform() -> void:
+	var control_size := get_rect().size
+	if control_size.x <= 0 or control_size.y <= 0:
+		_grid_scale = 1.0
+		_grid_offset = Vector2.ZERO
+		return
+	var natural := _grid_natural_size()
+	var sx := control_size.x / natural.x
+	var sy := control_size.y / natural.y
+	_grid_scale = minf(sx, sy)
+	# 居中放置
+	_grid_offset = (control_size - natural * _grid_scale) * 0.5
+
+## 鼠标屏幕坐标 → 网格自然坐标（逆变换）
+func _screen_to_grid_coords(screen_pos: Vector2) -> Vector2:
+	return (screen_pos - _grid_offset) / _grid_scale
 
 func _load_background() -> void:
 	# 加载网格背景
@@ -98,6 +130,9 @@ func _load_background() -> void:
 		base_background_texture = load(base_path)
 
 func _draw() -> void:
+	_update_grid_transform()
+	# 应用缩放变换：所有后续绘制自动缩放+居中
+	draw_set_transform(_grid_offset, 0.0, Vector2(_grid_scale, _grid_scale))
 	_draw_background()
 	# 绘制所有格子
 	for key in tiles.keys():
@@ -111,8 +146,13 @@ func _draw() -> void:
 		if _same_hex(tile_axial, hovered_hex):
 			fill_color = HOVER_FILL
 			border_color = HOVER_BORDER
+		# 范围高亮（攻击/移动范围）
+		var tile_key := "%s,%s" % [tile.q, tile.r]
+		if highlighted_hexes.has(tile_key):
+			fill_color = HIGHLIGHT_FILL
+			border_color = HIGHLIGHT_BORDER
 		draw_colored_polygon(points, fill_color)
-		draw_polyline(points + PackedVector2Array([points[0]]), border_color, BORDER_WIDTH)
+		draw_polyline(points + PackedVector2Array([points[0]]), border_color, BORDER_WIDTH / _grid_scale)
 		_draw_hex_label(tile, center)
 		_draw_special_icon(tile, center)
 	# 绘制单位
@@ -122,42 +162,32 @@ func _draw() -> void:
 			_draw_unit(String(side), unit)
 
 func _draw_background() -> void:
-	# 计算网格实际需要的尺寸
-	var grid_width := GRID_COLS * STEP_X + HEX_RADIUS
-	var grid_height := GRID_ROWS * STEP_Y + STEP_Y * 0.5
-
-	# 先绘制底层地图背景 - 按网格尺寸缩放填满
+	# 背景纹理按网格自然尺寸绘制，缩放由 draw_set_transform 处理
+	var natural := _grid_natural_size()
 	if base_background_texture != null:
-		var tex_size: Vector2 = base_background_texture.get_size()
-		# 背景图按网格比例放大
-		var bg_scale: float = max(grid_width / tex_size.x, grid_height / tex_size.y)
-		var scaled_size: Vector2 = tex_size * bg_scale
-		# 居中放置
-		var offset: Vector2 = Vector2(0, 0)  # 从左上角开始
-		draw_texture_rect(base_background_texture, Rect2(offset, scaled_size), false)
-
-	# 再绘制网格背景 - 同样按网格尺寸缩放
+		draw_texture_rect(base_background_texture, Rect2(Vector2.ZERO, natural), false)
 	if background_texture != null:
-		var tex_size: Vector2 = background_texture.get_size()
-		var bg_scale: float = max(grid_width / tex_size.x, grid_height / tex_size.y)
-		var scaled_size: Vector2 = tex_size * bg_scale
-		var offset: Vector2 = Vector2(0, 0)
-		draw_texture_rect(background_texture, Rect2(offset, scaled_size), false)
+		draw_texture_rect(background_texture, Rect2(Vector2.ZERO, natural), false)
 
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
-		var next_hover := _valid_hex_at(event.position)
+		var grid_pos := _screen_to_grid_coords(event.position)
+		var next_hover := _valid_hex_at(grid_pos)
 		if not _same_hex(next_hover, hovered_hex):
 			hovered_hex = next_hover
 			queue_redraw()
 	elif event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-			var clicked := _valid_hex_at(event.position)
+			var grid_pos := _screen_to_grid_coords(event.position)
+			var clicked := _valid_hex_at(grid_pos)
 			if not clicked.is_empty():
 				hex_clicked.emit(clicked)
 
 func _notification(what: int) -> void:
-	if what == NOTIFICATION_MOUSE_EXIT:
+	if what == NOTIFICATION_RESIZED:
+		_update_grid_transform()
+		queue_redraw()
+	elif what == NOTIFICATION_MOUSE_EXIT:
 		if not hovered_hex.is_empty():
 			hovered_hex = {}
 			queue_redraw()
@@ -166,33 +196,35 @@ func _draw_hex_label(hex: Dictionary, center: Vector2) -> void:
 	var font := _draw_font()
 	if font == null:
 		return
+	var font_size := int(12.0 / _grid_scale)
 	var text := "%d,%d" % [int(hex.get("q", 0)), int(hex.get("r", 0))]
-	var text_size := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 12)
-	draw_string(font, center - text_size * 0.5 + Vector2(0, 4), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, TEXT_COLOR)
+	var text_size := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
+	draw_string(font, center - text_size * 0.5 + Vector2(0, 4), text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, TEXT_COLOR)
 
 func _draw_special_icon(tile: Dictionary, center: Vector2) -> void:
 	var tile_type: String = tile.get("type", "normal")
 	if tile_type == "normal":
 		return
+	var icon_r := ICON_RADIUS / _grid_scale
+	var line_w := 2.0 / _grid_scale
 	# 绘制特殊点图标
 	match tile_type:
 		"resource":
 			# 黄色菱形
-			var half := ICON_RADIUS
 			var diamond := PackedVector2Array([
-				Vector2(center.x, center.y - half),
-				Vector2(center.x + half, center.y),
-				Vector2(center.x, center.y + half),
-				Vector2(center.x - half, center.y)
+				Vector2(center.x, center.y - icon_r),
+				Vector2(center.x + icon_r, center.y),
+				Vector2(center.x, center.y + icon_r),
+				Vector2(center.x - icon_r, center.y)
 			])
 			draw_colored_polygon(diamond, Color(0.9, 0.75, 0.1, 0.8))
 		"event":
 			# 蓝色圆环
-			draw_arc(center, ICON_RADIUS, 0.0, TAU, 24, Color(0.35, 0.55, 1.0, 0.8), 2.0)
+			draw_arc(center, icon_r, 0.0, TAU, 24, Color(0.35, 0.55, 1.0, 0.8), line_w)
 		"start_player", "start_enemy":
 			# 白色虚线圆环效果（简化为实线）
 			var color := Color(1.0, 1.0, 1.0, 0.7)
-			draw_arc(center, ICON_RADIUS, 0.0, TAU, 24, color, 2.0)
+			draw_arc(center, icon_r, 0.0, TAU, 24, color, line_w)
 
 func _draw_unit(side: String, unit: Dictionary) -> void:
 	var unit_pos = unit.get("position", {})
@@ -202,14 +234,16 @@ func _draw_unit(side: String, unit: Dictionary) -> void:
 	var row: int = int(unit_pos.get("row", 0))
 	var center := _grid_to_world(col, row)
 	var color := PLAYER_START_FILL if side == "player" else ENEMY_START_FILL
-	draw_circle(center, 18.0, color)
-	draw_arc(center, 18.0, 0.0, TAU, 48, Color.BLACK, 2.0)
+	var unit_r := 18.0 / _grid_scale
+	draw_circle(center, unit_r, color)
+	draw_arc(center, unit_r, 0.0, TAU, 48, Color.BLACK, 2.0 / _grid_scale)
 	var font := _draw_font()
 	if font == null:
 		return
 	var label := "我" if side == "player" else "敌"
-	var text_size := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 18)
-	draw_string(font, center - text_size * 0.5 + Vector2(0, 6), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color(0.94, 0.96, 0.98))
+	var font_size := int(18.0 / _grid_scale)
+	var text_size := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
+	draw_string(font, center - text_size * 0.5 + Vector2(0, 6), label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(0.94, 0.96, 0.98))
 
 func _draw_font() -> Font:
 	var font := get_theme_default_font()
@@ -284,3 +318,16 @@ func _same_hex(a: Dictionary, b: Dictionary) -> bool:
 		return a.is_empty() and b.is_empty()
 	# 比较 axial 坐标 (q/r)
 	return int(a.get("q", 0)) == int(b.get("q", 0)) and int(a.get("r", 0)) == int(b.get("r", 0))
+
+## 高亮指定hex列表（攻击/移动范围）
+func highlight_hexes(hexes: Array[Dictionary]) -> void:
+	highlighted_hexes.clear()
+	for hex: Dictionary in hexes:
+		var key: String = "%s,%s" % [int(hex.get("q", 0)), int(hex.get("r", 0))]
+		highlighted_hexes[key] = true
+	queue_redraw()
+
+## 清除高亮
+func clear_highlight() -> void:
+	highlighted_hexes.clear()
+	queue_redraw()

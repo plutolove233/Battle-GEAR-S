@@ -1,3 +1,8 @@
+## BattleState.gd — 战斗状态管理器
+##
+## BattleState 是 app_root 与底层游戏系统之间的桥梁。
+## 公共接口保持与旧版兼容，内部委托给 GameContext/Service 体系。
+## 旧版扁平 units 字典通过兼容层从 GameState 转换。
 extends RefCounted
 class_name BattleState
 
@@ -5,269 +10,541 @@ const HexGrid = preload("res://scripts/battle/hex_grid.gd")
 const BattleMath = preload("res://scripts/battle/battle_math.gd")
 const DataRegistry = preload("res://scripts/data/data_registry.gd")
 
-var registry: DataRegistry
-var config: Dictionary = {}
+# Preloaded class references for type checks and constructors
+const _GameContext = preload("res://scripts/runtime/GameContext.gd")
+const _MechState = preload("res://scripts/runtime/MechState.gd")
+const _PlayerState = preload("res://scripts/runtime/PlayerState.gd")
+const _CardInstance = preload("res://scripts/runtime/CardInstance.gd")
+const _CardDef = preload("res://scripts/card_defs/CardDef.gd")
+const _EquipmentCardDef = preload("res://scripts/card_defs/EquipmentCardDef.gd")
+const _ActionCardDef = preload("res://scripts/card_defs/ActionCardDef.gd")
+const _MechSlotState = preload("res://scripts/runtime/MechSlotState.gd")
+const _GameState = preload("res://scripts/runtime/GameState.gd")
+
+## GameContext：新的依赖注入容器
+var context = null
+
+## 战前选择的装备 ID 列表（由 app_root 在 start_tutorial 前设置）
+var pre_selected_equipment: Array[String] = []
+
+## 兼容字段：供 app_root 和 BattleBoard 读取
 var map_tiles: Array[Dictionary] = []
 var turn_number: int = 1
 var active_side: String = "player"
 var log: Array[Dictionary] = []
 var units: Dictionary = {}
 
-func start_tutorial(data_registry: DataRegistry) -> Dictionary:
+## DataRegistry 引用（兼容旧接口）
+var registry = null
+
+## 攻击是否等待响应（迎击窗口）
+var awaiting_response: bool = false
+var current_attack_id: StringName = &""
+
+
+## ── 初始化 ──
+
+
+func start_tutorial(data_registry) -> Dictionary:
 	registry = data_registry
-	config = registry.get_tutorial_battle()
-	map_tiles = []
-	turn_number = 1
-	active_side = "player"
-	log = []
-	units = {}
-	if config.is_empty():
-		return {"ok": false, "message": "tutorial battle config is missing"}
-	var config_map = config.get("map", {})
-	if config_map.has("cols") and config_map.has("rows"):
-		# 矩形网格
-		map_tiles = HexGrid.generate_rectangle(int(config_map.cols), int(config_map.rows), config_map.get("blocked", []))
-	else:
-		# 六边形半径（旧格式）
-		map_tiles = HexGrid.generate_radius(int(config_map.get("radius", 3)), config_map.get("blocked", []))
-	units = {
-		"player": _make_unit("player", config.player_frame_id, config.player_start),
-		"enemy": _make_unit("enemy", config.enemy_frame_id, config.enemy_start),
-	}
-	_draw_starting_cards("player")
-	_draw_starting_cards("enemy")
-	log.append(BattleMath.make_log("战斗开始", {"battle": config.name}))
+
+	# 创建 GameContext 并初始化所有系统
+	context = _GameContext.new()
+	context.initialize(data_registry)
+
+	# 通过 GameSetupService 创建完整游戏状态
+	var setup_result: Dictionary = context.game_setup_service.setup_tutorial_battle(data_registry)
+	if not setup_result.get("ok", false):
+		return setup_result
+
+	# 同步兼容字段
+	_sync_compat_fields()
+
+	# 注意：build_decks_from_config 已在 GameSetupService.setup_tutorial_battle 中调用，
+	# 此处不再重复调用以避免牌堆被清空重建导致卡牌实例丢失 def
+	var battle_config: Dictionary = data_registry.get_tutorial_battle()
+
+	# 将教学配置中的初始装备放入装备手牌
+	_setup_starting_equipment(battle_config)
+
+	# 自动装备预选装备到玩家机甲
+	for equipment_id: String in pre_selected_equipment:
+		var equip_result: Dictionary = set_equipment("player", equipment_id)
+		if not equip_result.get("ok", false):
+			log.append(BattleMath.make_log("预选装备未设置", {"equipment": equipment_id, "reason": String(equip_result.get("message", ""))}))
+
+	# 敌方自动装备所有装备牌
+	_auto_equip_enemy()
+
+	# 抽初始行动牌
+	_draw_starting_action_cards(battle_config)
+
+	# 同步一次
+	_sync_compat_fields()
+
+	log.append(BattleMath.make_log("战斗开始", {"battle": battle_config.get("name", "")}))
 	return {"ok": true, "message": "started"}
 
-func _make_unit(side: String, frame_id: String, position: Dictionary) -> Dictionary:
-	var frame := registry.get_mech_frame(frame_id)
-	var armor := 0
-	var power := 0
-	for slot in frame.get("base_slots", {}).values():
-		armor += int(slot.get("armor", 0))
-		power += int(slot.get("power", 0))
-	return {
-		"side": side,
-		"frame_id": frame_id,
-		"name": frame.get("name", side),
-		"position": _copy_hex(position),
-		"life": int(frame.get("life", 25)),
-		"max_life": int(frame.get("life", 25)),
-		"armor": armor,
-		"power": power,
-		"max_power": power,
-		"gold": 20,
-		"hand": [],
-		"equipment_hand": config.get("starting_equipment_pool", []).duplicate(),
-		"weapons": frame.get("base_weapons", []).duplicate(true),
-		"damage_markers": {},
-	}
 
-func _draw_starting_cards(side: String) -> void:
-	var deck: Array = config.get("starting_action_deck", []).duplicate()
-	units[side].hand = deck.slice(0, mini(4, deck.size()))
+## ── 回合操作 ──
 
-func _copy_hex(hex: Dictionary) -> Dictionary:
-	return {"q": int(hex.get("q", 0)), "r": int(hex.get("r", 0))}
-
-func _validate_side(side: String) -> Dictionary:
-	return _validate_labeled_side(side, "side")
-
-func _validate_labeled_side(side: String, label: String) -> Dictionary:
-	if units.is_empty():
-		return {"ok": false, "message": "battle is not started"}
-	if not units.has(side):
-		return {"ok": false, "message": "%s is invalid: %s" % [label, side]}
-	return {"ok": true, "message": "valid"}
 
 func start_turn(side: String) -> Dictionary:
-	var validation := _validate_side(side)
-	if not validation.ok:
-		return validation
-	active_side = side
-	units[side].power = units[side].max_power
-	units[side].gold += 2
-	log.append(BattleMath.make_log("%s 回合开始" % units[side].name, {"side": side, "turn": turn_number}))
-	return {"ok": true, "message": "turn_started"}
+	if not context or not context.game_state.players.has(StringName(side)):
+		return {"ok": false, "message": "invalid side: %s" % side}
+
+	var result: Dictionary = context.turn_service.start_turn(StringName(side))
+	_sync_compat_fields()
+	return result
+
 
 func move_unit(side: String, target: Dictionary) -> Dictionary:
-	var validation := _validate_side(side)
-	if not validation.ok:
-		return validation
-	var unit: Dictionary = units[side]
-	if not BattleMath.can_move(unit.position, target, int(unit.power), map_tiles):
-		return {"ok": false, "message": "target is not reachable"}
-	var cost := HexGrid.distance(unit.position, target)
-	unit.position = _copy_hex(target)
-	unit.power -= cost
-	log.append(BattleMath.make_log("%s 移动" % unit.name, {"to": target, "cost": cost}))
-	return {"ok": true, "message": "moved"}
+	if not context:
+		return {"ok": false, "message": "battle not started"}
+	var mech = context.game_state.get_mech_for_player(StringName(side))
+	if not mech:
+		return {"ok": false, "message": "mech not found for side: %s" % side}
 
-func set_equipment(side: String, equipment_id: String) -> Dictionary:
-	var validation := _validate_side(side)
-	if not validation.ok:
-		return validation
-	var unit: Dictionary = units[side]
-	if not unit.equipment_hand.has(equipment_id):
-		return {"ok": false, "message": "equipment is not in hand"}
-	var part := registry.get_equipment_part(equipment_id)
-	var weapon := registry.get_weapon(equipment_id)
-	if not part.is_empty():
-		unit.armor += int(part.armor)
-		unit.max_power += int(part.power)
-		unit.power += int(part.power)
-		unit.equipment_hand.erase(equipment_id)
-		log.append(BattleMath.make_log("%s 设置装备 %s" % [unit.name, part.set_name], {"slot": part.slot}))
-		return {"ok": true, "message": "part_set"}
-	if not weapon.is_empty():
-		unit.weapons.append({
-			"name": weapon.name,
-			"weapon_type": weapon.weapon_type,
-			"damage": weapon.damage,
-			"range": weapon.range,
-		})
-		unit.equipment_hand.erase(equipment_id)
-		log.append(BattleMath.make_log("%s 设置武器 %s" % [unit.name, weapon.name]))
-		return {"ok": true, "message": "weapon_set"}
-	return {"ok": false, "message": "equipment data is missing"}
+	var result: Dictionary = context.map_service.move_mech_to_hex(mech.mech_id, target)
+	_sync_compat_fields()
+	return result
 
-func sell_equipment(side: String, equipment_id: String) -> Dictionary:
-	var validation := _validate_side(side)
-	if not validation.ok:
-		return validation
-	var unit: Dictionary = units[side]
-	if not unit.equipment_hand.has(equipment_id):
-		return {"ok": false, "message": "equipment is not in hand"}
-	var data := registry.get_equipment_part(equipment_id)
-	if data.is_empty():
-		data = registry.get_weapon(equipment_id)
-	if data.is_empty():
-		return {"ok": false, "message": "equipment data is missing"}
-	unit.gold += int(data.get("cost", 0))
-	unit.equipment_hand.erase(equipment_id)
-	log.append(BattleMath.make_log("%s 卖出装备" % unit.name, {"equipment_id": equipment_id}))
-	return {"ok": true, "message": "sold"}
 
 func attack(attacker_side: String, defender_side: String, weapon_index: int) -> Dictionary:
-	var attacker_validation := _validate_labeled_side(attacker_side, "attacker side")
-	if not attacker_validation.ok:
-		return attacker_validation
-	var defender_validation := _validate_labeled_side(defender_side, "defender side")
-	if not defender_validation.ok:
-		return defender_validation
-	var attacker: Dictionary = units[attacker_side]
-	var defender: Dictionary = units[defender_side]
-	if weapon_index < 0 or weapon_index >= attacker.weapons.size():
-		return {"ok": false, "message": "weapon index is invalid"}
-	var weapon: Dictionary = attacker.weapons[weapon_index]
-	if not BattleMath.is_in_range(attacker.position, defender.position, int(weapon.range)):
-		return {"ok": false, "message": "target is out of range"}
-	var result := BattleMath.calculate_attack(int(weapon.damage), int(defender.armor))
-	defender.life = maxi(0, int(defender.life) - int(result.damage))
-	_add_damage_markers(defender, "躯干", int(result.markers))
-	log.append(BattleMath.make_log("%s 攻击 %s" % [attacker.name, defender.name], {
-		"weapon": weapon.name,
-		"damage": result.damage,
-		"markers": result.markers,
-	}))
-	return {"ok": true, "message": "attacked", "damage": result.damage, "markers": result.markers}
+	if not context:
+		return {"ok": false, "message": "battle not started"}
 
-func _add_damage_markers(unit: Dictionary, slot: String, amount: int) -> void:
-	unit.damage_markers[slot] = int(unit.damage_markers.get(slot, 0)) + amount
+	var attacker_mech = context.game_state.get_mech_for_player(StringName(attacker_side))
+	var defender_mech = context.game_state.get_mech_for_player(StringName(defender_side))
+	if not attacker_mech or not defender_mech:
+		return {"ok": false, "message": "invalid side"}
+
+	# 获取武器 ID
+	var weapon_ids: Array[StringName] = attacker_mech.get_weapon_ids()
+	if weapon_index < 0 or weapon_index >= weapon_ids.size():
+		return {"ok": false, "message": "weapon index invalid"}
+
+	# 需要一张攻击牌——简化处理：查找手牌中第一张攻击牌
+	var attack_card_id: StringName = &""
+	var player = context.game_state.players.get(StringName(attacker_side))
+	if player:
+		for card_id: StringName in player.action_hand:
+			var card = context.game_state.cards.get(card_id)
+			if card and card.def is _ActionCardDef and card.def.action_type == &"攻击":
+				attack_card_id = card_id
+				break
+	if attack_card_id == &"":
+		return {"ok": false, "message": "no attack card in hand"}
+
+	# 发动攻击
+	var result: Dictionary = context.attack_service.declare_attack(
+		attacker_mech.mech_id,
+		defender_mech.mech_id,
+		weapon_ids[weapon_index],
+		attack_card_id
+	)
+
+	# 如果进入迎击窗口，标记等待响应
+	if result.get("state", "") == "awaiting_response":
+		awaiting_response = true
+		current_attack_id = result.get("attack_id", &"")
+		# 简化处理：敌方AI自动跳过迎击（后续实现迎击逻辑）
+		if attacker_side == "player":
+			_auto_resolve_response()
+		else:
+			# 敌方攻击时，玩家可以选择迎击——暂时自动跳过
+			_auto_resolve_response()
+		return _finish_attack()
+
+	_sync_compat_fields()
+	return result
+
+
+## 提交迎击响应
+func submit_response(response_card_id: StringName, payload: Dictionary = {}) -> Dictionary:
+	if not awaiting_response or current_attack_id == &"":
+		return {"ok": false, "message": "no attack awaiting response"}
+	context.attack_service.submit_response(current_attack_id, response_card_id, payload)
+	return _finish_attack()
+
+
+## 跳过迎击
+func pass_response() -> Dictionary:
+	return _finish_attack()
+
+
+## ── 装备操作 ──
+
+
+func set_equipment(side: String, equipment_id: String) -> Dictionary:
+	if not context:
+		return {"ok": false, "message": "battle not started"}
+	var player = context.game_state.players.get(StringName(side))
+	var mech = context.game_state.get_mech_for_player(StringName(side))
+	if not player or not mech:
+		return {"ok": false, "message": "invalid side"}
+
+	# 在装备手牌中查找卡牌实例
+	var card_instance_id: StringName = &""
+	for cid: StringName in player.equipment_hand:
+		var hand_card = context.game_state.cards.get(cid)
+		if hand_card and hand_card.def and String(hand_card.def.card_id) == equipment_id:
+			card_instance_id = cid
+			break
+	if card_instance_id == &"":
+		return {"ok": false, "message": "equipment not in hand"}
+
+	# 确定槽位
+	var slot_id: StringName = &""
+	var card = context.game_state.cards.get(card_instance_id)
+	if card and card.def is _EquipmentCardDef:
+		var eq_def = card.def
+		if eq_def.equipment_kind == &"PART":
+			slot_id = eq_def.slot
+		elif eq_def.equipment_kind == &"WEAPON":
+			# 找空武器槽
+			for ws_id: StringName in [&"weapon_1", &"weapon_2"]:
+				if mech.slots.has(ws_id) and not mech.slots[ws_id].equipped_card:
+					slot_id = ws_id
+					break
+			if slot_id == &"":
+				slot_id = &"weapon_1"  # 替换第一个武器槽
+
+	if slot_id == &"":
+		return {"ok": false, "message": "no valid slot"}
+
+	var result: Dictionary = context.card_set_service.set_equipment(
+		StringName(side), card_instance_id, slot_id
+	)
+	_sync_compat_fields()
+	return result
+
+
+func sell_equipment(side: String, equipment_id: String) -> Dictionary:
+	if not context:
+		return {"ok": false, "message": "battle not started"}
+	var player = context.game_state.players.get(StringName(side))
+	if not player:
+		return {"ok": false, "message": "invalid side"}
+
+	var card_instance_id: StringName = &""
+	for cid: StringName in player.equipment_hand:
+		var hand_card = context.game_state.cards.get(cid)
+		if hand_card and hand_card.def and String(hand_card.def.card_id) == equipment_id:
+			card_instance_id = cid
+			break
+	if card_instance_id == &"":
+		return {"ok": false, "message": "equipment not in hand"}
+
+	var result: Dictionary = context.card_set_service.sell_equipment(StringName(side), card_instance_id)
+	_sync_compat_fields()
+	return result
+
+
+## ── 回合结束 ──
+
+
+func end_player_turn() -> Dictionary:
+	if not context:
+		return {"ok": false, "message": "battle not started"}
+
+	# 结束玩家回合
+	context.turn_service.end_turn(&"player")
+	_sync_compat_fields()
+
+	# 检查胜负
+	if get_result().state != "active":
+		return {"ok": true, "message": "player_turn_ended_battle_over"}
+
+	# 敌方回合
+	run_enemy_turn()
+
+	if get_result().state == "active":
+		start_turn("player")
+	return {"ok": true, "message": "player_turn_ended"}
+
 
 func run_enemy_turn() -> Dictionary:
-	var enemy_validation := _validate_labeled_side("enemy", "enemy side")
-	if not enemy_validation.ok:
-		return enemy_validation
-	var player_validation := _validate_labeled_side("player", "player side")
-	if not player_validation.ok:
-		return player_validation
-	var start_result := start_turn("enemy")
-	if not start_result.ok:
-		return start_result
-	var attack_result := attack("enemy", "player", 0)
-	if attack_result.ok:
-		_end_turn("enemy")
-		return {"ok": true, "message": "enemy_attacked"}
-	var enemy: Dictionary = units.enemy
-	var player: Dictionary = units.player
-	var best := _find_first_step_toward(enemy.position, player.position, int(enemy.power))
-	if best != enemy.position:
-		move_unit("enemy", best)
-	_end_turn("enemy")
-	return {"ok": true, "message": "enemy_moved_or_waited"}
+	if not context:
+		return {"ok": false, "message": "battle not started"}
 
+	context.turn_service.start_turn(&"enemy")
+	_sync_compat_fields()
+
+	# 简化AI：尝试攻击，失败则移动
+	var attack_result: Dictionary = attack("enemy", "player", 0)
+	if not attack_result.get("ok", false):
+		# 移动向玩家
+		var enemy_mech = context.game_state.get_mech_for_player(&"enemy")
+		var player_mech = context.game_state.get_mech_for_player(&"player")
+		if enemy_mech and player_mech and enemy_mech.power > 0:
+			var step: Dictionary = _find_first_step_toward(
+				enemy_mech.position, player_mech.position, enemy_mech.power
+			)
+			if HexGrid.distance(enemy_mech.position, step) > 0:
+				move_unit("enemy", step)
+
+	context.turn_service.end_turn(&"enemy")
+	_sync_compat_fields()
+	return {"ok": true, "message": "enemy_turn_done"}
+
+
+## ── 胜负判定 ──
+
+
+func get_result() -> Dictionary:
+	if not context or context.game_state.mechs.is_empty():
+		return {"state": "inactive", "reason": "battle is not started"}
+	return context.victory_service.check_victory()
+
+
+## ── 兼容层：从 GameState 同步到旧版 units 字典 ──
+
+
+func _sync_compat_fields() -> void:
+	if not context:
+		return
+	var gs = context.game_state
+
+	# 同步回合信息
+	turn_number = gs.turn_number
+	active_side = String(gs.active_player_id)
+	log = gs.log.duplicate(true)
+
+	# 同步地图
+	map_tiles.clear()
+	for cell_key: String in gs.map_state.cells:
+		var cell = gs.map_state.cells[cell_key]
+		map_tiles.append({"q": cell.q, "r": cell.r})
+
+	# 从 MechState 构建兼容的 units 字典
+	units.clear()
+	for player_id: StringName in gs.players:
+		var mech = gs.get_mech_for_player(player_id)
+		if not mech:
+			continue
+		var player = gs.players[player_id]
+
+		# 构建武器列表（兼容旧格式）
+		var weapons: Array = []
+		for slot_id: StringName in [&"weapon_1", &"weapon_2"]:
+			if mech.slots.has(slot_id) and mech.slots[slot_id].equipped_card:
+				var w_card = mech.slots[slot_id].equipped_card
+				if w_card.def is _EquipmentCardDef:
+					weapons.append({
+						"name": w_card.def.display_name,
+						"weapon_type": String(w_card.def.weapon_kind),
+						"damage": w_card.def.might,
+						"range": w_card.def.range_value,
+					})
+
+		# 构建损伤标记
+		var damage_markers: Dictionary = {}
+		for slot_id: StringName in mech.slots:
+			var slot = mech.slots[slot_id]
+			if slot.region_damage_tokens > 0:
+				damage_markers[String(slot_id)] = slot.region_damage_tokens
+
+		# 构建装备手牌（card_id列表）
+		var equip_hand: Array = []
+		for cid: StringName in player.equipment_hand:
+			var card = gs.cards.get(cid)
+			if card and card.def:
+				equip_hand.append(String(card.def.card_id))
+
+		# 构建行动牌手牌
+		var action_hand: Array = []
+		for cid: StringName in player.action_hand:
+			var card = gs.cards.get(cid)
+			if card and card.def:
+				action_hand.append(String(card.def.card_id))
+
+		units[String(player_id)] = {
+			"side": String(player_id),
+			"frame_id": String(mech.frame_def.card_id) if mech.frame_def else "",
+			"name": mech.frame_def.display_name if mech.frame_def else String(player_id),
+			"position": mech.position.duplicate(),
+			"life": mech.current_hp,
+			"max_life": mech.max_hp,
+			"armor": mech.get_armor(),
+			"power": mech.power,
+			"max_power": mech.max_power,
+			"gold": player.gold,
+			"hand": action_hand,
+			"equipment_hand": equip_hand,
+			"weapons": weapons,
+			"damage_markers": damage_markers,
+		}
+
+
+## ── 内部方法 ──
+
+
+## 设置初始装备手牌
+## 优先将 pre_selected_equipment 中的卡牌分给玩家，剩余牌再平分给双方
+func _setup_starting_equipment(_battle_config: Dictionary) -> void:
+	var player = context.game_state.players.get(&"player")
+	var enemy = context.game_state.players.get(&"enemy")
+	var deck_state = context.game_state.deck_state
+
+	# ── 第一轮：将匹配 pre_selected_equipment 的卡牌优先分给玩家 ──
+	var assigned: Array[StringName] = []
+	for card_id: StringName in deck_state.equipment_deck:
+		var card = context.game_state.cards.get(card_id)
+		if card and card.def and String(card.def.card_id) in pre_selected_equipment:
+			card.owner_player_id = &"player"
+			card.zone = &"equipment_hand"
+			player.equipment_hand.append(card_id)
+			assigned.append(card_id)
+	# 从牌堆中移除已分配的卡牌
+	for cid: StringName in assigned:
+		deck_state.equipment_deck.erase(cid)
+
+	# ── 第二轮：剩余牌平分给双方 ──
+	var half_size: int = deck_state.equipment_deck.size() / 2
+
+	# 玩家：抽取前半部分
+	if player:
+		for i: int in range(half_size):
+			if deck_state.equipment_deck.is_empty():
+				break
+			var card_id: StringName = deck_state.equipment_deck.pop_front() as StringName
+			var card = context.game_state.cards.get(card_id)
+			if card:
+				card.owner_player_id = &"player"
+				card.zone = &"equipment_hand"
+			player.equipment_hand.append(card_id)
+
+	# 敌方：抽取剩余
+	if enemy:
+		while deck_state.equipment_deck.size() > 0:
+			var card_id: StringName = deck_state.equipment_deck.pop_front() as StringName
+			var card = context.game_state.cards.get(card_id)
+			if card:
+				card.owner_player_id = &"enemy"
+				card.zone = &"equipment_hand"
+			enemy.equipment_hand.append(card_id)
+
+
+## 抽初始行动牌
+## 从行动牌堆中抽取卡牌到双方手牌（而非重复创建）
+func _draw_starting_action_cards(_battle_config: Dictionary) -> Dictionary:
+	var player = context.game_state.players.get(&"player")
+	var enemy = context.game_state.players.get(&"enemy")
+	var deck_state = context.game_state.deck_state
+
+	# 玩家：从行动牌堆抽4张
+	if player:
+		for i: int in range(mini(4, deck_state.action_deck.size())):
+			var card_id: StringName = deck_state.action_deck.pop_front() as StringName
+			var card = context.game_state.cards.get(card_id)
+			if card:
+				card.owner_player_id = &"player"
+				card.zone = &"action_hand"
+			player.action_hand.append(card_id)
+
+	# 敌方：从行动牌堆抽4张
+	if enemy:
+		for i: int in range(mini(4, deck_state.action_deck.size())):
+			var card_id: StringName = deck_state.action_deck.pop_front() as StringName
+			var card = context.game_state.cards.get(card_id)
+			if card:
+				card.owner_player_id = &"enemy"
+				card.zone = &"action_hand"
+			enemy.action_hand.append(card_id)
+
+	return {"ok": true, "message": "starting_cards_drawn"}
+
+
+## 敌方自动装备：将装备手牌中的卡牌自动设置到对应槽位
+func _auto_equip_enemy() -> void:
+	var enemy = context.game_state.players.get(&"enemy")
+	var mech = context.game_state.get_mech_for_player(&"enemy")
+	if not enemy or not mech:
+		return
+
+	# 复制一份列表，因为遍历过程中会修改原数组
+	var cards_to_equip: Array[StringName] = enemy.equipment_hand.duplicate()
+	for card_id: StringName in cards_to_equip:
+		var card = context.game_state.cards.get(card_id)
+		if not card or not card.def:
+			continue
+		var slot_id: StringName = &""
+		if card.def is _EquipmentCardDef:
+			var eq_def = card.def
+			if eq_def.equipment_kind == &"PART":
+				slot_id = eq_def.slot
+			elif eq_def.equipment_kind == &"WEAPON":
+				for ws_id: StringName in [&"weapon_1", &"weapon_2"]:
+					if mech.slots.has(ws_id) and not mech.slots[ws_id].equipped_card:
+						slot_id = ws_id
+						break
+				if slot_id == &"":
+					slot_id = &"weapon_1"
+		if slot_id != &"":
+			context.card_set_service.set_equipment(&"enemy", card_id, slot_id)
+
+
+## 自动解决迎击（简化AI）
+func _auto_resolve_response() -> void:
+	if not awaiting_response or current_attack_id == &"":
+		return
+	# 暂不实现迎击逻辑，直接跳过
+	awaiting_response = false
+
+
+## 完成攻击结算
+func _finish_attack() -> Dictionary:
+	if current_attack_id == &"":
+		return {"ok": false, "message": "no active attack"}
+
+	var result: Dictionary = context.attack_service.resolve_attack(current_attack_id)
+	awaiting_response = false
+	current_attack_id = &""
+	_sync_compat_fields()
+	return result
+
+
+## BFS 寻路：找到从 origin 向 target 的第一步
 func _find_first_step_toward(origin: Dictionary, target: Dictionary, available_power: int) -> Dictionary:
 	if available_power <= 0:
-		return _copy_hex(origin)
-	var origin_key := HexGrid.key(origin)
-	var target_key := HexGrid.key(target)
+		return origin.duplicate()
+	var origin_key: String = HexGrid.key(origin)
+	var target_key: String = HexGrid.key(target)
 	if origin_key == target_key:
-		return _copy_hex(origin)
-	var traversable := {}
-	for tile in map_tiles:
-		traversable[HexGrid.key(tile)] = _copy_hex(tile)
+		return origin.duplicate()
+
+	var traversable: Dictionary = {}
+	for tile: Dictionary in map_tiles:
+		traversable[HexGrid.key(tile)] = tile.duplicate()
+
 	if not traversable.has(origin_key) or not traversable.has(target_key):
-		return _copy_hex(origin)
-	var frontier: Array[Dictionary] = [_copy_hex(origin)]
-	var came_from := {origin_key: ""}
-	var index := 0
+		return origin.duplicate()
+
+	var frontier: Array[Dictionary] = [origin.duplicate()]
+	var came_from: Dictionary = {origin_key: ""}
+	var index: int = 0
+
 	while index < frontier.size():
-		var current := frontier[index]
+		var current: Dictionary = frontier[index]
 		index += 1
-		var current_key := HexGrid.key(current)
+		var current_key: String = HexGrid.key(current)
 		if current_key == target_key:
 			break
-		for neighbor in HexGrid.neighbors(current):
-			var neighbor_key := HexGrid.key(neighbor)
+		for neighbor: Dictionary in HexGrid.neighbors(current):
+			var neighbor_key: String = HexGrid.key(neighbor)
 			if not traversable.has(neighbor_key) or came_from.has(neighbor_key):
 				continue
 			came_from[neighbor_key] = current_key
-			frontier.append(_copy_hex(neighbor))
+			frontier.append(neighbor.duplicate())
+
 	if not came_from.has(target_key):
-		return _copy_hex(origin)
-	var step_key := target_key
-	var previous_key := String(came_from[step_key])
+		return origin.duplicate()
+
+	var step_key: String = target_key
+	var previous_key: String = String(came_from[step_key])
 	while previous_key != origin_key:
 		step_key = previous_key
 		previous_key = String(came_from[step_key])
-	return traversable.get(step_key, _copy_hex(origin)).duplicate()
 
-func end_player_turn() -> Dictionary:
-	var player_validation := _validate_labeled_side("player", "player side")
-	if not player_validation.ok:
-		return player_validation
-	var enemy_validation := _validate_labeled_side("enemy", "enemy side")
-	if not enemy_validation.ok:
-		return enemy_validation
-	_end_turn("player")
-	if get_result().state == "active":
-		var enemy_result := run_enemy_turn()
-		if not enemy_result.ok:
-			return enemy_result
-		if get_result().state == "active":
-			var player_start_result := start_turn("player")
-			if not player_start_result.ok:
-				return player_start_result
-			return {"ok": true, "message": "player_turn_started"}
-		return enemy_result
-	return {"ok": true, "message": "player_turn_ended"}
-
-func _end_turn(side: String) -> void:
-	log.append(BattleMath.make_log("%s 回合结束" % units[side].name, {"side": side}))
-	if side == "enemy":
-		turn_number += 1
-		active_side = "player"
-	else:
-		active_side = "enemy"
-
-func get_result() -> Dictionary:
-	if units.is_empty() or not units.has("player") or not units.has("enemy"):
-		return {"state": "inactive", "reason": "battle is not started"}
-	if int(units.enemy.life) <= 0:
-		return {"state": "victory", "reason": "敌方机甲毁灭"}
-	if int(units.player.life) <= 0:
-		return {"state": "defeat", "reason": "我方机甲毁灭"}
-	if turn_number > int(config.get("turn_limit", 12)):
-		return {"state": "defeat", "reason": "超过回合限制"}
-	return {"state": "active", "reason": ""}
+	return traversable.get(step_key, origin).duplicate()

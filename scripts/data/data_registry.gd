@@ -6,6 +6,7 @@ const PATHS := {
 	"event_cards": "res://data/cards/event_cards.json",
 	"equipment_parts": "res://data/cards/equipment_parts.json",
 	"equipment_weapons": "res://data/cards/equipment_weapons.json",
+	"pilot_cards": "res://data/cards/pilot_cards.json",
 	"mech_frames": "res://data/mechs/mech_frames.json",
 	"history_nodes": "res://data/lore/history_nodes.json",
 	"tutorial_campaign": "res://data/campaign/tutorial_campaign.json",
@@ -15,6 +16,7 @@ var action_cards: Dictionary = {}
 var event_cards: Dictionary = {}
 var equipment_parts: Dictionary = {}
 var equipment_weapons: Dictionary = {}
+var pilot_cards: Dictionary = {}
 var mech_frames: Dictionary = {}
 var history_nodes: Dictionary = {}
 var tutorial_campaign: Dictionary = {}
@@ -34,6 +36,9 @@ func load_all() -> Dictionary:
 	var loaded_equipment_weapons := _load_array_by_id(PATHS.equipment_weapons)
 	if last_error != "":
 		return {"ok": false, "message": last_error}
+	var loaded_pilot_cards := _load_array_by_id(PATHS.pilot_cards)
+	if last_error != "":
+		return {"ok": false, "message": last_error}
 	var loaded_mech_frames := _load_array_by_id(PATHS.mech_frames)
 	if last_error != "":
 		return {"ok": false, "message": last_error}
@@ -47,6 +52,7 @@ func load_all() -> Dictionary:
 	event_cards = loaded_event_cards
 	equipment_parts = loaded_equipment_parts
 	equipment_weapons = loaded_equipment_weapons
+	pilot_cards = loaded_pilot_cards
 	mech_frames = loaded_mech_frames
 	history_nodes = loaded_history_nodes
 	tutorial_campaign = loaded_tutorial_campaign
@@ -63,6 +69,9 @@ func get_equipment_part(id: String) -> Dictionary:
 
 func get_weapon(id: String) -> Dictionary:
 	return _copy_dictionary(equipment_weapons.get(id, {}))
+
+func get_pilot_card(id: String) -> Dictionary:
+	return _copy_dictionary(pilot_cards.get(id, {}))
 
 func get_mech_frame(id: String) -> Dictionary:
 	return _copy_dictionary(mech_frames.get(id, {}))
@@ -84,6 +93,17 @@ func list_parts() -> Array:
 
 func list_weapons() -> Array:
 	return _copy_dictionary_rows(equipment_weapons.values())
+
+func list_pilot_cards() -> Array:
+	return _copy_dictionary_rows(pilot_cards.values())
+
+func list_available_equipment() -> Array:
+	var result: Array = []
+	for row in equipment_parts.values():
+		result.append(_copy_dictionary(row))
+	for row in equipment_weapons.values():
+		result.append(_copy_dictionary(row))
+	return result
 
 func _load_array_by_id(path: String) -> Dictionary:
 	var rows = _read_json(path)

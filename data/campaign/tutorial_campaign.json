@@ -24,17 +24,27 @@
 	},
 	"enemy_start": {
 	  "q": 20,
-	  "r": 2
+	  "r": -6
 	},
 	"player_frame_id": "frame_001_基础框架",
 	"enemy_frame_id": "frame_002_原始框架",
 	"starting_action_deck": [
 	  "action_001_进攻",
 	  "action_001_进攻",
+	  "action_001_进攻",
+	  "action_001_进攻",
 	  "action_013_维修",
-	  "action_015_推进"
+	  "action_013_维修",
+	  "action_015_推进",
+	  "action_015_推进",
+	  "action_008_回避",
+	  "action_009_防御"
 	],
 	"starting_equipment_pool": [
+	  "part_001_量产装_头部",
+	  "part_002_量产装_躯干",
+	  "weapon_001_光束军刀",
+	  "weapon_002_光束步枪",
 	  "part_001_量产装_头部",
 	  "part_002_量产装_躯干",
 	  "weapon_001_光束军刀",

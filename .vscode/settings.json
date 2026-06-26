@@ -1,5 +1,5 @@
 {
-	"godotTools.editorPath.godot4": "/Applications/Godot.app/Contents/MacOS/Godot",
+	"godotTools.editorPath.godot4": "F:/Godot_4.6/Godot_v4.6-stable_win64.exe",
 	"godotTools.lsp.serverHost": "127.0.0.1",
 	"godotTools.lsp.serverPort": 6008,
 	"godotTools.lsp.headless": true,

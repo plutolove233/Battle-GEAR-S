@@ -1,0 +1,14 @@
+[
+  {
+    "id": "pilot_001_克劳德",
+    "name": "克劳德",
+    "rarity": "SR",
+    "count": 1,
+    "faction": "联邦",
+    "attack_limit": 1,
+    "action_card_limit": 5,
+    "cost": 0,
+    "effect_text": "使用远程武器攻击时范围+1。每回合1次，可以将1张行动牌当作聚能使用。",
+    "effect_ids": ["passive_range_plus_1"]
+  }
+]
