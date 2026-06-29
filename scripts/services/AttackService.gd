@@ -125,6 +125,12 @@ func submit_response(attack_id: StringName, response_card_id: StringName, payloa
 	attack_context["response_card_id"] = response_card_id
 	attack_context["response_payload"] = payload
 
+	# 从防守方手牌移除迎击牌
+	var target_id: StringName = attack_context.get("target_id", &"")
+	var defender_player = context.game_state.get_player_for_mech(target_id)
+	if defender_player:
+		defender_player.action_hand.erase(response_card_id)
+
 	gs.write_log(&"attack_response", {
 		"attack_id": String(attack_id),
 		"response_card_id": String(response_card_id),
@@ -133,7 +139,8 @@ func submit_response(attack_id: StringName, response_card_id: StringName, payloa
 
 
 ## 结算攻击
-## 修正窗口 → 射程复查 → 命中判定 → 伤害计算 → 清理
+## 修正窗口 → 射程复查 → 命中判定 → 伤害计算 → 返回损伤放置信息
+## 不再直接放置损伤标记，由 UI 层决定放置方式
 func resolve_attack(attack_id: StringName) -> Dictionary:
 	var gs = context.game_state
 	var attack_context: Dictionary = gs.attacks.get(attack_id, {})
@@ -198,19 +205,27 @@ func resolve_attack(attack_id: StringName) -> Dictionary:
 	damage = int(gs.temp_values.get("modified_damage", damage))
 	markers = int(gs.temp_values.get("modified_markers", markers))
 
-	# ── 6. 放置损伤标记 ──
-	if markers > 0 and target:
-		context.damage_token_service.place_damage_tokens({
-			"mech_id": target_id,
-			"count": markers,
-			"source_attack_id": attack_id,
-		})
-
-	# ── 7. 造成 HP 伤害 ──
+	# ── 6. 造成 HP 伤害（始终对原目标结算） ──
 	if target and damage > 0:
 		target.current_hp = max(0, target.current_hp - damage)
 		if target.current_hp <= 0:
 			gs.destroy_mech(target_id, "attack")
+
+	# ── 7. 确定损伤放置参数 ──
+	# 无迎击：攻击方选择放置在防守方机甲上
+	# 有迎击：迎击方（防守方）选择放置在攻击方机甲上
+	var responded: bool = attack_context.has("response_card_id") and attack_context.get("response_card_id", &"") != &""
+	var target_mech_id_for_tokens: StringName
+	var chooser_player_id: StringName
+
+	if responded:
+		# 迎击方选择损伤放在攻击方机甲上
+		target_mech_id_for_tokens = attacker_id
+		chooser_player_id = gs.get_player_for_mech(target_id).player_id if gs.get_player_for_mech(target_id) else &""
+	else:
+		# 攻击方选择损伤放在防守方机甲上
+		target_mech_id_for_tokens = target_id
+		chooser_player_id = gs.get_player_for_mech(attacker_id).player_id if gs.get_player_for_mech(attacker_id) else &""
 
 	# ── 8. 触发攻击结算钩子 ──
 	_fire_hook(_EffectConst.HOOK_ATTACK_RESOLVED, {
@@ -226,7 +241,15 @@ func resolve_attack(attack_id: StringName) -> Dictionary:
 		"damage": damage,
 		"markers": markers,
 	})
-	return {"ok": true, "hit": true, "damage": damage, "markers": markers}
+
+	return {
+		"ok": true,
+		"hit": true,
+		"damage": damage,
+		"markers": markers,
+		"target_mech_id_for_tokens": target_mech_id_for_tokens,
+		"chooser_player_id": chooser_player_id,
+	}
 
 
 ## ── 内部方法 ──

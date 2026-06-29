@@ -6,6 +6,10 @@ const _BattleState = preload("res://scripts/battle/battle_state.gd")
 const _RangeCalculator = preload("res://scripts/battle/RangeCalculator.gd")
 const _BattleMessageLog = preload("res://scripts/ui/battle_message_log.gd")
 const _EnemyInfoPopup = preload("res://scripts/ui/enemy_info_popup.gd")
+const _AttackFlowController = preload("res://scripts/ui/attack_flow_controller.gd")
+const _WeaponPickerPanel = preload("res://scripts/ui/weapon_picker_panel.gd")
+const _DamagePlacementPanel = preload("res://scripts/ui/damage_placement_panel.gd")
+const _ActionCardDef = preload("res://scripts/card_defs/ActionCardDef.gd")
 
 var registry = null  # type: DataRegistry
 var campaign = null  # type: CampaignState
@@ -22,10 +26,14 @@ var response_panel = null  # type: ResponsePanel
 var message_log = null  # type: BattleMessageLog
 var enemy_info_popup = null  # type: EnemyInfoPopup
 
-## 攻击交互状态
-var attack_mode: bool = false
-var selected_attack_card_id: StringName = &""
-var selected_weapon_id: StringName = &""
+## 攻击流程控制器
+var attack_flow: RefCounted = null  # type: AttackFlowController
+## 武器选择面板
+var weapon_picker_panel = null  # type: WeaponPickerPanel
+## 损伤放置面板
+var damage_placement_panel = null  # type: DamagePlacementPanel
+## 取消攻击按钮
+var cancel_attack_button = null  # type: Button
 
 func _ready() -> void:
 	_load_app_state()
@@ -162,6 +170,14 @@ func _show_battle() -> void:
 	_add_button(action_bar, "敌方信息", Callable(self, "_on_enemy_info_clicked"))
 	_add_button(action_bar, "返回主菜单", Callable(self, "_show_main_menu"))
 
+	# ── 取消攻击按钮（初始隐藏）──
+	cancel_attack_button = Button.new()
+	cancel_attack_button.text = "取消攻击"
+	cancel_attack_button.custom_minimum_size = Vector2(140, 32)
+	cancel_attack_button.visible = false
+	cancel_attack_button.pressed.connect(Callable(self, "_on_cancel_attack"))
+	layout.add_child(cancel_attack_button)
+
 	# ── 敌方信息弹窗（初始隐藏）──
 	enemy_info_popup = _EnemyInfoPopup.new()
 	add_child(enemy_info_popup)
@@ -173,9 +189,25 @@ func _show_battle() -> void:
 	response_panel.visible = false
 	layout.add_child(response_panel)
 
+	# ── 武器选择面板（初始隐藏）──
+	weapon_picker_panel = _WeaponPickerPanel.new()
+	weapon_picker_panel.weapon_selected.connect(Callable(self, "_on_weapon_selected"))
+	weapon_picker_panel.selection_cancelled.connect(Callable(self, "_on_weapon_selection_cancelled"))
+	weapon_picker_panel.visible = false
+	layout.add_child(weapon_picker_panel)
+
+	# ── 损伤放置面板（初始隐藏）──
+	damage_placement_panel = _DamagePlacementPanel.new()
+	damage_placement_panel.placement_completed.connect(Callable(self, "_on_damage_placement_completed"))
+	damage_placement_panel.visible = false
+	layout.add_child(damage_placement_panel)
+
 	# ── 连接 EffectEngine hook 信号 ──
 	if battle.context and battle.context.effect_engine:
 		battle.context.effect_engine.hook_fired.connect(Callable(self, "_on_hook_fired"))
+
+	# 初始化攻击流程控制器
+	attack_flow = _AttackFlowController.new()
 
 	# 初始配置消息日志（追赶历史日志）
 	if message_log and battle.context:
@@ -192,8 +224,8 @@ func _on_battle_hex_clicked(hex: Dictionary) -> void:
 	if battle == null:
 		return
 
-	# 如果在攻击模式，尝试攻击该位置上的机甲
-	if attack_mode:
+	# 如果在攻击目标选择模式，尝试攻击该位置上的机甲
+	if attack_flow.current_state == _AttackFlowController.SELECT_TARGET:
 		_try_attack_target(hex)
 		return
 
@@ -264,7 +296,6 @@ func _on_equipment_card_clicked(card_id: StringName) -> void:
 func _on_active_effect_clicked(effect_id: StringName) -> void:
 	if battle == null or battle.context == null:
 		return
-	# TODO: 弹出选择界面让玩家选来源牌，当前简化为第一个匹配的
 	var bindings = battle.context.effect_registry.get_all_active_bindings()
 	for binding in bindings:
 		if binding.effect.effect_id == effect_id:
@@ -282,30 +313,74 @@ func _on_active_effect_clicked(effect_id: StringName) -> void:
 func _end_player_turn() -> void:
 	if battle == null:
 		return
-	attack_mode = false
-	selected_attack_card_id = &""
-	selected_weapon_id = &""
+	_cancel_attack_mode()
+
 	var result = battle.end_player_turn()
 	if not _status_ok(result):
 		battle.log.append({"message": "结束回合失败", "details": {"reason": _status_message(result)}})
 	_refresh_battle()
 	_finish_battle_if_needed()
+	if get_result_state() != "active":
+		return
+
+	# 开始敌方回合（多步式）
+	_start_enemy_turn_flow()
+
+## 敌方回合流程
+func _start_enemy_turn_flow() -> void:
+	var result = battle.start_enemy_turn()
+
+	match result.get("state", ""):
+		"awaiting_player_response":
+			# 敌方攻击了我方，需要玩家选择迎击
+			_show_response_panel(result)
+		"awaiting_damage_placement":
+			# 需要玩家选择损伤放置
+			_show_damage_placement(result)
+		"done", "battle_over":
+			_refresh_battle()
+			_finish_battle_if_needed()
+		_:
+			_refresh_battle()
+			_finish_battle_if_needed()
 
 ## 迎击选择
 func _on_response_selected(card_id: StringName) -> void:
 	if battle == null:
 		return
-	battle.submit_response(card_id)
+
+	# 提交迎击并结算攻击
+	var resolve_result = battle.handle_response(battle.current_attack_id, card_id)
 	response_panel.visible = false
-	_refresh_battle()
+
+	# 继续敌方回合流程
+	_continue_enemy_turn_after_response(resolve_result)
 
 ## 跳过迎击
 func _on_response_passed() -> void:
 	if battle == null:
 		return
-	battle.pass_response()
+
+	# 跳过迎击并结算攻击
+	var resolve_result = battle.handle_response(battle.current_attack_id, &"")
 	response_panel.visible = false
-	_refresh_battle()
+
+	# 继续敌方回合流程
+	_continue_enemy_turn_after_response(resolve_result)
+
+## 迎击/跳过后继续敌方回合
+func _continue_enemy_turn_after_response(resolve_result: Dictionary) -> void:
+	var result = battle.continue_enemy_turn_after_response(resolve_result)
+
+	match result.get("state", ""):
+		"awaiting_damage_placement":
+			_show_damage_placement(result)
+		"done", "battle_over":
+			_refresh_battle()
+			_finish_battle_if_needed()
+		_:
+			_refresh_battle()
+			_finish_battle_if_needed()
 
 ## EffectEngine hook 信号回调：转发给消息日志
 func _on_hook_fired(hook: StringName, payload: Dictionary) -> void:
@@ -337,17 +412,33 @@ func _enter_attack_mode(attack_card_id: StringName) -> void:
 		battle.log.append({"message": "没有可用武器", "details": {}})
 		return
 
-	# 如果有2把武器，暂时选第一把（后续可弹出武器选择）
-	if weapon_ids.size() > 1:
-		selected_weapon_id = weapon_ids[0]
-	else:
-		selected_weapon_id = weapon_ids[0]
+	attack_flow.enter_select_weapon(attack_card_id, &"player", &"enemy", false)
 
-	selected_attack_card_id = attack_card_id
-	attack_mode = true
+	# 如果只有1把武器，自动选择
+	if weapon_ids.size() == 1:
+		_on_weapon_selected(weapon_ids[0])
+	else:
+		# 有2把武器，显示选择面板
+		weapon_picker_panel.configure(battle.context, weapon_ids)
+		weapon_picker_panel.visible = true
+		_show_cancel_button(true)
+		_refresh_battle()
+
+## 武器选择回调
+func _on_weapon_selected(weapon_id: StringName) -> void:
+	if battle == null or battle.context == null:
+		return
+
+	attack_flow.enter_select_target(weapon_id)
+	weapon_picker_panel.visible = false
 
 	# 高亮攻击范围
-	var weapon_card = gs.get_card(selected_weapon_id)
+	var gs = battle.context.game_state
+	var mech = gs.get_mech_for_player(&"player")
+	if not mech:
+		return
+
+	var weapon_card = gs.get_card(weapon_id)
 	var weapon_range: int = 1
 	if weapon_card and weapon_card.def:
 		weapon_range = weapon_card.def.range_value
@@ -356,14 +447,49 @@ func _enter_attack_mode(attack_card_id: StringName) -> void:
 	)
 	battle_board.highlight_hexes(reachable)
 	battle.log.append({"message": "攻击模式：选择目标（点击敌方位置）", "details": {}})
+	_show_cancel_button(true)
 	_refresh_battle()
+
+## 武器选择取消
+func _on_weapon_selection_cancelled() -> void:
+	_cancel_attack_mode()
+	_refresh_battle()
+
+## 取消攻击按钮
+func _on_cancel_attack() -> void:
+	_cancel_attack_mode()
+	_refresh_battle()
+
+## 取消攻击模式（通用清理）
+func _cancel_attack_mode() -> void:
+	attack_flow.reset()
+	if battle_board:
+		battle_board.clear_highlight()
+	if weapon_picker_panel:
+		weapon_picker_panel.visible = false
+	if damage_placement_panel:
+		damage_placement_panel.visible = false
+	_show_cancel_button(false)
+
+## 显示/隐藏取消攻击按钮
+func _show_cancel_button(show: bool) -> void:
+	if cancel_attack_button:
+		cancel_attack_button.visible = show
 
 ## 尝试攻击目标
 func _try_attack_target(hex: Dictionary) -> void:
 	if battle == null or battle.context == null:
 		return
-	attack_mode = false
-	battle_board.clear_highlight()
+
+	# 保存攻击参数（在 reset 前保存，因为 reset 会清空这些字段）
+	var saved_weapon_id: StringName = attack_flow.weapon_id
+	var saved_attack_card_id: StringName = attack_flow.attack_card_id
+
+	# 清除选择状态
+	attack_flow.reset()
+	if battle_board:
+		battle_board.clear_highlight()
+	_show_cancel_button(false)
 
 	var gs = battle.context.game_state
 	# 检查hex上是否有敌方机甲
@@ -382,33 +508,92 @@ func _try_attack_target(hex: Dictionary) -> void:
 		_refresh_battle()
 		return
 
-	# 发动攻击
-	var player_mech = gs.get_mech_for_player(&"player")
-	if not player_mech:
-		return
-	var result: Dictionary = battle.context.attack_service.declare_attack(
-		player_mech.mech_id, target_mech_id, selected_weapon_id, selected_attack_card_id
-	)
+	# 发动攻击（使用统一流程）
+	var result: Dictionary = battle.begin_attack(&"player", &"enemy", saved_weapon_id, saved_attack_card_id)
 
-	attack_mode = false
-	selected_attack_card_id = &""
-	selected_weapon_id = &""
-
-	if result.get("state", "") == "awaiting_response":
-		# 显示迎击面板
-		response_panel.configure(battle.context, result.get("attack_id", &""))
-		response_panel.visible = true
-		# 自动解决（简化处理）
-		battle._auto_resolve_response()
-		_finish_attack_and_refresh()
-	elif result.get("ok", false):
-		battle.log.append({"message": "攻击成功", "details": result})
-		_refresh_battle()
-	else:
+	if not result.get("ok", false):
 		battle.log.append({"message": "攻击失败: %s" % String(result.get("message", "")), "details": {}})
+		_refresh_battle()
+		return
+
+	# 检查结果状态
+	var state: String = result.get("state", "")
+	if state == "awaiting_player_response":
+		# 不应该出现在玩家攻击时（敌方迎击由AI处理）
+		_show_response_panel(result)
+	elif state == "resolved":
+		# 攻击已结算，处理损伤放置
+		_handle_attack_result(result)
+	else:
+		battle.log.append({"message": "攻击结果: %s" % state, "details": result})
 		_refresh_battle()
 
 	_finish_battle_if_needed()
+
+## 处理攻击结算结果
+func _handle_attack_result(result: Dictionary) -> void:
+	if not result.get("hit", false):
+		battle.log.append({"message": "攻击未命中", "details": result})
+		_refresh_battle()
+		return
+
+	var damage: int = int(result.get("damage", 0))
+	var markers: int = int(result.get("markers", 0))
+	battle.log.append({"message": "攻击命中！伤害: %d 损伤: %d" % [damage, markers], "details": result})
+
+	if markers > 0:
+		var chooser: StringName = result.get("chooser_player_id", &"")
+		var target_mech: StringName = result.get("target_mech_id_for_tokens", &"")
+
+		if chooser == &"player":
+			# 玩家选择损伤放置
+			attack_flow.enter_damage_placement(target_mech, markers, chooser)
+			damage_placement_panel.configure(battle.context, target_mech, markers)
+			damage_placement_panel.visible = true
+		else:
+			# AI 自动放置
+			battle.auto_place_damage_tokens(target_mech, markers)
+
+	_refresh_battle()
+
+## 损伤放置完成回调
+func _on_damage_placement_completed() -> void:
+	damage_placement_panel.visible = false
+	attack_flow.reset()
+
+	# 如果是敌方回合流程中的损伤放置，继续敌方回合
+	if battle.enemy_turn_phase == "awaiting_damage_placement":
+		var _result = battle.finish_enemy_turn()
+		_refresh_battle()
+		_finish_battle_if_needed()
+		return
+
+	_refresh_battle()
+
+## 显示迎击面板
+func _show_response_panel(attack_result: Dictionary) -> void:
+	if not battle or not battle.context:
+		return
+	var attack_id: StringName = attack_result.get("attack_id", battle.current_attack_id)
+	response_panel.configure(battle.context, attack_id)
+	response_panel.visible = true
+	_refresh_battle()
+
+## 显示损伤放置面板
+func _show_damage_placement(attack_result: Dictionary) -> void:
+	if not battle or not battle.context:
+		return
+	var target_mech: StringName = attack_result.get("target_mech_id_for_tokens", &"")
+	var markers: int = int(attack_result.get("markers", 0))
+	if target_mech != &"" and markers > 0:
+		attack_flow.enter_damage_placement(target_mech, markers, &"player")
+		damage_placement_panel.configure(battle.context, target_mech, markers)
+		damage_placement_panel.visible = true
+	else:
+		# 无需放置，直接继续
+		var _result = battle.finish_enemy_turn()
+		_refresh_battle()
+		_finish_battle_if_needed()
 
 ## 打出辅助牌
 func _play_action_card(card_id: StringName) -> void:
@@ -420,14 +605,6 @@ func _play_action_card(card_id: StringName) -> void:
 	else:
 		battle.log.append({"message": "打出失败: %s" % String(result.get("message", "")), "details": {}})
 	_refresh_battle()
-
-## 完成攻击并刷新
-func _finish_attack_and_refresh() -> void:
-	if battle == null:
-		return
-	var result: Dictionary = battle._finish_attack()
-	battle.log.append({"message": "攻击结算", "details": result})
-	_sync_and_refresh()
 
 # ═══════════════════════════════════════════
 # 刷新与工具
@@ -493,6 +670,12 @@ func _finish_battle_if_needed() -> void:
 	}
 	campaign.record_battle_result(record)
 	_show_result(record)
+
+func get_result_state() -> String:
+	if battle == null:
+		return "inactive"
+	var result = battle.get_result()
+	return String(result.get("state", "inactive"))
 
 # ═══════════════════════════════════════════
 # 结果 / 战役中心 / 图鉴
@@ -584,6 +767,9 @@ func _clear_screen() -> void:
 	equipment_panel = null
 	skill_bar = null
 	response_panel = null
+	weapon_picker_panel = null
+	damage_placement_panel = null
+	cancel_attack_button = null
 
 func _add_text(parent: Node, text: String) -> Label:
 	var label := Label.new()

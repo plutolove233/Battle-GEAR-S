@@ -1363,12 +1363,19 @@ func _check_equipment_broken_after_damage(mech_id: StringName, slot_id: StringNa
 	})
 
 	# 规则：装备被弃置后，损伤保留在区域上
-	slot_state.region_damage_tokens += card.damage_tokens
+	# 注意：DamageTokenService 已经同时增加了 region_damage_tokens 和 card.damage_tokens
+	# 因此不需要再将 card.damage_tokens 加到 region_damage_tokens（否则双重计算）
 	discard_card({
 		"card_id": card.instance_id,
 		"reason": &"EQUIPMENT_BROKEN"
 	})
 	slot_state.equipped_card = null
+
+	# ── 重算动力上限并调整当前动力 ──
+	var old_max_power: int = mech.max_power
+	mech.max_power = mech.get_total_power()
+	var power_delta: int = mech.max_power - old_max_power
+	mech.power = maxi(0, mech.power + power_delta)
 
 
 ## 破坏机甲

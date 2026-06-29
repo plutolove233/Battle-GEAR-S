@@ -2,7 +2,7 @@
 ##
 ## BattleState 是 app_root 与底层游戏系统之间的桥梁。
 ## 公共接口保持与旧版兼容，内部委托给 GameContext/Service 体系。
-## 旧版扁平 units 字典通过兼容层从 GameState 转换。
+## 统一攻击流程：声明 → 迎击窗口 → 结算 → 损伤放置
 extends RefCounted
 class_name BattleState
 
@@ -20,6 +20,7 @@ const _EquipmentCardDef = preload("res://scripts/card_defs/EquipmentCardDef.gd")
 const _ActionCardDef = preload("res://scripts/card_defs/ActionCardDef.gd")
 const _MechSlotState = preload("res://scripts/runtime/MechSlotState.gd")
 const _GameState = preload("res://scripts/runtime/GameState.gd")
+const _RangeCalculator = preload("res://scripts/battle/RangeCalculator.gd")
 
 ## GameContext：新的依赖注入容器
 var context = null
@@ -40,6 +41,9 @@ var registry = null
 ## 攻击是否等待响应（迎击窗口）
 var awaiting_response: bool = false
 var current_attack_id: StringName = &""
+
+## 敌方回合阶段状态（app_root 需要读取）
+var enemy_turn_phase: String = ""  # "", "awaiting_response", "awaiting_damage_placement", "done"
 
 
 ## ── 初始化 ──
@@ -110,6 +114,252 @@ func move_unit(side: String, target: Dictionary) -> Dictionary:
 	return result
 
 
+## ── 统一攻击流程 ──
+
+
+## 开始攻击（声明阶段）
+## 返回结果中包含下一步需要的信息：
+## - "state": "awaiting_response" → 需要迎击响应
+## - "state": "resolved" → 直接结算完毕
+## - "state": "failed" → 攻击失败
+func begin_attack(attacker_side: StringName, defender_side: StringName, weapon_id: StringName, attack_card_id: StringName) -> Dictionary:
+	if not context:
+		return {"ok": false, "message": "battle not started"}
+
+	var attacker_mech = context.game_state.get_mech_for_player(attacker_side)
+	var defender_mech = context.game_state.get_mech_for_player(defender_side)
+	if not attacker_mech or not defender_mech:
+		return {"ok": false, "message": "invalid side"}
+
+	# 发动攻击声明
+	var result: Dictionary = context.attack_service.declare_attack(
+		attacker_mech.mech_id, defender_mech.mech_id, weapon_id, attack_card_id
+	)
+
+	if not result.get("ok", false):
+		return result
+
+	# 如果进入迎击窗口
+	if result.get("state", "") == "awaiting_response":
+		awaiting_response = true
+		current_attack_id = result.get("attack_id", &"")
+
+		# 如果防守方是 AI，自动处理迎击
+		if defender_side == &"enemy":
+			_ai_decide_response(current_attack_id)
+			# AI 已处理，直接结算
+			var resolve_result = _resolve_and_get_placement()
+			resolve_result["state"] = "resolved"
+			return resolve_result
+		else:
+			# 防守方是玩家，需要玩家选择迎击
+			result["state"] = "awaiting_player_response"
+			result["defender_player_id"] = defender_side
+			return result
+
+	_sync_compat_fields()
+	return result
+
+
+## 处理迎击响应
+## response_card_id 为空表示跳过迎击
+func handle_response(attack_id: StringName, response_card_id: StringName = &"") -> Dictionary:
+	if not context:
+		return {"ok": false, "message": "battle not started"}
+
+	if response_card_id != &"":
+		context.attack_service.submit_response(attack_id, response_card_id, {})
+
+	# 迎击处理完毕，结算攻击
+	var resolve_result = _resolve_and_get_placement()
+	resolve_result["state"] = "resolved"
+	return resolve_result
+
+
+## 结算攻击并返回损伤放置信息
+func _resolve_and_get_placement() -> Dictionary:
+	if current_attack_id == &"":
+		return {"ok": false, "message": "no active attack"}
+
+	var result: Dictionary = context.attack_service.resolve_attack(current_attack_id)
+	awaiting_response = false
+	current_attack_id = &""
+	_sync_compat_fields()
+	return result
+
+
+## 自动放置损伤标记（AI模式）
+func auto_place_damage_tokens(mech_id: StringName, token_count: int, source_attack_id: StringName = &"") -> void:
+	if not context or token_count <= 0:
+		return
+	context.damage_token_service.place_damage_tokens({
+		"mech_id": mech_id,
+		"count": token_count,
+		"source_attack_id": source_attack_id,
+	})
+	_sync_compat_fields()
+
+
+## ── 敌方回合（多步式） ──
+
+
+## 开始敌方回合
+## 返回: {"state": "awaiting_player_response"} / {"state": "awaiting_damage_placement"} / {"state": "done"}
+func start_enemy_turn() -> Dictionary:
+	if not context:
+		return {"state": "done"}
+
+	enemy_turn_phase = "started"
+	context.turn_service.start_turn(&"enemy")
+	_sync_compat_fields()
+
+	# 简化AI：尝试攻击，失败则移动
+	var enemy_mech = context.game_state.get_mech_for_player(&"enemy")
+	var player_mech = context.game_state.get_mech_for_player(&"player")
+
+	if not enemy_mech or not player_mech:
+		return finish_enemy_turn()
+
+	# AI: 移动向玩家
+	if enemy_mech.power > 0:
+		var step: Dictionary = _find_first_step_toward(
+			enemy_mech.position, player_mech.position, enemy_mech.power
+		)
+		if HexGrid.distance(enemy_mech.position, step) > 0:
+			move_unit("enemy", step)
+
+	# AI: 尝试攻击
+	var attack_result = _ai_try_attack()
+	if attack_result.get("state", "") == "awaiting_player_response":
+		# 需要玩家迎击
+		enemy_turn_phase = "awaiting_response"
+		return attack_result
+
+	if attack_result.get("hit", false) and attack_result.get("markers", 0) > 0:
+		# 攻击命中，需要损伤放置
+		var chooser: StringName = attack_result.get("chooser_player_id", &"")
+		if chooser == &"player":
+			enemy_turn_phase = "awaiting_damage_placement"
+			attack_result["state"] = "awaiting_damage_placement"
+			return attack_result
+		else:
+			# AI 自动放置
+			auto_place_damage_tokens(
+				attack_result.get("target_mech_id_for_tokens", &""),
+				attack_result.get("markers", 0)
+			)
+
+	return finish_enemy_turn()
+
+
+## 敌方回合继续（玩家迎击或损伤放置后）
+func continue_enemy_turn_after_response(resolve_result: Dictionary) -> Dictionary:
+	if resolve_result.get("hit", false) and resolve_result.get("markers", 0) > 0:
+		var chooser: StringName = resolve_result.get("chooser_player_id", &"")
+		if chooser == &"player":
+			enemy_turn_phase = "awaiting_damage_placement"
+			resolve_result["state"] = "awaiting_damage_placement"
+			return resolve_result
+		else:
+			auto_place_damage_tokens(
+				resolve_result.get("target_mech_id_for_tokens", &""),
+				resolve_result.get("markers", 0)
+			)
+
+	return finish_enemy_turn()
+
+
+## 完成敌方回合
+func finish_enemy_turn() -> Dictionary:
+	enemy_turn_phase = "done"
+	context.turn_service.end_turn(&"enemy")
+	_sync_compat_fields()
+
+	# 检查胜负
+	if get_result().state != "active":
+		return {"state": "battle_over"}
+
+	# 开始玩家回合
+	start_turn("player")
+	return {"state": "done"}
+
+
+## AI 迎击决策
+func _ai_decide_response(attack_id: StringName) -> void:
+	if not context:
+		return
+
+	var gs = context.game_state
+	var attack_context: Dictionary = gs.attacks.get(attack_id, {})
+	if attack_context.is_empty():
+		return
+
+	# 找到防守方（AI方）的迎击牌
+	var target_id: StringName = attack_context.get("target_id", &"")
+	var defender_player = gs.get_player_for_mech(target_id)
+	if not defender_player:
+		return
+
+	# 查找手牌中的迎击牌
+	for card_id: StringName in defender_player.action_hand:
+		var card = gs.cards.get(card_id)
+		if card and card.def is _ActionCardDef and card.def.action_type == &"迎击":
+			# AI 简单策略：有迎击牌就使用第一张
+			context.attack_service.submit_response(attack_id, card_id, {})
+			return
+
+	# 没有迎击牌或选择不使用，跳过
+	# （不调用 submit_response，表示不迎击）
+
+
+## AI 尝试攻击
+func _ai_try_attack() -> Dictionary:
+	var gs = context.game_state
+	var enemy_mech = gs.get_mech_for_player(&"enemy")
+	var player_mech = gs.get_mech_for_player(&"player")
+	var enemy_player = gs.players.get(&"enemy")
+
+	if not enemy_mech or not player_mech or not enemy_player:
+		return {"ok": false}
+
+	if not enemy_mech.can_attack():
+		return {"ok": false}
+
+	# 查找攻击牌
+	var attack_card_id: StringName = &""
+	for card_id: StringName in enemy_player.action_hand:
+		var card = gs.cards.get(card_id)
+		if card and card.def is _ActionCardDef and card.def.action_type == &"攻击":
+			attack_card_id = card_id
+			break
+
+	if attack_card_id == &"":
+		return {"ok": false}
+
+	# 查找武器
+	var weapon_ids: Array[StringName] = enemy_mech.get_weapon_ids()
+	if weapon_ids.is_empty():
+		return {"ok": false}
+
+	# 使用第一把武器
+	var weapon_id: StringName = weapon_ids[0]
+
+	# 检查射程
+	var weapon_card = gs.get_card(weapon_id)
+	var weapon_range: int = 1
+	if weapon_card and weapon_card.def:
+		weapon_range = weapon_card.def.range_value
+	var map_cells: Dictionary = gs.map_state.cells if gs.map_state else {}
+	if not _RangeCalculator.is_in_weapon_range(enemy_mech.position, player_mech.position, weapon_range, map_cells):
+		return {"ok": false}
+
+	# 声明攻击
+	return begin_attack(&"enemy", &"player", weapon_id, attack_card_id)
+
+
+## ── 旧版兼容攻击接口 ──
+
+
 func attack(attacker_side: String, defender_side: String, weapon_index: int) -> Dictionary:
 	if not context:
 		return {"ok": false, "message": "battle not started"}
@@ -136,41 +386,18 @@ func attack(attacker_side: String, defender_side: String, weapon_index: int) -> 
 	if attack_card_id == &"":
 		return {"ok": false, "message": "no attack card in hand"}
 
-	# 发动攻击
-	var result: Dictionary = context.attack_service.declare_attack(
-		attacker_mech.mech_id,
-		defender_mech.mech_id,
-		weapon_ids[weapon_index],
-		attack_card_id
-	)
-
-	# 如果进入迎击窗口，标记等待响应
-	if result.get("state", "") == "awaiting_response":
-		awaiting_response = true
-		current_attack_id = result.get("attack_id", &"")
-		# 简化处理：敌方AI自动跳过迎击（后续实现迎击逻辑）
-		if attacker_side == "player":
-			_auto_resolve_response()
-		else:
-			# 敌方攻击时，玩家可以选择迎击——暂时自动跳过
-			_auto_resolve_response()
-		return _finish_attack()
-
-	_sync_compat_fields()
-	return result
+	# 使用统一攻击流程
+	return begin_attack(StringName(attacker_side), StringName(defender_side), weapon_ids[weapon_index], attack_card_id)
 
 
 ## 提交迎击响应
 func submit_response(response_card_id: StringName, payload: Dictionary = {}) -> Dictionary:
-	if not awaiting_response or current_attack_id == &"":
-		return {"ok": false, "message": "no attack awaiting response"}
-	context.attack_service.submit_response(current_attack_id, response_card_id, payload)
-	return _finish_attack()
+	return handle_response(current_attack_id, response_card_id)
 
 
 ## 跳过迎击
 func pass_response() -> Dictionary:
-	return _finish_attack()
+	return handle_response(current_attack_id, &"")
 
 
 ## ── 装备操作 ──
@@ -256,14 +483,12 @@ func end_player_turn() -> Dictionary:
 	if get_result().state != "active":
 		return {"ok": true, "message": "player_turn_ended_battle_over"}
 
-	# 敌方回合
-	run_enemy_turn()
-
-	if get_result().state == "active":
-		start_turn("player")
+	# 不再在这里直接运行敌方回合
+	# 改为由 app_root 调用 start_enemy_turn() 以支持多步交互
 	return {"ok": true, "message": "player_turn_ended"}
 
 
+## 旧的同步敌方回合（保留兼容，但不再被 app_root 直接调用）
 func run_enemy_turn() -> Dictionary:
 	if not context:
 		return {"ok": false, "message": "battle not started"}
@@ -483,26 +708,6 @@ func _auto_equip_enemy() -> void:
 					slot_id = &"weapon_1"
 		if slot_id != &"":
 			context.card_set_service.set_equipment(&"enemy", card_id, slot_id)
-
-
-## 自动解决迎击（简化AI）
-func _auto_resolve_response() -> void:
-	if not awaiting_response or current_attack_id == &"":
-		return
-	# 暂不实现迎击逻辑，直接跳过
-	awaiting_response = false
-
-
-## 完成攻击结算
-func _finish_attack() -> Dictionary:
-	if current_attack_id == &"":
-		return {"ok": false, "message": "no active attack"}
-
-	var result: Dictionary = context.attack_service.resolve_attack(current_attack_id)
-	awaiting_response = false
-	current_attack_id = &""
-	_sync_compat_fields()
-	return result
 
 
 ## BFS 寻路：找到从 origin 向 target 的第一步

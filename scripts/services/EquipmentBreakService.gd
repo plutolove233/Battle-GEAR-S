@@ -48,6 +48,12 @@ func check_equipment_broken(mech_id: StringName, slot_id: StringName) -> void:
 	# 清空槽位
 	slot.equipped_card = null
 
+	# ── 重算动力上限并调整当前动力 ──
+	var old_max_power: int = mech.max_power
+	mech.max_power = mech.get_total_power()
+	var power_delta: int = mech.max_power - old_max_power
+	mech.power = maxi(0, mech.power + power_delta)
+
 	gs.write_log(&"equipment_broken", {
 		"mech_id": String(mech_id),
 		"slot_id": String(slot_id),
@@ -104,6 +110,12 @@ func replace_equipment(player_id: StringName, mech_id: StringName, new_card_id: 
 		# 注册新装备效果
 		if context.effect_registry:
 			context.effect_registry.register_card(new_card)
+
+	# ── 重算动力上限并调整当前动力 ──
+	var old_max_power: int = mech.max_power
+	mech.max_power = mech.get_total_power()
+	var power_delta: int = mech.max_power - old_max_power
+	mech.power = maxi(0, mech.power + power_delta)
 
 	# ── 触发装备设置钩子 ──
 	_fire_hook(_EffectConst.HOOK_EQUIPMENT_SET, {

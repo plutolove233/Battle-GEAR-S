@@ -46,6 +46,10 @@ func set_equipment(player_id: StringName, card_id: StringName, slot_id: StringNa
 	# ── 处理已有装备的替换 ──
 	if slot.equipped_card != null:
 		var old_card: CardInstance = slot.equipped_card
+		# 移除旧装备耐久度等值的区域损伤标记（与 EquipmentBreakService.replace_equipment 一致）
+		var old_durability: int = slot.get_equipment_durability()
+		var tokens_to_remove: int = mini(old_durability, slot.region_damage_tokens)
+		slot.region_damage_tokens -= tokens_to_remove
 		# 取消注册旧装备效果
 		if context.effect_registry:
 			context.effect_registry.unregister_card(old_card)
@@ -61,6 +65,12 @@ func set_equipment(player_id: StringName, card_id: StringName, slot_id: StringNa
 	card.slot_id = slot_id
 	card.mech_id = mech.mech_id
 	slot.equipped_card = card
+
+	# ── 重算动力上限并调整当前动力 ──
+	var old_max_power: int = mech.max_power
+	mech.max_power = mech.get_total_power()
+	var power_delta: int = mech.max_power - old_max_power
+	mech.power = maxi(0, mech.power + power_delta)
 
 	# ── 注册装备效果 ──
 	if context.effect_registry:

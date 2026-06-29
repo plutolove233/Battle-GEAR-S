@@ -2,7 +2,8 @@
 ##
 ## 负责：
 ## - 放置损伤标记到机甲槽位
-## - 优先放置到已装备的槽位
+## - 优先放置到已装备的槽位（AI自动放置模式）
+## - 支持玩家指定槽位放置（place_one_token_at_slot）
 ## - 检查装备是否因标记数超过耐久度而损坏
 class_name DamageTokenService
 extends RefCounted
@@ -12,7 +13,45 @@ var context = null  # type: GameContext
 const _EffectConst = preload("res://scripts/effect_core/EffectConst.gd")
 
 
-## 放置损伤标记
+## 放置1个损伤标记到指定槽位（玩家选择模式）
+## 流程：添加标记 → 检查装备损坏
+func place_one_token_at_slot(mech_id: StringName, slot_id: StringName) -> void:
+	var gs: GameState = context.game_state
+	var mech: MechState = gs.mechs.get(mech_id)
+	if mech == null:
+		return
+	if not mech.slots.has(slot_id):
+		return
+
+	var slot: MechSlotState = mech.slots[slot_id]
+
+	# ── 触发放置前钩子 ──
+	_fire_hook(_EffectConst.HOOK_DAMAGE_DEALT, {
+		"event": &"before_damage_token_placed",
+		"mech_id": String(mech_id),
+		"slot_id": String(slot_id),
+	})
+
+	# ── 添加区域损伤标记 ──
+	slot.region_damage_tokens += 1
+
+	# ── 如果槽位有装备，也添加装备损伤标记 ──
+	if slot.equipped_card != null:
+		slot.equipped_card.damage_tokens += 1
+
+	# ── 触发放置后钩子 ──
+	_fire_hook(_EffectConst.HOOK_DAMAGE_DEALT, {
+		"event": &"after_damage_token_placed",
+		"mech_id": String(mech_id),
+		"slot_id": String(slot_id),
+	})
+
+	# ── 检查装备是否损坏 ──
+	if slot.equipped_card != null:
+		context.equipment_break_service.check_equipment_broken(mech_id, slot_id)
+
+
+## 放置多个损伤标记（AI自动放置模式）
 ## params 包含: mech_id, count, source_attack_id
 ## 流程：逐个放置 → 选择槽位（优先已装备） → 添加标记 → 检查装备损坏
 func place_damage_tokens(params: Dictionary) -> void:
@@ -66,7 +105,7 @@ func place_damage_tokens(params: Dictionary) -> void:
 ## ── 内部方法 ──
 
 
-## 为损伤标记选择目标槽位
+## 为损伤标记选择目标槽位（AI自动放置）
 ## 优先选择已装备的部件槽位，其次是武器槽位，最后是空槽位
 func _choose_slot_for_token(mech: MechState) -> StringName:
 	# 优先级：已装备部件 > 已装备武器 > 空部件 > 空武器 > 其他
