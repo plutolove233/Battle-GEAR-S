@@ -8,6 +8,7 @@ class_name AtomicActionResolver
 
 
 ## 解析单个动作字典，分发到 GameActions 对应方法
+## P0-0: 添加诊断日志
 static func resolve(binding: EffectBinding, payload: Dictionary, action: Dictionary, context: GameContext) -> void:
 	if context == null or context.game_actions == null:
 		push_error("AtomicActionResolver: context 或 game_actions 未初始化")
@@ -15,6 +16,9 @@ static func resolve(binding: EffectBinding, payload: Dictionary, action: Diction
 
 	var action_type: StringName = action.get("type", &"")
 	var params: Dictionary = _resolve_params(action.get("params", {}), binding, payload)
+
+	# P0-0: 诊断日志
+	print("[AtomicActionResolver] action=%s params=%s" % [String(action_type), JSON.stringify(params).left(120)])
 
 	match action_type:
 		# ── 攻击相关 ──
@@ -160,6 +164,90 @@ static func resolve(binding: EffectBinding, payload: Dictionary, action: Diction
 
 		&"CUSTOM_EFFECT_CHECK_TEXT":
 			context.game_actions.custom_effect_check_text(params)
+
+		# ── 新增动作（批次3原语扩展） ──
+		&"APPLY_ENERGY_TO_WEAPON":
+			context.game_actions.apply_energy_to_weapon(params)
+
+		&"STEAL_ACTION_CARD":
+			context.game_actions.steal_action_card(params)
+
+		&"PLACE_TRAP_MARKER":
+			context.game_actions.place_trap_marker(params)
+
+		&"CONVERT_WEAPON_KIND":
+			context.game_actions.convert_weapon_kind(params)
+
+		# ── 新增动作（阶段1原语扩展：280+效果支持） ──
+		&"PLACE_DAMAGE_TOKENS_ON_SLOT":
+			context.game_actions.place_damage_tokens_on_slot(params)
+
+		&"PLAY_CARD_AS_TYPE":
+			context.game_actions.play_card_as_type(params)
+
+		&"MODIFY_ACTION_HAND_LIMIT":
+			context.game_actions.modify_action_hand_limit(params)
+
+		&"MODIFY_ATTACK_COUNT":
+			context.game_actions.modify_attack_count(params)
+
+		&"INCREMENT_VARIABLE":
+			context.game_actions.increment_variable(params)
+
+		&"CHOOSE_ONE":
+			context.game_actions.choose_one(params)
+
+		&"FORCE_MECH_ACTION":
+			context.game_actions.force_mech_action(params)
+
+		&"TREAT_CARD_AS_NAMED_TYPE":
+			context.game_actions.treat_card_as_named_type(params)
+
+		&"GRANT_EFFECT_TO_FACTION":
+			context.game_actions.grant_effect_to_faction(params)
+
+		&"TOGGLE_EFFECT_ON_MECH":
+			context.game_actions.toggle_effect_on_mech(params)
+
+		&"NEGATE_EQUIPMENT_EFFECT":
+			context.game_actions.negate_equipment_effect(params)
+
+		&"MOVE_WITHOUT_POWER":
+			context.game_actions.move_without_power(params)
+
+		&"MODIFY_WEAPON_POWER":
+			context.game_actions.modify_weapon_power(params)
+
+		&"SET_WEAPON_STATS":
+			context.game_actions.set_weapon_stats(params)
+
+		&"CONVERT_ARMOR_TO_POWER":
+			context.game_actions.convert_armor_to_power(params)
+
+		&"REDIRECT_HEAL_TO_DAMAGE":
+			context.game_actions.redirect_heal_to_damage(params)
+
+		&"REDIRECT_REMOVE_TO_PLACE_TOKENS":
+			context.game_actions.redirect_remove_to_place_tokens(params)
+
+		&"MODIFY_NEXT_DAMAGE_DEALT":
+			context.game_actions.modify_next_damage_dealt(params)
+
+		&"ADD_WEAPON_TAG":
+			context.game_actions.add_weapon_tag(params)
+
+		&"DECLARE_CARD_TYPE":
+			context.game_actions.declare_card_type(params)
+
+		&"DRAW_ADVANCED_EQUIPMENT":
+			context.game_actions.draw_advanced_equipment(params)
+
+		&"PLACE_CARD_IN_DECK_FACE_UP":
+			context.game_actions.place_card_in_deck_face_up(params)
+
+		# ── 新增动作（阶段4机师效果支持） ──
+		&"SWAP_HAND_LIMIT_AND_ATTACK_COUNT":
+			context.game_actions.swap_hand_limit_and_attack_count(params)
 
 		_:
 			push_error("AtomicActionResolver: 未知原子动作 %s" % action_type)

@@ -15,6 +15,7 @@ var registry = null  # type: DataRegistry
 var campaign = null  # type: CampaignState
 var battle = null  # type: BattleState
 var selected_equipment: Dictionary = {}
+var current_selection_cards: Array = []
 var current_screen: Control
 var status_label: Label
 var battle_summary_label: Label
@@ -32,8 +33,14 @@ var attack_flow: RefCounted = null  # type: AttackFlowController
 var weapon_picker_panel = null  # type: WeaponPickerPanel
 ## 损伤放置面板
 var damage_placement_panel = null  # type: DamagePlacementPanel
+## 效果选择面板（维修等二选一卡牌）
+var choice_panel = null  # type: ChoicePanel
 ## 取消攻击按钮
 var cancel_attack_button = null  # type: Button
+## 辅助牌目标选择状态：正在选择目标的辅助牌ID
+var _support_target_select_card_id: StringName = &""
+## 辅助牌效果选择状态：正在选择效果的辅助牌ID
+var _choice_select_card_id: StringName = &""
 
 func _ready() -> void:
 	_load_app_state()
@@ -67,11 +74,17 @@ func _show_main_menu() -> void:
 # ═══════════════════════════════════════════
 
 func _show_loadout() -> void:
+	# 随机抽取4张装备（至少1张武器）
+	current_selection_cards = campaign.generate_random_equipment_selection(4, 1)
+	selected_equipment.clear()
+	_render_loadout_screen()
+
+func _render_loadout_screen() -> void:
 	var layout := _begin_screen("出击准备")
 	var pilot: Dictionary = campaign.selected_pilot
 	_add_text(layout, "机师: %s" % String(pilot.get("name", "克劳德")))
-	_add_text(layout, "选择可用装备")
-	for item in campaign.list_available_equipment():
+	_add_text(layout, "从以下装备中选择（随机4张，至少1张武器）:")
+	for item in current_selection_cards:
 		if typeof(item) != TYPE_DICTIONARY:
 			continue
 		var id := String(item.get("id", ""))
@@ -82,8 +95,14 @@ func _show_loadout() -> void:
 		checkbox.button_pressed = bool(selected_equipment.get(id, false))
 		checkbox.toggled.connect(Callable(self, "_on_equipment_toggled").bind(id))
 		layout.add_child(checkbox)
+	_add_button(layout, "重新随机", Callable(self, "_reroll_selection"))
 	_add_button(layout, "开始教学战斗", Callable(self, "_start_tutorial_battle"))
 	_add_button(layout, "返回", Callable(self, "_show_main_menu"))
+
+func _reroll_selection() -> void:
+	current_selection_cards = campaign.generate_random_equipment_selection(4, 1)
+	selected_equipment.clear()
+	_render_loadout_screen()
 
 func _start_tutorial_battle() -> void:
 	var ids: Array[String] = []
@@ -202,6 +221,14 @@ func _show_battle() -> void:
 	damage_placement_panel.visible = false
 	layout.add_child(damage_placement_panel)
 
+	# ── 效果选择面板（初始隐藏）──
+	var _ChoicePanel = preload("res://scripts/ui/choice_panel.gd")
+	choice_panel = _ChoicePanel.new()
+	choice_panel.choice_made.connect(Callable(self, "_on_choice_made"))
+	choice_panel.choice_cancelled.connect(Callable(self, "_on_choice_cancelled"))
+	choice_panel.visible = false
+	layout.add_child(choice_panel)
+
 	# ── 连接 EffectEngine hook 信号 ──
 	if battle.context and battle.context.effect_engine:
 		battle.context.effect_engine.hook_fired.connect(Callable(self, "_on_hook_fired"))
@@ -219,9 +246,14 @@ func _show_battle() -> void:
 # 战斗交互
 # ═══════════════════════════════════════════
 
-## 点击地图格子
+	## 点击地图格子
 func _on_battle_hex_clicked(hex: Dictionary) -> void:
 	if battle == null:
+		return
+
+	# 如果在辅助牌目标选择模式，选择该位置上的机甲
+	if _support_target_select_card_id != &"":
+		_select_support_target(hex)
 		return
 
 	# 如果在攻击目标选择模式，尝试攻击该位置上的机甲
@@ -235,7 +267,7 @@ func _on_battle_hex_clicked(hex: Dictionary) -> void:
 		battle.log.append({"message": "无法移动", "details": {"reason": _status_message(result)}})
 	_refresh_battle()
 
-## 点击行动牌
+	## 点击行动牌
 func _on_action_card_clicked(card_id: StringName) -> void:
 	if battle == null or battle.context == null:
 		return
@@ -252,7 +284,19 @@ func _on_action_card_clicked(card_id: StringName) -> void:
 		"迎击":
 			battle.log.append({"message": "迎击牌在响应窗口自动使用", "details": {}})
 		"辅助":
-			_play_action_card(card_id)
+			# 检查是否为掩护牌（不能主动打出）
+			if _is_cover_card(card):
+				battle.log.append({"message": "掩护牌只能在响应窗口中使用", "details": {}})
+				_refresh_battle()
+				return
+			# 检查是否有二选一效果（如维修）
+			if _support_card_has_choose_one(card):
+				_enter_choice_select(card_id)
+			# 检查是否需要选择目标
+			elif _support_card_needs_target(card):
+				_enter_support_target_select(card_id)
+			else:
+				_play_action_card(card_id)
 
 ## 点击装备牌
 func _on_equipment_card_clicked(card_id: StringName) -> void:
@@ -463,6 +507,8 @@ func _on_cancel_attack() -> void:
 ## 取消攻击模式（通用清理）
 func _cancel_attack_mode() -> void:
 	attack_flow.reset()
+	_support_target_select_card_id = &""
+	_choice_select_card_id = &""
 	if battle_board:
 		battle_board.clear_highlight()
 	if weapon_picker_panel:
@@ -570,6 +616,28 @@ func _on_damage_placement_completed() -> void:
 
 	_refresh_battle()
 
+## 效果选择完成回调
+func _on_choice_made(effect_id: StringName) -> void:
+	if choice_panel:
+		choice_panel.visible = false
+	var card_id: StringName = _choice_select_card_id
+	_choice_select_card_id = &""
+	if card_id == &"":
+		_refresh_battle()
+		return
+	# 将选择的效果ID加入 payload 并打出辅助牌
+	var payload := {"chosen_effect_id": effect_id}
+	_play_action_card(card_id, payload)
+
+
+## 效果选择取消回调
+func _on_choice_cancelled() -> void:
+	if choice_panel:
+		choice_panel.visible = false
+	_choice_select_card_id = &""
+	_refresh_battle()
+
+
 ## 显示迎击面板
 func _show_response_panel(attack_result: Dictionary) -> void:
 	if not battle or not battle.context:
@@ -596,15 +664,140 @@ func _show_damage_placement(attack_result: Dictionary) -> void:
 		_finish_battle_if_needed()
 
 ## 打出辅助牌
-func _play_action_card(card_id: StringName) -> void:
+func _play_action_card(card_id: StringName, payload: Dictionary = {}) -> void:
 	if battle == null or battle.context == null:
 		return
-	var result: Dictionary = battle.context.card_play_service.play_action_card(&"player", card_id)
+	var result: Dictionary = battle.context.card_play_service.play_action_card(&"player", card_id, payload)
 	if result.get("ok", false):
 		battle.log.append({"message": "打出了行动牌", "details": {}})
 	else:
 		battle.log.append({"message": "打出失败: %s" % String(result.get("message", "")), "details": {}})
 	_refresh_battle()
+
+
+## 判断辅助牌是否为掩护牌（不能主动打出）
+func _is_cover_card(card) -> bool:
+	if card == null or card.def == null:
+		return false
+	# 检查效果的 hook 是否为 HOOK_ATTACK_DECLARED（掩护牌特征）
+	for effect in card.def.effects:
+		if effect and String(effect.hook) == "ON_ATTACK_DECLARED":
+			return true
+	# 检查 effect_ids 是否包含掩护效果
+	if card.def.card_id == &"action_016_掩护":
+		return true
+	return false
+
+
+## 判断辅助牌是否需要选择目标机甲
+## 判断辅助牌是否包含二选一效果（CHOOSE_ONE）
+func _support_card_has_choose_one(card) -> bool:
+	if card == null or card.def == null:
+		return false
+	for effect in card.def.effects:
+		if effect == null:
+			continue
+		for action in effect.actions:
+			if action is Dictionary and String(action.get("type", "")) == "CHOOSE_ONE":
+				return true
+	return false
+
+
+## 进入效果选择模式（二选一）
+func _enter_choice_select(card_id: StringName) -> void:
+	_choice_select_card_id = card_id
+	# 从卡牌效果中提取 CHOOSE_ONE 的选项
+	var gs = battle.context.game_state
+	var card = gs.get_card(card_id)
+	if card == null or card.def == null:
+		_choice_select_card_id = &""
+		return
+	var options: Array[Dictionary] = []
+	for effect in card.def.effects:
+		if effect == null:
+			continue
+		for action in effect.actions:
+			if action is Dictionary and String(action.get("type", "")) == "CHOOSE_ONE":
+				var action_params: Dictionary = action.get("params", {})
+				var raw_options: Array = action_params.get("options", [])
+				for opt in raw_options:
+					if opt is Dictionary:
+						options.append(opt)
+				break
+		if options.size() > 0:
+			break
+	if options.is_empty():
+		_choice_select_card_id = &""
+		return
+	if choice_panel:
+		choice_panel.configure(options)
+		choice_panel.visible = true
+	_refresh_battle()
+
+
+func _support_card_needs_target(card) -> bool:
+	if card == null or card.def == null:
+		return false
+	for effect in card.def.effects:
+		if effect == null:
+			continue
+		for rule in effect.target_rules:
+			var rule_name: String = String(rule.get("rule", ""))
+			if rule_name in ["CHOOSE_ENEMY_MECH", "CHOOSE_ENEMY_MECH_IN_RANGE", "CHOOSE_MECH_IN_VARIABLE_RANGE"]:
+				return true
+	return false
+
+
+## 进入辅助牌目标选择模式
+func _enter_support_target_select(card_id: StringName) -> void:
+	_support_target_select_card_id = card_id
+	if battle_board:
+		# 高亮所有敌方机甲位置
+		var gs = battle.context.game_state
+		var highlights: Array[Dictionary] = []
+		for mech_id: StringName in gs.mechs:
+			var m = gs.mechs[mech_id]
+			if m.destroyed or m.owner_player_id == &"player":
+				continue
+			highlights.append(m.position)
+		battle_board.highlight_hexes(highlights)
+	_show_cancel_button(true)
+	battle.log.append({"message": "辅助牌目标选择：点击敌方机甲", "details": {}})
+	_refresh_battle()
+
+
+## 选择辅助牌的目标机甲
+func _select_support_target(hex: Dictionary) -> void:
+	if battle == null or battle.context == null:
+		_support_target_select_card_id = &""
+		return
+
+	var gs = battle.context.game_state
+	var card_id: StringName = _support_target_select_card_id
+	_support_target_select_card_id = &""
+	_show_cancel_button(false)
+	if battle_board:
+		battle_board.clear_highlight()
+
+	# 查找点击位置上的敌方机甲
+	var target_mech_id: StringName = &""
+	for mech_id: StringName in gs.mechs:
+		var m = gs.mechs[mech_id]
+		if m.destroyed:
+			continue
+		if int(m.position.get("q", 0)) == int(hex.get("q", 0)) and int(m.position.get("r", 0)) == int(hex.get("r", 0)):
+			if m.owner_player_id != &"player":
+				target_mech_id = mech_id
+				break
+
+	if target_mech_id == &"":
+		battle.log.append({"message": "该位置无敌方机甲", "details": {}})
+		_refresh_battle()
+		return
+
+	# 将目标信息加入 payload 并打出辅助牌
+	var payload := {"target_mech_id": target_mech_id}
+	_play_action_card(card_id, payload)
 
 # ═══════════════════════════════════════════
 # 刷新与工具
@@ -769,6 +962,7 @@ func _clear_screen() -> void:
 	response_panel = null
 	weapon_picker_panel = null
 	damage_placement_panel = null
+	choice_panel = null
 	cancel_attack_button = null
 
 func _add_text(parent: Node, text: String) -> Label:

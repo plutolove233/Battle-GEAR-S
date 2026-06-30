@@ -41,6 +41,65 @@ func list_available_equipment() -> Array:
 		result.append(item)
 	return result
 
+
+## 从 N 稀有度装备池中随机抽取指定数量的装备（至少含 min_weapons 张武器牌）
+## 返回选中的装备字典数组，每项含 id, name, rarity, slot 等原始 JSON 字段
+func generate_random_equipment_selection(count: int = 4, min_weapons: int = 1) -> Array:
+	var result: Array = []
+	if not initialized or registry == null:
+		return result
+
+	# 收集 N 稀有度零件和武器
+	var n_parts: Array = []
+	var n_weapons: Array = []
+	for item in registry.list_parts():
+		if typeof(item) == TYPE_DICTIONARY and String(item.get("rarity", "")) == "N":
+			n_parts.append(item)
+	for item in registry.list_weapons():
+		if typeof(item) == TYPE_DICTIONARY and String(item.get("rarity", "")) == "N":
+			n_weapons.append(item)
+
+	# 先随机选至少 min_weapons 张武器
+	var selected_ids: Array[String] = []
+	var weapon_count: int = mini(min_weapons, n_weapons.size())
+	n_weapons = _shuffle_and_copy(n_weapons)
+	for i in range(weapon_count):
+		var item: Dictionary = n_weapons[i]
+		var id: String = String(item.get("id", ""))
+		if id != "":
+			result.append(item)
+			selected_ids.append(id)
+
+	# 从剩余 N 稀有度装备（零件+武器）中补齐
+	var remaining: Array = []
+	for item in n_parts:
+		var id: String = String(item.get("id", ""))
+		if not id in selected_ids:
+			remaining.append(item)
+	for i in range(weapon_count, n_weapons.size()):
+		var item: Dictionary = n_weapons[i]
+		var id: String = String(item.get("id", ""))
+		if not id in selected_ids:
+			remaining.append(item)
+
+	remaining = _shuffle_and_copy(remaining)
+	var need: int = count - result.size()
+	for i in range(mini(need, remaining.size())):
+		result.append(remaining[i])
+
+	return result
+
+
+## Fisher-Yates 洗牌并返回副本
+func _shuffle_and_copy(arr: Array) -> Array:
+	var copy: Array = arr.duplicate(true)
+	for i in range(copy.size() - 1, 0, -1):
+		var j: int = randi() % (i + 1)
+		var tmp = copy[i]
+		copy[i] = copy[j]
+		copy[j] = tmp
+	return copy
+
 func select_faction(faction: String) -> Dictionary:
 	if not initialized:
 		return _not_initialized()

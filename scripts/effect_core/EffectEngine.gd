@@ -75,6 +75,7 @@ func _process_queue() -> void:
 
 
 ## 分发 hook 到所有注册的被动/静态效果
+## P0-0: 添加诊断日志
 func _dispatch_hook(hook: StringName, payload: Dictionary) -> void:
 	if context == null or context.effect_registry == null:
 		return
@@ -83,6 +84,13 @@ func _dispatch_hook(hook: StringName, payload: Dictionary) -> void:
 	bindings.sort_custom(func(a, b) -> bool:
 		return a.effect.priority < b.effect.priority
 	)
+	# P0-0: 诊断日志
+	if bindings.size() > 0:
+		var binding_info: String = ""
+		for b in bindings:
+			if b.effect:
+				binding_info += "%s(src=%s) " % [String(b.effect.effect_id), String(b.source_card.instance_id) if b.source_card else "?"]
+		print("[EffectEngine] hook=%s bindings=%d: %s" % [String(hook), bindings.size(), binding_info])
 	for binding in bindings:
 		_try_resolve_binding(binding, payload, false)
 
@@ -100,13 +108,14 @@ func _try_resolve_binding(binding, payload: Dictionary, is_manual: bool) -> bool
 	if not is_manual and effect.mode == _EffectConst.MODE_ACTIVE:
 		return false
 
-	# 2. 每回合一次检查
+	# 2. 每回合次数检查
 	if effect.once_per_turn_key != &"":
 		var player_id: StringName = binding.get_owner_player_id()
 		var key: String = "%s_%s" % [player_id, effect.once_per_turn_key]
 		if context.game_state != null:
 			var player_state = context.game_state.players.get(player_id)
-			if player_state != null and player_state.once_per_turn_used.has(key):
+			var used: int = player_state.once_per_turn_used.get(key, 0) if player_state != null else 0
+			if used >= effect.once_per_turn_max:
 				return false
 
 	# 3. 条件检查
@@ -128,14 +137,15 @@ func _try_resolve_binding(binding, payload: Dictionary, is_manual: bool) -> bool
 	for action in effect.actions:
 		_AtomicActionResolver.resolve(binding, payload, action, context)
 
-	# 8. 标记每回合一次
+	# 8. 标记每回合效果使用次数
 	if effect.once_per_turn_key != &"":
 		var player_id: StringName = binding.get_owner_player_id()
 		var key: String = "%s_%s" % [player_id, effect.once_per_turn_key]
 		if context.game_state != null:
 			var player_state = context.game_state.players.get(player_id)
 			if player_state != null:
-				player_state.once_per_turn_used[key] = true
+				var prev: int = player_state.once_per_turn_used.get(key, 0)
+				player_state.once_per_turn_used[key] = prev + 1
 
 	effect_resolved.emit(binding, payload)
 	return true

@@ -5,14 +5,14 @@
 class_name CardDatabaseLoader
 extends RefCounted
 
-## 卡牌→效果映射：card_id → effect_id（用于后续效果绑定）
-var _effect_id_map: Dictionary = {}
+## 卡牌→效果映射：card_id → [effect_id, ...]（用于后续效果绑定）
+var _effect_ids_map: Dictionary = {}
 
 
 ## 从 DataRegistry 加载所有卡牌，返回 { card_id: CardDef }
 func load_from_registry(registry: DataRegistry) -> Dictionary:
 	var result: Dictionary = {}
-	_effect_id_map.clear()
+	_effect_ids_map.clear()
 
 	# 加载装备部件
 	for id in registry.equipment_parts:
@@ -38,6 +38,12 @@ func load_from_registry(registry: DataRegistry) -> Dictionary:
 		var def := _load_event_card(data)
 		result[def.card_id] = def
 
+	# 加载飞行员牌
+	for id in registry.pilot_cards:
+		var data: Dictionary = registry.pilot_cards[id]
+		var def := _load_pilot_card(data)
+		result[def.card_id] = def
+
 	# 加载机甲框架
 	for id in registry.mech_frames:
 		var data: Dictionary = registry.mech_frames[id]
@@ -48,12 +54,12 @@ func load_from_registry(registry: DataRegistry) -> Dictionary:
 
 
 ## 获取卡牌→效果映射（load_from_registry 调用后可用）
-func get_effect_id_map() -> Dictionary:
-	return _effect_id_map
+func get_effect_ids_map() -> Dictionary:
+	return _effect_ids_map
 
 
 ## ── 装备部件：JSON → EquipmentCardDef ──
-## JSON 字段：id, set_name, slot, rarity, count, effect_text, armor, power, durability, cost, effect_id
+## JSON 字段：id, category, set_name, slot, rarity, count, effect_text, armor, power, durability, cost, effect_ids
 func _load_equipment_part(data: Dictionary) -> EquipmentCardDef:
 	var def := EquipmentCardDef.new()
 	# 基类 CardDef 字段
@@ -77,12 +83,12 @@ func _load_equipment_part(data: Dictionary) -> EquipmentCardDef:
 	def.durability = int(data.get("durability", 0))
 	def.cost = int(data.get("cost", 0))
 	# 记录效果 ID
-	_record_effect_id(def.card_id, data)
+	_record_effect_ids(def.card_id, data)
 	return def
 
 
 ## ── 装备武器：JSON → EquipmentCardDef ──
-## JSON 字段：id, name, weapon_type, rarity, count, effect_text, damage, range, durability, cost, effect_id
+## JSON 字段：id, name, weapon_type, slot, rarity, count, effect_text, damage, range, durability, cost, effect_ids
 ## 字段映射：damage → might, range → range_value, weapon_type → weapon_kind
 func _load_equipment_weapon(data: Dictionary) -> EquipmentCardDef:
 	var def := EquipmentCardDef.new()
@@ -95,6 +101,8 @@ func _load_equipment_weapon(data: Dictionary) -> EquipmentCardDef:
 	def.effect_text = String(data.get("effect_text", ""))
 	# 装备大类
 	def.equipment_kind = &"WEAPON"
+	# 武器槽位（新 JSON 包含 slot 字段，如 "武器"）
+	def.slot = StringName(data.get("slot", &"武器"))
 	# 武器属性（字段名映射）
 	def.might = int(data.get("damage", 0))           # JSON damage → CardDef might
 	def.range_value = int(data.get("range", 0))       # JSON range → CardDef range_value
@@ -105,16 +113,18 @@ func _load_equipment_weapon(data: Dictionary) -> EquipmentCardDef:
 		def.tags.append(&"近战")
 	elif def.weapon_kind == &"远程":
 		def.tags.append(&"远程")
+	elif def.weapon_kind == &"特殊":
+		def.tags.append(&"特殊")
 	# 通用属性
 	def.durability = int(data.get("durability", 0))
 	def.cost = int(data.get("cost", 0))
 	# 记录效果 ID
-	_record_effect_id(def.card_id, data)
+	_record_effect_ids(def.card_id, data)
 	return def
 
 
 ## ── 行动牌：JSON → ActionCardDef ──
-## JSON 字段：id, name, type, rarity, count, effect_text, effect_id
+## JSON 字段：id, name, type, rarity, count, effect_text, effect_ids
 ## 字段映射：type → action_type
 func _load_action_card(data: Dictionary) -> ActionCardDef:
 	var def := ActionCardDef.new()
@@ -128,12 +138,12 @@ func _load_action_card(data: Dictionary) -> ActionCardDef:
 	# 行动类型（字段名映射）
 	def.action_type = StringName(data.get("type", ""))
 	# 记录效果 ID
-	_record_effect_id(def.card_id, data)
+	_record_effect_ids(def.card_id, data)
 	return def
 
 
 ## ── 事件牌：JSON → EventCardDef ──
-## JSON 字段：id, name, delay, tone, rarity, count, timing, effect_text, effect_id
+## JSON 字段：id, name, delay, tone, rarity, count, timing, effect_text, effect_ids
 func _load_event_card(data: Dictionary) -> EventCardDef:
 	var def := EventCardDef.new()
 	# 基类 CardDef 字段
@@ -148,7 +158,7 @@ func _load_event_card(data: Dictionary) -> EventCardDef:
 	def.tone = String(data.get("tone", ""))
 	def.timing = String(data.get("timing", ""))
 	# 记录效果 ID
-	_record_effect_id(def.card_id, data)
+	_record_effect_ids(def.card_id, data)
 	return def
 
 
@@ -184,12 +194,39 @@ func _load_mech_frame(data: Dictionary) -> MechFrameDef:
 			weapon_dict["range_value"] = int(weapon_data.get("range", 0))    # JSON range → range_value
 			def.base_weapons.append(weapon_dict)
 	# 记录效果 ID
-	_record_effect_id(def.card_id, data)
+	_record_effect_ids(def.card_id, data)
 	return def
 
 
-## ── 内部：记录卡牌的 effect_id 用于后续效果绑定 ──
-func _record_effect_id(card_id: StringName, data: Dictionary) -> void:
-	var eid = data.get("effect_id", "")
-	if eid != "" and eid != null:
-		_effect_id_map[card_id] = StringName(eid)
+## ── 飞行员牌：JSON → PilotCardDef ──
+## JSON 字段：id, name, rarity, count, faction, attack_limit, action_card_limit, cost, effect_text, effect_ids
+func _load_pilot_card(data: Dictionary) -> PilotCardDef:
+	var def := PilotCardDef.new()
+	# 基类 CardDef 字段
+	def.card_id = StringName(data.get("id", ""))
+	def.display_name = String(data.get("name", data.get("id", "")))
+	def.card_kind = &"pilot"
+	def.rarity = String(data.get("rarity", "N"))
+	def.count = int(data.get("count", 1))
+	def.effect_text = String(data.get("effect_text", ""))
+	# 飞行员属性
+	def.attack_limit = int(data.get("attack_limit", 1))
+	def.action_card_limit = int(data.get("action_card_limit", 5))
+	def.faction = String(data.get("faction", ""))
+	def.cost = int(data.get("cost", 0))
+	# 记录效果 ID
+	_record_effect_ids(def.card_id, data)
+	return def
+
+
+## ── 内部：记录卡牌的 effect_ids 用于后续效果绑定 ──
+## 支持数组格式：effect_ids: ["effect_a", "effect_b"]
+func _record_effect_ids(card_id: StringName, data: Dictionary) -> void:
+	var ids = data.get("effect_ids", [])
+	if typeof(ids) == TYPE_ARRAY:
+		var valid_ids: Array[StringName] = []
+		for eid in ids:
+			if eid != "" and eid != null:
+				valid_ids.append(StringName(eid))
+		if valid_ids.size() > 0:
+			_effect_ids_map[card_id] = valid_ids

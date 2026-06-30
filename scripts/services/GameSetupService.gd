@@ -57,7 +57,7 @@ func setup_tutorial_battle(data_registry: DataRegistry) -> Dictionary:
 		gs.map_state.add_cell(int(cell.q), int(cell.r), &"NORMAL")
 
 	# ── 6. 构建牌堆 ──
-	context.deck_service.build_decks_from_config(battle_config)
+	context.deck_build_service.build_all_decks_from_card_database()
 
 	# ── 7. 注册所有已装备卡牌的效果 ──
 	_register_equipped_effects(player_mech)

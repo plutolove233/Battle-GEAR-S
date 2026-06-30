@@ -6,7 +6,9 @@
 ## 当前实现的目标规则：
 ##   NO_TARGET, TARGET_SLOT_EXISTS, TARGET_IS_MECH, TARGET_IN_RANGE,
 ##   TARGET_IN_WEAPON_RANGE, TARGET_IS_ADJACENT, TARGET_HAS_EQUIPMENT,
-##   CHOOSE_OWN_SLOT, CHOOSE_OWN_WEAPON
+##   CHOOSE_OWN_SLOT, CHOOSE_OWN_WEAPON, CHOOSE_ENEMY_MECH,
+##   CHOOSE_ENEMY_MECH_IN_RANGE, CHOOSE_OWN_EQUIPMENT_IN_SLOT,
+##   CHOOSE_MAP_CELL_IN_WEAPON_RANGE, CHOOSE_MECH_IN_VARIABLE_RANGE
 extends RefCounted
 class_name TargetChecker
 
@@ -31,24 +33,19 @@ static func check_single(binding, payload: Dictionary, rule: Dictionary) -> bool
 	var rule_name: StringName = rule.get("rule", &"NO_TARGET")
 	match rule_name:
 		&"NO_TARGET":
-			# 无需目标，总是合法
 			return true
 
 		&"TARGET_SLOT_EXISTS":
-			# 目标槽位存在
 			var target_mech_id: StringName = payload.get("target_mech_id", payload.get("target_id", &""))
 			var slot_id: StringName = payload.get("slot_id", &"")
 			if target_mech_id == &"" or slot_id == &"":
 				return false
-			# payload 中携带 slot_exists 标记（由调用方设置）
 			return payload.get("slot_exists", false)
 
 		&"TARGET_IS_MECH":
-			# 目标是一个机甲
 			var target_id: StringName = payload.get("target_id", &"")
 			if target_id == &"":
 				return false
-			# payload 中携带 target_is_mech 标记（由调用方设置）
 			return payload.get("target_is_mech", false)
 
 		&"TARGET_IN_RANGE":
@@ -94,6 +91,69 @@ static func check_single(binding, payload: Dictionary, rule: Dictionary) -> bool
 		&"CHOOSE_OWN_WEAPON":
 			var weapon_id: StringName = payload.get("selected_weapon_id", &"")
 			return weapon_id != &""
+
+		&"CHOOSE_ENEMY_MECH":
+			var target_id: StringName = payload.get("target_id", &"")
+			if target_id == &"":
+				return false
+			var owner_id: StringName = binding.get_owner_player_id()
+			var target_owner: StringName = payload.get("target_owner_id", &"")
+			if target_owner != &"":
+				return target_owner != owner_id
+			return payload.get("target_is_enemy", false)
+
+		&"CHOOSE_ENEMY_MECH_IN_RANGE":
+			# 选择N格范围内的敌方机甲
+			var target_id: StringName = payload.get("target_id", &"")
+			if target_id == &"":
+				return false
+			var owner_id: StringName = binding.get_owner_player_id()
+			var target_owner: StringName = payload.get("target_owner_id", &"")
+			if target_owner != &"" and target_owner == owner_id:
+				return false
+			var max_range: int = int(rule.get("range", 5))
+			var source_pos: Dictionary = payload.get("source_pos", {})
+			var target_pos: Dictionary = payload.get("target_pos", {})
+			if source_pos.is_empty() or target_pos.is_empty():
+				return payload.get("target_in_range", false)
+			return _HexGrid.distance(source_pos, target_pos) <= max_range
+
+		&"CHOOSE_OWN_EQUIPMENT_IN_SLOT":
+			# 选择自身区域中的装备牌
+			var selected_card_id: StringName = payload.get("selected_card_id", &"")
+			return selected_card_id != &""
+
+		&"CHOOSE_MAP_CELL_IN_WEAPON_RANGE":
+			# 选择武器范围内的格子（用于设陷阱等）
+			var cell_pos: Dictionary = payload.get("selected_cell_pos", {})
+			if cell_pos.is_empty():
+				return false
+			var source_pos: Dictionary = payload.get("source_pos", {})
+			if source_pos.is_empty():
+				return true  # 无法校验时放行
+			var weapon_range: int = int(payload.get("weapon_range", 1))
+			return _HexGrid.distance(source_pos, cell_pos) <= weapon_range
+
+		&"CHOOSE_MECH_IN_VARIABLE_RANGE":
+			# 选择(基础+变量)范围内的机甲
+			var target_id: StringName = payload.get("target_id", &"")
+			if target_id == &"":
+				return false
+			var base_range: int = int(rule.get("base_range", 4))
+			var variable_name: StringName = rule.get("variable_name", &"")
+			var extra_range: int = 0
+			if variable_name != &"":
+				var owner_id: StringName = binding.get_owner_player_id()
+				var mech_id: StringName = binding.get_source_mech_id()
+				var key: String = "%s_%s_%s" % [owner_id, mech_id, variable_name]
+				extra_range = int(payload.get("variable_%s" % key, 0))
+			var max_range: int = base_range + extra_range
+			var source_pos: Dictionary = payload.get("source_pos", {})
+			var target_pos: Dictionary = payload.get("target_pos", {})
+			if source_pos.is_empty() or target_pos.is_empty():
+				return payload.get("target_in_range", false)
+			return _HexGrid.distance(source_pos, target_pos) <= max_range
+
 
 		_:
 			push_warning("TargetChecker: 未知目标规则 %s，默认返回 true" % rule_name)

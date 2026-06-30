@@ -98,20 +98,24 @@ func get_all_active_bindings() -> Array:
 
 ## 判断一张牌的某个效果是否应该注册
 ## 只有牌在效果生效区域（装备槽、武器槽、事件槽、驾驶员槽）时才注册
+## 手牌中的行动牌/装备牌不自动注册——它们只能通过"打出"后快照解析
 func _should_register(card, effect) -> bool:
 	if card == null:
 		return false
 	# 被禁用的牌不注册效果
 	if card.disabled:
 		return false
-	# 效果生效的区域白名单
+	# 行动牌在手牌中不自动注册——它们只能通过"打出"后快照解析
+	# 否则 fire_hook 会自动触发手牌中的行动牌效果（如猛击+4、防御+5），
+	# 导致玩家未选择就自动执行，且与快照解析重复执行
+	if card.zone in [&"action_hand", &"equipment_hand"]:
+		return false
+	# 场上持续效果自动注册
 	var active_zones: Array[StringName] = [
 		&"equipment_slot",
 		&"weapon_slot",
 		&"event_slot",
 		&"pilot_slot",
 		&"reserve_slot",
-		&"action_hand",       # 行动牌在手牌时效果也可用
-		&"equipment_hand",    # 装备牌在手牌时效果也可用
 	]
 	return card.zone in active_zones

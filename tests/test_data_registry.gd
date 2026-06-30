@@ -17,7 +17,7 @@ func test_loads_action_card_by_id() -> bool:
 	if not result.ok:
 		return result.message
 	var card := registry.get_action_card("action_001_进攻")
-	return card.get("name") == "进攻" and card.get("effect_id") == "basic_attack"
+	return card.get("name") == "进攻" and card.get("effect_ids") == ["basic_attack"]
 
 func test_missing_id_returns_empty_dictionary() -> bool:
 	var registry := DataRegistry.new()

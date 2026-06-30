@@ -5,7 +5,8 @@
 ## 先 can_pay_all 检查全部费用是否可支付，再 pay_all 一次性支付。
 ## 当前实现的费用类型：
 ##   DISCARD_ACTION_CARD, SPEND_POWER, SPEND_GOLD,
-##   SPEND_ATTACK_CHANCE, TAKE_SELF_DAMAGE, DISCARD_EQUIPMENT_CARD
+##   SPEND_ATTACK_CHANCE, TAKE_SELF_DAMAGE, DISCARD_EQUIPMENT_CARD,
+##   SPEND_ALL_POWER, SPEND_VARIABLE_GOLD, DISCARD_VARIABLE_ACTION_CARDS
 extends RefCounted
 class_name CostChecker
 
@@ -80,6 +81,32 @@ static func can_pay_single(binding, payload: Dictionary, cost: Dictionary, ctx) 
 			if player_state == null:
 				return false
 			return player_state.equipment_hand.size() >= count
+
+		&"SPEND_ALL_POWER":
+			# 消耗当前所有动力（动力不为0即可支付）
+			var mech_id: StringName = cost.get("mech_id", binding.get_source_mech_id())
+			var mech_state = ctx.game_state.mechs.get(mech_id)
+			if mech_state == null:
+				return false
+			return mech_state.power > 0
+
+		&"SPEND_VARIABLE_GOLD":
+			# 消耗 2*n 金币（n 由玩家选择，至少为1）
+			var player_id: StringName = cost.get("player_id", binding.get_owner_player_id())
+			var n: int = int(payload.get("variable_gold_n", 1))
+			var amount: int = 2 * n
+			var player_state = ctx.game_state.players.get(player_id)
+			if player_state == null:
+				return false
+			return player_state.gold >= amount
+
+		&"DISCARD_VARIABLE_ACTION_CARDS":
+			# 弃置任意张行动牌（至少1张，手牌不为空即可）
+			var player_id: StringName = cost.get("player_id", binding.get_owner_player_id())
+			var player_state = ctx.game_state.players.get(player_id)
+			if player_state == null:
+				return false
+			return player_state.action_hand.size() > 0
 
 		_:
 			push_warning("CostChecker: 未知费用类型 %s，默认可支付" % cost_type)
@@ -166,6 +193,54 @@ static func pay_single(binding, payload: Dictionary, cost: Dictionary, ctx) -> b
 			for i in range(mini(count, player_state.equipment_hand.size())):
 				var card_id: StringName = player_state.equipment_hand.pop_back()
 				ctx.deck_service.discard_card(card_id, &"EFFECT_COST")
+			return true
+
+		&"SPEND_ALL_POWER":
+			# 消耗当前所有动力
+			var mech_id: StringName = cost.get("mech_id", binding.get_source_mech_id())
+			var mech_state = ctx.game_state.mechs.get(mech_id)
+			if mech_state == null or ctx.game_actions == null:
+				return false
+			var all_power: int = mech_state.power
+			if all_power <= 0:
+				return false
+			return ctx.game_actions.spend_power({
+				"mech_id": mech_id,
+				"amount": all_power,
+				"reason": &"EFFECT_COST"
+			})
+
+		&"SPEND_VARIABLE_GOLD":
+			# 消耗 2*n 金币
+			var player_id: StringName = cost.get("player_id", binding.get_owner_player_id())
+			var n: int = int(payload.get("variable_gold_n", 1))
+			var amount: int = 2 * n
+			if ctx.game_actions == null:
+				return false
+			return ctx.game_actions.spend_gold({
+				"player_id": player_id,
+				"amount": amount,
+				"reason": &"EFFECT_COST"
+			})
+
+		&"DISCARD_VARIABLE_ACTION_CARDS":
+			# 弃置任意张行动牌（数量由 payload 指定）
+			var player_id: StringName = cost.get("player_id", binding.get_owner_player_id())
+			var count: int = int(payload.get("variable_discard_count", 1))
+			if ctx.game_actions == null:
+				return false
+			var player_state = ctx.game_state.players.get(player_id)
+			if player_state == null:
+				return false
+			var actual_count: int = mini(count, player_state.action_hand.size())
+			for i in range(actual_count):
+				var card_id: StringName = payload.get("selected_action_card_ids", [&""])[i] if payload.has("selected_action_card_ids") and i < payload.get("selected_action_card_ids", []).size() else &""
+				if card_id != &"":
+					ctx.game_actions.discard_action_card({
+						"player_id": player_id,
+						"card_id": card_id,
+						"reason": &"EFFECT_COST"
+					})
 			return true
 
 		_:

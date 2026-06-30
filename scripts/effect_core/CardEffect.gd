@@ -22,8 +22,11 @@ var mode: String = "PASSIVE"
 ## 优先级：数值越小越先执行
 @export var priority: int = 100
 
-## 每回合一次键：非空时表示此效果每回合只能触发一次
+## 每回合一次键：非空时表示此效果每回合只能触发有限次
 @export var once_per_turn_key: StringName = &""
+
+## 每回合最大触发次数（默认1；配合 once_per_turn_key 使用）
+@export var once_per_turn_max: int = 1
 
 ## 条件列表：[{ op: StringName, ... }] 必须全部满足才触发
 @export var conditions: Array[Dictionary] = []

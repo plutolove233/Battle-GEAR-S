@@ -1,0 +1,518 @@
+[
+  {
+    "effect_id": "equipment_effect_001",
+    "effect_text": "此牌设置在区域中依然可以卖出。"
+  },
+  {
+    "effect_id": "equipment_effect_002",
+    "effect_text": "其他区域每设置有1张名称带有联邦的装备牌则此牌护甲+1。"
+  },
+  {
+    "effect_id": "equipment_effect_003",
+    "effect_text": "此牌从区域中弃置时可移除此牌原先所在区域内的所有损伤。"
+  },
+  {
+    "effect_id": "equipment_effect_004",
+    "effect_text": "将要在其他名称带有联邦的装备牌上设置损伤时，可以将损伤移至此牌所在区域。"
+  },
+  {
+    "effect_id": "equipment_effect_005",
+    "effect_text": "此牌从区域中弃置时可立即抽1张装备牌并设置到区域上(若不立即设置则需要直接弃置)。"
+  },
+  {
+    "effect_id": "equipment_effect_006",
+    "effect_text": "机甲被指定为攻击目标时，可在当前回合动力+2。"
+  },
+  {
+    "effect_id": "equipment_effect_007",
+    "effect_text": "机甲被攻击命中时，可以弃置此牌，之后可最多减少此次攻击产生的2损伤。"
+  },
+  {
+    "effect_id": "equipment_effect_008",
+    "effect_text": "其他区域每设置有1张名称带有帝国的装备牌则此牌动力+1。"
+  },
+  {
+    "effect_id": "equipment_effect_009",
+    "effect_text": "机甲被指定为攻击目标时，可在当前回合动力+3，之后护甲-2。"
+  },
+  {
+    "effect_id": "equipment_effect_010",
+    "effect_text": "机甲发动攻击结算后，回复2动力。"
+  },
+  {
+    "effect_id": "equipment_effect_011",
+    "effect_text": "机甲发动攻击结算后，回复1动力。"
+  },
+  {
+    "effect_id": "equipment_effect_012",
+    "effect_text": "每回合1次，机甲在当前回合内累积移动过8个格子，可回复2动力。"
+  },
+  {
+    "effect_id": "equipment_effect_013",
+    "effect_text": "每回合1次，机甲在当前回合内累积移动过8个格子，可回复1动力。"
+  },
+  {
+    "effect_id": "equipment_effect_014",
+    "effect_text": "损伤不会影响此牌所在区域提供的护甲。"
+  },
+  {
+    "effect_id": "equipment_effect_015",
+    "effect_text": "机甲被指定为攻击目标时，可弃置2张行动牌，当前回合护甲+4。"
+  },
+  {
+    "effect_id": "equipment_effect_016",
+    "effect_text": "此牌上设置的损伤≥1时，动力+1。"
+  },
+  {
+    "effect_id": "equipment_effect_017",
+    "effect_text": "每我方回合1次，可以消耗4动力抽1张行动牌。"
+  },
+  {
+    "effect_id": "equipment_effect_018",
+    "effect_text": "机甲被指定为攻击目标时，可弃置2张行动牌，当前回合动力+5。"
+  },
+  {
+    "effect_id": "equipment_effect_019",
+    "effect_text": "其他区域设置的装备牌会因即将设置的损伤而弃置时，可以将最多2损伤转移至此牌所在区域。"
+  },
+  {
+    "effect_id": "equipment_effect_020",
+    "effect_text": "机甲发动的攻击命中后，回复3动力。"
+  },
+  {
+    "effect_id": "equipment_effect_021",
+    "effect_text": "此牌上设置的损伤≥2时，动力+1。"
+  },
+  {
+    "effect_id": "equipment_effect_022",
+    "effect_text": "使用远程武器发动攻击时，该攻击范围+1。"
+  },
+  {
+    "effect_id": "equipment_effect_023",
+    "effect_text": "无。"
+  },
+  {
+    "effect_id": "equipment_effect_024",
+    "effect_text": "每我方回合1次，可以弃置1张行动牌，回复1动力。"
+  },
+  {
+    "effect_id": "equipment_effect_025",
+    "effect_text": "使用远程武器发动攻击时，可以弃置1张行动牌，使威力+2。"
+  },
+  {
+    "effect_id": "equipment_effect_026",
+    "effect_text": "打出攻击牌时，可立即移动到相邻的1个格子上。"
+  },
+  {
+    "effect_id": "equipment_effect_027",
+    "effect_text": "打出迎击牌时，可立即移动到相邻的1个格子上。"
+  },
+  {
+    "effect_id": "equipment_effect_028",
+    "effect_text": "可以将发动攻击武器的范围-2(不会低于1)，然后威力+3，类型变为近战武器(以上效果不适用于近战武器)。"
+  },
+  {
+    "effect_id": "equipment_effect_029",
+    "effect_text": "打出迎击牌时，当前回合护甲+2。"
+  },
+  {
+    "effect_id": "equipment_effect_030",
+    "effect_text": "使用近战武器发动攻击时，可以弃置1张行动牌，使威力+2。"
+  },
+  {
+    "effect_id": "equipment_effect_031",
+    "effect_text": "此牌因损伤而从区域中弃置时可移除机甲其他区域内最多2损伤。"
+  },
+  {
+    "effect_id": "equipment_effect_032",
+    "effect_text": "此牌设置到区域中时可以抽1张行动牌。"
+  },
+  {
+    "effect_id": "equipment_effect_033",
+    "effect_text": "此牌因损伤而从区域中弃置时可以抽2张行动牌。"
+  },
+  {
+    "effect_id": "equipment_effect_034",
+    "effect_text": "打出迎击牌响应攻击时，可以使该攻击威力-5，之后设置2损伤在此牌上。"
+  },
+  {
+    "effect_id": "equipment_effect_035",
+    "effect_text": "使用名称带有光束的近战武器攻击时，威力+3。"
+  },
+  {
+    "effect_id": "equipment_effect_036",
+    "effect_text": "使用名称带有光束的远程武器攻击时，威力+3。"
+  },
+  {
+    "effect_id": "equipment_effect_037",
+    "effect_text": "机甲被指定为攻击目标时，可在当前回合动力+3。"
+  },
+  {
+    "effect_id": "equipment_effect_038",
+    "effect_text": "机甲被攻击命中时，可以设置2损伤在此牌上，之后可最多减少此次攻击产生的3损伤。"
+  },
+  {
+    "effect_id": "equipment_effect_039",
+    "effect_text": "每回合1次，可以消耗2*n数量的金币(n为整数)，当前回合动力+n，此效果可以在打出迎击牌时使用。"
+  },
+  {
+    "effect_id": "equipment_effect_040",
+    "effect_text": "使用名称带有热能的远程武器攻击时，威力+3。"
+  },
+  {
+    "effect_id": "equipment_effect_041",
+    "effect_text": "使用名称带有热能的近战武器攻击时，威力+3。"
+  },
+  {
+    "effect_id": "equipment_effect_042",
+    "effect_text": "每回合1次，机甲在当前回合内消耗了8动力，可回复2动力。"
+  },
+  {
+    "effect_id": "equipment_effect_043",
+    "effect_text": "每回合1次，机甲在当前回合内消耗了8动力，可回复1动力。"
+  },
+  {
+    "effect_id": "equipment_effect_044",
+    "effect_text": "损伤不会影响此牌所在区域提供的护甲，除非此牌上设置的损伤≥2。"
+  },
+  {
+    "effect_id": "equipment_effect_045",
+    "effect_text": "机甲被指定为攻击目标时，可弃置2张行动牌，使当前回合护甲+5。"
+  },
+  {
+    "effect_id": "equipment_effect_046",
+    "effect_text": "此牌上设置有损伤≥2时，动力+2。"
+  },
+  {
+    "effect_id": "equipment_effect_047",
+    "effect_text": "每我方回合2次，可以消耗4动力抽1张行动牌。"
+  },
+  {
+    "effect_id": "equipment_effect_048",
+    "effect_text": "机甲被指定为攻击目标时，可弃置2张行动牌，使当前回合动力+6。"
+  },
+  {
+    "effect_id": "equipment_effect_049",
+    "effect_text": "我方回合，可以将区域内的此牌弃置，之后移除机甲区域上原先设置于此牌上损伤数量的损伤。"
+  },
+  {
+    "effect_id": "equipment_effect_050",
+    "effect_text": "机甲发动的攻击命中后，回复4动力。"
+  },
+  {
+    "effect_id": "equipment_effect_051",
+    "effect_text": "此牌上设置的损伤≥2时，动力+2。"
+  },
+  {
+    "effect_id": "equipment_effect_052",
+    "effect_text": "此牌上设置的损伤≥3时，动力+2。"
+  },
+  {
+    "effect_id": "equipment_effect_053",
+    "effect_text": "使用远程武器发动攻击时，攻击范围+2。"
+  },
+  {
+    "effect_id": "equipment_effect_054",
+    "effect_text": "此牌从区域中弃置时可获得2金币。"
+  },
+  {
+    "effect_id": "equipment_effect_055",
+    "effect_text": "每我方回合1次，可以弃置1张行动牌，回复2动力。"
+  },
+  {
+    "effect_id": "equipment_effect_056",
+    "effect_text": "使用远程武器发动攻击时，可以弃置1张行动牌，使威力+3。"
+  },
+  {
+    "effect_id": "equipment_effect_057",
+    "effect_text": "打出攻击牌时，可立即移动到相邻的1个格子上，之后回复1动力。"
+  },
+  {
+    "effect_id": "equipment_effect_058",
+    "effect_text": "打出迎击牌时，本回合动力可立即+2，之后移动到相邻的1个格子上。"
+  },
+  {
+    "effect_id": "equipment_effect_059",
+    "effect_text": "可以将发动攻击武器的范围-2(不会低于1)，然后威力+4，类型变为近战武器(以上效果不适用于近战武器)。"
+  },
+  {
+    "effect_id": "equipment_effect_060",
+    "effect_text": "打出迎击牌时，当前回合护甲+2，动力+2。"
+  },
+  {
+    "effect_id": "equipment_effect_061",
+    "effect_text": "使用近战武器发动攻击时，可以弃置1张行动牌，使威力+2，之后可以选择攻击目标区域最多1张牌效果无效直到本回合结束。"
+  },
+  {
+    "effect_id": "equipment_effect_062",
+    "effect_text": "此牌从区域中弃置时可使机甲回复3动力，之后可以用当前所有动力进行移动。"
+  },
+  {
+    "effect_id": "equipment_effect_063",
+    "effect_text": "此牌因损伤而从区域中弃置时可以抽1张装备牌，立即设置或者卖出。"
+  },
+  {
+    "effect_id": "equipment_effect_064",
+    "effect_text": "机甲每设置有1张名称带有联邦的装备牌则此牌护甲+1。"
+  },
+  {
+    "effect_id": "equipment_effect_065",
+    "effect_text": "机甲被指定为攻击目标时，可以弃置1张行动牌响应此攻击，使该攻击威力-5，之后设置2损伤在此牌上。"
+  },
+  {
+    "effect_id": "equipment_effect_066",
+    "effect_text": "使用名称带有光束的武器攻击时，可以弃置1张行动牌，使威力+3。"
+  },
+  {
+    "effect_id": "equipment_effect_067",
+    "effect_text": "每我方回合1次，可以弃置1张行动牌，之后抽1张行动牌或回复2动力。"
+  },
+  {
+    "effect_id": "equipment_effect_068",
+    "effect_text": "机甲每设置有1张名称带有帝国的装备牌则此牌动力+1。"
+  },
+  {
+    "effect_id": "equipment_effect_069",
+    "effect_text": "每回合1次，可以消耗2*n数量的金币(n为整数)，之后移动n个格子(无视动力)，此效果也可以在打出迎击牌时使用。"
+  },
+  {
+    "effect_id": "equipment_effect_070",
+    "effect_text": "使用名称带有热能的武器攻击时，可以弃置1张行动牌，使威力+3。"
+  },
+  {
+    "effect_id": "equipment_effect_071",
+    "effect_text": "机甲被指定为攻击目标时，可弃置2张行动牌，使当前回合护甲+5，动力+2。"
+  },
+  {
+    "effect_id": "equipment_effect_072",
+    "effect_text": "此牌上设置有≥2枚损伤时，动力+2。"
+  },
+  {
+    "effect_id": "equipment_effect_073",
+    "effect_text": "可以将发动攻击武器的范围-2(不会低于1)，然后威力+4，类型变为近战武器。"
+  },
+  {
+    "effect_id": "equipment_effect_074",
+    "effect_text": "机甲被指定为攻击目标时，可弃置2张行动牌，立即抽1张行动牌(若是迎击牌可以立即响应该攻击)，并使当前回合动力+3。"
+  },
+  {
+    "effect_id": "equipment_effect_075",
+    "effect_text": "使用近战武器发动攻击时，可以弃置2张行动牌，使威力+3，之后可以选择攻击目标区域最多2张牌效果无效直到本回合结束。"
+  },
+  {
+    "effect_id": "equipment_effect_076",
+    "effect_text": "此牌从区域中弃置时可移除机甲其他区域内最多2损伤。"
+  },
+  {
+    "effect_id": "equipment_effect_077",
+    "effect_text": "场上所有机甲的所有区域中名称带有联邦的装备牌将额外提供1护甲。"
+  },
+  {
+    "effect_id": "equipment_effect_078",
+    "effect_text": "机甲被指定为攻击目标时，可以直接无效该攻击，之后设置5损伤到此牌上。"
+  },
+  {
+    "effect_id": "equipment_effect_079",
+    "effect_text": "发动攻击时，可以设置2损伤到此牌上，使本次攻击威力+4。"
+  },
+  {
+    "effect_id": "equipment_effect_080",
+    "effect_text": "发动攻击命中时，可以设置3损伤到此牌上，之后本回合的可攻击次数+1。"
+  },
+  {
+    "effect_id": "equipment_effect_081",
+    "effect_text": "响应对我方的攻击，可以设置2损伤到此牌上，机甲可立即移动2个格子。"
+  },
+  {
+    "effect_id": "equipment_effect_082",
+    "effect_text": "发动此效果后，可以立即继续发动此效果。"
+  },
+  {
+    "effect_id": "equipment_effect_083",
+    "effect_text": "机甲被攻击命中时，可以设置3损伤到此牌上，之后可最多减少此次攻击产生的5损伤。"
+  },
+  {
+    "effect_id": "equipment_effect_084",
+    "effect_text": "场上所有机甲的所有区域中名称带有帝国的装备牌将额外提供1动力。"
+  },
+  {
+    "effect_id": "equipment_effect_085",
+    "effect_text": "此牌也可以当作威力20，范围6的远程武器使用。"
+  },
+  {
+    "effect_id": "equipment_effect_086",
+    "effect_text": "使用此牌发动攻击需要消耗当前所有动力(不为0)，且直到下个我方回合开始无法回复。"
+  },
+  {
+    "effect_id": "equipment_effect_087",
+    "effect_text": "发动攻击命中时，可以设置2损伤到此牌上，之后抽3张行动牌，回复3动力。"
+  },
+  {
+    "effect_id": "equipment_effect_088",
+    "effect_text": "每回合1次，机甲在当前回合内消耗了8动力，可无视动力移动2格。"
+  },
+  {
+    "effect_id": "equipment_effect_089",
+    "effect_text": "对此牌使用聚能时，本回合额外使此牌范围+1。"
+  },
+  {
+    "effect_id": "equipment_effect_090",
+    "effect_text": "机甲被名称带有光束的武器攻击时，可弃置1张攻击行动牌响应，使该攻击威力-5。"
+  },
+  {
+    "effect_id": "equipment_effect_091",
+    "effect_text": "对此牌使用聚能时，本回合额外使此牌威力+3。"
+  },
+  {
+    "effect_id": "equipment_effect_092",
+    "effect_text": "机甲被名称带有热能的武器攻击时，可弃置1张攻击行动牌响应该攻击，使该攻击威力-5。"
+  },
+  {
+    "effect_id": "equipment_effect_093",
+    "effect_text": "此牌发动的攻击命中后可额外设置2损伤。"
+  },
+  {
+    "effect_id": "equipment_effect_094",
+    "effect_text": "可以使此牌威力-5，范围+2。"
+  },
+  {
+    "effect_id": "equipment_effect_095",
+    "effect_text": "此牌发动的攻击命中后可弃置攻击目标2张行动牌。"
+  },
+  {
+    "effect_id": "equipment_effect_096",
+    "effect_text": "此牌发动的攻击产生的损伤如果全部放置于同一区域，则可以额外设置2损伤在该区域上。"
+  },
+  {
+    "effect_id": "equipment_effect_097",
+    "effect_text": "此牌发动的攻击命中后可额外设置1枚损伤。"
+  },
+  {
+    "effect_id": "equipment_effect_098",
+    "effect_text": "此牌发动的攻击没有命中，则设置2损伤在此牌上。"
+  },
+  {
+    "effect_id": "equipment_effect_099",
+    "effect_text": "此牌发动的攻击命中后，可对该攻击目标施加锁定效果，此效果将持续到目标下一次被攻击命中时结束，且在效果持续期间，此牌不能攻击。"
+  },
+  {
+    "effect_id": "equipment_effect_100",
+    "effect_text": "此牌发动的攻击命中后，在此牌上设置1损伤。"
+  },
+  {
+    "effect_id": "equipment_effect_101",
+    "effect_text": "此牌攻击时，可以使威力+3，攻击结算后在此牌上设置1损伤。"
+  },
+  {
+    "effect_id": "equipment_effect_102",
+    "effect_text": "此牌攻击时，可以使范围+2，攻击结算后在此牌上设置1损伤。"
+  },
+  {
+    "effect_id": "equipment_effect_103",
+    "effect_text": "需要额外消耗2动力才能使用此牌攻击。"
+  },
+  {
+    "effect_id": "equipment_effect_104",
+    "effect_text": "此牌攻击时，可以再消耗4动力使此次攻击威力+3。"
+  },
+  {
+    "effect_id": "equipment_effect_105",
+    "effect_text": "此牌每发动过1次攻击，威力-4。"
+  },
+  {
+    "effect_id": "equipment_effect_106",
+    "effect_text": "我方回合未使用此牌攻击则在回合结束时回复4威力。"
+  },
+  {
+    "effect_id": "equipment_effect_107",
+    "effect_text": "对此牌使用聚能时也可回复4威力。"
+  },
+  {
+    "effect_id": "equipment_effect_108",
+    "effect_text": "机甲被名称带有光束的武器攻击时，可弃置1张攻击牌响应该攻击，使该攻击威力-5。"
+  },
+  {
+    "effect_id": "equipment_effect_109",
+    "effect_text": "此牌发动的攻击命中后，倘若攻击目标与机甲当前位置相邻，则可额外设置2损伤。"
+  },
+  {
+    "effect_id": "equipment_effect_110",
+    "effect_text": "此牌发动的攻击命中后可额外设置1损伤。"
+  },
+  {
+    "effect_id": "equipment_effect_111",
+    "effect_text": "此牌发动攻击指定目标时，可以使目标当前动力-2，之后若目标机甲动力为0，则攻击命中可额外设置2损伤。"
+  },
+  {
+    "effect_id": "equipment_effect_112",
+    "effect_text": "此牌每设置有1损伤，则威力-2。"
+  },
+  {
+    "effect_id": "equipment_effect_113",
+    "effect_text": "此牌攻击时，可以在此牌上设置1损伤，回复全部威力，并使威力+2。"
+  },
+  {
+    "effect_id": "equipment_effect_114",
+    "effect_text": "此牌攻击命中时，可以在此牌上设置2损伤，之后可额外设置3损伤。"
+  },
+  {
+    "effect_id": "equipment_effect_115",
+    "effect_text": "此牌发动攻击时，随机弃置我方1张行动牌，若此即将被弃置的牌是我方的最后一张牌，则此次攻击威力+3。"
+  },
+  {
+    "effect_id": "equipment_effect_116",
+    "effect_text": "此牌发动攻击后，直到下个我方回合结束不能再使用此牌发动攻击。"
+  },
+  {
+    "effect_id": "equipment_effect_117",
+    "effect_text": "对此牌使用聚能后允许再次发动攻击。"
+  },
+  {
+    "effect_id": "equipment_effect_118",
+    "effect_text": "可以将攻击或陷阱产生的损伤移至此牌上。"
+  },
+  {
+    "effect_id": "equipment_effect_119",
+    "effect_text": "此牌发动攻击结算后会被设置1损伤。"
+  },
+  {
+    "effect_id": "equipment_effect_120",
+    "effect_text": "可直接使用此牌发动攻击(不需要攻击牌)。"
+  },
+  {
+    "effect_id": "equipment_effect_121",
+    "effect_text": "每我方回合1次，可以将1张行动牌当作维修打出，之后在此牌上设置2损伤。"
+  },
+  {
+    "effect_id": "equipment_effect_122",
+    "effect_text": "我方回合或打出迎击牌时，可以使机甲在本回合动力+4，之后在此牌上设置1损伤。"
+  },
+  {
+    "effect_id": "equipment_effect_123",
+    "effect_text": "以上效果每回合只能使用1次。"
+  },
+  {
+    "effect_id": "equipment_effect_124",
+    "effect_text": "可以在此牌攻击范围内的格子上设置1陷阱，之后在此牌上设置1损伤。"
+  },
+  {
+    "effect_id": "equipment_effect_125",
+    "effect_text": "每我方回合1次，可以将1张行动牌当作维修打出或是弃置2张行动牌再抽2张行动牌，之后在此牌上设置2损伤。"
+  },
+  {
+    "effect_id": "equipment_effect_126",
+    "effect_text": "此牌攻击结算后会被设置1损伤。"
+  },
+  {
+    "effect_id": "equipment_effect_127",
+    "effect_text": "可以在此牌范围内的2个格子上各设置1陷阱，之后在此牌上设置1损伤。"
+  },
+  {
+    "effect_id": "equipment_effect_128",
+    "effect_text": "可以将此牌的威力变为机甲当前护甲数值*2，范围变为当前动力数值。"
+  },
+  {
+    "effect_id": "equipment_effect_129",
+    "effect_text": "此牌发动攻击结算完成后，弃置机甲所有正面朝上的部件装备牌。"
+  }
+]

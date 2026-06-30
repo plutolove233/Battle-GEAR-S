@@ -151,7 +151,8 @@
     "count": 12,
     "effect_text": "回复机甲2点生命或移除2枚损伤（也可对1格范围内的其他机甲使用)。",
     "effect_ids": [
-      "repair_choose_one",
+      "repair_heal_life_2",
+      "repair_remove_damage_2",
       "can_target_adjacent_mecha"
     ]
   },
