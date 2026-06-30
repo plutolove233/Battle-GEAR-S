@@ -12,6 +12,7 @@ var context = null  # type: GameContext
 const HexGrid = preload("res://scripts/battle/hex_grid.gd")
 const BattleMath = preload("res://scripts/battle/battle_math.gd")
 const _EffectConst = preload("res://scripts/effect_core/EffectConst.gd")
+const _MapCellState = preload("res://scripts/runtime/MapCellState.gd")
 
 
 ## 移动机甲到目标六角格
@@ -97,15 +98,25 @@ func _calculate_power_cost(origin: Dictionary, target: Dictionary, gs: GameState
 	var base_cost: int = HexGrid.distance(origin, target)
 
 	# 检查目标格是否有特殊地形
-	var target_cell: Dictionary = gs.map_state.get_cell(target)
-	var terrain: StringName = target_cell.get("terrain", &"normal")
+	var target_cell = gs.map_state.get_cell(target)
+	var terrain: StringName = _get_cell_terrain(target_cell)
 	match terrain:
-		&"rough":
+		&"rough", &"GREEN":
 			return base_cost + 1  # 粗糙地形额外消耗1点
-		&"blocked":
+		&"blocked", &"RED":
 			return 999  # 不可通过
 		_:
 			return base_cost
+
+
+func _get_cell_terrain(cell) -> StringName:
+	if cell == null:
+		return &"normal"
+	if cell is _MapCellState:
+		return cell.terrain
+	if typeof(cell) == TYPE_DICTIONARY:
+		return cell.get("terrain", &"normal")
+	return &"normal"
 
 
 ## 检查目标格的地图标记

@@ -16,6 +16,7 @@ class_name GeneratedEffects
 extends RefCounted
 
 const _EffectConst = preload("res://scripts/effect_core/EffectConst.gd")
+const GeneratedPilotEffects = preload("res://scripts/generated_database/GeneratedPilotEffects.gd")
 
 
 ## 构建所有效果定义，返回 { effect_id: CardEffect }
@@ -432,7 +433,7 @@ static func build_all_effects() -> Dictionary:
 	discard_action_repeat_same_attack.priority = 100
 	discard_action_repeat_same_attack.conditions = [{"op": &"SOURCE_OWNER_IS_ATTACKER"}]
 	discard_action_repeat_same_attack.target_rules = [{"rule": &"NO_TARGET"}]
-	discard_action_repeat_same_attack.costs = [{"cost_type": &"DISCARD_ACTION_CARD", "count": 1}]
+	discard_action_repeat_same_attack.costs = [{"cost_type": &"DISCARD_ACTION_CARD", "count": 1, "optional": true}]
 	discard_action_repeat_same_attack.actions = [{"type": &"START_ATTACK_DECLARE_ATTACK", "params": {"repeat_last_attack": true}}]
 	discard_action_repeat_same_attack.description = "该攻击结算后，可以弃置1张行动牌，选择相同的武器对相同的目标再次发动攻击。"
 	effects[discard_action_repeat_same_attack.effect_id] = discard_action_repeat_same_attack

@@ -17,6 +17,11 @@ var source_card
 ## 静态效果定义
 var effect
 
+## 行动牌打出后会离开手牌，不能把 mech_id 写回 CardInstance。
+## 快照解析可通过这些字段提供本次效果的运行时来源。
+var override_owner_player_id: StringName = &""
+var override_source_mech_id: StringName = &""
+
 
 func _init(p_source_card, p_effect) -> void:
 	source_card = p_source_card
@@ -25,6 +30,8 @@ func _init(p_source_card, p_effect) -> void:
 
 ## 获取来源牌的操控者玩家ID
 func get_owner_player_id() -> StringName:
+	if override_owner_player_id != &"":
+		return override_owner_player_id
 	if source_card == null:
 		return &""
 	return source_card.owner_player_id
@@ -39,6 +46,8 @@ func get_source_instance_id() -> StringName:
 
 ## 获取来源牌所属机甲ID
 func get_source_mech_id() -> StringName:
+	if override_source_mech_id != &"":
+		return override_source_mech_id
 	if source_card == null:
 		return &""
 	return source_card.mech_id

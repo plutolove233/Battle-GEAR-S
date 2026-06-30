@@ -1058,6 +1058,15 @@ func discard_action_card(params: Dictionary) -> void:
 	var card_id: StringName = params.get("card_id", params.get("selected_action_card_id", &""))
 	var count: int = int(params.get("count", 1))
 
+	if bool(params.get("from_target", false)):
+		var target_id: StringName = params.get("target_id", &"")
+		if target_id == &"" and context.game_state.current_attack_id != &"":
+			var attack: Dictionary = context.game_state.attacks.get(context.game_state.current_attack_id, {})
+			target_id = attack.get("target_id", &"")
+		var target_player = context.game_state.get_player_for_mech(target_id)
+		if target_player:
+			player_id = target_player.player_id
+
 	if player_id == &"":
 		push_error("DISCARD_ACTION_CARD 缺少 player_id")
 		return
@@ -1335,22 +1344,51 @@ func steal_action_card(params: Dictionary) -> void:
 	var from_player_id: StringName = params.get("from_player_id", &"")
 	var to_player_id: StringName = params.get("to_player_id", params.get("player_id", &""))
 	var count: int = int(params.get("count", 1))
+	var discard: bool = bool(params.get("discard", false))
 
-	if from_player_id == &"" or to_player_id == &"":
+	if from_player_id == &"" and bool(params.get("from_target", false)):
+		var target_id: StringName = &""
+		if context.game_state.current_attack_id != &"":
+			var attack: Dictionary = context.game_state.attacks.get(context.game_state.current_attack_id, {})
+			target_id = attack.get("target_id", &"")
+		if target_id == &"":
+			target_id = params.get("target_id", &"")
+		var target_player = context.game_state.get_player_for_mech(target_id)
+		if target_player:
+			from_player_id = target_player.player_id
+	if from_player_id == &"":
+		from_player_id = params.get("target_player_id", &"")
+
+	if from_player_id == &"" or (to_player_id == &"" and not discard):
 		push_error("STEAL_ACTION_CARD 缺少 from_player_id / to_player_id")
 		return
 
 	var from_state = context.game_state.players.get(from_player_id)
-	var to_state = context.game_state.players.get(to_player_id)
-	if from_state == null or to_state == null:
+	var to_state = context.game_state.players.get(to_player_id) if not discard else null
+	if from_state == null or (not discard and to_state == null):
+		return
+
+	if discard:
+		for i in range(min(count, from_state.action_hand.size())):
+			var card_id: StringName = from_state.action_hand[0]
+			discard_action_card({
+				"player_id": from_player_id,
+				"card_id": card_id,
+				"reason": params.get("reason", &"EFFECT_DISCARD"),
+			})
+			context.effect_engine.fire_hook(&"ON_CARD_DISCARDED_BY_EFFECT", {
+				"card_id": card_id,
+				"from_player_id": from_player_id,
+				"reason": &"DISCARDED_BY_STEAL_ACTION_CARD"
+			})
 		return
 
 	var stolen: Array[StringName] = []
 	for i in range(min(count, from_state.action_hand.size())):
 		var card_id: StringName = from_state.action_hand.pop_front()
-		to_state.action_hand.append(card_id)
 		stolen.append(card_id)
 
+		to_state.action_hand.append(card_id)
 		var card = context.game_state.cards.get(card_id)
 		if card != null:
 			card.owner_player_id = to_player_id

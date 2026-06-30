@@ -356,6 +356,7 @@ func resolve_attack(attack_id: StringName) -> Dictionary:
 			"attack_id": attack_id,
 			"phase": "modifier_window",
 		}
+		_enrich_attack_payload(modifier_payload, attack_context)
 		# 场上持续效果
 		_fire_hook(_EffectConst.HOOK_ATTACK_MODIFIER_WINDOW, modifier_payload)
 		# 攻击牌快照（猛击: MODIFY_ATTACK_POWER delta=4）
@@ -409,6 +410,7 @@ func resolve_attack(attack_id: StringName) -> Dictionary:
 			"target_id": String(target_id),
 			"hit": true,
 		}
+		_enrich_attack_payload(hit_payload, attack_context)
 		_fire_hook(_EffectConst.HOOK_ATTACK_HIT, hit_payload)
 
 		# 攻击牌快照（破甲: PLACE_DAMAGE_TOKENS → 写入extra_markers+=2; 预判: APPLY_OR_CHECK_LOCKED）
@@ -427,6 +429,7 @@ func resolve_attack(attack_id: StringName) -> Dictionary:
 			"damage": damage,
 			"markers": base_markers,
 		}
+		_enrich_attack_payload(damage_modifier_payload, attack_context)
 		# 场上持续效果
 		_fire_hook(_EffectConst.HOOK_DAMAGE_MODIFIER_WINDOW, damage_modifier_payload)
 		# 迎击牌快照（防御: MODIFY_DAMAGE_TOKENS delta=-1）
@@ -465,6 +468,7 @@ func resolve_attack(attack_id: StringName) -> Dictionary:
 		"damage": damage,
 		"markers": final_markers,
 	}
+	_enrich_attack_payload(resolved_payload, attack_context)
 	# 场上持续效果
 	_fire_hook(_EffectConst.HOOK_ATTACK_RESOLVED, resolved_payload)
 	# 攻击牌快照（闪击: START_ATTACK_DECLARE_ATTACK → 存入pending）
@@ -548,6 +552,56 @@ func _cleanup_attack(attack_id: StringName) -> void:
 		gs.current_attack_id = &""
 
 
+func _snapshot_source_prefix(snapshot_key: String) -> String:
+	match snapshot_key:
+		"attack_card":
+			return "attack"
+		"response_card":
+			return "response"
+		"cover_card":
+			return "cover"
+		_:
+			return snapshot_key
+
+
+func _make_snapshot_binding(card_instance, effect, attack_context: Dictionary, snapshot_key: String):
+	var binding = _EffectBinding.new(card_instance, effect)
+	var source_prefix: String = _snapshot_source_prefix(snapshot_key)
+	binding.override_owner_player_id = attack_context.get(source_prefix + "_source_player_id", &"")
+	binding.override_source_mech_id = attack_context.get(source_prefix + "_source_mech_id", &"")
+	return binding
+
+
+func _enrich_attack_payload(payload: Dictionary, attack_context: Dictionary) -> void:
+	var gs = context.game_state
+	var attacker_id: StringName = attack_context.get("attacker_id", &"")
+	var target_id: StringName = attack_context.get("target_id", &"")
+	var attacker_player = gs.get_player_for_mech(attacker_id)
+	var target_player = gs.get_player_for_mech(target_id)
+
+	if not payload.has("attack_id"):
+		payload["attack_id"] = attack_context.get("attack_id", gs.current_attack_id)
+	if not payload.has("attacker_id"):
+		payload["attacker_id"] = attacker_id
+	if not payload.has("target_id"):
+		payload["target_id"] = target_id
+	if not payload.has("weapon_id"):
+		payload["weapon_id"] = attack_context.get("weapon_id", &"")
+	if not payload.has("attack_weapon_instance_id"):
+		payload["attack_weapon_instance_id"] = attack_context.get("weapon_id", &"")
+	if not payload.has("target_owner_id") and target_player:
+		payload["target_owner_id"] = target_player.player_id
+	if not payload.has("target_is_mech"):
+		payload["target_is_mech"] = target_id != &"" and gs.mechs.has(target_id)
+
+	var attack: Dictionary = payload.get("attack", {})
+	if attacker_player and not attack.has("attacker_player_id"):
+		attack["attacker_player_id"] = attacker_player.player_id
+	if target_player and not attack.has("target_player_id"):
+		attack["target_player_id"] = target_player.player_id
+	payload["attack"] = attack
+
+
 ## P0-2: 从效果快照中解析匹配指定hook的所有效果
 ## 替代原 _resolve_attack_card_effects（只判断PASSIVE mode）
 ## 快照解析应按 hook + condition + target_rule + cost 全链路判断，支持所有mode
@@ -565,12 +619,14 @@ func _resolve_card_effects_snapshot(attack_id: StringName, snapshot_key: String,
 		return
 
 	# P0-1: 注入来源信息到payload（不修改卡牌实例）
-	var source_player_key: String = snapshot_key + "_source_player_id"
-	var source_mech_key: String = snapshot_key + "_source_mech_id"
+	var source_prefix: String = _snapshot_source_prefix(snapshot_key)
+	var source_player_key: String = source_prefix + "_source_player_id"
+	var source_mech_key: String = source_prefix + "_source_mech_id"
 	if not payload.has("source_player_id"):
 		payload["source_player_id"] = attack_context.get(source_player_key, &"")
 	if not payload.has("source_mech_id"):
 		payload["source_mech_id"] = attack_context.get(source_mech_key, &"")
+	_enrich_attack_payload(payload, attack_context)
 
 	for effect in effects:
 		if effect == null:
@@ -579,33 +635,58 @@ func _resolve_card_effects_snapshot(attack_id: StringName, snapshot_key: String,
 		if effect.hook != hook_name:
 			continue
 
+		var binding = _make_snapshot_binding(card_instance, effect, attack_context, snapshot_key)
+
 		# ConditionChecker检查
-		if not _ConditionChecker.check_all(card_instance, payload, effect.conditions):
+		if not _ConditionChecker.check_all(binding, payload, effect.conditions):
 			continue
 
 		# TargetChecker检查
-		if not _TargetChecker.check_all(card_instance, payload, effect.target_rules):
+		if not _TargetChecker.check_all(binding, payload, effect.target_rules):
 			continue
 
 		# CostChecker检查（optional cost由pending action处理，此处只检查强制cost）
 		var has_optional_cost: bool = false
-		var mandatory_costs: Array = []
+		var mandatory_costs: Array[Dictionary] = []
 		for cost: Dictionary in effect.costs:
 			if cost.get("optional", false):
 				has_optional_cost = true
 			else:
 				mandatory_costs.append(cost)
 
-		if not _CostChecker.can_pay_all(card_instance, payload, mandatory_costs, context):
+		if not _CostChecker.can_pay_all(binding, payload, mandatory_costs, context):
 			continue
-
-		# 支付强制费用
-		_CostChecker.pay_all(card_instance, payload, mandatory_costs, context)
 
 		# 如果有optional cost，将整个效果存入pending_actions
 		if has_optional_cost:
+			if not _CostChecker.can_pay_all(binding, payload, effect.costs, context):
+				continue
 			if not attack_context.has("pending_after_resolve"):
 				attack_context["pending_after_resolve"] = []
+			var added_pending_attack: bool = false
+			for action: Dictionary in effect.actions:
+				var action_type: StringName = action.get("type", &"")
+				if hook_name == _EffectConst.HOOK_ATTACK_RESOLVED and action_type == &"START_ATTACK_DECLARE_ATTACK":
+					var pending_type: StringName = &"REPEAT_ATTACK"
+					if effect.effect_id == &"discard_action_repeat_same_attack":
+						pending_type = &"FLASH_ATTACK"
+					elif effect.effect_id == &"counterattack_after_resolution":
+						pending_type = &"COUNTERATTACK"
+					elif effect.effect_id == &"allow_other_mecha_attack_after_your_attack":
+						pending_type = &"JOINT_ATTACK"
+					attack_context["pending_after_resolve"].append({
+						"type": pending_type,
+						"optional": true,
+						"source_card_id": attack_context.get(snapshot_key + "_id", attack_context.get(snapshot_key + "_card_id", &"")),
+						"source_player_id": attack_context.get(source_player_key, &""),
+						"source_mech_id": attack_context.get(source_mech_key, &""),
+						"cost": effect.costs,
+						"weapon_id": attack_context.get("weapon_id", &""),
+						"target_id": attack_context.get("target_id", &""),
+					})
+					added_pending_attack = true
+			if added_pending_attack:
+				continue
 			attack_context["pending_after_resolve"].append({
 				"effect": effect,
 				"source_card_id": attack_context.get(snapshot_key + "_id", attack_context.get(snapshot_key + "_card_id", &"")),
@@ -614,10 +695,15 @@ func _resolve_card_effects_snapshot(attack_id: StringName, snapshot_key: String,
 			})
 			continue
 
+		# 支付强制费用
+		_CostChecker.pay_all(binding, payload, mandatory_costs, context)
+
 		# 执行每个action
-		var binding = _EffectBinding.new(card_instance, effect)
 		for action: Dictionary in effect.actions:
 			var action_type: StringName = action.get("type", &"")
+			# 攻击声明已由 declare_attack() 创建完成，CARD_PLAYED 的基础攻击动作不再重复执行。
+			if hook_name == _EffectConst.HOOK_ATTACK_CARD_PLAYED and action_type == &"START_ATTACK_DECLARE_ATTACK":
+				continue
 			# 移动效果由UI异步处理
 			if skip_move and action_type == &"MOVE_MECH":
 				continue

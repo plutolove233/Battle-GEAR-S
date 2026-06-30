@@ -9,7 +9,8 @@ func _init() -> void:
 		"res://tests/test_battle_math.gd",
 		"res://tests/test_battle_state.gd",
 		"res://tests/test_campaign_state.gd",
-			"res://tests/test_effect_primitives.gd",
+		"res://tests/test_effect_primitives.gd",
+		"res://tests/test_action_card_effects.gd",
 	]
 	for path in test_files:
 		if not ResourceLoader.exists(path):
@@ -28,8 +29,8 @@ func _run_test_file(path: String) -> void:
 	for method_name in suite.get_method_list().map(func(item): return item.name):
 		if String(method_name).begins_with("test_"):
 			var result = suite.call(method_name)
-			if result != true:
+			if typeof(result) == TYPE_BOOL and result == true:
+				print("PASS %s::%s" % [path, method_name])
+			else:
 				failures += 1
 				print("FAIL %s::%s -> %s" % [path, method_name, str(result)])
-			else:
-				print("PASS %s::%s" % [path, method_name])
