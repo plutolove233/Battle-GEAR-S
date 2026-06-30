@@ -228,6 +228,16 @@ func _fmt_equipment_broken_hook(payload: Dictionary) -> String:
 	return "[color=red]%s 已损坏![/color]" % card_name
 
 
+func _fmt_reaction_card_played_hook(payload: Dictionary) -> String:
+	var target_id := String(payload.get("target_id", ""))
+	var name := _player_name_by_mech(target_id)
+	var card_name := _card_display_name(payload.get("response_card_id", &""))
+	var is_cover: bool = bool(payload.get("is_cover", false))
+	if is_cover:
+		return "[color=green]%s 打出了掩护牌: %s[/color]" % [name, card_name]
+	return "[color=cyan]%s 打出了迎击牌: %s[/color]" % [name, card_name]
+
+
 func _fmt_mech_moved_hook(payload: Dictionary) -> String:
 	var mech_name := _mech_display_name(String(payload.get("mech_id", &"")))
 	var from: Dictionary = payload.get("from", {})
@@ -276,7 +286,12 @@ func _translate_log_entry(entry: Dictionary) -> String:
 		"attack_miss":
 			return "  攻击未命中 (%s)" % String(entry.get("reason", ""))
 		"attack_response":
-			return "  迎击响应"
+			var name := _player_name(String(entry.get("player_id", "")))
+			var card_name := _card_display_name(entry.get("response_card_id", &""))
+			var is_cover: bool = bool(entry.get("is_cover", false))
+			if is_cover:
+				return "[color=green]%s 打出了掩护牌: %s[/color]" % [name, card_name]
+			return "[color=cyan]%s 打出了迎击牌: %s[/color]" % [name, card_name]
 		"action_card_played":
 			var name := _player_name(String(entry.get("player_id", "")))
 			var card_name := _card_display_name(entry.get("card_id", &""))

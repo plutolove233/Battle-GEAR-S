@@ -83,3 +83,35 @@ func test_uninitialized_methods_fail_safely() -> bool:
 		and context.equipment_ids.is_empty() \
 		and not record_result.ok \
 		and campaign.last_result.is_empty()
+
+func test_random_equipment_selection_returns_correct_count() -> bool:
+	var campaign := _new_campaign()
+	var selection := campaign.generate_random_equipment_selection(4, 1)
+	return selection.size() == 4
+
+func test_random_equipment_selection_has_at_least_one_weapon() -> bool:
+	var campaign := _new_campaign()
+	# 测试多次以确保稳定性
+	for _i in range(10):
+		var selection := campaign.generate_random_equipment_selection(4, 1)
+		var has_weapon: bool = false
+		for item in selection:
+			if typeof(item) == TYPE_DICTIONARY:
+				var category: String = String(item.get("category", ""))
+				var slot: String = String(item.get("slot", ""))
+				if category == "weapon" or slot == "武器":
+					has_weapon = true
+					break
+		if not has_weapon:
+			return false
+	return true
+
+func test_random_equipment_selection_all_are_n_rarity() -> bool:
+	var campaign := _new_campaign()
+	var selection := campaign.generate_random_equipment_selection(4, 1)
+	for item in selection:
+		if typeof(item) == TYPE_DICTIONARY:
+			var rarity: String = String(item.get("rarity", ""))
+			if rarity != "N":
+				return false
+	return true

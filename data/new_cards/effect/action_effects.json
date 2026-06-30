@@ -1,0 +1,146 @@
+[
+  {
+    "effect_id": "basic_attack_single",
+    "effect_text": "选择1把武器对1台范围内的机甲发动攻击。"
+  },
+  {
+    "effect_id": "move_current_power_after_response_before_resolution",
+    "effect_text": "可以在目标响应后用当前的动力进行移动，之后再结算本次攻击。"
+  },
+  {
+    "effect_id": "attack_power_plus_4_this_attack",
+    "effect_text": "使本次攻击威力+4。"
+  },
+  {
+    "effect_id": "on_hit_add_2_damage_markers",
+    "effect_text": "若本次攻击命中则可额外设置2枚损伤。"
+  },
+  {
+    "effect_id": "attack_one_weapon_one_or_two_targets",
+    "effect_text": "选择1把武器对1~2台范围内的机甲发动攻击。"
+  },
+  {
+    "effect_id": "discard_action_repeat_same_attack",
+    "effect_text": "该攻击结算后，可以弃置1张行动牌，选择相同的武器对相同的目标再次发动攻击。"
+  },
+  {
+    "effect_id": "apply_lock_effect_to_target",
+    "effect_text": "对目标施加锁定效果。"
+  },
+  {
+    "effect_id": "discard_target_action_card_1",
+    "effect_text": "可以弃置目标1张行动牌。"
+  },
+  {
+    "effect_id": "attack_cannot_be_nullified",
+    "effect_text": "此牌发动的攻击不会被无效。"
+  },
+  {
+    "effect_id": "evade_half_power",
+    "effect_text": "响应对我方的攻击，可以用当前1/2的动力（向下取整）进行移动。"
+  },
+  {
+    "effect_id": "defend_armor_bonus_5",
+    "effect_text": "响应对我方的攻击，在本次攻击结算前使机甲护甲+5。"
+  },
+  {
+    "effect_id": "reduce_attack_damage_marker_1",
+    "effect_text": "减少该攻击产生的1损伤。"
+  },
+  {
+    "effect_id": "counterattack_after_resolution",
+    "effect_text": "该攻击结算后，可以选择1把武器对1台攻击范围内的机甲发动攻击。"
+  },
+  {
+    "effect_id": "evade_full_power",
+    "effect_text": "响应对我方的攻击，可以用当前的动力进行移动。"
+  },
+  {
+    "effect_id": "nullify_attack",
+    "effect_text": "响应对我方的攻击，直接无效该攻击。"
+  },
+  {
+    "effect_id": "gain_attacker_action_card_1",
+    "effect_text": "获得攻击方的1张行动牌。"
+  },
+  {
+    "effect_id": "ignore_lock_when_played",
+    "effect_text": "打出此牌不受锁定影响。"
+  },
+  {
+    "effect_id": "repair_heal_life_2",
+    "effect_text": "回复机甲2点生命。"
+  },
+  {
+    "effect_id": "repair_remove_damage_2",
+    "effect_text": "移除2枚损伤。"
+  },
+  {
+    "effect_id": "can_target_adjacent_mecha",
+    "effect_text": "也可对1格范围内的其他机甲使用。"
+  },
+  {
+    "effect_id": "next_attack_power_plus_4_selected_weapon",
+    "effect_text": "本回合内选择我方1把武器使其下次发动的攻击威力+4。"
+  },
+  {
+    "effect_id": "gain_power_5_this_turn",
+    "effect_text": "本回合使机甲动力+5。"
+  },
+  {
+    "effect_id": "can_play_with_reaction_card",
+    "effect_text": "此牌也可以与迎击牌一同打出。"
+  },
+  {
+    "effect_id": "cover_reduce_attack_power_5",
+    "effect_text": "已设置武器的范围内存在机甲（包括我方）被攻击时可以打出，使该攻击威力-5。"
+  },
+  {
+    "effect_id": "trap_two_chances_this_turn",
+    "effect_text": "本回合有2次机会。"
+  },
+  {
+    "effect_id": "set_trap_when_leaving_cell",
+    "effect_text": "当机甲离开某格子时可以在该格子上设置1枚陷阱。"
+  },
+  {
+    "effect_id": "allow_other_mecha_attack_after_your_attack",
+    "effect_text": "选择其他1台机甲，本回合其在你发动攻击结算完成后也可以打出1张攻击牌。"
+  },
+  {
+    "effect_id": "discard_self_draw_action_1",
+    "effect_text": "也可以弃置此牌，然后抽1张行动牌。"
+  },
+  {
+    "effect_id": "draw_random_equipment_from_discard",
+    "effect_text": "从装备弃牌堆里随机抽1张牌。"
+  },
+  {
+    "effect_id": "draw_random_action_2_from_discard",
+    "effect_text": "从行动弃牌堆里随机抽2张牌。"
+  },
+  {
+    "effect_id": "buy_equipment_at_face_value_twice",
+    "effect_text": "本回合有2次机会，可以在商店中以原价购买装备牌。"
+  },
+  {
+    "effect_id": "draw_action_2_equipment_1",
+    "effect_text": "抽2张行动牌与1张装备牌。"
+  },
+  {
+    "effect_id": "target_cannot_react_to_your_attacks",
+    "effect_text": "指定其他1台机甲，本回合其不能响应你发动的攻击。"
+  },
+  {
+    "effect_id": "lock_effect_ends_after_target_hit",
+    "effect_text": "该目标机甲被攻击命中后结束以上效果。"
+  },
+  {
+    "effect_id": "gain_prediction_and_insight_from_action_discard",
+    "effect_text": "从行动弃牌堆里获得预判与识破各1张。"
+  },
+  {
+    "effect_id": "replace_missing_named_action_and_draw",
+    "effect_text": "弃牌堆每缺少以上记述的1种行动牌，则可以从弃牌堆里指定获得1张行动牌，并抽1张行动牌。"
+  }
+]

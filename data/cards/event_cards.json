@@ -8,6 +8,6 @@
     "count": 4,
     "timing": "此牌被设置时即刻生效并结算",
     "effect_text": "选择抽2张行动牌或1张装备牌。",
-    "effect_id": "effect_unimplemented"
+    "effect_ids": ["event_reinforce_draw_actions", "event_reinforce_draw_equipment"]
   }
 ]

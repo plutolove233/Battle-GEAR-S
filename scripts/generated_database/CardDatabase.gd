@@ -23,7 +23,7 @@ func load_all(registry: DataRegistry) -> void:
 	effect_defs = GeneratedEffects.build_all_effects()
 
 	# 将效果绑定到对应卡牌
-	_bind_effects_to_cards(loader.get_effect_id_map())
+	_bind_effects_to_cards(loader.get_effect_ids_map())
 
 
 ## 根据 card_id 获取 CardDef，找不到返回 null
@@ -54,16 +54,20 @@ func list_cards_by_kind(kind: StringName) -> Array:
 
 
 ## ── 内部：将效果绑定到对应卡牌 ──
-## 根据 effect_id_map 查找 CardEffect 并附加到 CardDef.effects。
+## 根据 effect_ids_map 查找 CardEffect 并附加到 CardDef.effects。
+## effect_ids_map 格式：card_id → [effect_id, ...]，支持每张牌绑定多个效果。
 ## 如果效果 ID 在 effect_defs 中不存在（如 effect_unimplemented），跳过绑定。
-func _bind_effects_to_cards(effect_id_map: Dictionary) -> void:
-	for card_id in effect_id_map:
-		var effect_id: StringName = effect_id_map[card_id]
-		var effect: CardEffect = effect_defs.get(effect_id, null) as CardEffect
-		if effect == null:
-			# 效果尚未定义（如 effect_unimplemented），跳过
+func _bind_effects_to_cards(effect_ids_map: Dictionary) -> void:
+	for card_id in effect_ids_map:
+		var effect_ids = effect_ids_map[card_id]
+		if typeof(effect_ids) != TYPE_ARRAY:
 			continue
 		var def = card_defs.get(card_id, null)
 		if def == null:
 			continue
-		def.effects.append(effect)
+		for effect_id in effect_ids:
+			var effect: CardEffect = effect_defs.get(effect_id, null) as CardEffect
+			if effect == null:
+				# 效果尚未定义（如 effect_unimplemented），跳过
+				continue
+			def.effects.append(effect)

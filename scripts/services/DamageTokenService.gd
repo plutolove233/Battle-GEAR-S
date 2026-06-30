@@ -102,6 +102,77 @@ func place_damage_tokens(params: Dictionary) -> void:
 	})
 
 
+## ── P2-4: 查询和执行API ──
+
+
+## 返回可选槽位列表（给UI层使用）
+## 有装备槽位存在时，空槽位不可放置
+func get_valid_damage_slots(target_id: StringName) -> Array[StringName]:
+	var gs: GameState = context.game_state
+	var mech: MechState = gs.mechs.get(target_id)
+	if mech == null:
+		return []
+
+	var equipped_parts: Array[StringName] = []
+	var equipped_weapons: Array[StringName] = []
+	var empty_parts: Array[StringName] = []
+	var empty_weapons: Array[StringName] = []
+
+	for slot_id: StringName in mech.slots:
+		var slot: MechSlotState = mech.slots[slot_id]
+		match slot.slot_kind:
+			&"PART":
+				if slot.equipped_card != null:
+					equipped_parts.append(slot_id)
+				else:
+					empty_parts.append(slot_id)
+			&"WEAPON":
+				if slot.equipped_card != null:
+					equipped_weapons.append(slot_id)
+				else:
+					empty_weapons.append(slot_id)
+
+	# 规则：有装备槽位存在时，空槽位不可放置
+	var has_equipped: bool = not equipped_parts.is_empty() or not equipped_weapons.is_empty()
+	if has_equipped:
+		var result: Array[StringName] = []
+		result.append_array(equipped_parts)
+		result.append_array(equipped_weapons)
+		return result
+	else:
+		var result: Array[StringName] = []
+		result.append_array(empty_parts)
+		result.append_array(empty_weapons)
+		return result
+
+
+## 在指定槽位放1枚损伤标记（玩家逐枚放置模式）
+func place_one_damage_token(target_id: StringName, slot_id: StringName) -> void:
+	place_one_token_at_slot(target_id, slot_id)
+
+
+## 检查并处理装备损坏
+func check_and_handle_equipment_break(target_id: StringName, slot_id: StringName) -> bool:
+	var gs: GameState = context.game_state
+	var mech: MechState = gs.mechs.get(target_id)
+	if mech == null:
+		return false
+	var slot: MechSlotState = mech.slots.get(slot_id)
+	if slot == null or slot.equipped_card == null:
+		return false
+
+	var card = slot.equipped_card
+	if card.def == null or card.def.card_kind != &"equipment":
+		return false
+
+	if card.damage_tokens < slot.get_equipment_durability():
+		return false
+
+	# 装备损坏
+	context.equipment_break_service.check_equipment_broken(target_id, slot_id)
+	return true
+
+
 ## ── 内部方法 ──
 
 

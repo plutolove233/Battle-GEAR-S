@@ -20,8 +20,8 @@ var action_card_limit: int = 5
 ## 每回合攻击次数上限（由机师牌决定）
 var attack_limit: int = 1
 
-## 本回合已使用的每回合一次效果
-var once_per_turn_used: Dictionary = {}  # key → bool
+## 本回合已使用的每回合效果次数（key → int 使用次数）
+var once_per_turn_used: Dictionary = {}
 
 ## 回合内计数器（移动格数、攻击次数等，供效果条件判断）
 var turn_counters: Dictionary = {}

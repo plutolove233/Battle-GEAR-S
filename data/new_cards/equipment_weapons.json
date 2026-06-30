@@ -343,7 +343,7 @@
     "rarity": "N",
     "count": 1,
     "effect_text": "此牌发动的攻击命中后可额外设置1损伤。",
-    "damage": 7,
+    "damage": 6,
     "range": 4,
     "durability": 3,
     "cost": 3,

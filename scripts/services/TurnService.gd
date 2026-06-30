@@ -123,6 +123,16 @@ func _clean_this_turn_durations() -> void:
 	var gs: GameState = context.game_state
 	for mech_id: StringName in gs.mechs:
 		var mech: MechState = gs.mechs[mech_id]
+		for status: Dictionary in mech.statuses:
+			if status.get("duration", &"") == &"THIS_TURN":
+				# 还原临时属性修改
+				var status_type: StringName = status.get("type", &"")
+				var delta: int = int(status.get("delta", 0))
+				if status_type == &"POWER_MODIFIER" and delta != 0:
+					mech.power = clamp(mech.power - delta, 0, mech.max_power)
+				elif status_type == &"ARMOR_MODIFIER" and delta != 0:
+					# 装甲修改还原由 slot 处理，此处仅移除状态
+					pass
 		mech.statuses = mech.statuses.filter(func(s: Dictionary) -> bool:
 			return s.get("duration", &"") != &"THIS_TURN"
 		)

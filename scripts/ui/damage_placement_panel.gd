@@ -42,6 +42,7 @@ func configure(game_context, target_mech_id: StringName, token_count: int, sourc
 
 
 ## 刷新面板显示
+## P2-4: 每枚放置后刷新可选槽位（装备损坏后可选槽位可能变化）
 func _refresh() -> void:
 	for child in get_children():
 		child.queue_free()
@@ -53,6 +54,11 @@ func _refresh() -> void:
 	var mech: MechState = gs.mechs.get(_target_mech_id)
 	if not mech:
 		return
+
+	# P2-4: 使用 DamageTokenService 查询可选槽位
+	var valid_slots: Array[StringName] = []
+	if _context.damage_token_service:
+		valid_slots = _context.damage_token_service.get_valid_damage_slots(_target_mech_id)
 
 	# 标题：显示剩余损伤数
 	var title = Label.new()
@@ -71,11 +77,13 @@ func _refresh() -> void:
 		if not mech.slots.has(slot_id):
 			continue
 		var slot: MechSlotState = mech.slots[slot_id]
-		_add_slot_button(slot_id, slot)
+		var is_valid: bool = slot_id in valid_slots
+		_add_slot_button(slot_id, slot, is_valid)
 
 
 ## 添加一个槽位按钮
-func _add_slot_button(slot_id: StringName, slot: MechSlotState) -> void:
+## is_valid: 该槽位是否为当前合法放置目标
+func _add_slot_button(slot_id: StringName, slot: MechSlotState, is_valid: bool) -> void:
 	var hbox = HBoxContainer.new()
 
 	# 槽位名称
@@ -100,7 +108,8 @@ func _add_slot_button(slot_id: StringName, slot: MechSlotState) -> void:
 	var place_btn = Button.new()
 	place_btn.text = "+1"
 	place_btn.custom_minimum_size = Vector2(50, 28)
-	if _remaining_tokens <= 0:
+	# P2-4: 使用 is_valid 判断是否可放置（装备损坏后可选槽位会变化）
+	if _remaining_tokens <= 0 or not is_valid:
 		place_btn.disabled = true
 	var captured_slot_id = slot_id
 	place_btn.pressed.connect(func(): _on_place_token(captured_slot_id))
@@ -110,6 +119,7 @@ func _add_slot_button(slot_id: StringName, slot: MechSlotState) -> void:
 
 
 ## 点击放置一个损伤标记
+## P2-4: 每放1枚后检查装备损坏，损坏则刷新可选槽位
 func _on_place_token(slot_id: StringName) -> void:
 	if _remaining_tokens <= 0:
 		return
@@ -122,10 +132,13 @@ func _on_place_token(slot_id: StringName) -> void:
 		return
 
 	# 放置1个损伤标记
-	_context.damage_token_service.place_one_token_at_slot(_target_mech_id, slot_id)
+	_context.damage_token_service.place_one_damage_token(_target_mech_id, slot_id)
 	_remaining_tokens -= 1
 
-	# 刷新显示
+	# P2-4: 检查装备是否因损伤损坏（损坏后可选槽位会变化）
+	_context.damage_token_service.check_and_handle_equipment_break(_target_mech_id, slot_id)
+
+	# 刷新显示（装备损坏后可选槽位可能变化）
 	_refresh()
 
 	# 全部放置完毕

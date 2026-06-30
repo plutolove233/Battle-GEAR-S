@@ -148,22 +148,27 @@ func apply_cannot_respond(params: Dictionary) -> void:
 
 
 ## 施加或检查锁定状态
+## P2-2: 支持 ignore_lock 参数（识破无视锁定）
 func apply_or_check_locked(params: Dictionary) -> bool:
 	var target_id: StringName = params.get("target_id", params.get("mech_id", &""))
 	var mode: StringName = params.get("mode", &"apply")
+	var ignore_lock: bool = bool(params.get("ignore_lock", false))
 
 	if target_id == &"":
 		push_error("APPLY_OR_CHECK_LOCKED 缺少 target_id")
 		return false
 
 	if mode == &"check":
+		if ignore_lock:
+			return true  # 无视锁定，始终通过
 		return context.game_state.has_status(target_id, &"LOCKED")
 
 	var status := {
 		"status_id": params.get("status_id", context.game_state.next_id(&"status")),
 		"type": &"LOCKED",
 		"duration": params.get("duration", &"THIS_TURN"),
-		"source_card_id": params.get("source_card_id", &"")
+		"source_card_id": params.get("source_card_id", &""),
+		"source_player_id": params.get("source_player_id", params.get("player_id", &"")),
 	}
 
 	context.game_state.add_status_to_target(target_id, status)
@@ -241,6 +246,7 @@ func open_or_use_response(params: Dictionary) -> void:
 ## ────────────────────────────────────────────
 
 ## 修改护甲
+## P2-2: 如果 duration=THIS_ATTACK 且有活跃的攻击上下文，同时写入 attack_context["temporary_armor_bonus"]
 func modify_armor(params: Dictionary) -> void:
 	var mech_id: StringName = params.get("mech_id", params.get("source_mech_id", &""))
 	if mech_id == &"" or not context.game_state.mechs.has(mech_id):
@@ -251,16 +257,27 @@ func modify_armor(params: Dictionary) -> void:
 	if delta == 0:
 		return
 
+	var duration: StringName = params.get("duration", &"THIS_TURN")
+
 	var status := {
 		"status_id": params.get("status_id", context.game_state.next_id(&"status")),
 		"type": &"ARMOR_MODIFIER",
 		"slot_id": params.get("slot_id", &""),
 		"delta": delta,
-		"duration": params.get("duration", &"THIS_TURN"),
+		"duration": duration,
 		"source_card_id": params.get("source_card_id", &"")
 	}
 
 	context.game_state.mechs[mech_id].statuses.append(status)
+
+	# P2-2: 如果是 THIS_ATTACK 持续时间的护甲修改，同时写入 attack_context
+	if duration == &"THIS_ATTACK":
+		var attack_id: StringName = params.get("attack_id", context.game_state.current_attack_id)
+		if attack_id != &"" and context.game_state.attacks.has(attack_id):
+			var attack: Dictionary = context.game_state.attacks[attack_id]
+			var current_bonus: int = int(attack.get("temporary_armor_bonus", 0))
+			attack["temporary_armor_bonus"] = current_bonus + delta
+			context.game_state.attacks[attack_id] = attack
 
 	context.effect_engine.fire_hook(&"ON_STATUS_ADDED", {
 		"mech_id": mech_id,
@@ -277,32 +294,32 @@ func modify_mech_power(params: Dictionary) -> void:
 
 	var mech = context.game_state.mechs[mech_id]
 	var delta: int = int(params.get("delta", 0))
-	var mode: StringName = params.get("mode", &"current")
+	var duration: StringName = params.get("duration", &"")
 
-	if mode == &"current":
-		var before: int = mech.power
-		mech.power = clamp(mech.power + delta, 0, _get_max_power(mech_id))
-		context.effect_engine.fire_hook(&"ON_POWER_CHANGED", {
-			"mech_id": mech_id,
-			"delta": mech.power - before,
-			"current_power": mech.power
-		})
-		return
-
-	# 模式修饰：添加持续动力修改状态
-	var status := {
-		"status_id": params.get("status_id", context.game_state.next_id(&"status")),
-		"type": &"POWER_MODIFIER",
-		"delta": delta,
-		"duration": params.get("duration", &"THIS_TURN"),
-		"source_card_id": params.get("source_card_id", &"")
-	}
-	mech.statuses.append(status)
-
-	context.effect_engine.fire_hook(&"ON_STATUS_ADDED", {
+	# ── 始终立即应用动力修改 ──
+	var before: int = mech.power
+	mech.power = clamp(mech.power + delta, 0, _get_max_power(mech_id))
+	context.effect_engine.fire_hook(&"ON_POWER_CHANGED", {
 		"mech_id": mech_id,
-		"status": status
+		"delta": mech.power - before,
+		"current_power": mech.power
 	})
+
+	# ── 如果指定了 duration，注册状态追踪以便回合结束时还原 ──
+	if duration != &"":
+		var status := {
+			"status_id": params.get("status_id", context.game_state.next_id(&"status")),
+			"type": &"POWER_MODIFIER",
+			"delta": delta,
+			"duration": duration,
+			"source_card_id": params.get("source_card_id", &""),
+			"mech_id": mech_id,
+		}
+		mech.statuses.append(status)
+		context.effect_engine.fire_hook(&"ON_STATUS_ADDED", {
+			"mech_id": mech_id,
+			"status": status
+		})
 
 
 ## 支付动力
@@ -736,10 +753,23 @@ func deal_damage(params: Dictionary) -> void:
 
 
 ## 放置损伤标记
+## P2-1: 如果 params 包含 extra_markers_only=true，则不直接放置，
+## 而是写入 attack_context["extra_markers"]（破甲等效果绕过统一的损伤放置UI）
 func place_damage_tokens(params: Dictionary) -> void:
 	var target_id: StringName = params.get("target_id", params.get("mech_id", &""))
 	var amount: int = int(params.get("amount", params.get("count", 0)))
 	var chooser_player_id: StringName = params.get("chooser_player_id", &"")
+
+	# P2-1: 破甲等效果的 extra_markers_only 模式
+	var extra_markers_only: bool = bool(params.get("extra_markers_only", false))
+	if extra_markers_only:
+		var attack_id: StringName = params.get("attack_id", context.game_state.current_attack_id)
+		if attack_id != &"" and context.game_state.attacks.has(attack_id):
+			var attack: Dictionary = context.game_state.attacks[attack_id]
+			var current_extra: int = int(attack.get("extra_markers", 0))
+			attack["extra_markers"] = current_extra + amount
+			context.game_state.attacks[attack_id] = attack
+		return
 
 	if target_id == &"" or not context.game_state.mechs.has(target_id) or amount <= 0:
 		return
@@ -785,27 +815,35 @@ func place_damage_tokens(params: Dictionary) -> void:
 
 
 ## 修改损伤标记数量
+## 优先写回 attack_context（有 attack_id 作用域，不会跨攻击残留），
+## 同时向后兼容 damage_contexts 和 temp_values
 func modify_damage_tokens(params: Dictionary) -> void:
-	var context_id: StringName = params.get("damage_context_id", context.game_state.current_damage_context_id)
-	if context_id == &"" or not context.game_state.damage_contexts.has(context_id):
-		push_error("MODIFY_DAMAGE_TOKENS 找不到 damage_context_id")
-		return
-
 	var delta: int = int(params.get("delta", 0))
-	var ctx: Dictionary = context.game_state.damage_contexts[context_id]
 
-	ctx["damage_tokens"] = max(0, int(ctx.get("damage_tokens", 0)) + delta)
+	# 优先写回 attack_context
+	var attack_id: StringName = params.get("attack_id", context.game_state.current_attack_id)
+	if attack_id != &"" and context.game_state.attacks.has(attack_id):
+		var attack: Dictionary = context.game_state.attacks[attack_id]
+		var current_markers: int = int(attack.get("markers", 0))
+		attack["markers"] = max(0, current_markers + delta)
+		context.game_state.attacks[attack_id] = attack
 
-	if not ctx.has("modifiers"):
-		ctx["modifiers"] = []
+	# 向后兼容：也写入 temp_values
+	context.game_state.temp_values["modified_markers"] = max(0, int(context.game_state.temp_values.get("modified_markers", 0)) + delta)
 
-	ctx["modifiers"].append({
-		"type": &"damage_tokens",
-		"delta": delta,
-		"source_card_id": params.get("source_card_id", &"")
-	})
-
-	context.game_state.damage_contexts[context_id] = ctx
+	# 向后兼容：也写入 damage_contexts（如果存在）
+	var context_id: StringName = params.get("damage_context_id", context.game_state.current_damage_context_id)
+	if context_id != &"" and context.game_state.damage_contexts.has(context_id):
+		var ctx: Dictionary = context.game_state.damage_contexts[context_id]
+		ctx["damage_tokens"] = max(0, int(ctx.get("damage_tokens", 0)) + delta)
+		if not ctx.has("modifiers"):
+			ctx["modifiers"] = []
+		ctx["modifiers"].append({
+			"type": &"damage_tokens",
+			"delta": delta,
+			"source_card_id": params.get("source_card_id", &"")
+		})
+		context.game_state.damage_contexts[context_id] = ctx
 
 
 ## 移除损伤标记
@@ -1259,6 +1297,148 @@ func track_event_progress(params: Dictionary) -> void:
 ## 其他
 ## ────────────────────────────────────────────
 
+
+## 对武器施加聚能效果（下次攻击威力+N）
+func apply_energy_to_weapon(params: Dictionary) -> void:
+	var mech_id: StringName = params.get("mech_id", params.get("source_mech_id", &""))
+	var weapon_id: StringName = params.get("weapon_id", params.get("selected_weapon_id", &""))
+	var delta: int = int(params.get("delta", 4))
+
+	if mech_id == &"" or weapon_id == &"":
+		push_error("APPLY_ENERGY_TO_WEAPON 缺少 mech_id / weapon_id")
+		return
+
+	var status := {
+		"status_id": params.get("status_id", context.game_state.next_id(&"status")),
+		"type": &"NEXT_ATTACK_POWER_BUFF",
+		"weapon_id": weapon_id,
+		"delta": delta,
+		"consume_on_next_attack": true,
+		"duration": params.get("duration", &"THIS_TURN"),
+		"source_card_id": params.get("source_card_id", &"")
+	}
+
+	var mech = context.game_state.mechs.get(mech_id)
+	if mech != null:
+		mech.statuses.append(status)
+
+	context.effect_engine.fire_hook(&"ON_ENERGY_APPLIED_TO_WEAPON", {
+		"mech_id": mech_id,
+		"weapon_id": weapon_id,
+		"delta": delta,
+		"status": status
+	})
+
+
+## 从对手手牌偷取行动牌
+func steal_action_card(params: Dictionary) -> void:
+	var from_player_id: StringName = params.get("from_player_id", &"")
+	var to_player_id: StringName = params.get("to_player_id", params.get("player_id", &""))
+	var count: int = int(params.get("count", 1))
+
+	if from_player_id == &"" or to_player_id == &"":
+		push_error("STEAL_ACTION_CARD 缺少 from_player_id / to_player_id")
+		return
+
+	var from_state = context.game_state.players.get(from_player_id)
+	var to_state = context.game_state.players.get(to_player_id)
+	if from_state == null or to_state == null:
+		return
+
+	var stolen: Array[StringName] = []
+	for i in range(min(count, from_state.action_hand.size())):
+		var card_id: StringName = from_state.action_hand.pop_front()
+		to_state.action_hand.append(card_id)
+		stolen.append(card_id)
+
+		var card = context.game_state.cards.get(card_id)
+		if card != null:
+			card.owner_player_id = to_player_id
+
+	for card_id in stolen:
+		context.effect_engine.fire_hook(&"ON_CARD_TRANSFERRED", {
+			"card_id": card_id,
+			"from_player_id": from_player_id,
+			"to_player_id": to_player_id,
+			"reason": &"STOLEN"
+		})
+
+
+## 放置陷阱标记到地图格
+func place_trap_marker(params: Dictionary) -> void:
+	var cell_id: StringName = params.get("cell_id", &"")
+	var mech_id: StringName = params.get("mech_id", params.get("source_mech_id", &""))
+
+	if cell_id == &"":
+		# 如果未指定 cell_id，使用机甲当前位置
+		if mech_id == &"" or not context.game_state.mechs.has(mech_id):
+			push_error("PLACE_TRAP_MARKER 缺少 cell_id / mech_id")
+			return
+		var mech = context.game_state.mechs[mech_id]
+		cell_id = String(mech.position.get("q", 0)) + "," + String(mech.position.get("r", 0))
+
+	if not context.game_state.map_state.cells.has(cell_id):
+		push_error("PLACE_TRAP_MARKER 找不到 cell_id: %s" % cell_id)
+		return
+
+	var marker_id: StringName = context.game_state.next_id(&"marker")
+	var marker := {
+		"marker_id": marker_id,
+		"marker_type": &"TRAP",
+		"cell_id": cell_id,
+		"owner_player_id": params.get("player_id", params.get("source_owner_player_id", &"")),
+		"damage": int(params.get("damage", 3)),
+		"range": int(params.get("range", 1)),
+		"tokens": int(params.get("tokens", 1))
+	}
+
+	context.game_state.map_state.markers[marker_id] = marker
+	context.game_state.map_state.cells[cell_id]["marker_id"] = marker_id
+
+	context.effect_engine.fire_hook(&"ON_MAP_MARKER_PLACED", {
+		"marker_id": marker_id,
+		"marker_type": &"TRAP",
+		"cell_id": cell_id
+	})
+
+
+## 转换武器类型（如远程→近战）
+func convert_weapon_kind(params: Dictionary) -> void:
+	var weapon_id: StringName = params.get("weapon_id", params.get("selected_weapon_id", &""))
+	var new_kind: StringName = params.get("new_kind", &"近战")
+
+	if weapon_id == &"":
+		push_error("CONVERT_WEAPON_KIND 缺少 weapon_id")
+		return
+
+	var card = context.game_state.cards.get(weapon_id)
+	if card == null or card.def == null:
+		push_error("CONVERT_WEAPON_KIND 找不到 weapon card: %s" % weapon_id)
+		return
+
+	var old_kind: StringName = card.def.weapon_kind if "weapon_kind" in card.def else &""
+	card.def.weapon_kind = new_kind
+
+	var status := {
+		"status_id": params.get("status_id", context.game_state.next_id(&"status")),
+		"type": &"WEAPON_KIND_CONVERTED",
+		"weapon_id": weapon_id,
+		"old_kind": old_kind,
+		"new_kind": new_kind,
+		"duration": params.get("duration", &"WHILE_SOURCE_ACTIVE"),
+		"source_card_id": params.get("source_card_id", &"")
+	}
+
+	var mech_id: StringName = card.mech_id
+	if mech_id != &"" and context.game_state.mechs.has(mech_id):
+		context.game_state.mechs[mech_id].statuses.append(status)
+
+	context.effect_engine.fire_hook(&"ON_STATUS_ADDED", {
+		"mech_id": mech_id,
+		"status": status
+	})
+
+
 ## 揭示或窥视卡牌
 func reveal_or_peek_card(params: Dictionary) -> void:
 	var player_id: StringName = params.get("player_id", &"")
@@ -1334,6 +1514,38 @@ func custom_effect_check_text(params: Dictionary) -> void:
 	context.effect_engine.fire_hook(&"ON_CUSTOM_EFFECT_REQUIRED", item)
 
 
+
+## 互换行动牌上限与回合攻击数
+func swap_hand_limit_and_attack_count(params: Dictionary) -> void:
+	var player_id: StringName = params.get("player_id", params.get("source_owner_player_id", &""))
+	var mech_id: StringName = params.get("mech_id", params.get("source_mech_id", &""))
+	if player_id == &"" or mech_id == &"":
+		push_error("SWAP_HAND_LIMIT_AND_ATTACK_COUNT 缺少 player_id / mech_id")
+		return
+	var player = context.game_state.players.get(player_id)
+	var mech = context.game_state.mechs.get(mech_id)
+	if player == null or mech == null:
+		return
+	# 交换当前值
+	var old_limit: int = player.action_card_limit
+	var old_attack: int = mech.attack_limit_this_turn
+	player.action_card_limit = old_attack
+	mech.attack_limit_this_turn = old_limit
+	# 添加状态以在回合结束时恢复
+	player.statuses.append({"type": &"swapped_hand_limit", "original": old_limit, "duration": &"THIS_TURN"})
+	mech.statuses.append({"type": &"swapped_attack_count", "original": old_attack, "duration": &"THIS_TURN"})
+	# 交换后立即抽牌到新的上限
+	var draw_count: int = max(0, player.action_card_limit - player.action_hand.size())
+	if draw_count > 0:
+		draw_action_cards({"player_id": player_id, "count": draw_count, "reason": &"SWAP_DRAW"})
+	context.effect_engine.fire_hook(&"ON_STATUS_ADDED", {
+		"player_id": player_id,
+		"mech_id": mech_id,
+		"status_type": &"swap_hand_limit_and_attack_count",
+		"old_limit": old_limit,
+		"old_attack": old_attack,
+	})
+
 ## ────────────────────────────────────────────
 ## 辅助方法
 ## ────────────────────────────────────────────
@@ -1405,3 +1617,371 @@ func _get_max_power(mech_id: StringName) -> int:
 	if context.game_state == null:
 		return 0
 	return context.game_state.get_max_power(mech_id)
+
+
+## ────────────────────────────────────────────
+## 阶段1新增动作（280+效果支持）
+## ────────────────────────────────────────────
+
+## 在指定区域/此牌上设置损伤（slot 级别）
+func place_damage_tokens_on_slot(params: Dictionary) -> void:
+	var mech_id: StringName = params.get("mech_id", params.get("source_mech_id", &""))
+	var slot_id: StringName = params.get("slot_id", &"")
+	var amount: int = int(params.get("amount", 1))
+	if mech_id == &"" or slot_id == &"":
+		push_error("PLACE_DAMAGE_TOKENS_ON_SLOT 缺少 mech_id 或 slot_id")
+		return
+	var mech = context.game_state.mechs.get(mech_id)
+	if mech == null:
+		return
+	var slot = mech.slots.get(slot_id)
+	if slot == null:
+		return
+	slot.damage_tokens += amount
+	context.effect_engine.fire_hook(&"ON_AFTER_DAMAGE_TOKEN_PLACED", {
+		"mech_id": mech_id,
+		"slot_id": slot_id,
+		"amount": amount,
+		"source_card_id": params.get("source_card_id", &""),
+	})
+
+
+## 将行动牌当作指定类型使用
+func play_card_as_type(params: Dictionary) -> void:
+	var player_id: StringName = params.get("player_id", &"")
+	var card_id: StringName = params.get("card_id", &"")
+	var as_type: StringName = params.get("as_type", &"")
+	if player_id == &"" or card_id == &"" or as_type == &"":
+		push_error("PLAY_CARD_AS_TYPE 缺少 player_id / card_id / as_type")
+		return
+	# 标记此牌在当前回合被视为指定类型
+	if context.game_state == null:
+		return
+	context.effect_engine.fire_hook(&"ON_CARD_PLAYED", {
+		"player_id": player_id,
+		"card_id": card_id,
+		"play_as_type": as_type,
+	})
+
+
+## 修改行动牌上限
+func modify_action_hand_limit(params: Dictionary) -> void:
+	var player_id: StringName = params.get("player_id", params.get("source_owner_player_id", &""))
+	var delta: int = int(params.get("delta", 0))
+	var duration: String = String(params.get("duration", "THIS_TURN"))
+	if player_id == &"":
+		push_error("MODIFY_ACTION_HAND_LIMIT 缺少 player_id")
+		return
+	var player = context.game_state.players.get(player_id)
+	if player == null:
+		return
+	player.action_card_limit += delta
+	if duration != "PERMANENT":
+		# THIS_TURN 效果回合结束时自动恢复
+		player.statuses.append({"type": &"action_hand_limit_modifier", "delta": delta, "duration": duration})
+	context.effect_engine.fire_hook(&"ON_STATUS_ADDED", {
+		"player_id": player_id,
+		"status_type": &"action_hand_limit_modifier",
+		"delta": delta,
+	})
+
+
+## 修改可攻击次数
+func modify_attack_count(params: Dictionary) -> void:
+	var mech_id: StringName = params.get("mech_id", params.get("source_mech_id", &""))
+	var delta: int = int(params.get("delta", 0))
+	var duration: String = String(params.get("duration", "THIS_TURN"))
+	if mech_id == &"":
+		push_error("MODIFY_ATTACK_COUNT 缺少 mech_id")
+		return
+	var mech = context.game_state.mechs.get(mech_id)
+	if mech == null:
+		return
+	mech.attack_limit_this_turn += delta
+	if duration != "PERMANENT":
+		mech.statuses.append({"type": &"attack_count_modifier", "delta": delta, "duration": duration})
+	context.effect_engine.fire_hook(&"ON_STATUS_ADDED", {
+		"mech_id": mech_id,
+		"status_type": &"attack_count_modifier",
+		"delta": delta,
+	})
+
+
+## 使自定义计数器 X+1
+func increment_variable(params: Dictionary) -> void:
+	var variable_name: StringName = params.get("variable_name", &"default_counter")
+	var delta: int = int(params.get("delta", 1))
+	var player_id: StringName = params.get("player_id", params.get("source_owner_player_id", &""))
+	var mech_id: StringName = params.get("mech_id", params.get("source_mech_id", &""))
+	if context.game_state == null:
+		return
+	# 使用 game_state.variables 存储自定义计数器
+	var key: String = "%s_%s_%s" % [player_id, mech_id, variable_name]
+	var current: int = int(context.game_state.variables.get(key, 0))
+	context.game_state.variables[key] = current + delta
+
+
+## 选择多个效果之一执行（效果路由）
+func choose_one(params: Dictionary) -> void:
+	# 此动作是 UI 层的分支选择信号，实际由 EffectEngine 处理
+	# payload 中的 chosen_effect_id 由玩家选择后传入
+	var chosen_effect_id: StringName = params.get("chosen_effect_id", &"")
+	if chosen_effect_id == &"":
+		return
+	# 触发已选择的效果
+	var effect = context.card_database.get_effect(chosen_effect_id)
+	if effect == null:
+		push_error("CHOOSE_ONE: 未找到效果 %s" % chosen_effect_id)
+		return
+	# 委托 EffectEngine 使用选中的效果
+	var source_card_id: StringName = params.get("source_card_id", &"")
+	var binding = context.effect_registry.get_active_effect(source_card_id, chosen_effect_id)
+	if binding == null:
+		return
+	context.effect_engine._try_resolve_binding(binding, params, true)
+
+
+## 强制其他机甲执行行动
+func force_mech_action(params: Dictionary) -> void:
+	var target_mech_id: StringName = params.get("target_mech_id", &"")
+	var action_type: StringName = params.get("action_type", &"attack")
+	if target_mech_id == &"":
+		push_error("FORCE_MECH_ACTION 缺少 target_mech_id")
+		return
+	# 标记目标机甲需要在本回合执行指定行动
+	var mech = context.game_state.mechs.get(target_mech_id)
+	if mech == null:
+		return
+	mech.statuses.append({"type": &"forced_action", "action_type": action_type, "source_mech_id": params.get("source_mech_id", &"")})
+
+
+## 将牌视作指定命名类型使用
+func treat_card_as_named_type(params: Dictionary) -> void:
+	# 与 PLAY_AS_CARD 类似，但标记为指定的命名类型（强袭/闪击/预判等）
+	var player_id: StringName = params.get("player_id", &"")
+	var card_id: StringName = params.get("card_id", &"")
+	var named_type: StringName = params.get("named_type", &"")
+	if named_type == &"":
+		push_error("TREAT_CARD_AS_NAMED_TYPE 缺少 named_type")
+		return
+	context.effect_engine.fire_hook(&"ON_CARD_PLAYED", {
+		"player_id": player_id,
+		"card_id": card_id,
+		"treat_as_named_type": named_type,
+	})
+
+
+## 使阵营机甲获得效果（光环效果）
+func grant_effect_to_faction(params: Dictionary) -> void:
+	var faction: StringName = params.get("faction", &"")
+	var effect_id: StringName = params.get("effect_id", &"")
+	if faction == &"" or effect_id == &"":
+		push_error("GRANT_EFFECT_TO_FACTION 缺少 faction 或 effect_id")
+		return
+	# 遍历所有机甲，为指定阵营的机甲注册效果
+	if context.game_state == null:
+		return
+	for mech_id in context.game_state.mechs:
+		var mech = context.game_state.mechs[mech_id]
+		if mech.faction == faction:
+			mech.statuses.append({"type": &"faction_effect_grant", "effect_id": effect_id, "source_player_id": params.get("player_id", &"")})
+
+
+## 取消/恢复机甲获得的效果
+func toggle_effect_on_mech(params: Dictionary) -> void:
+	var mech_id: StringName = params.get("target_mech_id", &"")
+	var effect_id: StringName = params.get("effect_id", &"")
+	var toggle: String = String(params.get("toggle", "cancel"))
+	if mech_id == &"" or effect_id == &"":
+		push_error("TOGGLE_EFFECT_ON_MECH 缺少 mech_id 或 effect_id")
+		return
+	var mech = context.game_state.mechs.get(mech_id)
+	if mech == null:
+		return
+	if toggle == "cancel":
+		mech.statuses.append({"type": &"effect_cancelled", "effect_id": effect_id})
+	else:
+		# 移除取消状态
+		mech.statuses = mech.statuses.filter(func(s): return not (s.get("type", &"") == &"effect_cancelled" and s.get("effect_id", &"") == effect_id))
+
+
+## 使装备效果无效直到回合结束
+func negate_equipment_effect(params: Dictionary) -> void:
+	var target_card_id: StringName = params.get("target_card_id", &"")
+	var duration: String = String(params.get("duration", "THIS_TURN"))
+	if target_card_id == &"":
+		push_error("NEGATE_EQUIPMENT_EFFECT 缺少 target_card_id")
+		return
+	# 将目标装备牌标记为效果无效
+	var card = context.game_state.find_card_instance(target_card_id)
+	if card == null:
+		return
+	card.disabled = true
+	if duration == "THIS_TURN":
+		card.statuses.append({"type": &"effect_negated", "duration": &"THIS_TURN"})
+
+
+## 无视动力移动
+func move_without_power(params: Dictionary) -> void:
+	var mech_id: StringName = params.get("mech_id", params.get("source_mech_id", &""))
+	var cells: int = int(params.get("cells", 1))
+	if mech_id == &"":
+		push_error("MOVE_WITHOUT_POWER 缺少 mech_id")
+		return
+	if context.map_service != null:
+		context.map_service.move_mech_without_power(mech_id, cells)
+
+
+## 修改武器威力（非仅回复）
+func modify_weapon_power(params: Dictionary) -> void:
+	var weapon_id: StringName = params.get("weapon_id", params.get("target_weapon_id", &""))
+	var delta: int = int(params.get("delta", 0))
+	if weapon_id == &"":
+		push_error("MODIFY_WEAPON_POWER 缺少 weapon_id")
+		return
+	var weapon = context.game_state.find_card_instance(weapon_id)
+	if weapon == null:
+		return
+	weapon.might_modifiers.append({"delta": delta, "duration": params.get("duration", &"PERMANENT")})
+
+
+## 设置武器属性为指定值
+func set_weapon_stats(params: Dictionary) -> void:
+	var weapon_id: StringName = params.get("weapon_id", params.get("target_weapon_id", &""))
+	var new_might: int = int(params.get("might", -1))
+	var new_range: int = int(params.get("range", -1))
+	if weapon_id == &"":
+		push_error("SET_WEAPON_STATS 缺少 weapon_id")
+		return
+	var weapon = context.game_state.find_card_instance(weapon_id)
+	if weapon == null:
+		return
+	if new_might >= 0:
+		weapon.might_override = new_might
+	if new_range >= 0:
+		weapon.range_override = new_range
+
+
+## 将护甲转化为动力
+func convert_armor_to_power(params: Dictionary) -> void:
+	var mech_id: StringName = params.get("mech_id", params.get("source_mech_id", &""))
+	var amount: int = int(params.get("armor_amount", 0))
+	var draw_per_2: int = int(params.get("draw_per_2_armor", 1))
+	if mech_id == &"":
+		push_error("CONVERT_ARMOR_TO_POWER 缺少 mech_id")
+		return
+	var mech = context.game_state.mechs.get(mech_id)
+	if mech == null:
+		return
+	# 每转化2点护甲，抽1张行动牌
+	mech.current_hp = maxi(1, mech.current_hp - amount)
+	var draw_count: int = (amount / 2) * draw_per_2
+	if draw_count > 0:
+		draw_action_cards({"player_id": params.get("player_id", &""), "count": draw_count})
+	modify_mech_power({"mech_id": mech_id, "delta": amount})
+
+
+## 将回复生命改为受到等量伤害
+func redirect_heal_to_damage(params: Dictionary) -> void:
+	var target_mech_id: StringName = params.get("target_mech_id", &"")
+	var amount: int = int(params.get("amount", 0))
+	if target_mech_id == &"":
+		push_error("REDIRECT_HEAL_TO_DAMAGE 缺少 target_mech_id")
+		return
+	var mech = context.game_state.mechs.get(target_mech_id)
+	if mech == null:
+		return
+	# 将回复效果改为伤害
+	mech.current_hp = maxi(0, mech.current_hp - amount)
+	context.effect_engine.fire_hook(&"ON_DAMAGE_DEALT", {
+		"mech_id": target_mech_id,
+		"amount": amount,
+		"source": &"redirected_heal",
+	})
+
+
+## 将移除损伤改为设置等量损伤
+func redirect_remove_to_place_tokens(params: Dictionary) -> void:
+	var target_mech_id: StringName = params.get("target_mech_id", &"")
+	var amount: int = int(params.get("amount", 0))
+	var slot_id: StringName = params.get("slot_id", &"")
+	if target_mech_id == &"":
+		push_error("REDIRECT_REMOVE_TO_PLACE_TOKENS 缺少 target_mech_id")
+		return
+	# 改为设置损伤
+	place_damage_tokens({"mech_id": target_mech_id, "slot_id": slot_id, "amount": amount})
+
+
+## 使下次造成的伤害+N
+func modify_next_damage_dealt(params: Dictionary) -> void:
+	var delta: int = int(params.get("delta", 0))
+	var mech_id: StringName = params.get("mech_id", params.get("source_mech_id", &""))
+	if context.game_state == null:
+		return
+	var key: String = "next_damage_bonus_%s" % mech_id
+	context.game_state.variables[key] = delta
+
+
+## 给武器添加名称标签（热能/光束）
+func add_weapon_tag(params: Dictionary) -> void:
+	var weapon_id: StringName = params.get("weapon_id", params.get("target_weapon_id", &""))
+	var tag: StringName = params.get("tag", &"")
+	var duration: String = String(params.get("duration", "THIS_TURN"))
+	if weapon_id == &"" or tag == &"":
+		push_error("ADD_WEAPON_TAG 缺少 weapon_id 或 tag")
+		return
+	var weapon = context.game_state.find_card_instance(weapon_id)
+	if weapon == null:
+		return
+	weapon.def.tags.append(tag)
+	if duration == "THIS_TURN":
+		weapon.statuses.append({"type": &"temporary_tag", "tag": tag})
+
+
+## 宣言行动牌类型
+func declare_card_type(params: Dictionary) -> void:
+	var player_id: StringName = params.get("player_id", params.get("source_owner_player_id", &""))
+	var declared_type: StringName = params.get("declared_type", &"")
+	if player_id == &"" or declared_type == &"":
+		push_error("DECLARE_CARD_TYPE 缺少 player_id 或 declared_type")
+		return
+	var player = context.game_state.players.get(player_id)
+	if player == null:
+		return
+	player.statuses.append({"type": &"declared_card_type", "declared_type": declared_type, "duration": &"THIS_TURN"})
+
+
+## 抽高级装备牌
+func draw_advanced_equipment(params: Dictionary) -> void:
+	var player_id: StringName = params.get("player_id", params.get("source_owner_player_id", &""))
+	var count: int = int(params.get("count", 1))
+	if player_id == &"":
+		push_error("DRAW_ADVANCED_EQUIPMENT 缺少 player_id")
+		return
+	if context.deck_service != null:
+		for i in range(count):
+			context.deck_service.draw_advanced_equipment(player_id)
+
+
+## 正面朝上放入牌堆
+func place_card_in_deck_face_up(params: Dictionary) -> void:
+	var player_id: StringName = params.get("player_id", params.get("source_owner_player_id", &""))
+	var card_ids: Array = params.get("card_ids", [])
+	var top_card_id: StringName = params.get("top_card_id", &"")
+	if player_id == &"":
+		push_error("PLACE_CARD_IN_DECK_FACE_UP 缺少 player_id")
+		return
+	var player = context.game_state.players.get(player_id)
+	if player == null:
+		return
+	# 将指定牌正面朝上放入行动牌堆
+	for card_id in card_ids:
+		player.action_deck_face_up.append(card_id)
+	# 如果指定了牌堆顶的牌，重排牌堆
+	if top_card_id != &"":
+		# 移除该牌然后放到顶部
+		var deck: Array = player.action_deck
+		var idx: int = deck.find(top_card_id)
+		if idx >= 0:
+			deck.remove_at(idx)
+			deck.push_front(top_card_id)

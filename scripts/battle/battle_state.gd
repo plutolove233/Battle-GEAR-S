@@ -2,7 +2,7 @@
 ##
 ## BattleState 是 app_root 与底层游戏系统之间的桥梁。
 ## 公共接口保持与旧版兼容，内部委托给 GameContext/Service 体系。
-## 统一攻击流程：声明 → 迎击窗口 → 结算 → 损伤放置
+## 统一攻击流程：声明 → 掩护检测 → 迎击窗口 → 迎击移动 → 强袭移动 → 结算 → 损伤放置
 extends RefCounted
 class_name BattleState
 
@@ -45,6 +45,12 @@ var current_attack_id: StringName = &""
 ## 敌方回合阶段状态（app_root 需要读取）
 var enemy_turn_phase: String = ""  # "", "awaiting_response", "awaiting_damage_placement", "done"
 
+## P1-1: 移动状态
+var evade_movement_pending: bool = false
+var evade_power_fraction: float = 1.0
+var evade_use_current_power: bool = false
+var assault_movement_pending: bool = false
+
 
 ## ── 初始化 ──
 
@@ -64,7 +70,7 @@ func start_tutorial(data_registry) -> Dictionary:
 	# 同步兼容字段
 	_sync_compat_fields()
 
-	# 注意：build_decks_from_config 已在 GameSetupService.setup_tutorial_battle 中调用，
+	# 注意：build_all_decks_from_card_database 已在 GameSetupService.setup_tutorial_battle 中调用，
 	# 此处不再重复调用以避免牌堆被清空重建导致卡牌实例丢失 def
 	var battle_config: Dictionary = data_registry.get_tutorial_battle()
 
@@ -119,7 +125,10 @@ func move_unit(side: String, target: Dictionary) -> Dictionary:
 
 ## 开始攻击（声明阶段）
 ## 返回结果中包含下一步需要的信息：
-## - "state": "awaiting_response" → 需要迎击响应
+## - "state": "awaiting_cover_selection" → 需要掩护选择
+## - "state": "awaiting_player_response" → 需要迎击响应
+## - "state": "awaiting_evade_movement" → 需要迎击移动
+## - "state": "awaiting_assault_movement" → 需要强袭移动
 ## - "state": "resolved" → 直接结算完毕
 ## - "state": "failed" → 攻击失败
 func begin_attack(attacker_side: StringName, defender_side: StringName, weapon_id: StringName, attack_card_id: StringName) -> Dictionary:
@@ -144,9 +153,25 @@ func begin_attack(attacker_side: StringName, defender_side: StringName, weapon_i
 		awaiting_response = true
 		current_attack_id = result.get("attack_id", &"")
 
+		# P0-5: 掩护检测 — 在迎击之前检查是否有玩家可以打出掩护
+		var cover_candidates: Array = _find_cover_candidates(current_attack_id)
+		if cover_candidates.size() > 0:
+			if defender_side == &"enemy" or _is_ai_turn():
+				# AI自动决策是否掩护
+				_ai_decide_cover(current_attack_id, cover_candidates)
+			else:
+				# 玩家选择是否掩护
+				result["state"] = "awaiting_cover_selection"
+				result["cover_candidates"] = cover_candidates
+				return result
+
 		# 如果防守方是 AI，自动处理迎击
 		if defender_side == &"enemy":
 			_ai_decide_response(current_attack_id)
+			# AI迎击后检查移动
+			var move_result = _check_movement_after_response(current_attack_id, defender_side)
+			if move_result.get("state", "") != "":
+				return move_result
 			# AI 已处理，直接结算
 			var resolve_result = _resolve_and_get_placement()
 			resolve_result["state"] = "resolved"
@@ -161,6 +186,36 @@ func begin_attack(attacker_side: StringName, defender_side: StringName, weapon_i
 	return result
 
 
+## P0-5: 处理掩护选择
+func handle_cover(attack_id: StringName, cover_card_id: StringName, cover_player_id: StringName) -> Dictionary:
+	if not context:
+		return {"ok": false, "message": "battle not started"}
+
+	var result: Dictionary = context.attack_service.submit_cover(attack_id, cover_card_id, cover_player_id)
+	if not result.get("ok", false):
+		return result
+
+	# 掩护选择完成后，继续迎击窗口流程
+	# 检查防守方是否需要迎击
+	var gs = context.game_state
+	var attack_context: Dictionary = gs.attacks.get(attack_id, {})
+	var target_id: StringName = attack_context.get("target_id", &"")
+	var defender_player = gs.get_player_for_mech(target_id)
+
+	if defender_player and defender_player.player_id == &"enemy":
+		_ai_decide_response(attack_id)
+		var move_result = _check_movement_after_response(attack_id, &"enemy")
+		if move_result.get("state", "") != "":
+			return move_result
+		var resolve_result = _resolve_and_get_placement()
+		resolve_result["state"] = "resolved"
+		return resolve_result
+	elif defender_player:
+		return {"state": "awaiting_player_response", "attack_id": attack_id, "defender_player_id": defender_player.player_id}
+
+	return {"state": "awaiting_player_response", "attack_id": attack_id}
+
+
 ## 处理迎击响应
 ## response_card_id 为空表示跳过迎击
 func handle_response(attack_id: StringName, response_card_id: StringName = &"") -> Dictionary:
@@ -170,10 +225,126 @@ func handle_response(attack_id: StringName, response_card_id: StringName = &"") 
 	if response_card_id != &"":
 		context.attack_service.submit_response(attack_id, response_card_id, {})
 
+	# P1-1: 检查迎击后是否需要移动
+	var gs = context.game_state
+	var attack_context: Dictionary = gs.attacks.get(attack_id, {})
+	var has_movement: bool = attack_context.get("response_has_movement", false)
+	var target_id: StringName = attack_context.get("target_id", &"")
+	var defender_side: StringName = &""
+	var defender_player = gs.get_player_for_mech(target_id)
+	if defender_player:
+		defender_side = defender_player.player_id
+
+	if has_movement and defender_side != &"":
+		# 检查是AI还是玩家
+		if defender_side == &"enemy":
+			# AI自动执行迎击移动（远离攻击者）
+			_ai_execute_evade_movement(attack_id)
+		else:
+			# 玩家需要选择移动目标格子
+			evade_movement_pending = true
+			evade_power_fraction = float(attack_context.get("response_power_fraction", 1.0))
+			evade_use_current_power = bool(attack_context.get("response_use_current_power", false))
+			return {
+				"state": "awaiting_evade_movement",
+				"attack_id": attack_id,
+				"power_fraction": evade_power_fraction,
+				"use_current_power": evade_use_current_power,
+			}
+
+	# P1-1: 检查强袭移动
+	var assault_result = _check_assault_movement(attack_id, attack_context.get("attacker_id", &""))
+	if assault_result.get("state", "") != "":
+		return assault_result
+
 	# 迎击处理完毕，结算攻击
 	var resolve_result = _resolve_and_get_placement()
 	resolve_result["state"] = "resolved"
 	return resolve_result
+
+
+## P1-1: 迎击移动完成后调用
+func complete_evade_movement(attack_id: StringName) -> Dictionary:
+	evade_movement_pending = false
+
+	# 检查强袭移动
+	var gs = context.game_state
+	var attack_context: Dictionary = gs.attacks.get(attack_id, {})
+	var assault_result = _check_assault_movement(attack_id, attack_context.get("attacker_id", &""))
+	if assault_result.get("state", "") != "":
+		return assault_result
+
+	# 结算攻击
+	var resolve_result = _resolve_and_get_placement()
+	resolve_result["state"] = "resolved"
+	return resolve_result
+
+
+## P1-1: 强袭移动完成后调用
+func complete_assault_movement(attack_id: StringName) -> Dictionary:
+	assault_movement_pending = false
+	# 结算攻击
+	var resolve_result = _resolve_and_get_placement()
+	resolve_result["state"] = "resolved"
+	return resolve_result
+
+
+## P1-1: 检查迎击后的移动状态
+func _check_movement_after_response(attack_id: StringName, defender_side: StringName) -> Dictionary:
+	var gs = context.game_state
+	var attack_context: Dictionary = gs.attacks.get(attack_id, {})
+	var has_movement: bool = attack_context.get("response_has_movement", false)
+
+	if has_movement:
+		if defender_side == &"enemy":
+			_ai_execute_evade_movement(attack_id)
+		else:
+			evade_movement_pending = true
+			evade_power_fraction = float(attack_context.get("response_power_fraction", 1.0))
+			evade_use_current_power = bool(attack_context.get("response_use_current_power", false))
+			return {
+				"state": "awaiting_evade_movement",
+				"attack_id": attack_id,
+				"power_fraction": evade_power_fraction,
+				"use_current_power": evade_use_current_power,
+			}
+
+	# 检查强袭移动
+	return _check_assault_movement(attack_id, attack_context.get("attacker_id", &""))
+
+
+## P1-1: 检查强袭移动效果
+func _check_assault_movement(attack_id: StringName, attacker_id: StringName) -> Dictionary:
+	var gs = context.game_state
+	var attack_context: Dictionary = gs.attacks.get(attack_id, {})
+	# 检查攻击牌快照中是否有强袭移动效果
+	var attack_card_effects: Array = attack_context.get("attack_card_effects", [])
+	var has_assault_move: bool = false
+	for effect in attack_card_effects:
+		if effect == null: continue
+		if String(effect.hook) != "ON_ATTACK_RESPONSE_WINDOW": continue
+		for action: Dictionary in effect.actions:
+			if String(action.get("type", "")) == "MOVE_MECH":
+				var params: Dictionary = action.get("params", {})
+				if params.get("after_response", false) or params.get("use_current_power", false):
+					has_assault_move = true
+					break
+		if has_assault_move:
+			break
+
+	if has_assault_move:
+		var attacker_player = gs.get_player_for_mech(attacker_id)
+		if attacker_player and attacker_player.player_id == &"enemy":
+			# AI自动执行强袭移动（向目标靠近）
+			_ai_execute_assault_movement(attack_id)
+		else:
+			assault_movement_pending = true
+			return {
+				"state": "awaiting_assault_movement",
+				"attack_id": attack_id,
+			}
+
+	return {}
 
 
 ## 结算攻击并返回损伤放置信息
@@ -249,6 +420,10 @@ func start_enemy_turn() -> Dictionary:
 				attack_result.get("markers", 0)
 			)
 
+	# P0-4: 处理pending actions
+	if attack_result.get("pending_actions", []).size() > 0:
+		_ai_handle_pending_actions(attack_result.get("pending_actions", []))
+
 	return finish_enemy_turn()
 
 
@@ -265,6 +440,10 @@ func continue_enemy_turn_after_response(resolve_result: Dictionary) -> Dictionar
 				resolve_result.get("target_mech_id_for_tokens", &""),
 				resolve_result.get("markers", 0)
 			)
+
+	# P0-4: 处理pending actions
+	if resolve_result.get("pending_actions", []).size() > 0:
+		_ai_handle_pending_actions(resolve_result.get("pending_actions", []))
 
 	return finish_enemy_turn()
 
@@ -284,7 +463,76 @@ func finish_enemy_turn() -> Dictionary:
 	return {"state": "done"}
 
 
+## ── P0-5: 掩护检测 ──
+
+
+## 查找可以打出掩护的玩家
+func _find_cover_candidates(attack_id: StringName) -> Array:
+	var gs = context.game_state
+	var attack_context: Dictionary = gs.attacks.get(attack_id, {})
+	if attack_context.is_empty():
+		return []
+
+	var target_id: StringName = attack_context.get("target_id", &"")
+	var attacker_id: StringName = attack_context.get("attacker_id", &"")
+	var candidates: Array = []
+
+	for player_id: StringName in gs.players:
+		# 打出掩护的玩家不是攻击目标
+		var candidate_mech = gs.get_mech_for_player(player_id)
+		if candidate_mech == null or candidate_mech.mech_id == target_id or candidate_mech.mech_id == attacker_id:
+			continue
+
+		var player = gs.players.get(player_id)
+		if player == null:
+			continue
+
+		# 检查手牌中是否有掩护牌（辅助牌，hook含ON_ATTACK_DECLARED或ON_ATTACK_MODIFIER_WINDOW）
+		for card_id: StringName in player.action_hand:
+			var card = gs.cards.get(card_id)
+			if card == null or card.def == null:
+				continue
+			if not (card.def is _ActionCardDef and card.def.action_type == &"辅助"):
+				continue
+			# 检查是否为掩护效果
+			for effect in card.def.effects:
+				if effect == null: continue
+				if String(effect.hook) in ["ON_ATTACK_DECLARED", "ON_ATTACK_MODIFIER_WINDOW"]:
+					# 掩护玩家有已设置的武器
+					var weapon_ids: Array[StringName] = candidate_mech.get_weapon_ids()
+					if weapon_ids.is_empty():
+						continue
+					# 被攻击的机甲在掩护玩家武器的范围内
+					var attacker_mech = gs.mechs.get(attacker_id)
+					if attacker_mech:
+						var weapon_card = gs.get_card(weapon_ids[0])
+						var weapon_range: int = 1
+						if weapon_card and weapon_card.def:
+							weapon_range = weapon_card.def.range_value
+						var map_cells: Dictionary = gs.map_state.cells if gs.map_state else {}
+						if _RangeCalculator.is_in_weapon_range(candidate_mech.position, attacker_mech.position, weapon_range, map_cells):
+							candidates.append({
+								"player_id": player_id,
+								"card_id": card_id,
+								"card_name": card.def.display_name,
+							})
+							break  # 一个玩家只需报告一张掩护牌
+			break  # 只需报告玩家有掩护牌
+
+	return candidates
+
+
+## AI掩护决策
+func _ai_decide_cover(attack_id: StringName, candidates: Array) -> void:
+	if candidates.is_empty():
+		return
+	# AI简单策略：如果有掩护牌就打出
+	var choice: Dictionary = candidates[0]
+	context.attack_service.submit_cover(attack_id, choice["card_id"], choice["player_id"])
+
+
 ## AI 迎击决策
+## P2-2: 识破无视锁定 — 先检查ignore_lock再检查CANNOT_RESPOND
 func _ai_decide_response(attack_id: StringName) -> void:
 	if not context:
 		return
@@ -294,22 +542,79 @@ func _ai_decide_response(attack_id: StringName) -> void:
 	if attack_context.is_empty():
 		return
 
-	# 找到防守方（AI方）的迎击牌
+	# 找到防守方（AI方）的迎击牌和掩护牌
 	var target_id: StringName = attack_context.get("target_id", &"")
 	var defender_player = gs.get_player_for_mech(target_id)
 	if not defender_player:
 		return
 
-	# 查找手牌中的迎击牌
+	# P2-2: 检查是否被锁定（cannot_respond），但先检查识破的ignore_lock
+	var target_mech = gs.mechs.get(target_id)
+	var is_locked: bool = false
+	if target_mech:
+		for status in target_mech.statuses:
+			if String(status.get("type", "")) == "CANNOT_RESPOND":
+				is_locked = true
+				break
+
+	# 优先使用迎击牌
+	# P2-2: 识破(ignore_lock检查) > 反击 > 防御 > 疾行 > 回避
+	var best_card_id: StringName = &""
+	var best_priority: int = 99
+
 	for card_id: StringName in defender_player.action_hand:
 		var card = gs.cards.get(card_id)
-		if card and card.def is _ActionCardDef and card.def.action_type == &"迎击":
-			# AI 简单策略：有迎击牌就使用第一张
-			context.attack_service.submit_response(attack_id, card_id, {})
-			return
+		if card == null or not (card.def is _ActionCardDef) or card.def.action_type != &"迎击":
+			continue
 
-	# 没有迎击牌或选择不使用，跳过
-	# （不调用 submit_response，表示不迎击）
+		# P2-2: 检查识破的ignore_lock
+		var has_ignore_lock: bool = false
+		if card.def.effects:
+			for effect in card.def.effects:
+				if effect == null: continue
+				for action: Dictionary in effect.actions:
+					if action is Dictionary and String(action.get("type", "")) == "APPLY_OR_CHECK_LOCKED":
+						var action_params: Dictionary = action.get("params", {})
+						if action_params.get("ignore_lock", false):
+							has_ignore_lock = true
+
+		# 被锁定且无ignore_lock → 跳过此牌
+		if is_locked and not has_ignore_lock:
+			continue
+
+		# 优先级排序：识破 > 反击 > 防御 > 疾行 > 回避
+		var priority: int = 5  # 默认最低
+		var card_name: String = String(card.def.card_id)
+		if card_name.find("insight") >= 0 or card_name.find("识破") >= 0:
+			priority = 1
+		elif card_name.find("counter") >= 0 or card_name.find("反击") >= 0:
+			priority = 2
+		elif card_name.find("defend") >= 0 or card_name.find("防御") >= 0:
+			priority = 3
+		elif card_name.find("rush") >= 0 or card_name.find("疾行") >= 0:
+			priority = 4
+		elif card_name.find("evade") >= 0 or card_name.find("回避") >= 0:
+			priority = 5
+
+		if priority < best_priority:
+			best_priority = priority
+			best_card_id = card_id
+
+	if best_card_id != &"":
+		context.attack_service.submit_response(attack_id, best_card_id, {})
+		return
+
+	# 其次检查掩护牌（被锁定时仍可使用）
+	for card_id: StringName in defender_player.action_hand:
+		var card = gs.cards.get(card_id)
+		if card and card.def is _ActionCardDef and card.def.action_type == &"辅助":
+			# 检查是否为掩护牌
+			for effect in card.def.effects:
+				if effect and String(effect.hook) == "ON_ATTACK_DECLARED":
+					context.attack_service.submit_response(attack_id, card_id, {})
+					return
+
+	# 没有可用响应牌，跳过
 
 
 ## AI 尝试攻击
@@ -606,7 +911,8 @@ func _sync_compat_fields() -> void:
 
 
 ## 设置初始装备手牌
-## 优先将 pre_selected_equipment 中的卡牌分给玩家，剩余牌再平分给双方
+## 玩家选中的装备优先从牌堆分配；敌方从 N 稀有度装备中随机选等量装备
+## 剩余装备留在牌堆中供商店/抽牌使用
 func _setup_starting_equipment(_battle_config: Dictionary) -> void:
 	var player = context.game_state.players.get(&"player")
 	var enemy = context.game_state.players.get(&"enemy")
@@ -625,30 +931,22 @@ func _setup_starting_equipment(_battle_config: Dictionary) -> void:
 	for cid: StringName in assigned:
 		deck_state.equipment_deck.erase(cid)
 
-	# ── 第二轮：剩余牌平分给双方 ──
-	var half_size: int = deck_state.equipment_deck.size() / 2
-
-	# 玩家：抽取前半部分
-	if player:
-		for i: int in range(half_size):
-			if deck_state.equipment_deck.is_empty():
-				break
-			var card_id: StringName = deck_state.equipment_deck.pop_front() as StringName
-			var card = context.game_state.cards.get(card_id)
-			if card:
-				card.owner_player_id = &"player"
-				card.zone = &"equipment_hand"
-			player.equipment_hand.append(card_id)
-
-	# 敌方：抽取剩余
-	if enemy:
-		while deck_state.equipment_deck.size() > 0:
-			var card_id: StringName = deck_state.equipment_deck.pop_front() as StringName
-			var card = context.game_state.cards.get(card_id)
-			if card:
-				card.owner_player_id = &"enemy"
-				card.zone = &"equipment_hand"
+	# ── 第二轮：为敌方随机选等量 N 稀有度装备 ──
+	var player_equip_count: int = player.equipment_hand.size()
+	var enemy_assigned: int = 0
+	var i: int = 0
+	while enemy_assigned < player_equip_count and i < deck_state.equipment_deck.size():
+		var card_id: StringName = deck_state.equipment_deck[i]
+		var card = context.game_state.cards.get(card_id)
+		if card and card.def and String(card.def.rarity) == "N":
+			card.owner_player_id = &"enemy"
+			card.zone = &"equipment_hand"
 			enemy.equipment_hand.append(card_id)
+			deck_state.equipment_deck.erase(card_id)
+			enemy_assigned += 1
+			# 不递增 i，因为 erase 导致后续元素前移
+		else:
+			i += 1
 
 
 ## 抽初始行动牌
@@ -753,3 +1051,118 @@ func _find_first_step_toward(origin: Dictionary, target: Dictionary, available_p
 		previous_key = String(came_from[step_key])
 
 	return traversable.get(step_key, origin).duplicate()
+
+
+## P1-1: AI自动执行迎击移动（远离攻击者）
+func _ai_execute_evade_movement(attack_id: StringName) -> void:
+	if not context:
+		return
+	var gs = context.game_state
+	var attack_context: Dictionary = gs.attacks.get(attack_id, {})
+	var target_id: StringName = attack_context.get("target_id", &"")
+	var attacker_id: StringName = attack_context.get("attacker_id", &"")
+	var target_mech = gs.mechs.get(target_id)
+	var attacker_mech = gs.mechs.get(attacker_id)
+	if not target_mech or not attacker_mech:
+		return
+
+	# AI策略：远离攻击者移动
+	var best_cell: Dictionary = target_mech.position.duplicate()
+	var best_distance: int = 0
+	var current_distance: int = HexGrid.distance(target_mech.position, attacker_mech.position)
+
+	# 计算可用移动动力
+	var available_power: int = target_mech.power
+	if attack_context.get("response_use_current_power", false):
+		available_power = target_mech.power
+	var power_fraction: float = float(attack_context.get("response_power_fraction", 1.0))
+	available_power = int(available_power * power_fraction)
+
+	if available_power > 0 and gs.map_state:
+		# 简单策略：尝试向远离攻击者的方向移动
+		for neighbor: Dictionary in HexGrid.neighbors(target_mech.position):
+			var neighbor_key: String = HexGrid.key(neighbor)
+			var cell = gs.map_state.cells.get(neighbor_key)
+			if cell == null or String(cell.get("terrain", &"NORMAL")) == &"RED":
+				continue
+			var new_distance: int = HexGrid.distance(neighbor, attacker_mech.position)
+			if new_distance > best_distance and new_distance > current_distance:
+				best_distance = new_distance
+				best_cell = neighbor.duplicate()
+
+	if HexGrid.distance(target_mech.position, best_cell) > 0:
+		context.map_service.move_mech_to_hex(target_id, best_cell)
+
+
+## P1-1: AI自动执行强袭移动（向目标靠近）
+func _ai_execute_assault_movement(attack_id: StringName) -> void:
+	if not context:
+		return
+	var gs = context.game_state
+	var attack_context: Dictionary = gs.attacks.get(attack_id, {})
+	var attacker_id: StringName = attack_context.get("attacker_id", &"")
+	var target_id: StringName = attack_context.get("target_id", &"")
+	var attacker_mech = gs.mechs.get(attacker_id)
+	var target_mech = gs.mechs.get(target_id)
+	if not attacker_mech or not target_mech:
+		return
+
+	# AI策略：向目标移动（使用当前动力）
+	if attacker_mech.power > 0:
+		var step: Dictionary = _find_first_step_toward(
+			attacker_mech.position, target_mech.position, attacker_mech.power
+		)
+		if HexGrid.distance(attacker_mech.position, step) > 0:
+			context.map_service.move_mech_to_hex(attacker_id, step)
+
+
+## P0-4: AI处理pending actions
+func _ai_handle_pending_actions(pending_actions: Array) -> void:
+	for pending: Dictionary in pending_actions:
+		var pending_type: StringName = pending.get("type", &"")
+		var source_player_id: StringName = pending.get("source_player_id", &"")
+		var source_mech_id: StringName = pending.get("source_mech_id", &"")
+
+		match pending_type:
+			&"FLASH_ATTACK":
+				# 闪击再攻：若有行动牌可弃，则发动
+				var player = context.game_state.players.get(source_player_id)
+				if player and player.action_hand.size() > 0:
+					# 弃1行动牌，然后重新攻击
+					var discard_card_id: StringName = player.action_hand[0]
+					context.game_actions.discard_action_card({
+						"player_id": source_player_id,
+						"card_id": discard_card_id,
+						"reason": &"FLASH_ATTACK_COST",
+					})
+					# 创建新的攻击
+					var weapon_id: StringName = pending.get("weapon_id", &"")
+					var target_id: StringName = pending.get("target_id", &"")
+					var mech = context.game_state.mechs.get(source_mech_id)
+					if mech and mech.can_attack() and weapon_id != &"" and target_id != &"":
+						# 需要一张攻击牌——用弃牌堆的最后一张或虚拟攻击牌
+						begin_attack(StringName(source_player_id), StringName(context.game_state.get_player_for_mech(target_id).player_id if context.game_state.get_player_for_mech(target_id) else &""), weapon_id, &"")
+
+			&"COUNTERATTACK":
+				# 反击：选择最优武器和目标发动
+				var mech = context.game_state.mechs.get(source_mech_id)
+				if mech and mech.can_attack():
+					var weapon_ids: Array[StringName] = mech.get_weapon_ids()
+					if not weapon_ids.is_empty():
+						# 反击默认目标为攻击者
+						var target_id: StringName = pending.get("target_id", &"")
+						if target_id == &"":
+							continue
+						begin_attack(StringName(source_player_id), StringName(context.game_state.get_player_for_mech(target_id).player_id if context.game_state.get_player_for_mech(target_id) else &""), weapon_ids[0], &"")
+
+			&"JOINT_ATTACK":
+				# 联合：选择最有利的目标机甲
+				# AI简化：跳过联合攻击（实现复杂）
+				pass
+
+
+## 判断当前是否AI回合
+func _is_ai_turn() -> bool:
+	if not context:
+		return false
+	return context.game_state.active_player_id == &"enemy"

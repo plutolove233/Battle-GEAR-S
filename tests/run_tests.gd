@@ -9,6 +9,7 @@ func _init() -> void:
 		"res://tests/test_battle_math.gd",
 		"res://tests/test_battle_state.gd",
 		"res://tests/test_campaign_state.gd",
+			"res://tests/test_effect_primitives.gd",
 	]
 	for path in test_files:
 		if not ResourceLoader.exists(path):
