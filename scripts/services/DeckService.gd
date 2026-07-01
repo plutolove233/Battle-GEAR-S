@@ -48,16 +48,40 @@ func discard_card(card_id: StringName, reason: StringName) -> void:
 
 	# 更新卡牌实例区域
 	var card: CardInstance = gs.get_card(card_id)
+	var from_zone: StringName = &""
+	var owner_player_id: StringName = &""
 	if card:
+		from_zone = card.zone
+		owner_player_id = card.owner_player_id
 		card.zone = &"discard"
 
-	# 加入弃牌堆
-	deck_state.discard_pile.append(card_id)
+	# 按卡牌类型分入对应弃牌堆
+	if card and card.def:
+		match card.def.card_kind:
+			&"action":
+				deck_state.action_discard_pile.append(card_id)
+			&"equipment":
+				deck_state.equipment_discard_pile.append(card_id)
+			_:
+				# 其他类型（事件、机师等）归入行动弃牌堆
+				deck_state.action_discard_pile.append(card_id)
+	else:
+		deck_state.action_discard_pile.append(card_id)
 
 	gs.write_log(&"card_discarded", {
 		"card_id": String(card_id),
 		"reason": String(reason),
 	})
+
+	# 通知消息面板（不绑定任何效果，不改变游戏行为）
+	# 先写日志再发通知，使面板 _advance_log_index 能跳过该日志条目，避免重复
+	if context.effect_engine:
+		context.effect_engine.fire_hook(_EffectConst.HOOK_CARD_DISCARDED_NOTIFY, {
+			"card_id": String(card_id),
+			"owner_player_id": String(owner_player_id),
+			"from_zone": String(from_zone),
+			"reason": String(reason),
+		})
 
 
 ## 根据教学战役配置构建牌堆
@@ -119,14 +143,27 @@ func _reshuffle_discard_into_deck(deck_key: StringName) -> void:
 	var gs: GameState = context.game_state
 	var deck_state: DeckState = gs.deck_state
 
-	if deck_state.discard_pile.is_empty():
+	# 根据牌堆类型选择对应的弃牌堆
+	var source_discard: Array[StringName] = []
+	match deck_key:
+		&"action_deck":
+			source_discard = deck_state.action_discard_pile
+		&"equipment_deck":
+			source_discard = deck_state.equipment_discard_pile
+		&"advanced_equipment_deck":
+			source_discard = deck_state.equipment_discard_pile
+		_:
+			# 其他牌堆合并两个弃牌堆
+			source_discard = deck_state.action_discard_pile + deck_state.equipment_discard_pile
+
+	if source_discard.is_empty():
 		return
 
 	# 将弃牌堆中的卡牌按原始牌堆分类放回
 	var cards_to_return: Array[StringName] = []
 	var remaining_discard: Array[StringName] = []
 
-	for card_id: StringName in deck_state.discard_pile:
+	for card_id: StringName in source_discard:
 		var card: CardInstance = gs.get_card(card_id)
 		if card and card.def:
 			var belongs: bool = false
@@ -135,13 +172,14 @@ func _reshuffle_discard_into_deck(deck_key: StringName) -> void:
 					belongs = card.def.card_kind == &"action"
 				&"equipment_deck":
 					belongs = card.def.card_kind == &"equipment"
+				&"advanced_equipment_deck":
+					belongs = card.def.card_kind == &"equipment"
 				_:
 					belongs = true  # 其他牌堆全部放回
 
 			if belongs:
 				cards_to_return.append(card_id)
-				if card:
-					card.zone = &"deck"
+				card.zone = &"deck"
 			else:
 				remaining_discard.append(card_id)
 		else:
@@ -152,8 +190,16 @@ func _reshuffle_discard_into_deck(deck_key: StringName) -> void:
 	var deck: Array = _get_deck_array(deck_key)
 	deck.append_array(cards_to_return)
 
-	# 更新弃牌堆
-	deck_state.discard_pile = remaining_discard
+	# 更新对应弃牌堆
+	match deck_key:
+		&"action_deck":
+			deck_state.action_discard_pile = remaining_discard
+		&"equipment_deck", &"advanced_equipment_deck":
+			deck_state.equipment_discard_pile = remaining_discard
+		_:
+			# 清空两个弃牌堆（全部洗入了）
+			deck_state.action_discard_pile.clear()
+			deck_state.equipment_discard_pile.clear()
 
 
 ## 根据卡牌定义ID创建 CardInstance 并注册到 GameState

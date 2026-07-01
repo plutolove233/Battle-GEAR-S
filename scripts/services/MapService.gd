@@ -17,7 +17,10 @@ const _MapCellState = preload("res://scripts/runtime/MapCellState.gd")
 
 ## 移动机甲到目标六角格
 ## 验证可移动 → 路径可达 → 计算消耗 → 扣除动力 → 更新位置 → 触发钩子
-func move_mech_to_hex(mech_id: StringName, target: Dictionary) -> Dictionary:
+## power_budget: 可选的动力上限（用于回避/疾行等"使用部分动力移动"的效果）。
+##   为 -1 时不限制（使用机甲当前全部动力）；否则可达性与消耗都按 min(机甲动力, power_budget) 判断，
+##   但实际扣除仍从机甲动力中扣除（剩余动力保留）。
+func move_mech_to_hex(mech_id: StringName, target: Dictionary, power_budget: int = -1) -> Dictionary:
 	var gs: GameState = context.game_state
 	var mech: MechState = gs.mechs.get(mech_id)
 
@@ -30,6 +33,11 @@ func move_mech_to_hex(mech_id: StringName, target: Dictionary) -> Dictionary:
 		return {"ok": false, "message": "动力不足"}
 	if mech.destroyed:
 		return {"ok": false, "message": "机甲已被摧毁"}
+
+	# 本次移动可使用的动力上限
+	var avail_power: int = mech.power
+	if power_budget >= 0:
+		avail_power = min(mech.power, power_budget)
 
 	# ── 2. 验证目标格在地图上 ──
 	if not gs.map_state.has_cell(target):
@@ -47,14 +55,14 @@ func move_mech_to_hex(mech_id: StringName, target: Dictionary) -> Dictionary:
 	for cell_key: String in gs.map_state.cells:
 		map_tiles.append(gs.map_state.cells[cell_key].to_dict())
 
-	if not BattleMath.can_move(mech.position, target, mech.power, map_tiles):
+	if not BattleMath.can_move(mech.position, target, avail_power, map_tiles):
 		return {"ok": false, "message": "目标格不可达或超出动力范围"}
 
 	# ── 5. 计算动力消耗（基础地形每格消耗1点） ──
 	var distance: int = HexGrid.distance(mech.position, target)
 	var power_cost: int = _calculate_power_cost(mech.position, target, gs)
 
-	if power_cost > mech.power:
+	if power_cost > avail_power:
 		return {"ok": false, "message": "动力不足以移动到目标格"}
 
 	# ── 6. 扣除动力 ──

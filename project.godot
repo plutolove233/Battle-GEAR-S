@@ -18,6 +18,10 @@ window/size/viewport_width=1536
 window/size/viewport_height=768
 window/size/resizable=true
 
+[autoload]
+
+SessionLogger="*res://scripts/services/session_logger.gd"
+
 [physics]
 
 3d/physics_engine="Jolt Physics"

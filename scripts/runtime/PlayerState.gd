@@ -28,3 +28,6 @@ var turn_counters: Dictionary = {}
 
 ## 玩家身上的状态效果列表（商店折扣等）
 var statuses: Array[Dictionary] = []
+
+## 行动牌手牌是否对对手明牌（用于弃牌选择时判断明暗牌）
+var hand_revealed: bool = false

@@ -149,18 +149,21 @@ func apply_cannot_respond(params: Dictionary) -> void:
 
 ## 施加或检查锁定状态
 ## P2-2: 支持 ignore_lock 参数（识破无视锁定）
+## ignore_lock=true 时仅作为"无视锁定"标记动作：不施加状态、不校验目标，
+## 仅供 ResponsePanel/AI 在响应窗口识别"此牌无视锁定"用。
 func apply_or_check_locked(params: Dictionary) -> bool:
+	var ignore_lock: bool = bool(params.get("ignore_lock", false))
+	if ignore_lock:
+		return true  # 无视锁定标记：识破等牌的标记动作，不产生状态
+
 	var target_id: StringName = params.get("target_id", params.get("mech_id", &""))
 	var mode: StringName = params.get("mode", &"apply")
-	var ignore_lock: bool = bool(params.get("ignore_lock", false))
 
 	if target_id == &"":
 		push_error("APPLY_OR_CHECK_LOCKED 缺少 target_id")
 		return false
 
 	if mode == &"check":
-		if ignore_lock:
-			return true  # 无视锁定，始终通过
 		return context.game_state.has_status(target_id, &"LOCKED")
 
 	var status := {
@@ -179,6 +182,23 @@ func apply_or_check_locked(params: Dictionary) -> bool:
 	})
 
 	return true
+
+
+## 移除目标身上由指定来源玩家施加的锁定状态
+## 实现"锁定"的生命周期：A 的攻击命中 B 后，解除 A 施加在 B 上的 LOCKED。
+## source_player_id 为空时移除目标身上所有 LOCKED 状态。
+func remove_locked_status_from_target(target_id: StringName, source_player_id: StringName = &"") -> void:
+	var mech = context.game_state.mechs.get(target_id)
+	if mech == null:
+		return
+	mech.statuses = mech.statuses.filter(func(s: Dictionary) -> bool:
+		if String(s.get("type", &"")) != "LOCKED":
+			return true  # 非锁定状态保留
+		# 仅移除指定来源玩家施加的锁定；来源不匹配则保留
+		if source_player_id != &"" and String(s.get("source_player_id", &"")) != String(source_player_id):
+			return true
+		return false
+	)
 
 
 ## 消耗下次攻击威力增益
@@ -297,8 +317,12 @@ func modify_mech_power(params: Dictionary) -> void:
 	var duration: StringName = params.get("duration", &"")
 
 	# ── 始终立即应用动力修改 ──
+	# THIS_TURN / THIS_ATTACK 临时动力增益允许超过当前上限
 	var before: int = mech.power
-	mech.power = clamp(mech.power + delta, 0, _get_max_power(mech_id))
+	if duration == &"THIS_TURN" or duration == &"THIS_ATTACK":
+		mech.power = maxi(0, mech.power + delta)
+	else:
+		mech.power = clamp(mech.power + delta, 0, _get_max_power(mech_id))
 	context.effect_engine.fire_hook(&"ON_POWER_CHANGED", {
 		"mech_id": mech_id,
 		"delta": mech.power - before,
@@ -428,6 +452,7 @@ func draw_action_cards(params: Dictionary) -> void:
 		push_error("DRAW_ACTION 缺少 player_id")
 		return
 
+	var player_state = context.game_state.players.get(player_id)
 	var drawn: Array[StringName] = []
 
 	for i in range(max(0, count)):
@@ -439,6 +464,10 @@ func draw_action_cards(params: Dictionary) -> void:
 		var card_id: StringName = drawn_one[0]
 
 		drawn.append(card_id)
+
+		# 将抽到的行动牌加入玩家手牌（draw_from_deck 仅更新 zone，不维护手牌数组）
+		if player_state != null and not player_state.action_hand.has(card_id):
+			player_state.action_hand.append(card_id)
 
 		context.effect_engine.fire_hook(&"ON_CARD_DRAWN", {
 			"player_id": player_id,
@@ -473,6 +502,7 @@ func draw_equipment_cards(params: Dictionary) -> void:
 		push_error("DRAW_EQUIPMENT 缺少 player_id")
 		return
 
+	var player_state = context.game_state.players.get(player_id)
 	var drawn: Array[StringName] = []
 
 	for i in range(max(0, count)):
@@ -484,6 +514,10 @@ func draw_equipment_cards(params: Dictionary) -> void:
 		var card_id: StringName = drawn_one[0]
 
 		drawn.append(card_id)
+
+		# 将抽到的装备牌加入玩家手牌（draw_from_deck 仅更新 zone，不维护手牌数组）
+		if player_state != null and not player_state.equipment_hand.has(card_id):
+			player_state.equipment_hand.append(card_id)
 
 		context.effect_engine.fire_hook(&"ON_CARD_DRAWN", {
 			"player_id": player_id,
@@ -550,7 +584,8 @@ func random_draw_from_discard_or_deck(params: Dictionary) -> void:
 	var player_id: StringName = params.get("player_id", params.get("target_player_id", &""))
 	var count: int = int(params.get("count", 1))
 	var source_zone: StringName = params.get("source_zone", &"discard")
-	var card_kind: StringName = params.get("card_kind", &"")
+	# 兼容两种参数命名：效果定义用 "type"，部分调用用 "card_kind"
+	var card_kind: StringName = params.get("card_kind", params.get("type", &""))
 
 	if player_id == &"":
 		push_error("RANDOM_DRAW_FROM_DISCARD_OR_DECK 缺少 player_id")
@@ -559,7 +594,12 @@ func random_draw_from_discard_or_deck(params: Dictionary) -> void:
 	var pool: Array[StringName] = []
 
 	if source_zone == &"discard":
-		pool = context.game_state.deck_state.discard_pile.duplicate()
+		if card_kind == &"equipment":
+			pool = context.game_state.deck_state.equipment_discard_pile.duplicate()
+		elif card_kind == &"action":
+			pool = context.game_state.deck_state.action_discard_pile.duplicate()
+		else:
+			pool = (context.game_state.deck_state.action_discard_pile + context.game_state.deck_state.equipment_discard_pile).duplicate()
 	elif source_zone == &"action_deck":
 		pool = context.game_state.deck_state.action_deck.duplicate()
 	elif source_zone == &"equipment_deck":
@@ -571,7 +611,7 @@ func random_draw_from_discard_or_deck(params: Dictionary) -> void:
 	elif source_zone == &"event_deck":
 		pool = context.game_state.deck_state.event_deck.duplicate()
 	else:
-		pool = context.game_state.deck_state.discard_pile.duplicate()
+		pool = (context.game_state.deck_state.action_discard_pile + context.game_state.deck_state.equipment_discard_pile).duplicate()
 
 	if card_kind != &"":
 		pool = pool.filter(func(card_id: StringName) -> bool:
@@ -847,39 +887,77 @@ func modify_damage_tokens(params: Dictionary) -> void:
 
 
 ## 移除损伤标记
+## 如果未指定 slot_id，自动从损伤最多的槽位开始移除
 func remove_damage_tokens(params: Dictionary) -> void:
 	var mech_id: StringName = params.get("mech_id", params.get("target_id", &""))
 	var slot_id: StringName = params.get("slot_id", &"")
 	var amount: int = int(params.get("amount", params.get("count", 1)))
 
-	if mech_id == &"" or slot_id == &"" or amount <= 0:
+	if mech_id == &"" or amount <= 0:
 		return
 
 	var mech = context.game_state.mechs.get(mech_id)
 	if mech == null:
 		return
-	var slot_state = mech.slots.get(slot_id)
-	if slot_state == null:
+
+	# 如果指定了 slot_id，从该槽位移除
+	if slot_id != &"":
+		var slot_state = mech.slots.get(slot_id)
+		if slot_state == null:
+			return
+		var removed := 0
+		while removed < amount and slot_state.region_damage_tokens > 0:
+			slot_state.region_damage_tokens -= 1
+			removed += 1
+		if removed < amount and slot_state.equipped_card != null:
+			var card = slot_state.equipped_card
+			while removed < amount and card.damage_tokens > 0:
+				card.damage_tokens -= 1
+				removed += 1
+		if removed > 0:
+			context.effect_engine.fire_hook(&"ON_DAMAGE_TOKEN_REMOVED", {
+				"mech_id": mech_id,
+				"slot_id": slot_id,
+				"amount": removed
+			})
 		return
 
-	var removed := 0
+	# 未指定 slot_id：自动从损伤最多的槽位开始移除
+	var remaining := amount
+	var total_removed := 0
+	# 按损伤标记数降序排列槽位
+	var sorted_slots: Array[Dictionary] = []
+	for sid: StringName in mech.slots:
+		var s = mech.slots[sid]
+		var total_tokens: int = s.region_damage_tokens
+		if s.equipped_card != null:
+			total_tokens += s.equipped_card.damage_tokens
+		if total_tokens > 0:
+			sorted_slots.append({"slot_id": sid, "total_tokens": total_tokens})
+	sorted_slots.sort_custom(func(a, b): return a["total_tokens"] > b["total_tokens"])
 
-	while removed < amount and slot_state.region_damage_tokens > 0:
-		slot_state.region_damage_tokens -= 1
-		removed += 1
-
-	if removed < amount and slot_state.equipped_card != null:
-		var card = slot_state.equipped_card
-		while removed < amount and card.damage_tokens > 0:
-			card.damage_tokens -= 1
+	for entry: Dictionary in sorted_slots:
+		if remaining <= 0:
+			break
+		var sid: StringName = entry["slot_id"]
+		var s = mech.slots[sid]
+		var removed := 0
+		while removed < remaining and s.region_damage_tokens > 0:
+			s.region_damage_tokens -= 1
 			removed += 1
-
-	if removed > 0:
-		context.effect_engine.fire_hook(&"ON_DAMAGE_TOKEN_REMOVED", {
-			"mech_id": mech_id,
-			"slot_id": slot_id,
-			"amount": removed
-		})
+		if removed < remaining and s.equipped_card != null:
+			var card = s.equipped_card
+			while removed < remaining and card.damage_tokens > 0:
+				card.damage_tokens -= 1
+				removed += 1
+		remaining -= removed
+		total_removed += removed
+		if removed > 0:
+			context.effect_engine.fire_hook(&"ON_DAMAGE_TOKEN_REMOVED", {
+				"mech_id": mech_id,
+				"slot_id": sid,
+				"amount": removed
+			})
 
 
 ## 重定向损伤标记
@@ -1041,8 +1119,12 @@ func discard_card(params: Dictionary) -> void:
 	card.mech_id = &""
 	card.face_down = false
 
-	if not context.game_state.deck_state.discard_pile.has(card_id):
-		context.game_state.deck_state.discard_pile.append(card_id)
+	# 按卡牌类型分入对应弃牌堆
+	var target_pile: Array = context.game_state.deck_state.action_discard_pile
+	if card.def and card.def.card_kind == &"equipment":
+		target_pile = context.game_state.deck_state.equipment_discard_pile
+	if not target_pile.has(card_id):
+		target_pile.append(card_id)
 
 	context.effect_engine.fire_hook(&"ON_CARD_DISCARDED", {
 		"card_id": card_id,
@@ -1067,6 +1149,15 @@ func discard_action_card(params: Dictionary) -> void:
 		if target_player:
 			player_id = target_player.player_id
 
+	if bool(params.get("from_attacker", false)):
+		var attacker_id: StringName = params.get("attacker_id", &"")
+		if attacker_id == &"" and context.game_state.current_attack_id != &"":
+			var attack: Dictionary = context.game_state.attacks.get(context.game_state.current_attack_id, {})
+			attacker_id = attack.get("attacker_id", &"")
+		var attacker_player = context.game_state.get_player_for_mech(attacker_id)
+		if attacker_player:
+			player_id = attacker_player.player_id
+
 	if player_id == &"":
 		push_error("DISCARD_ACTION_CARD 缺少 player_id")
 		return
@@ -1085,6 +1176,68 @@ func discard_action_card(params: Dictionary) -> void:
 		if player_state != null and player_state.action_hand.has(id):
 			player_state.action_hand.erase(id)
 		discard_card({"card_id": id, "reason": params.get("reason", &"EFFECT_DISCARD")})
+
+
+## 随机弃置行动牌
+func random_discard_action_card(params: Dictionary) -> void:
+	var player_id: StringName = params.get("player_id", params.get("target_player_id", &""))
+	var count: int = int(params.get("count", 1))
+
+	# 解析 from_target / from_attacker（与 discard_action_card 相同逻辑）
+	if bool(params.get("from_target", false)):
+		var target_id: StringName = params.get("target_id", &"")
+		if target_id == &"" and context.game_state.current_attack_id != &"":
+			var attack: Dictionary = context.game_state.attacks.get(context.game_state.current_attack_id, {})
+			target_id = attack.get("target_id", &"")
+		var target_player = context.game_state.get_player_for_mech(target_id)
+		if target_player:
+			player_id = target_player.player_id
+	if bool(params.get("from_attacker", false)):
+		var attacker_id: StringName = params.get("attacker_id", &"")
+		if attacker_id == &"" and context.game_state.current_attack_id != &"":
+			var attack: Dictionary = context.game_state.attacks.get(context.game_state.current_attack_id, {})
+			attacker_id = attack.get("attacker_id", &"")
+		var attacker_player = context.game_state.get_player_for_mech(attacker_id)
+		if attacker_player:
+			player_id = attacker_player.player_id
+
+	if player_id == &"":
+		push_error("RANDOM_DISCARD_ACTION_CARD 缺少 player_id")
+		return
+
+	var player_state = context.game_state.players.get(player_id)
+	if player_state == null:
+		return
+
+	var is_last_before_discard: bool = (player_state.action_hand.size() <= count)
+
+	# 随机选择要弃置的牌
+	var indices: Array[int] = []
+	for i in range(player_state.action_hand.size()):
+		indices.append(i)
+	indices.shuffle()
+
+	var cards_to_discard: Array[StringName] = []
+	for i in range(min(count, indices.size())):
+		cards_to_discard.append(player_state.action_hand[indices[i]])
+
+	# 设置临时标记供条件检查（弃置后是否为最后一张行动牌）
+	if is_last_before_discard:
+		context.game_state.temp_values["is_last_action_card_in_hand"] = true
+
+	for card_id in cards_to_discard:
+		discard_action_card({
+			"player_id": player_id,
+			"card_id": card_id,
+			"reason": params.get("reason", &"EFFECT_RANDOM_DISCARD"),
+		})
+
+	# 触发随机弃牌钩子
+	context.effect_engine.fire_hook(&"ON_ACTION_CARD_RANDOMLY_DISCARDED", {
+		"player_id": player_id,
+		"card_ids": cards_to_discard,
+		"was_last_card": is_last_before_discard,
+	})
 
 
 ## 破坏卡牌
@@ -1356,6 +1509,16 @@ func steal_action_card(params: Dictionary) -> void:
 		var target_player = context.game_state.get_player_for_mech(target_id)
 		if target_player:
 			from_player_id = target_player.player_id
+	if from_player_id == &"" and bool(params.get("from_attacker", false)):
+		var attacker_id: StringName = &""
+		if context.game_state.current_attack_id != &"":
+			var attack: Dictionary = context.game_state.attacks.get(context.game_state.current_attack_id, {})
+			attacker_id = attack.get("attacker_id", &"")
+		if attacker_id == &"":
+			attacker_id = params.get("attacker_id", &"")
+		var attacker_player = context.game_state.get_player_for_mech(attacker_id)
+		if attacker_player:
+			from_player_id = attacker_player.player_id
 	if from_player_id == &"":
 		from_player_id = params.get("target_player_id", &"")
 

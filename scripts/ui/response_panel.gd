@@ -59,13 +59,17 @@ func _refresh() -> void:
 	if not player:
 		return
 
-	# P2-2: 检查被攻击方是否被锁定（cannot_respond）
-	# 关键顺序：先检查迎击牌是否有ignore_lock效果，再决定是否跳过
+	# 检查被攻击方是否被攻击方锁定（LOCKED，且来源为攻击方玩家）
+	# 识破等带 ignore_lock 的响应牌仍可使用
+	var attacker_id: StringName = attack.get("attacker_id", &"")
+	var attacker_player = gs.get_player_for_mech(attacker_id)
+	var attacker_player_id: StringName = attacker_player.player_id if attacker_player else &""
+
 	var target_mech = gs.mechs.get(target_id)
 	var is_locked: bool = false
-	if target_mech:
+	if target_mech and attacker_player_id != &"":
 		for status in target_mech.statuses:
-			if String(status.get("type", "")) == "CANNOT_RESPOND":
+			if String(status.get("type", "")) == "LOCKED" and String(status.get("source_player_id", "")) == String(attacker_player_id):
 				is_locked = true
 				break
 

@@ -266,8 +266,7 @@
     "count": 4,
     "effect_text": "指定其他1台机甲，本回合其不能响应你发动的攻击(该目标机甲被攻击命中后结束以上效果)。",
     "effect_ids": [
-      "target_cannot_react_to_your_attacks",
-      "lock_effect_ends_after_target_hit"
+      "target_cannot_react_to_your_attacks"
     ]
   },
   {

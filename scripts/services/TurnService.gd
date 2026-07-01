@@ -49,6 +49,28 @@ func start_turn(player_id: StringName) -> Dictionary:
 	for card_id: StringName in drawn_equipment:
 		player.equipment_hand.append(card_id)
 
+	# ── 5b. 记录回合开始抽牌（供消息面板展示） ──
+	var _drawn_action_str: Array = []
+	for cid in drawn_actions:
+		_drawn_action_str.append(String(cid))
+	var _drawn_equip_str: Array = []
+	for cid in drawn_equipment:
+		_drawn_equip_str.append(String(cid))
+	gs.write_log(&"turn_draw", {
+		"player_id": String(player_id),
+		"turn_number": gs.turn_number,
+		"action_card_ids": _drawn_action_str,
+		"equipment_card_ids": _drawn_equip_str,
+	})
+	# 通知消息面板展示回合抽牌（不绑定任何效果，不改变游戏行为）
+	if context.effect_engine:
+		context.effect_engine.fire_hook(_EffectConst.HOOK_TURN_DRAW_NOTIFY, {
+			"player_id": String(player_id),
+			"turn_number": gs.turn_number,
+			"action_card_ids": _drawn_action_str,
+			"equipment_card_ids": _drawn_equip_str,
+		})
+
 	# ── 6. 获得2金币 ──
 	if context.game_actions:
 		context.game_actions.gain_gold({"player_id": player_id, "amount": 2})
