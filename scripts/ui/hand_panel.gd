@@ -66,9 +66,9 @@ func _refresh() -> void:
 		btn.custom_minimum_size = Vector2(120, 44)
 		btn.tooltip_text = card.def.effect_text
 		# 攻击牌用绿色，辅助牌用蓝色
-		if card.def.action_type == &"攻击":
+		if card.def is ActionCardDef and card.def.action_type == &"攻击":
 			btn.add_theme_color_override("font_color", Color(0.9, 0.3, 0.2))
-		elif card.def.action_type == &"迎击":
+		elif card.def is ActionCardDef and card.def.action_type == &"迎击":
 			btn.add_theme_color_override("font_color", Color(0.3, 0.7, 0.9))
 		else:
 			btn.add_theme_color_override("font_color", Color(0.3, 0.85, 0.5))
@@ -100,6 +100,8 @@ func _refresh() -> void:
 
 ## 获取行动类型的简写
 func _action_type_short(def) -> String:
+	if not def is ActionCardDef:
+		return "?"
 	if def.action_type == &"攻击":
 		return "攻"
 	elif def.action_type == &"迎击":

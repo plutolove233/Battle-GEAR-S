@@ -172,6 +172,9 @@ static func resolve(binding: EffectBinding, payload: Dictionary, action: Diction
 		&"STEAL_ACTION_CARD":
 			context.game_actions.steal_action_card(params)
 
+		&"RANDOM_DISCARD_ACTION_CARD":
+			context.game_actions.random_discard_action_card(params)
+
 		&"PLACE_TRAP_MARKER":
 			context.game_actions.place_trap_marker(params)
 
@@ -268,6 +271,19 @@ static func _resolve_params(raw_params: Dictionary, binding: EffectBinding, payl
 		result["source_mech_id"] = binding.get_source_mech_id()
 	if not result.has("player_id"):
 		result["player_id"] = binding.get_owner_player_id()
+	# 自动注入玩家选择的对象（装备牌/行动牌均可指定对象）
+	# 武器：优先 selected_weapon_id，再 weapon_id
+	if not result.has("weapon_id"):
+		var sel_weapon = payload.get("selected_weapon_id", payload.get("weapon_id", &""))
+		if sel_weapon != null and String(sel_weapon) != "":
+			result["weapon_id"] = sel_weapon
+	# 目标机甲：优先 target_id / target_mech_id；未指定时默认以我方机甲为对象
+	if not result.has("target_id"):
+		var sel_target = payload.get("target_id", payload.get("target_mech_id", &""))
+		if sel_target != null and String(sel_target) != "":
+			result["target_id"] = sel_target
+		else:
+			result["target_id"] = binding.get_source_mech_id()
 
 	return result
 
@@ -310,3 +326,76 @@ static func _resolve_value(value, binding: EffectBinding, payload):
 
 	# 无匹配：原样返回
 	return value
+
+
+## 检查动作列表中是否有需要玩家选择弃置目标的弃牌动作
+## 返回空字典表示不需要选择，返回 {"needs": "discard_select", ...} 表示需要暂停等待玩家输入
+static func check_needs_discard_select(binding: EffectBinding, payload: Dictionary, actions: Array[Dictionary], context: GameContext) -> Dictionary:
+	for action: Dictionary in actions:
+		var action_type: StringName = action.get("type", &"")
+		if action_type != &"DISCARD_ACTION_CARD" and action_type != &"STEAL_ACTION_CARD":
+			continue
+
+		var params: Dictionary = _resolve_params(action.get("params", {}), binding, payload)
+		var count: int = int(params.get("count", 1))
+		if count <= 0:
+			continue
+
+		# 如果已指定具体牌ID，无需选择
+		if params.get("card_id", &"") != &"" or params.get("selected_action_card_id", &"") != &"":
+			continue
+
+		# 如果 payload 中已提供选择的牌ID列表，无需再选
+		var selected_ids: Array = payload.get("selected_action_card_ids", [])
+		if selected_ids.size() >= count:
+			continue
+
+		# 确定弃牌对象的玩家 ID
+		var discard_player_id: StringName = params.get("player_id", params.get("target_player_id", &""))
+		var executor_player_id: StringName = binding.get_owner_player_id()
+
+		# 解析 from_target
+		if bool(params.get("from_target", false)):
+			var target_id: StringName = params.get("target_id", &"")
+			if target_id == &"" and context.game_state.current_attack_id != &"":
+				var attack: Dictionary = context.game_state.attacks.get(context.game_state.current_attack_id, {})
+				target_id = attack.get("target_id", &"")
+			var target_player = context.game_state.get_player_for_mech(target_id)
+			if target_player:
+				discard_player_id = target_player.player_id
+
+		# 解析 from_attacker
+		if bool(params.get("from_attacker", false)):
+			var attacker_id: StringName = params.get("attacker_id", &"")
+			if attacker_id == &"" and context.game_state.current_attack_id != &"":
+				var attack: Dictionary = context.game_state.attacks.get(context.game_state.current_attack_id, {})
+				attacker_id = attack.get("attacker_id", &"")
+			var attacker_player = context.game_state.get_player_for_mech(attacker_id)
+			if attacker_player:
+				discard_player_id = attacker_player.player_id
+
+		if discard_player_id == &"":
+			continue
+
+		# 明牌判断：弃自己的牌为明牌，弃对手的牌为暗牌（除非对手手牌已明牌）
+		var face_up: bool = (discard_player_id == executor_player_id)
+		if not face_up:
+			var discard_player_state = context.game_state.players.get(discard_player_id)
+			if discard_player_state != null and discard_player_state.hand_revealed:
+				face_up = true
+
+		var player_state = context.game_state.players.get(discard_player_id)
+		if player_state == null:
+			continue
+		if player_state.action_hand.size() < count:
+			continue
+
+		return {
+			"needs": &"discard_select",
+			"discard_player_id": discard_player_id,
+			"count": count,
+			"face_up": face_up,
+			"card_type_filter": params.get("card_type_filter", &""),
+		}
+
+	return {}

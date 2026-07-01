@@ -41,10 +41,19 @@ static func can_pay_single(binding, payload: Dictionary, cost: Dictionary, ctx) 
 			# 弃置行动牌：检查手牌中是否有足够的行动牌
 			var player_id: StringName = cost.get("player_id", binding.get_owner_player_id())
 			var count: int = int(cost.get("count", 1))
+			var card_type_filter: StringName = cost.get("card_type_filter", &"")
 			var player_state = ctx.game_state.players.get(player_id)
 			if player_state == null:
 				return false
-			return player_state.action_hand.size() >= count
+			if card_type_filter == &"":
+				return player_state.action_hand.size() >= count
+			# 有 card_type_filter 时，只计算匹配类型的牌
+			var matching_count: int = 0
+			for card_id: StringName in player_state.action_hand:
+				var card = ctx.game_state.cards.get(card_id)
+				if card and card.def and card.def.action_type == card_type_filter:
+					matching_count += 1
+			return matching_count >= count
 
 		&"SPEND_POWER":
 			# 支付动力：检查机甲当前动力是否足够
@@ -123,23 +132,63 @@ static func pay_single(binding, payload: Dictionary, cost: Dictionary, ctx) -> b
 			# 弃置行动牌
 			var player_id: StringName = cost.get("player_id", binding.get_owner_player_id())
 			var count: int = int(cost.get("count", 1))
+			var card_type_filter: StringName = cost.get("card_type_filter", &"")
 			if ctx.game_actions == null:
 				return false
-			# 选择并弃置行动牌
-			for i in range(count):
-				var card_id: StringName = &""
-				# 优先使用指定牌ID，否则由玩家选择
-				if cost.has("card_id"):
-					card_id = cost["card_id"]
-				elif payload.has("selected_action_card_id"):
-					card_id = payload["selected_action_card_id"]
+
+			# 优先使用玩家选择的牌ID列表
+			var selected_ids: Array = payload.get("selected_action_card_ids", [])
+			if selected_ids.size() >= count:
+				for i in range(count):
+					ctx.game_actions.discard_action_card({
+						"player_id": player_id,
+						"card_id": selected_ids[i],
+						"reason": &"EFFECT_COST"
+					})
+				return true
+
+			# 回退：自动选择前 N 张匹配的牌
+			var player_state = ctx.game_state.players.get(player_id)
+			if player_state == null:
+				return false
+			var discarded: int = 0
+			# 先尝试使用 payload 中的单张选择
+			if payload.has("selected_action_card_id"):
+				var card_id: StringName = payload["selected_action_card_id"]
 				if card_id != &"":
 					ctx.game_actions.discard_action_card({
 						"player_id": player_id,
 						"card_id": card_id,
 						"reason": &"EFFECT_COST"
 					})
-			return true
+					discarded += 1
+			# 再尝试使用 cost 中的指定牌
+			if discarded < count and cost.has("card_id"):
+				var card_id: StringName = cost["card_id"]
+				if card_id != &"":
+					ctx.game_actions.discard_action_card({
+						"player_id": player_id,
+						"card_id": card_id,
+						"reason": &"EFFECT_COST"
+					})
+					discarded += 1
+			# 剩余的从手牌中自动选取匹配的牌
+			if discarded < count:
+				var hand_copy: Array[StringName] = player_state.action_hand.duplicate()
+				for card_id: StringName in hand_copy:
+					if discarded >= count:
+						break
+					if card_type_filter != &"":
+						var card = ctx.game_state.cards.get(card_id)
+						if card == null or card.def == null or card.def.action_type != card_type_filter:
+							continue
+					ctx.game_actions.discard_action_card({
+						"player_id": player_id,
+						"card_id": card_id,
+						"reason": &"EFFECT_COST"
+					})
+					discarded += 1
+			return discarded >= count
 
 		&"SPEND_POWER":
 			# 支付动力
@@ -246,3 +295,54 @@ static func pay_single(binding, payload: Dictionary, cost: Dictionary, ctx) -> b
 		_:
 			push_warning("CostChecker: 未知费用类型 %s，跳过支付" % cost_type)
 			return true
+
+
+## 检查弃牌费用是否需要玩家选择弃置目标
+## 返回空字典表示不需要选择，返回 {"needs": "discard_select", ...} 表示需要暂停等待玩家输入
+static func needs_discard_select(binding, payload: Dictionary, costs: Array[Dictionary], ctx) -> Dictionary:
+	for cost in costs:
+		if cost.get("cost_type", &"") != &"DISCARD_ACTION_CARD":
+			continue
+		if cost.get("optional", false):
+			continue  # 可选费用通过 pending action 机制处理
+		var count: int = int(cost.get("count", 1))
+		var player_id: StringName = cost.get("player_id", binding.get_owner_player_id())
+		var card_type_filter: StringName = cost.get("card_type_filter", &"")
+
+		# 如果 payload 中已提供选择的牌ID，则无需再选
+		var selected_ids: Array = payload.get("selected_action_card_ids", [])
+		if selected_ids.size() >= count:
+			continue
+
+		# 确定弃牌对象：自己则明牌，对手则暗牌
+		var executor_player_id: StringName = binding.get_owner_player_id()
+		var face_up: bool = (player_id == executor_player_id)
+		# 如果对手手牌已明牌，也视为明牌
+		if not face_up:
+			var discard_player_state = ctx.game_state.players.get(player_id)
+			if discard_player_state != null and discard_player_state.hand_revealed:
+				face_up = true
+
+		# 检查是否有足够的匹配牌
+		var player_state = ctx.game_state.players.get(player_id)
+		if player_state == null:
+			continue
+		var matching_count: int = 0
+		for card_id: StringName in player_state.action_hand:
+			if card_type_filter != &"":
+				var card = ctx.game_state.cards.get(card_id)
+				if card == null or card.def == null or card.def.action_type != card_type_filter:
+					continue
+			matching_count += 1
+		if matching_count < count:
+			continue  # 无法支付，后续 can_pay 检查会失败
+
+		return {
+			"needs": &"discard_select",
+			"discard_player_id": player_id,
+			"count": count,
+			"face_up": face_up,
+			"card_type_filter": card_type_filter,
+		}
+
+	return {}

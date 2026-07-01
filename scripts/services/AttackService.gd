@@ -29,8 +29,12 @@ var context = null  # type: GameContext
 ## 声明攻击
 ## 验证条件 → 创建攻击上下文 → 消耗攻击牌 → 触发钩子 → 进入响应窗口
 ## P0-1: 不再修改 attack_card.mech_id，改为在 attack_context 中保存来源信息
+## 反击(attack2)：attack_card_id 传 &"" 表示"无需攻击牌的自由攻击"(is_free_attack)，
+##   跳过手牌校验/不消耗攻击牌/不消耗本回合攻击次数。
 func declare_attack(attacker_id: StringName, target_id: StringName, weapon_id: StringName, attack_card_id: StringName) -> Dictionary:
 	var gs = context.game_state
+
+	var is_free_attack: bool = (attack_card_id == &"")  # 反击等"无需攻击牌"的攻击
 
 	# ── 1. 验证 ──
 	var attacker = gs.mechs.get(attacker_id)
@@ -54,11 +58,11 @@ func declare_attack(attacker_id: StringName, target_id: StringName, weapon_id: S
 	var player = gs.get_player_for_mech(attacker_id)
 	if player == null:
 		return {"ok": false, "message": "找不到攻击者所属玩家"}
-	if not player.action_hand.has(attack_card_id):
+	if not is_free_attack and not player.action_hand.has(attack_card_id):
 		return {"ok": false, "message": "攻击牌不在手牌中"}
 
-	# 验证攻击次数
-	if not attacker.can_attack():
+	# 验证攻击次数（自由攻击/反击不消耗本回合攻击次数）
+	if not is_free_attack and not attacker.can_attack():
 		return {"ok": false, "message": "本回合无法再攻击"}
 
 	# 验证射程（使用RangeCalculator BFS动力可达）
@@ -87,6 +91,7 @@ func declare_attack(attacker_id: StringName, target_id: StringName, weapon_id: S
 		"range_value": weapon_range,
 		"hit": false,
 		"cancelled": false,
+		"is_free_attack": is_free_attack,
 		# P0-1: 来源信息保存在 attack_context 中，不污染卡牌实例
 		"attack_card_effects": attack_card_effects,
 		"attack_card_instance": attack_card,
@@ -97,14 +102,15 @@ func declare_attack(attacker_id: StringName, target_id: StringName, weapon_id: S
 	gs.current_attack_id = attack_id
 
 	# ── 3. 从手牌移除攻击牌 ──
-	player.action_hand.erase(attack_card_id)
+	if not is_free_attack:
+		player.action_hand.erase(attack_card_id)
+		# P0-7: 从 EffectRegistry 注销（手牌中的牌不再自动注册，但安全起见仍注销）
+		if context.effect_registry and attack_card:
+			context.effect_registry.unregister_card(attack_card)
 
-	# P0-7: 从 EffectRegistry 注销（手牌中的牌不再自动注册，但安全起见仍注销）
-	if context.effect_registry:
-		context.effect_registry.unregister_card(attack_card)
-
-	# ── 4. 消耗攻击次数 ──
-	attacker.attack_count_this_turn += 1
+	# ── 4. 消耗攻击次数（自由攻击不消耗） ──
+	if not is_free_attack:
+		attacker.attack_count_this_turn += 1
 
 	# ── 5. 触发攻击牌打出钩子 ──
 	var card_played_payload := {
@@ -356,6 +362,7 @@ func resolve_attack(attack_id: StringName) -> Dictionary:
 			"attack_id": attack_id,
 			"phase": "modifier_window",
 		}
+		_enrich_attack_payload(modifier_payload, attack_context)
 		# 场上持续效果
 		_fire_hook(_EffectConst.HOOK_ATTACK_MODIFIER_WINDOW, modifier_payload)
 		# 攻击牌快照（猛击: MODIFY_ATTACK_POWER delta=4）
@@ -364,6 +371,15 @@ func resolve_attack(attack_id: StringName) -> Dictionary:
 		_resolve_card_effects_snapshot(attack_id, &"cover_card", _EffectConst.HOOK_ATTACK_MODIFIER_WINDOW, modifier_payload)
 		# 迎击牌的 MODIFIER_WINDOW 效果（如果有的话）
 		_resolve_card_effects_snapshot(attack_id, &"response_card", _EffectConst.HOOK_ATTACK_MODIFIER_WINDOW, modifier_payload)
+		# 聚能状态：消耗该武器上叠加的 NEXT_ATTACK_POWER_BUFF（可叠加，本回合下次攻击结算后结束）
+		# 直接调用 GameActions，因为该状态挂在机甲上而非某张牌的效果上。
+		if context.game_actions:
+			context.game_actions.consume_next_attack_power_buff({
+				"attack_id": attack_id,
+				"attacker_id": attacker_id,
+				"weapon_id": attack_context.get("weapon_id", &""),
+			})
+			gs.attacks[attack_id] = attack_context
 
 	# ── 阶段3: 射程复查 ──
 	# 所有移动（回避/疾行/强袭）在UI层已完成
@@ -409,7 +425,15 @@ func resolve_attack(attack_id: StringName) -> Dictionary:
 			"target_id": String(target_id),
 			"hit": true,
 		}
+		_enrich_attack_payload(hit_payload, attack_context)
 		_fire_hook(_EffectConst.HOOK_ATTACK_HIT, hit_payload)
+
+		# 命中后解除"来源玩家"施加在目标身上的锁定状态
+		# （锁定牌"该目标机甲被攻击命中后结束以上效果"）
+		# 必须在攻击牌快照之前执行，以免预判刚施加的锁定被立即解除
+		var _hit_attacker_player = gs.get_player_for_mech(attacker_id)
+		if _hit_attacker_player and context.game_actions:
+			context.game_actions.remove_locked_status_from_target(target_id, _hit_attacker_player.player_id)
 
 		# 攻击牌快照（破甲: PLACE_DAMAGE_TOKENS → 写入extra_markers+=2; 预判: APPLY_OR_CHECK_LOCKED）
 		_resolve_card_effects_snapshot(attack_id, &"attack_card", _EffectConst.HOOK_ATTACK_HIT, hit_payload)
@@ -427,6 +451,7 @@ func resolve_attack(attack_id: StringName) -> Dictionary:
 			"damage": damage,
 			"markers": base_markers,
 		}
+		_enrich_attack_payload(damage_modifier_payload, attack_context)
 		# 场上持续效果
 		_fire_hook(_EffectConst.HOOK_DAMAGE_MODIFIER_WINDOW, damage_modifier_payload)
 		# 迎击牌快照（防御: MODIFY_DAMAGE_TOKENS delta=-1）
@@ -465,6 +490,7 @@ func resolve_attack(attack_id: StringName) -> Dictionary:
 		"damage": damage,
 		"markers": final_markers,
 	}
+	_enrich_attack_payload(resolved_payload, attack_context)
 	# 场上持续效果
 	_fire_hook(_EffectConst.HOOK_ATTACK_RESOLVED, resolved_payload)
 	# 攻击牌快照（闪击: START_ATTACK_DECLARE_ATTACK → 存入pending）
@@ -483,6 +509,21 @@ func resolve_attack(attack_id: StringName) -> Dictionary:
 			"attack_id": attack_id,
 			"miss": true,
 		})
+
+	# ── 行动牌弃置：所有效果结算完成后，攻击牌/迎击牌/掩护牌进入弃牌堆 ──
+	# 攻击牌与迎击牌在打出时仅从手牌移除（不弃置），此处统一在攻击结算完成后弃置，
+	# 以保证"所有行动牌发动完所有效果结算后才进入弃牌堆"。
+	# 注意：反击的附加攻击(attack2)是自由攻击(无攻击牌)，其攻击牌实例为 null，跳过即可。
+	if context.deck_service:
+		var _atk_card = attack_context.get("attack_card_instance")
+		if _atk_card != null and String(_atk_card.zone) != "discard":
+			context.deck_service.discard_card(_atk_card.instance_id, &"ATTACK_RESOLVED")
+		var _rsp_card = attack_context.get("response_card_instance")
+		if _rsp_card != null and String(_rsp_card.zone) != "discard":
+			context.deck_service.discard_card(_rsp_card.instance_id, &"ATTACK_RESOLVED")
+		var _cov_card = attack_context.get("cover_card_instance")
+		if _cov_card != null and String(_cov_card.zone) != "discard":
+			context.deck_service.discard_card(_cov_card.instance_id, &"ATTACK_RESOLVED")
 
 	# ── 日志与清理 ──
 	if cancelled:
@@ -548,6 +589,110 @@ func _cleanup_attack(attack_id: StringName) -> void:
 		gs.current_attack_id = &""
 
 
+## P1-3: 从弃牌动作中解析弃牌对象的玩家 ID
+func _resolve_discard_player_id_from_action(action: Dictionary, binding: EffectBinding, payload: Dictionary, attack_context: Dictionary) -> StringName:
+	var params: Dictionary = _AtomicActionResolver._resolve_params(action.get("params", {}), binding, payload)
+	var discard_player_id: StringName = params.get("player_id", params.get("target_player_id", &""))
+	var executor_player_id: StringName = binding.get_owner_player_id()
+
+	# 解析 from_target
+	if bool(params.get("from_target", false)):
+		var target_id: StringName = params.get("target_id", &"")
+		if target_id == &"" and context.game_state.current_attack_id != &"":
+			var attack: Dictionary = context.game_state.attacks.get(context.game_state.current_attack_id, {})
+			target_id = attack.get("target_id", &"")
+		if target_id == &"":
+			target_id = attack_context.get("target_id", &"")
+		var target_player = context.game_state.get_player_for_mech(target_id)
+		if target_player:
+			discard_player_id = target_player.player_id
+
+	# 解析 from_attacker
+	if bool(params.get("from_attacker", false)):
+		var attacker_id: StringName = params.get("attacker_id", &"")
+		if attacker_id == &"" and context.game_state.current_attack_id != &"":
+			var attack: Dictionary = context.game_state.attacks.get(context.game_state.current_attack_id, {})
+			attacker_id = attack.get("attacker_id", &"")
+		if attacker_id == &"":
+			attacker_id = attack_context.get("attacker_id", &"")
+		var attacker_player = context.game_state.get_player_for_mech(attacker_id)
+		if attacker_player:
+			discard_player_id = attacker_player.player_id
+
+	# 默认弃牌对象为执行者自身
+	if discard_player_id == &"":
+		discard_player_id = executor_player_id
+
+	return discard_player_id
+
+
+## P1-3: 判断玩家是否为人类玩家（非 AI）
+func _is_human_player(player_id: StringName) -> bool:
+	return player_id == &"player"
+
+
+## P1-3: 判断弃牌对象是否为执行者自己的手牌（明牌）
+func _is_own_hand(discard_player_id: StringName, binding: EffectBinding) -> bool:
+	var executor_player_id: StringName = binding.get_owner_player_id()
+	if discard_player_id == executor_player_id:
+		return true
+	# 检查对手手牌是否已明牌
+	var discard_player_state = context.game_state.players.get(discard_player_id)
+	if discard_player_state != null and discard_player_state.hand_revealed:
+		return true
+	return false
+
+
+func _snapshot_source_prefix(snapshot_key: String) -> String:
+	match snapshot_key:
+		"attack_card":
+			return "attack"
+		"response_card":
+			return "response"
+		"cover_card":
+			return "cover"
+		_:
+			return snapshot_key
+
+
+func _make_snapshot_binding(card_instance, effect, attack_context: Dictionary, snapshot_key: String):
+	var binding = _EffectBinding.new(card_instance, effect)
+	var source_prefix: String = _snapshot_source_prefix(snapshot_key)
+	binding.override_owner_player_id = attack_context.get(source_prefix + "_source_player_id", &"")
+	binding.override_source_mech_id = attack_context.get(source_prefix + "_source_mech_id", &"")
+	return binding
+
+
+func _enrich_attack_payload(payload: Dictionary, attack_context: Dictionary) -> void:
+	var gs = context.game_state
+	var attacker_id: StringName = attack_context.get("attacker_id", &"")
+	var target_id: StringName = attack_context.get("target_id", &"")
+	var attacker_player = gs.get_player_for_mech(attacker_id)
+	var target_player = gs.get_player_for_mech(target_id)
+
+	if not payload.has("attack_id"):
+		payload["attack_id"] = attack_context.get("attack_id", gs.current_attack_id)
+	if not payload.has("attacker_id"):
+		payload["attacker_id"] = attacker_id
+	if not payload.has("target_id"):
+		payload["target_id"] = target_id
+	if not payload.has("weapon_id"):
+		payload["weapon_id"] = attack_context.get("weapon_id", &"")
+	if not payload.has("attack_weapon_instance_id"):
+		payload["attack_weapon_instance_id"] = attack_context.get("weapon_id", &"")
+	if not payload.has("target_owner_id") and target_player:
+		payload["target_owner_id"] = target_player.player_id
+	if not payload.has("target_is_mech"):
+		payload["target_is_mech"] = target_id != &"" and gs.mechs.has(target_id)
+
+	var attack: Dictionary = payload.get("attack", {})
+	if attacker_player and not attack.has("attacker_player_id"):
+		attack["attacker_player_id"] = attacker_player.player_id
+	if target_player and not attack.has("target_player_id"):
+		attack["target_player_id"] = target_player.player_id
+	payload["attack"] = attack
+
+
 ## P0-2: 从效果快照中解析匹配指定hook的所有效果
 ## 替代原 _resolve_attack_card_effects（只判断PASSIVE mode）
 ## 快照解析应按 hook + condition + target_rule + cost 全链路判断，支持所有mode
@@ -565,12 +710,14 @@ func _resolve_card_effects_snapshot(attack_id: StringName, snapshot_key: String,
 		return
 
 	# P0-1: 注入来源信息到payload（不修改卡牌实例）
-	var source_player_key: String = snapshot_key + "_source_player_id"
-	var source_mech_key: String = snapshot_key + "_source_mech_id"
+	var source_prefix: String = _snapshot_source_prefix(snapshot_key)
+	var source_player_key: String = source_prefix + "_source_player_id"
+	var source_mech_key: String = source_prefix + "_source_mech_id"
 	if not payload.has("source_player_id"):
 		payload["source_player_id"] = attack_context.get(source_player_key, &"")
 	if not payload.has("source_mech_id"):
 		payload["source_mech_id"] = attack_context.get(source_mech_key, &"")
+	_enrich_attack_payload(payload, attack_context)
 
 	for effect in effects:
 		if effect == null:
@@ -579,33 +726,62 @@ func _resolve_card_effects_snapshot(attack_id: StringName, snapshot_key: String,
 		if effect.hook != hook_name:
 			continue
 
+		var binding = _make_snapshot_binding(card_instance, effect, attack_context, snapshot_key)
+
 		# ConditionChecker检查
-		if not _ConditionChecker.check_all(card_instance, payload, effect.conditions):
+		if not _ConditionChecker.check_all(binding, payload, effect.conditions):
 			continue
 
 		# TargetChecker检查
-		if not _TargetChecker.check_all(card_instance, payload, effect.target_rules):
+		if not _TargetChecker.check_all(binding, payload, effect.target_rules):
 			continue
 
 		# CostChecker检查（optional cost由pending action处理，此处只检查强制cost）
 		var has_optional_cost: bool = false
-		var mandatory_costs: Array = []
+		var mandatory_costs: Array[Dictionary] = []
 		for cost: Dictionary in effect.costs:
 			if cost.get("optional", false):
 				has_optional_cost = true
 			else:
 				mandatory_costs.append(cost)
 
-		if not _CostChecker.can_pay_all(card_instance, payload, mandatory_costs, context):
+		if not _CostChecker.can_pay_all(binding, payload, mandatory_costs, context):
 			continue
-
-		# 支付强制费用
-		_CostChecker.pay_all(card_instance, payload, mandatory_costs, context)
 
 		# 如果有optional cost，将整个效果存入pending_actions
 		if has_optional_cost:
+			if not _CostChecker.can_pay_all(binding, payload, effect.costs, context):
+				continue
 			if not attack_context.has("pending_after_resolve"):
 				attack_context["pending_after_resolve"] = []
+			var added_pending_attack: bool = false
+			for action: Dictionary in effect.actions:
+				var action_type: StringName = action.get("type", &"")
+				if hook_name == _EffectConst.HOOK_ATTACK_RESOLVED and action_type == &"START_ATTACK_DECLARE_ATTACK":
+					var pending_type: StringName = &"REPEAT_ATTACK"
+					if effect.effect_id == &"discard_action_repeat_same_attack":
+						pending_type = &"FLASH_ATTACK"
+					elif effect.effect_id == &"counterattack_after_resolution":
+						pending_type = &"COUNTERATTACK"
+					elif effect.effect_id == &"allow_other_mecha_attack_after_your_attack":
+						pending_type = &"JOINT_ATTACK"
+					# 反击(attack2)的目标是原攻击的攻击者；闪击/联合沿用原目标
+					var pending_attack_target_id: StringName = attack_context.get("target_id", &"")
+					if pending_type == &"COUNTERATTACK":
+						pending_attack_target_id = attack_context.get("attacker_id", &"")
+					attack_context["pending_after_resolve"].append({
+						"type": pending_type,
+						"optional": true,
+						"source_card_id": attack_context.get(snapshot_key + "_id", attack_context.get(snapshot_key + "_card_id", &"")),
+						"source_player_id": attack_context.get(source_player_key, &""),
+						"source_mech_id": attack_context.get(source_mech_key, &""),
+						"cost": effect.costs,
+						"weapon_id": attack_context.get("weapon_id", &""),
+						"target_id": pending_attack_target_id,
+					})
+					added_pending_attack = true
+			if added_pending_attack:
+				continue
 			attack_context["pending_after_resolve"].append({
 				"effect": effect,
 				"source_card_id": attack_context.get(snapshot_key + "_id", attack_context.get(snapshot_key + "_card_id", &"")),
@@ -614,10 +790,15 @@ func _resolve_card_effects_snapshot(attack_id: StringName, snapshot_key: String,
 			})
 			continue
 
+		# 支付强制费用
+		_CostChecker.pay_all(binding, payload, mandatory_costs, context)
+
 		# 执行每个action
-		var binding = _EffectBinding.new(card_instance, effect)
 		for action: Dictionary in effect.actions:
 			var action_type: StringName = action.get("type", &"")
+			# 攻击声明已由 declare_attack() 创建完成，CARD_PLAYED 的基础攻击动作不再重复执行。
+			if hook_name == _EffectConst.HOOK_ATTACK_CARD_PLAYED and action_type == &"START_ATTACK_DECLARE_ATTACK":
+				continue
 			# 移动效果由UI异步处理
 			if skip_move and action_type == &"MOVE_MECH":
 				continue
@@ -633,6 +814,10 @@ func _resolve_card_effects_snapshot(attack_id: StringName, snapshot_key: String,
 					pending_type = &"COUNTERATTACK"
 				elif effect.effect_id == &"allow_other_mecha_attack_after_your_attack":
 					pending_type = &"JOINT_ATTACK"
+				# 反击(attack2)的目标是原攻击的攻击者；闪击/联合沿用原目标
+				var pending_attack_target_id: StringName = attack_context.get("target_id", &"")
+				if pending_type == &"COUNTERATTACK":
+					pending_attack_target_id = attack_context.get("attacker_id", &"")
 				attack_context["pending_after_resolve"].append({
 					"type": pending_type,
 					"optional": true,
@@ -641,9 +826,29 @@ func _resolve_card_effects_snapshot(attack_id: StringName, snapshot_key: String,
 					"source_mech_id": attack_context.get(source_mech_key, &""),
 					"cost": effect.costs,
 					"weapon_id": attack_context.get("weapon_id", &""),
-					"target_id": attack_context.get("target_id", &""),
+					"target_id": pending_attack_target_id,
 				})
 				continue
+			# P1-3: 弃牌动作：如果弃牌对象是人类玩家，延迟到 pending 供 UI 选择
+			if action_type in [&"DISCARD_ACTION_CARD", &"STEAL_ACTION_CARD"]:
+				var discard_player_id: StringName = _resolve_discard_player_id_from_action(action, binding, payload, attack_context)
+				if discard_player_id != &"" and _is_human_player(discard_player_id):
+					# 人类玩家需要选择弃牌，存入 pending
+					if not attack_context.has("pending_after_resolve"):
+						attack_context["pending_after_resolve"] = []
+					var resolved_params: Dictionary = _AtomicActionResolver._resolve_params(action.get("params", {}), binding, payload)
+					attack_context["pending_after_resolve"].append({
+						"type": &"DISCARD_SELECT",
+						"discard_player_id": discard_player_id,
+						"count": int(resolved_params.get("count", 1)),
+						"face_up": _is_own_hand(discard_player_id, binding),
+						"card_type_filter": resolved_params.get("card_type_filter", &""),
+						"effect_id": effect.effect_id,
+						"reason": resolved_params.get("reason", &"EFFECT_DISCARD"),
+						"source_player_id": attack_context.get(source_player_key, &""),
+						"source_mech_id": attack_context.get(source_mech_key, &""),
+					})
+					continue
 			_AtomicActionResolver.resolve(binding, payload, action, context)
 
 	# 保存修改后的 attack_context（快照解析可能修改了 markers/power 等）

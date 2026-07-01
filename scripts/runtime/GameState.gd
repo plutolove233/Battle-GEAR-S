@@ -223,7 +223,8 @@ func remove_card_from_all_zones(card_id: StringName) -> void:
 		deck_state.advanced_equipment_deck.erase(card_id)
 		deck_state.pilot_deck.erase(card_id)
 		deck_state.event_deck.erase(card_id)
-		deck_state.discard_pile.erase(card_id)
+		deck_state.action_discard_pile.erase(card_id)
+		deck_state.equipment_discard_pile.erase(card_id)
 
 	# 从机甲槽位中移除
 	for mech_id: StringName in mechs:
@@ -369,7 +370,7 @@ func set_card_to_slot(card_id: StringName, mech_id: StringName, slot_id: StringN
 		old_card.slot_id = &""
 		old_card.mech_id = &""
 		if deck_state != null:
-			deck_state.discard_pile.append(old_card.instance_id)
+			deck_state.equipment_discard_pile.append(old_card.instance_id)
 
 	# 装备新卡
 	slot.equipped_card = card

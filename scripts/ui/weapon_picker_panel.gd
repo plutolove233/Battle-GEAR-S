@@ -11,11 +11,14 @@ signal selection_cancelled()
 
 ## 当前 GameContext 引用
 var _context = null  # type: GameContext
+## 自定义标题
+var _title_text: String = "── 选择武器 ──"
 
 
 ## 配置面板：显示可选武器列表
-func configure(game_context, weapon_ids: Array[StringName]) -> void:
+func configure(game_context, weapon_ids: Array[StringName], title: String = "── 选择武器 ──") -> void:
 	_context = game_context
+	_title_text = title
 	_refresh(weapon_ids)
 
 
@@ -26,7 +29,7 @@ func _refresh(weapon_ids: Array[StringName]) -> void:
 
 	# 标题
 	var title = Label.new()
-	title.text = "── 选择武器 ──"
+	title.text = _title_text
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	add_child(title)
 

@@ -19,7 +19,7 @@ var mech_id: StringName = &""
 
 ## 当前所在区域
 ## &"action_hand" / &"equipment_hand" / &"equipment_slot" / &"weapon_slot"
-## &"event_slot" / &"pilot_slot" / &"reserve_slot" / &"discard_pile"
+## &"event_slot" / &"pilot_slot" / &"reserve_slot" / &"discard"
 ## &"action_deck" / &"equipment_deck" / &"advanced_equipment_deck"
 ## &"pilot_deck" / &"event_deck" / &"shop"
 var zone: StringName = &""

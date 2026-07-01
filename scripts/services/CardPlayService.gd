@@ -52,7 +52,7 @@ func play_action_card(player_id: StringName, card_id: StringName, payload: Dicti
 	if action_type == &"辅助":
 		var support_result = _resolve_support_effects_snapshot(player_id, card_id, payload)
 		if not support_result.get("ok", true):
-			# 需要玩家选择（武器/目标/CHOOSE_ONE），返回选择请求
+			# 需要玩家选择（武器/目标/CHOOSE_ONE/弃牌），返回选择请求
 			return support_result
 
 	# ── 触发行动牌打出钩子 ──
@@ -119,9 +119,15 @@ func _resolve_support_effects_snapshot(player_id: StringName, card_id: StringNam
 	resolve_payload["source_player_id"] = player_id
 	resolve_payload["mech_id"] = mech_id
 	resolve_payload["manual"] = true
+	# 注入当前阶段，使 IS_OWNER_MAIN_PHASE 等条件判断可以在快照解析中通过
+	resolve_payload["phase"] = gs.phase
 	# 如果 payload 中有 target_mech_id，也映射为 target_id
 	if payload.has("target_mech_id") and not resolve_payload.has("target_id"):
 		resolve_payload["target_id"] = payload["target_mech_id"]
+	# 丰富目标归属/位置信息，供 CHOOSE_ENEMY_MECH / CHOOSE_ENEMY_MECH_IN_RANGE 等目标规则判断
+	_enrich_target_payload(resolve_payload, mech_id)
+	# 注意：未指定对象时默认以我方机甲为对象的逻辑在 AtomicActionResolver._resolve_params
+	# 中实现，避免在此处提前填入 target_id 而跳过 CHOOSE_ENEMY_MECH 等目标选择检查
 
 	var resolved_any: bool = false
 	var needs_choice: bool = false
@@ -132,8 +138,16 @@ func _resolve_support_effects_snapshot(player_id: StringName, card_id: StringNam
 		if effect.actions.size() == 0:
 			continue
 
+		# 创建 binding（在条件检查之前，用于所有 checker）
+		var binding = _EffectBinding.new(card, effect)
+		# 行动牌打出后会离开手牌，CardInstance.mech_id 为空（手牌未绑定机甲），
+		# 这里通过 override 注入本次执行的来源机甲/玩家，使 HEAL_HP 等依赖
+		# binding.get_source_mech_id() 的效果能正确解析目标（默认为自身机甲）。
+		binding.override_owner_player_id = player_id
+		binding.override_source_mech_id = mech_id
+
 		# P1-2: ConditionChecker检查
-		if not _ConditionChecker.check_all(card, resolve_payload, effect.conditions):
+		if not _ConditionChecker.check_all(binding, resolve_payload, effect.conditions):
 			continue
 
 		# P1-2: TargetChecker检查
@@ -155,18 +169,27 @@ func _resolve_support_effects_snapshot(player_id: StringName, card_id: StringNam
 		if needs_target:
 			return {"ok": false, "needs": "target_select", "card_id": card_id, "effect_id": effect.effect_id}
 
-		if not _TargetChecker.check_all(card, resolve_payload, effect.target_rules):
+		if not _TargetChecker.check_all(binding, resolve_payload, effect.target_rules):
 			continue
 
+		# 检查弃牌费用是否需要玩家选择
+		var discard_cost_needs: Dictionary = _CostChecker.needs_discard_select(binding, resolve_payload, effect.costs, context)
+		if discard_cost_needs.has("needs"):
+			return {"ok": false, "needs": "discard_select", "card_id": card_id, "effect_id": effect.effect_id, "discard_info": discard_cost_needs}
+
+		# 检查弃牌动作是否需要玩家选择
+		var discard_action_needs: Dictionary = _AtomicActionResolver.check_needs_discard_select(binding, resolve_payload, effect.actions, context)
+		if discard_action_needs.has("needs"):
+			return {"ok": false, "needs": "discard_select", "card_id": card_id, "effect_id": effect.effect_id, "discard_info": discard_action_needs}
+
 		# P1-2: CostChecker检查
-		if not _CostChecker.can_pay_all(card, resolve_payload, effect.costs, context):
+		if not _CostChecker.can_pay_all(binding, resolve_payload, effect.costs, context):
 			continue
 
 		# 支付费用
-		_CostChecker.pay_all(card, resolve_payload, effect.costs, context)
+		_CostChecker.pay_all(binding, resolve_payload, effect.costs, context)
 
 		# 执行每个action
-		var binding = _EffectBinding.new(card, effect)
 		for action: Dictionary in effect.actions:
 			var action_type: StringName = action.get("type", &"")
 			if action_type == &"CHOOSE_ONE":
@@ -200,6 +223,8 @@ func _resolve_support_effects_snapshot(player_id: StringName, card_id: StringNam
 			var effect_def = context.card_database.get_effect(eid)
 			if effect_def and effect_def.actions:
 				var binding = _EffectBinding.new(card, effect_def)
+				binding.override_owner_player_id = player_id
+				binding.override_source_mech_id = mech_id
 				for action: Dictionary in effect_def.actions:
 					_AtomicActionResolver.resolve(binding, resolve_payload, action, context)
 				resolved_any = true
@@ -210,6 +235,28 @@ func _resolve_support_effects_snapshot(player_id: StringName, card_id: StringNam
 		_inline_support_fallback(card_def_id, player_id, mech_id)
 
 	return {"ok": true}
+
+
+## 丰富 payload 中目标机甲的归属/位置信息
+## 辅助牌快照解析不走 AttackService._enrich_attack_payload，需在此补充
+## CHOOSE_ENEMY_MECH / CHOOSE_ENEMY_MECH_IN_RANGE 等目标规则判断所需字段
+func _enrich_target_payload(payload: Dictionary, source_mech_id: StringName) -> void:
+	var gs = context.game_state
+	var target_id: StringName = payload.get("target_id", &"")
+	if target_id == &"":
+		return
+	var target_mech = gs.mechs.get(target_id)
+	if target_mech == null:
+		return
+	var owner_id: StringName = payload.get("player_id", &"")
+	var target_owner: StringName = target_mech.owner_player_id
+	payload["target_owner_id"] = target_owner
+	payload["target_is_enemy"] = (target_owner != owner_id)
+	payload["target_is_mech"] = true
+	payload["target_pos"] = target_mech.position
+	var source_mech = gs.mechs.get(source_mech_id)
+	if source_mech:
+		payload["source_pos"] = source_mech.position
 
 
 ## 获取行动牌的 effect_ids 列表
@@ -246,12 +293,12 @@ func _inline_support_fallback(card_def_id: StringName, player_id: StringName, me
 
 	match String(card_def_id):
 		"action_013_维修":
-			# 回复2点生命
-			mech.current_hp = min(mech.max_hp, mech.current_hp + 2)
+			# 回复4点生命
+			mech.current_hp = min(mech.max_hp, mech.current_hp + 4)
 			gs.write_log(&"support_effect", {
 				"effect": "repair_heal",
 				"player_id": String(player_id),
-				"amount": 2,
+				"amount": 4,
 			})
 		"action_015_推进":
 			# 动力+5

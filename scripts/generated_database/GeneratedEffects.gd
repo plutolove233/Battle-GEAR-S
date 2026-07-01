@@ -16,6 +16,7 @@ class_name GeneratedEffects
 extends RefCounted
 
 const _EffectConst = preload("res://scripts/effect_core/EffectConst.gd")
+const GeneratedPilotEffects = preload("res://scripts/generated_database/GeneratedPilotEffects.gd")
 
 
 ## 构建所有效果定义，返回 { effect_id: CardEffect }
@@ -432,7 +433,7 @@ static func build_all_effects() -> Dictionary:
 	discard_action_repeat_same_attack.priority = 100
 	discard_action_repeat_same_attack.conditions = [{"op": &"SOURCE_OWNER_IS_ATTACKER"}]
 	discard_action_repeat_same_attack.target_rules = [{"rule": &"NO_TARGET"}]
-	discard_action_repeat_same_attack.costs = [{"cost_type": &"DISCARD_ACTION_CARD", "count": 1}]
+	discard_action_repeat_same_attack.costs = [{"cost_type": &"DISCARD_ACTION_CARD", "count": 1, "optional": true}]
 	discard_action_repeat_same_attack.actions = [{"type": &"START_ATTACK_DECLARE_ATTACK", "params": {"repeat_last_attack": true}}]
 	discard_action_repeat_same_attack.description = "该攻击结算后，可以弃置1张行动牌，选择相同的武器对相同的目标再次发动攻击。"
 	effects[discard_action_repeat_same_attack.effect_id] = discard_action_repeat_same_attack
@@ -601,7 +602,9 @@ static func build_all_effects() -> Dictionary:
 	# 批次6：行动牌效果（辅助类）
 	# ═══════════════════════════════════════════
 
-	# ── 维修选择：主阶段二选一（回复2HP 或 移除2损伤）──
+	# ── 维修选择：主阶段二选一（回复4HP 或 移除2损伤）──
+	# 可对自身或1格范围内的其他机甲使用（目标选择由 app_root 在打出时处理，
+	# 选中的 target_mech_id 通过 payload 注入，未指定时默认为自身机甲）。
 	var repair_choose_one := CardEffect.new()
 	repair_choose_one.effect_id = &"repair_choose_one"
 	repair_choose_one.display_name = "维修"
@@ -616,30 +619,30 @@ static func build_all_effects() -> Dictionary:
 			"type": &"CHOOSE_ONE",
 			"params": {
 				"options": [
-					{"effect_id": &"repair_heal_life_2", "label": "回复2点生命"},
+					{"effect_id": &"repair_heal_life_4", "label": "回复4点生命"},
 					{"effect_id": &"repair_remove_damage_2", "label": "移除2枚损伤"},
 				]
 			}
 		},
 	]
-	repair_choose_one.description = "回复机甲2点生命或移除2枚损伤。"
+	repair_choose_one.description = "回复机甲4点生命或移除2枚损伤。可对自身或1格范围内的其他机甲使用。"
 	effects[repair_choose_one.effect_id] = repair_choose_one
 
-	# ── 维修回复2HP：被 CHOOSE_ONE 引用的子效果 ──
-	var repair_heal_life_2 := CardEffect.new()
-	repair_heal_life_2.effect_id = &"repair_heal_life_2"
-	repair_heal_life_2.display_name = "维修回复2HP"
-	repair_heal_life_2.mode = _EffectConst.MODE_PASSIVE
-	repair_heal_life_2.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	repair_heal_life_2.priority = 100
-	repair_heal_life_2.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	repair_heal_life_2.target_rules = [{"rule": &"NO_TARGET"}]
-	repair_heal_life_2.costs = []
-	repair_heal_life_2.actions = [
-		{"type": &"HEAL_HP", "params": {"amount": 2}},
+	# ── 维修回复4HP：被 CHOOSE_ONE 引用的子效果 ──
+	var repair_heal_life_4 := CardEffect.new()
+	repair_heal_life_4.effect_id = &"repair_heal_life_4"
+	repair_heal_life_4.display_name = "维修回复4HP"
+	repair_heal_life_4.mode = _EffectConst.MODE_PASSIVE
+	repair_heal_life_4.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
+	repair_heal_life_4.priority = 100
+	repair_heal_life_4.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
+	repair_heal_life_4.target_rules = [{"rule": &"NO_TARGET"}]
+	repair_heal_life_4.costs = []
+	repair_heal_life_4.actions = [
+		{"type": &"HEAL_HP", "params": {"amount": 4}},
 	]
-	repair_heal_life_2.description = "回复机甲2点生命。"
-	effects[repair_heal_life_2.effect_id] = repair_heal_life_2
+	repair_heal_life_4.description = "回复机甲4点生命。"
+	effects[repair_heal_life_4.effect_id] = repair_heal_life_4
 
 	# ── 维修移除2损伤：主阶段移除2枚损伤 ──
 	var repair_remove_damage_2 := CardEffect.new()
@@ -671,10 +674,13 @@ static func build_all_effects() -> Dictionary:
 	can_target_adjacent_mecha.description = "也可对1格范围内的其他机甲使用。"
 	effects[can_target_adjacent_mecha.effect_id] = can_target_adjacent_mecha
 
-	# ── 聚能+4威力：主阶段选择我方武器，下次攻击威力+4 ──
+	# ── 聚能+4威力：主阶段选择我方武器，下次攻击威力+4（可叠加） ──
 	# P2-3: 改为 APPLY_ENERGY_TO_WEAPON（两步效果）：
-	# 1. 主阶段执行 APPLY_ENERGY_TO_WEAPON → 在武器 MechStatus 上标记 next_attack_power_buff: 4
-	# 2. 下次攻击 MODIFIER_WINDOW 时，consume_next_attack_power_buff 检查并执行 MODIFY_ATTACK_POWER
+	# 1. 主阶段执行 APPLY_ENERGY_TO_WEAPON → 对武器叠加一个 NEXT_ATTACK_POWER_BUFF(delta=4, THIS_TURN) 状态
+	#    重复使用聚能会叠加多个状态，威力随之累加。
+	# 2. 该武器下次发动攻击时（AttackService 攻击修正窗口），consume_next_attack_power_buff
+	#    汇总并消耗该武器上所有 NEXT_ATTACK_POWER_BUFF，将总 delta 加到本次攻击威力上。
+	#    结算后状态结束；本回合结束时未消耗的也会被 TurnService 清理。
 	var next_attack_power_plus_4_selected_weapon := CardEffect.new()
 	next_attack_power_plus_4_selected_weapon.effect_id = &"next_attack_power_plus_4_selected_weapon"
 	next_attack_power_plus_4_selected_weapon.display_name = "聚能+4威力"
@@ -687,7 +693,7 @@ static func build_all_effects() -> Dictionary:
 	next_attack_power_plus_4_selected_weapon.actions = [
 		{"type": &"APPLY_ENERGY_TO_WEAPON", "params": {"delta": 4}},
 	]
-	next_attack_power_plus_4_selected_weapon.description = "本回合内选择我方1把武器使其下次发动的攻击威力+4。"
+	next_attack_power_plus_4_selected_weapon.description = "本回合内选择我方1把武器，使其下次发动的攻击威力+4；可叠加，每次使用聚能都会继续累加，该武器本回合下一次攻击结算后结束。"
 	effects[next_attack_power_plus_4_selected_weapon.effect_id] = next_attack_power_plus_4_selected_weapon
 
 	# ── 可与迎击牌一同打出：打出攻击牌时允许与迎击牌组合 ──
@@ -853,10 +859,14 @@ static func build_all_effects() -> Dictionary:
 	draw_action_2_equipment_1.description = "抽2张行动牌与1张装备牌。"
 	effects[draw_action_2_equipment_1.effect_id] = draw_action_2_equipment_1
 
-	# ── 锁定不可响应：主阶段打出时指定敌方机甲使其不能响应 ──
-	# P2-3: hook从HOOK_ATTACK_CARD_PLAYED改为HOOK_OWNER_MAIN_PHASE
-	# 锁定是辅助牌，主阶段打出不应挂在ATTACK_CARD_PLAYED
-	# 状态只禁止响应来源玩家发动的攻击（检查attack_context["attack_source_player_id"]与状态的source_player_id匹配）
+	# ── 锁定：主阶段打出时指定敌方机甲，对其施加 LOCKED 状态 ──
+	# 锁定是辅助牌，主阶段打出。被锁定机甲本回合不能响应"来源玩家"发动的攻击
+	# （识破等带 ignore_lock 的响应牌仍可使用）。
+	# 锁定生命周期：
+	#   - 施加：打出锁定牌时（本效果，duration=THIS_TURN，记录 source_player_id）
+	#   - 解除：来源玩家的攻击命中该目标后，由 AttackService.resolve_attack 解除
+	#   - 兜底：THIS_TURN 持续时间在回合结束由 TurnService 自动清理
+	# 状态只禁止响应来源玩家发动的攻击：响应窗口检查 LOCKED.status.source_player_id == 攻击方玩家。
 	var target_cannot_react_to_your_attacks := CardEffect.new()
 	target_cannot_react_to_your_attacks.effect_id = &"target_cannot_react_to_your_attacks"
 	target_cannot_react_to_your_attacks.display_name = "锁定不可响应"
@@ -864,32 +874,13 @@ static func build_all_effects() -> Dictionary:
 	target_cannot_react_to_your_attacks.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
 	target_cannot_react_to_your_attacks.priority = 95
 	target_cannot_react_to_your_attacks.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	target_cannot_react_to_your_attacks.target_rules = [{"rule": &"CHOOSE_ENEMY_MECH_IN_RANGE", "range": 5}]
+	target_cannot_react_to_your_attacks.target_rules = [{"rule": &"CHOOSE_ENEMY_MECH"}]
 	target_cannot_react_to_your_attacks.costs = []
 	target_cannot_react_to_your_attacks.actions = [
-		{"type": &"APPLY_CANNOT_RESPOND", "params": {"duration": &"THIS_TURN"}},
+		{"type": &"APPLY_OR_CHECK_LOCKED", "params": {"mode": &"apply", "duration": &"THIS_TURN"}},
 	]
-	target_cannot_react_to_your_attacks.description = "指定其他1台机甲，本回合其不能响应你发动的攻击。"
+	target_cannot_react_to_your_attacks.description = "指定其他1台机甲，本回合其不能响应你发动的攻击(该目标机甲被攻击命中后结束以上效果)。"
 	effects[target_cannot_react_to_your_attacks.effect_id] = target_cannot_react_to_your_attacks
-
-	# ── 命中后结束锁定：攻击命中后移除不可响应状态 ──
-	var lock_effect_ends_after_target_hit := CardEffect.new()
-	lock_effect_ends_after_target_hit.effect_id = &"lock_effect_ends_after_target_hit"
-	lock_effect_ends_after_target_hit.display_name = "命中后结束锁定"
-	lock_effect_ends_after_target_hit.mode = _EffectConst.MODE_PASSIVE
-	lock_effect_ends_after_target_hit.hook = _EffectConst.HOOK_ATTACK_HIT
-	lock_effect_ends_after_target_hit.priority = 100
-	lock_effect_ends_after_target_hit.conditions = [
-		{"op": &"SOURCE_OWNER_IS_ATTACKER"},
-		{"op": &"PAYLOAD_ATTACK_HIT"},
-	]
-	lock_effect_ends_after_target_hit.target_rules = [{"rule": &"NO_TARGET"}]
-	lock_effect_ends_after_target_hit.costs = []
-	lock_effect_ends_after_target_hit.actions = [
-		{"type": &"REMOVE_STATUS", "params": {"status_type": &"cannot_respond", "target_id": "$payload.target_id"}},
-	]
-	lock_effect_ends_after_target_hit.description = "该目标机甲被攻击命中后结束以上效果。"
-	effects[lock_effect_ends_after_target_hit.effect_id] = lock_effect_ends_after_target_hit
 
 	# ── 觉醒获得预判识破：主动效果，从弃牌堆获得预判与识破 ──
 	var gain_prediction_and_insight_from_action_discard := CardEffect.new()

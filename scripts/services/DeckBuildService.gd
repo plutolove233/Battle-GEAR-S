@@ -26,12 +26,16 @@ func build_all_decks_from_card_database() -> Dictionary:
 	deck_state.advanced_equipment_deck.clear()
 	deck_state.pilot_deck.clear()
 	deck_state.event_deck.clear()
-	deck_state.discard_pile.clear()
+	deck_state.action_discard_pile.clear()
+	deck_state.equipment_discard_pile.clear()
 
 	# 遍历所有卡牌定义，按类型和稀有度分配
 	for card_id: StringName in context.card_database.card_defs:
 		var card_def = context.card_database.card_defs[card_id]
 		if card_def == null:
+			continue
+		# 机甲框架等不属于任何牌堆的卡牌类型跳过（避免被错误放入行动牌堆）
+		if card_def.card_kind == &"mech_frame":
 			continue
 
 		# 根据卡牌的 count 字段决定创建多少张实例

@@ -19,5 +19,8 @@ var pilot_deck: Array[StringName] = []
 ## 事件牌堆
 var event_deck: Array[StringName] = []
 
-## 统一弃牌堆
-var discard_pile: Array[StringName] = []
+## 行动牌弃牌堆
+var action_discard_pile: Array[StringName] = []
+
+## 装备牌弃牌堆
+var equipment_discard_pile: Array[StringName] = []

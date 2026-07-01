@@ -102,3 +102,9 @@ const TARGET_CHOOSE_MECH_IN_VARIABLE_RANGE := &"CHOOSE_MECH_IN_VARIABLE_RANGE"  
 
 ## ── 新增动作常量 ──
 const ACTION_SWAP_HAND_LIMIT_AND_ATTACK_COUNT := &"SWAP_HAND_LIMIT_AND_ATTACK_COUNT"  ## 互换行动牌上限与回合攻击数
+
+## ── 仅用于消息面板通知的 Hook（无任何效果绑定，不改变游戏行为） ──
+## 回合开始抽牌后通知（payload: player_id, turn_number, action_card_ids, equipment_card_ids）
+const HOOK_TURN_DRAW_NOTIFY := &"ON_TURN_DRAW_NOTIFY"
+## 卡牌经 deck_service 弃置后通知（payload: card_id, owner_player_id, from_zone, reason）
+const HOOK_CARD_DISCARDED_NOTIFY := &"ON_CARD_DISCARDED_NOTIFY"
