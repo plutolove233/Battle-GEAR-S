@@ -13,6 +13,18 @@ const _DamagePlacementPanel = preload("res://scripts/ui/damage_placement_panel.g
 const _ActionCardDef = preload("res://scripts/card_defs/ActionCardDef.gd")
 const _DiscardSelectPanel = preload("res://scripts/ui/discard_select_panel.gd")
 const _DeckInfoPopup = preload("res://scripts/ui/deck_info_popup.gd")
+const _ShopPanel = preload("res://scripts/ui/shop_panel.gd")
+const _SellEquipmentPanel = preload("res://scripts/ui/sell_equipment_panel.gd")
+const _GameConfig = preload("res://scripts/config/GameConfig.gd")
+
+## 槽位中文名映射（与 EquipmentPanel 保持一致）
+const SLOT_NAMES: Dictionary = {
+	&"头部": "头部", &"躯干": "躯干", &"右臂": "右臂", &"左臂": "左臂",
+	&"右腿": "右腿", &"左腿": "左腿",
+	&"weapon_1": "武器1", &"weapon_2": "武器2",
+	&"reserve_1": "备用1", &"reserve_2": "备用2",
+	&"event": "事件", &"pilot": "机师",
+}
 
 var registry = null  # type: DataRegistry
 var campaign = null  # type: CampaignState
@@ -50,12 +62,22 @@ var _choice_select_card_id: StringName = &""
 var discard_select_panel = null  # type: DiscardSelectPanel
 ## 牌堆信息弹窗
 var deck_info_popup = null  # type: DeckInfoPopup
+## 商店面板
+var shop_panel = null  # type: ShopPanel
+## 卖出装备面板
+var sell_equipment_panel = null  # type: SellEquipmentPanel
 ## 弃牌选择状态：正在弃牌的辅助牌ID
 var _discard_select_card_id: StringName = &""
 ## 弃牌选择状态：弃牌信息
 var _discard_select_pending: Dictionary = {}
 ## 武器槽位选择状态：正在选择替换哪个武器槽的装备牌ID
 var _weapon_slot_select_card_id: StringName = &""
+## 设置操作状态：正在选择设置区域的装备牌ID
+var _set_equipment_card_id: StringName = &""
+## 卖出操作状态：是否正在执行卖出操作
+var _sell_mode_active: bool = false
+## 卖出装备按钮引用（用于更新文本）
+var _sell_button: Button = null
 ## 维修目标选择状态：正在选择维修目标的维修牌ID
 var _repair_target_select_card_id: StringName = &""
 ## 维修已选目标机甲ID（打出时注入 payload，空表示默认以自身机甲为目标）
@@ -203,6 +225,7 @@ func _show_battle() -> void:
 	equipment_panel = EquipmentPanel.new()
 	equipment_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	equipment_panel.custom_minimum_size = Vector2(0, 200)
+	equipment_panel.reserve_set_clicked.connect(Callable(self, "_on_reserve_set_clicked"))
 	right_panel.add_child(equipment_panel)
 
 	skill_bar = SkillBar.new()
@@ -225,7 +248,9 @@ func _show_battle() -> void:
 	action_bar.alignment = BoxContainer.ALIGNMENT_CENTER
 	layout.add_child(action_bar)
 	_add_button(action_bar, "结束回合", Callable(self, "_end_player_turn"))
+	_sell_button = _add_button(action_bar, "卖出(*)", Callable(self, "_on_sell_equipment_clicked"), "sell")
 	_add_button(action_bar, "敌方信息", Callable(self, "_on_enemy_info_clicked"))
+	_add_button(action_bar, "商店", Callable(self, "_on_shop_clicked"))
 	_add_button(action_bar, "牌堆信息", Callable(self, "_on_deck_info_clicked"))
 	_add_button(action_bar, "返回主菜单", Callable(self, "_show_main_menu"))
 
@@ -244,6 +269,25 @@ func _show_battle() -> void:
 	# ── 牌堆信息弹窗（初始隐藏）──
 	deck_info_popup = _DeckInfoPopup.new()
 	add_child(deck_info_popup)
+
+	# ── 商店面板（初始隐藏）──
+	shop_panel = _ShopPanel.new()
+	shop_panel.normal_equipment_buy_clicked.connect(Callable(self, "_on_shop_normal_buy_clicked"))
+	shop_panel.advanced_equipment_buy_clicked.connect(Callable(self, "_on_shop_advanced_buy_clicked"))
+	shop_panel.reveal_hidden_clicked.connect(Callable(self, "_on_shop_reveal_hidden_clicked"))
+	shop_panel.buy_hidden_advanced_clicked.connect(Callable(self, "_on_shop_buy_hidden_clicked"))
+	shop_panel.reset_shop_clicked.connect(Callable(self, "_on_shop_reset_clicked"))
+	shop_panel.refresh_shop_clicked.connect(Callable(self, "_on_shop_refresh_clicked"))
+	shop_panel.visible = false
+	add_child(shop_panel)
+
+	# ── 卖出装备面板（初始隐藏）──
+	sell_equipment_panel = _SellEquipmentPanel.new()
+	sell_equipment_panel.equipment_selected.connect(Callable(self, "_on_sell_panel_equipment_selected"))
+	sell_equipment_panel.cancelled.connect(Callable(self, "_on_sell_panel_cancelled"))
+	sell_equipment_panel.visible = false
+	layout.add_child(sell_equipment_panel)
+
 	# ── 迎击面板（初始隐藏）──
 	response_panel = ResponsePanel.new()
 	response_panel.response_selected.connect(Callable(self, "_on_response_selected"))
@@ -382,32 +426,8 @@ func _on_equipment_card_clicked(card_id: StringName) -> void:
 	if not card or not card.def:
 		return
 
-	# 自动选择槽位并设置装备
-	var player = gs.players.get(&"player")
-	var mech = gs.get_mech_for_player(&"player")
-	if not player or not mech:
-		return
-
-	var slot_id: StringName = &""
-	if card.def.equipment_kind == &"PART":
-		slot_id = card.def.slot
-	elif card.def.equipment_kind == &"WEAPON":
-		# 查找空武器槽
-		for ws_id: StringName in [&"weapon_1", &"weapon_2"]:
-			if mech.slots.has(ws_id) and not mech.slots[ws_id].equipped_card:
-				slot_id = ws_id
-				break
-		# 两个武器槽都有装备，让玩家选择替换哪个
-		if slot_id == &"":
-			_enter_weapon_slot_select(card_id)
-			return
-
-	if slot_id == &"":
-		battle.log.append({"message": "无可用槽位", "details": {}})
-		_refresh_battle()
-		return
-
-	_do_set_equipment(card_id, slot_id)
+	# 点击装备牌时，进入设置操作，让玩家选择槽位
+	_enter_set_equipment_mode(card_id)
 
 ## 进入武器槽位选择模式（两个武器槽都有装备时）
 func _enter_weapon_slot_select(card_id: StringName) -> void:
@@ -418,7 +438,7 @@ func _enter_weapon_slot_select(card_id: StringName) -> void:
 		return
 	# 显示当前两个武器槽的装备，让玩家选择替换哪个
 	var weapon_ids: Array[StringName] = mech.get_weapon_ids()
-	weapon_picker_panel.configure(battle.context, weapon_ids, "── 选择要替换的武器 ──")
+	weapon_picker_panel.configure(battle.context, weapon_ids, "── 选择要替换的武器 ──", mech)
 	weapon_picker_panel.visible = true
 	battle.log.append({"message": "选择要替换的武器槽", "details": {}})
 	_show_cancel_button(true)
@@ -440,12 +460,25 @@ func _on_weapon_slot_selected_for_equipment(weapon_id: StringName) -> void:
 	if not mech:
 		_refresh_battle()
 		return
+
 	var target_slot_id: StringName = &""
-	for slot_id: StringName in [&"weapon_1", &"weapon_2"]:
-		if mech.slots.has(slot_id) and mech.slots[slot_id].equipped_card:
-			if mech.slots[slot_id].equipped_card.instance_id == weapon_id:
-				target_slot_id = slot_id
-				break
+	var wid_str = String(weapon_id)
+
+	# 检查是否是基础武器虚拟 ID
+	if wid_str.begins_with("frame_base_weapon"):
+		if wid_str.begins_with("frame_base_weapon_"):
+			var index = int(wid_str.substr(19)) - 1
+			target_slot_id = StringName("weapon_%d" % [index + 1])
+		else:
+			target_slot_id = &"weapon_1"
+	else:
+		# 普通装备武器
+		for slot_id: StringName in [&"weapon_1", &"weapon_2"]:
+			if mech.slots.has(slot_id) and mech.slots[slot_id].equipped_card:
+				if mech.slots[slot_id].equipped_card.instance_id == weapon_id:
+					target_slot_id = slot_id
+					break
+
 	if target_slot_id == &"":
 		battle.log.append({"message": "未找到对应武器槽", "details": {}})
 		_refresh_battle()
@@ -749,7 +782,7 @@ func _begin_player_counterattack() -> void:
 	if weapon_ids.size() == 1:
 		_on_counterattack_weapon_selected(weapon_ids[0])
 	else:
-		weapon_picker_panel.configure(battle.context, weapon_ids, "── 反击：选择武器 ──")
+		weapon_picker_panel.configure(battle.context, weapon_ids, "── 反击：选择武器 ──", source_mech)
 		weapon_picker_panel.visible = true
 	_refresh_battle()
 
@@ -942,6 +975,343 @@ func _on_deck_info_clicked() -> void:
 		deck_info_popup.configure(battle.context)
 		deck_info_popup.popup_centered(Vector2i(400, 560))
 
+## 商店按钮点击
+func _on_shop_clicked() -> void:
+	if shop_panel and battle and battle.context:
+		shop_panel.configure(battle.context)
+		shop_panel.visible = true
+
+## 商店：购买普通装备
+func _on_shop_normal_buy_clicked(slot_index: int) -> void:
+	if battle == null or battle.context == null:
+		return
+	var result = battle.context.shop_service.buy_normal_equipment(&"player", slot_index)
+	if result.get("ok", false):
+		battle.log.append({"message": "购买成功: %s" % result.get("message", ""), "details": {}})
+	else:
+		battle.log.append({"message": "购买失败: %s" % result.get("message", ""), "details": {}})
+	shop_panel.configure(battle.context)
+	_refresh_battle()
+
+## 商店：购买高级装备
+func _on_shop_advanced_buy_clicked() -> void:
+	if battle == null or battle.context == null:
+		return
+	var result = battle.context.shop_service.buy_advanced_equipment(&"player")
+	if result.get("ok", false):
+		battle.log.append({"message": "购买成功: %s" % result.get("message", ""), "details": {}})
+	else:
+		battle.log.append({"message": "购买失败: %s" % result.get("message", ""), "details": {}})
+	shop_panel.configure(battle.context)
+	_refresh_battle()
+
+## 商店：查看隐藏高级装备
+func _on_shop_reveal_hidden_clicked() -> void:
+	if battle == null or battle.context == null:
+		return
+	var result = battle.context.shop_service.reveal_hidden_advanced(&"player")
+	if result.get("ok", false):
+		battle.log.append({"message": "已查看隐藏装备", "details": {}})
+	else:
+		battle.log.append({"message": "查看失败: %s" % result.get("message", ""), "details": {}})
+	shop_panel.configure(battle.context)
+	_refresh_battle()
+
+## 商店：购买隐藏高级装备
+func _on_shop_buy_hidden_clicked() -> void:
+	if battle == null or battle.context == null:
+		return
+	var result = battle.context.shop_service.buy_hidden_advanced(&"player")
+	if result.get("ok", false):
+		battle.log.append({"message": "购买成功: %s" % result.get("message", ""), "details": {}})
+	else:
+		battle.log.append({"message": "购买失败: %s" % result.get("message", ""), "details": {}})
+	shop_panel.configure(battle.context)
+	_refresh_battle()
+
+## 商店：重置商店
+func _on_shop_reset_clicked() -> void:
+	if battle == null or battle.context == null:
+		return
+	var result = battle.context.shop_service.reset_shop(&"player")
+	if result.get("ok", false):
+		battle.log.append({"message": "重置商店成功", "details": {}})
+	else:
+		battle.log.append({"message": "重置商店失败: %s" % result.get("message", ""), "details": {}})
+	shop_panel.configure(battle.context)
+	_refresh_battle()
+
+## 商店：刷新商店
+func _on_shop_refresh_clicked() -> void:
+	if battle == null or battle.context == null:
+		return
+	var result = battle.context.shop_service.refresh_shop(&"player")
+	if result.get("ok", false):
+		battle.log.append({"message": "刷新商店成功", "details": {}})
+	else:
+		battle.log.append({"message": "刷新商店失败: %s" % result.get("message", ""), "details": {}})
+	shop_panel.configure(battle.context)
+	_refresh_battle()
+
+# ═══════════════════════════════════════════
+# 卖出装备和设置操作
+# ═══════════════════════════════════════════
+
+## 点击卖出装备按钮
+func _on_sell_equipment_clicked() -> void:
+	if battle == null or battle.context == null:
+		return
+	var gs = battle.context.game_state
+	var player = gs.players.get(&"player")
+	if not player:
+		return
+
+	# 检查是否还有卖出机会
+	var remaining = _GameConfig.SELL_EQUIPMENT_LIMIT_PER_TURN - player.sell_equipment_count_this_turn
+	if remaining <= 0:
+		battle.log.append({"message": "本回合已用完卖出装备的机会", "details": {}})
+		_refresh_battle()
+		return
+
+	# 显示卖出装备面板
+	sell_equipment_panel.configure(battle.context)
+	sell_equipment_panel.visible = true
+	battle.log.append({"message": "选择要卖出的装备", "details": {}})
+
+## 卖出装备选择回调（从卖出面板）
+func _on_sell_panel_equipment_selected(card_id: StringName) -> void:
+	print("DEBUG: _on_sell_panel_equipment_selected 被调用, card_id=", card_id)
+	sell_equipment_panel.visible = false
+
+	if battle == null or battle.context == null:
+		print("DEBUG: battle 或 context 为空")
+		_refresh_battle()
+		return
+
+	if battle.context.card_set_service == null:
+		print("DEBUG: card_set_service 为空")
+		_refresh_battle()
+		return
+
+	# 执行卖出
+	print("DEBUG: 调用 sell_equipment, card_id=", card_id)
+	var result = battle.context.card_set_service.sell_equipment(&"player", card_id)
+	print("DEBUG: sell_equipment 结果: ", result)
+
+	if result.get("ok", false):
+		var gold = result.get("gold_earned", 0)
+		battle.log.append({"message": "卖出装备获得 %d 金币" % gold, "details": {}})
+	else:
+		battle.log.append({"message": "卖出失败: %s" % result.get("message", ""), "details": {}})
+
+	_refresh_battle()
+
+## 卖出装备取消回调
+func _on_sell_panel_cancelled() -> void:
+	sell_equipment_panel.visible = false
+	_refresh_battle()
+
+## 显示卖出装备选择面板
+func _show_sell_equipment_panel() -> void:
+	if battle == null or battle.context == null:
+		return
+	var gs = battle.context.game_state
+	var player = gs.players.get(&"player")
+	var mech = gs.get_mech_for_player(&"player")
+	if not player or not mech:
+		return
+
+	# 收集可卖出选项
+	var options: Array[Dictionary] = []
+
+	# 1. 玩家手中的装备牌
+	for card_id: StringName in player.equipment_hand:
+		var card = gs.get_card(card_id)
+		if card and card.def:
+			options.append({
+				"type": "hand",
+				"card_id": card_id,
+				"effect_id": card_id,  # 使用 card_id 作为 effect_id
+				"label": "%s (手中)" % card.def.display_name,
+			})
+
+	# 2. 备用区的装备牌
+	for rs_id: StringName in [&"reserve_1", &"reserve_2"]:
+		if mech.slots.has(rs_id) and mech.slots[rs_id].equipped_card != null:
+			var card = mech.slots[rs_id].equipped_card
+			if card and card.def:
+				var reserve_name = "备用1" if rs_id == &"reserve_1" else "备用2"
+				options.append({
+					"type": "reserve",
+					"card_id": card.instance_id,
+					"slot_id": rs_id,
+					"effect_id": card.instance_id,  # 使用 card_id 作为 effect_id
+					"label": "%s: %s (%s)" % [reserve_name, card.def.display_name, _get_card_rarity_text(card.def.rarity)],
+				})
+
+	if options.is_empty():
+		battle.log.append({"message": "没有可卖出的装备", "details": {}})
+		_sell_mode_active = false
+		_refresh_battle()
+		return
+
+	# 使用 choice_panel 显示选项
+	choice_panel.configure(options)
+	choice_panel.visible = true
+	battle.log.append({"message": "选择要卖出的装备", "details": {}})
+
+## 获取稀有度文本
+func _get_card_rarity_text(rarity: StringName) -> String:
+	match rarity:
+		&"N": return "普通"
+		&"R": return "稀有"
+		&"SR": return "超稀有"
+		&"SSR": return "极稀有"
+		_: return "普通"
+
+## 点击装备牌进入设置操作（选择槽位）
+func _enter_set_equipment_mode(card_id: StringName) -> void:
+	if battle == null or battle.context == null:
+		return
+	var gs = battle.context.game_state
+	var mech = gs.get_mech_for_player(&"player")
+	if not mech:
+		return
+
+	var card = gs.get_card(card_id)
+	if not card or not card.def:
+		return
+
+	_set_equipment_card_id = card_id
+	_show_set_equipment_panel(card)
+
+## 显示设置装备选择面板
+func _show_set_equipment_panel(card) -> void:
+	if battle == null or battle.context == null:
+		return
+	var gs = battle.context.game_state
+	var mech = gs.get_mech_for_player(&"player")
+	if not mech:
+		return
+
+	# 收集可用槽位
+	var options: Array[Dictionary] = []
+
+	# 所有装备都可以设置到部件槽位和备用区
+	if card.def.equipment_kind == &"PART":
+		# 部件只能设置到对应槽位 + 备用区
+		var slot_id = card.def.slot
+		if mech.slots.has(slot_id):
+			var slot = mech.slots[slot_id]
+			var current = _get_slot_equipment_text(slot)
+			options.append({
+				"slot_id": slot_id,
+				"effect_id": slot_id,
+				"label": "%s (%s)" % [SLOT_NAMES.get(slot_id, slot_id), current],
+			})
+		# 添加备用区选项
+		for rs_id: StringName in [&"reserve_1", &"reserve_2"]:
+			if mech.slots.has(rs_id):
+				var slot = mech.slots[rs_id]
+				var current = _get_slot_equipment_text(slot)
+				options.append({
+					"slot_id": rs_id,
+					"effect_id": rs_id,
+					"label": "%s (%s)" % [SLOT_NAMES.get(rs_id, rs_id), current],
+				})
+	elif card.def.equipment_kind == &"WEAPON":
+		# 武器可以设置到任一武器槽 + 备用区
+		for ws_id: StringName in [&"weapon_1", &"weapon_2"]:
+			if mech.slots.has(ws_id):
+				var slot = mech.slots[ws_id]
+				var current = _get_slot_equipment_text(slot)
+				options.append({
+					"slot_id": ws_id,
+					"effect_id": ws_id,
+					"label": "%s (%s)" % [SLOT_NAMES.get(ws_id, ws_id), current],
+				})
+		# 添加备用区选项
+		for rs_id: StringName in [&"reserve_1", &"reserve_2"]:
+			if mech.slots.has(rs_id):
+				var slot = mech.slots[rs_id]
+				var current = _get_slot_equipment_text(slot)
+				options.append({
+					"slot_id": rs_id,
+					"effect_id": rs_id,
+					"label": "%s (%s)" % [SLOT_NAMES.get(rs_id, rs_id), current],
+				})
+	else:
+		# 其他类型装备添加到备用区
+		for rs_id: StringName in [&"reserve_1", &"reserve_2"]:
+			if mech.slots.has(rs_id):
+				var slot = mech.slots[rs_id]
+				var current = _get_slot_equipment_text(slot)
+				options.append({
+					"slot_id": rs_id,
+					"effect_id": rs_id,
+					"label": "%s (%s)" % [SLOT_NAMES.get(rs_id, rs_id), current],
+				})
+
+	if options.is_empty():
+		battle.log.append({"message": "没有可用槽位", "details": {}})
+		_set_equipment_card_id = &""
+		_refresh_battle()
+		return
+
+	# 使用 choice_panel 显示选项（choice_panel 会自动添加取消按钮）
+	choice_panel.configure(options)
+	choice_panel.visible = true
+	battle.log.append({"message": "选择设置区域", "details": {}})
+
+## 获取槽位装备描述
+func _get_slot_equipment_text(slot) -> String:
+	if slot.equipped_card and slot.equipped_card.def:
+		return slot.equipped_card.def.display_name
+	return "空"
+
+## 设置区域选择回调
+func _on_set_equipment_slot_selected(option: Dictionary) -> void:
+	choice_panel.visible = false
+	var slot_id = option.get("slot_id", &"")
+	var card_id = _set_equipment_card_id
+	_set_equipment_card_id = &""
+
+	if slot_id == &"" or slot_id == "":
+		# 取消
+		_refresh_battle()
+		return
+
+	# 执行设置
+	_do_set_equipment(card_id, slot_id)
+
+## 点击备用区设置按钮
+func _on_reserve_set_clicked(slot_id: StringName) -> void:
+	if battle == null or battle.context == null:
+		return
+	var gs = battle.context.game_state
+	var mech = gs.get_mech_for_player(&"player")
+	var player = gs.players.get(&"player")
+	if not mech or not player:
+		return
+
+	# 检查备用区是否有装备
+	if not mech.slots.has(slot_id) or not mech.slots[slot_id].equipped_card:
+		return
+
+	# 获取备用区的装备
+	var reserve_card = mech.slots[slot_id].equipped_card
+	if not reserve_card or not reserve_card.def:
+		return
+
+	# 进入设置操作，将备用区的装备设置到其他槽位
+	# 先从备用区移除
+	mech.slots[slot_id].equipped_card = null
+	# 添加回玩家手牌（这样 _enter_set_equipment_mode 才能正确处理）
+	player.equipment_hand.append(reserve_card.instance_id)
+
+	# 进入设置模式，设置这个装备
+	_enter_set_equipment_mode(reserve_card.instance_id)
+
 # ═══════════════════════════════════════════
 # 攻击交互流程
 # ═══════════════════════════════════════════
@@ -968,7 +1338,7 @@ func _enter_attack_mode(attack_card_id: StringName) -> void:
 		_on_weapon_selected(weapon_ids[0])
 	else:
 		# 有2把武器，显示选择面板
-		weapon_picker_panel.configure(battle.context, weapon_ids)
+		weapon_picker_panel.configure(battle.context, weapon_ids, "── 选择武器 ──", mech)
 		weapon_picker_panel.visible = true
 		_show_cancel_button(true)
 		_refresh_battle()
@@ -1185,6 +1555,43 @@ func _on_choice_made(effect_id: StringName) -> void:
 	if choice_panel:
 		choice_panel.visible = false
 
+	battle.log.append({"message": "收到选择, _sell_mode_active=%s, effect_id=%s" % [_sell_mode_active, effect_id], "details": {}})
+
+	# 卖出模式
+	if _sell_mode_active:
+		_sell_mode_active = false
+
+		battle.log.append({"message": "卖出模式处理中, effect_id=%s" % String(effect_id), "details": {}})
+
+		# 直接执行卖出，不做检查
+		var card_id = effect_id
+		battle.log.append({"message": "调用sell_equipment, card_id=%s" % String(card_id), "details": {}})
+
+		var result = battle.context.card_set_service.sell_equipment(&"player", card_id)
+		SessionLogger.log_call("app_root", "sell_equipment", {"player": "player", "card_id": String(card_id)}, result)
+
+		battle.log.append({"message": "sell_equipment结果: %s" % result, "details": {}})
+
+		if result.get("ok", false):
+			var gold = result.get("gold_earned", 0)
+			battle.log.append({"message": "卖出装备获得 %d 金币" % gold, "details": {}})
+		else:
+			battle.log.append({"message": "卖出失败: %s" % result.get("message", ""), "details": {}})
+
+		_refresh_battle()
+		return
+
+	# 设置模式
+	if _set_equipment_card_id != &"":
+		var slot_id = effect_id
+		var card_id = _set_equipment_card_id
+		_set_equipment_card_id = &""
+		if slot_id != &"" and slot_id != "":
+			_do_set_equipment(card_id, slot_id)
+		else:
+			_refresh_battle()
+		return
+
 	# 反击(attack2)是否发动的选择
 	if _counterattack_prompt_active:
 		_counterattack_prompt_active = false
@@ -1212,6 +1619,29 @@ func _on_choice_made(effect_id: StringName) -> void:
 func _on_choice_cancelled() -> void:
 	if choice_panel:
 		choice_panel.visible = false
+
+	# 卖出模式取消
+	if _sell_mode_active:
+		_sell_mode_active = false
+		_refresh_battle()
+		return
+
+	# 设置模式取消
+	if _set_equipment_card_id != &"":
+		# 如果是从备用区拿出来设置的装备，需要处理
+		var gs = battle.context.game_state
+		var mech = gs.get_mech_for_player(&"player")
+		var player = gs.players.get(&"player")
+		if mech and player:
+			# 检查装备是否在玩家手牌中（从备用区拿出来的情况）
+			if player.equipment_hand.has(_set_equipment_card_id):
+				# 找到这张牌是从哪个备用区拿出来的，归还回去
+				# 暂时简单处理：不做处理，让它留在手牌中
+				pass
+		_set_equipment_card_id = &""
+		_refresh_battle()
+		return
+
 	# 反击提示取消 → 视为不发动
 	if _counterattack_prompt_active:
 		_skip_player_counterattack()
@@ -1521,7 +1951,7 @@ func _enter_support_weapon_select(card_id: StringName) -> void:
 	if weapon_ids.size() == 1:
 		_on_support_weapon_selected(weapon_ids[0])
 		return
-	weapon_picker_panel.configure(battle.context, weapon_ids, "── 选择要聚能的武器 ──")
+	weapon_picker_panel.configure(battle.context, weapon_ids, "── 选择要聚能的武器 ──", mech)
 	weapon_picker_panel.visible = true
 	_show_cancel_button(true)
 	battle.log.append({"message": "辅助牌武器选择：选择1把武器", "details": {}})
@@ -1643,6 +2073,15 @@ func _refresh_battle() -> void:
 	if message_log and battle.context:
 		message_log.configure(battle.context)
 
+	# 更新卖出按钮文本
+	if _sell_button and battle.context:
+		var gs = battle.context.game_state
+		var player_state = gs.players.get(&"player")
+		if player_state:
+			var remaining = _GameConfig.SELL_EQUIPMENT_LIMIT_PER_TURN - player_state.sell_equipment_count_this_turn
+			_sell_button.text = "卖出(%d/2)" % remaining
+			_sell_button.disabled = (remaining <= 0)
+
 func _sync_and_refresh() -> void:
 	_refresh_battle()
 
@@ -1744,6 +2183,8 @@ func _clear_screen() -> void:
 		enemy_info_popup.queue_free()
 	if deck_info_popup and is_instance_valid(deck_info_popup):
 		deck_info_popup.queue_free()
+	if shop_panel and is_instance_valid(shop_panel):
+		shop_panel.queue_free()
 	if current_screen != null and is_instance_valid(current_screen):
 		current_screen.queue_free()
 	current_screen = null
@@ -1752,6 +2193,7 @@ func _clear_screen() -> void:
 	message_log = null
 	enemy_info_popup = null
 	deck_info_popup = null
+	shop_panel = null
 	battle_board = null
 	hand_panel = null
 	equipment_panel = null
@@ -1771,11 +2213,13 @@ func _add_text(parent: Node, text: String) -> Label:
 	parent.add_child(label)
 	return label
 
-func _add_button(parent: Node, text: String, callback: Callable) -> Button:
+func _add_button(parent: Node, text: String, callback: Callable, name: String = "") -> Button:
 	var button := Button.new()
 	button.text = text
 	button.custom_minimum_size = Vector2(140, 32)
 	button.pressed.connect(callback)
+	if name != "":
+		button.set_meta("button_id", name)
 	parent.add_child(button)
 	return button
 

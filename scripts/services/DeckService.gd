@@ -40,6 +40,22 @@ func draw_from_deck(deck_key: StringName, count: int) -> Array[StringName]:
 	return drawn
 
 
+## 将卡牌移到牌堆底部
+func move_card_to_deck_bottom(card_id: StringName, deck_key: StringName) -> void:
+	var gs: GameState = context.game_state
+	var deck_state: DeckState = gs.deck_state
+
+	# 更新卡牌实例区域
+	var card: CardInstance = gs.get_card(card_id)
+	if card:
+		card.zone = &"deck"
+
+	# 按卡牌类型加入对应牌堆底部
+	var deck_array = _get_deck_array(deck_key)
+	if deck_array != null:
+		deck_array.append(card_id)
+
+
 ## 弃牌
 ## 将卡牌移到弃牌堆，并触发对应钩子
 func discard_card(card_id: StringName, reason: StringName) -> void:

@@ -1,0 +1,110 @@
+════════ 会话日志 ════════
+启动时间: 20260703_234132
+
+[MSG]   └ 我方 抽牌: 行动牌(2张): 推进、防御 | 装备牌(1张): 扭转钢鞭
+[MSG] >> 我方 回合2开始
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 10, "r": -2 } }) -> { "ok": false, "message": "动力不足以移动到目标格" }
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 13, "r": -2 } }) -> { "ok": false, "message": "动力不足以移动到目标格" }
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 16, "r": -3 } }) -> { "ok": false, "message": "动力不足以移动到目标格" }
+[MSG] 基础框架 移动 (2,2)→(4,2) 消耗动力2
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 4, "r": 2 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 4, "r": 2 }, "power_cost": 2 }
+[MSG] 基础框架 移动 (2,2)→(4,2) 消耗动力2
+[MSG] 基础框架 移动 (4,2)→(6,0) 消耗动力2
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 6, "r": 0 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 6, "r": 0 }, "power_cost": 2 }
+[MSG] 基础框架 移动 (4,2)→(6,0) 消耗动力2
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 7, "r": -1 } }) -> { "ok": false, "message": "机甲无法移动（动力不足或被锁定）" }
+[MSG] 我方 打出了 推进 (行动牌 )
+[MSG]   弃置 推进 (玩家: 来源:手牌 原因:打出)
+[CALL] app_root::play_action_card(args={ "player": "player", "card_id": "card_293", "payload": {  } }) -> { "ok": true, "card_id": &"card_293" }
+[MSG] 我方 打出了 推进
+[MSG] 基础框架 移动 (6,0)→(8,0) 消耗动力2
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 8, "r": 0 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 8, "r": 0 }, "power_cost": 2 }
+[MSG] 基础框架 移动 (6,0)→(8,0) 消耗动力2
+[MSG] 基础框架 移动 (8,0)→(10,0) 消耗动力2
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 10, "r": 0 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 10, "r": 0 }, "power_cost": 2 }
+[MSG] 基础框架 移动 (8,0)→(10,0) 消耗动力2
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 12, "r": -2 } }) -> { "ok": false, "message": "动力不足以移动到目标格" }
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 8, "r": 1 } }) -> { "ok": false, "message": "动力不足以移动到目标格" }
+[MSG] 基础框架 移动 (10,0)→(11,-1) 消耗动力1
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 11, "r": -1 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 11, "r": -1 }, "power_cost": 1 }
+[MSG] 基础框架 移动 (10,0)→(11,-1) 消耗动力1
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 13, "r": -3 } }) -> { "ok": false, "message": "机甲无法移动（动力不足或被锁定）" }
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 12, "r": -1 } }) -> { "ok": false, "message": "机甲无法移动（动力不足或被锁定）" }
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 12, "r": 1 } }) -> { "ok": false, "message": "机甲无法移动（动力不足或被锁定）" }
+[MSG] 我方 回合结束
+[MSG]   弃置 扭转钢鞭 (玩家: 来源:手牌 原因:end_turn_unset)
+[CALL] app_root::end_player_turn(args={  }) -> { "ok": true, "message": "player_turn_ended" }
+[MSG] 我方 回合2结束
+[MSG] >> 敌方 回合开始
+[MSG]   └ 敌方 回合抽牌: 行动牌(2张): 破甲、补给 | 装备牌(1张): 狙击装 左臂
+[MSG]   └ 敌方 获得 2 金币
+[MSG] 原始框架 移动 (20,-6)→(19,-6) 消耗动力1
+[MSG] 敌方 回合结束
+[MSG]   弃置 补给 (玩家: 来源:手牌 原因:hand_limit)
+[MSG]   弃置 狙击装 左臂 (玩家: 来源:手牌 原因:end_turn_unset)
+[MSG] >> 我方 回合开始
+[MSG]   └ 我方 回合抽牌: 行动牌(2张): 聚能、回避 | 装备牌(1张): 流星钢锤
+[MSG]   └ 我方 获得 2 金币
+[MSG] >> 我方 回合3开始
+[MSG]   弃置 光束手枪 (玩家:我方 来源:equipment_slot 原因:替换)
+[MSG] 我方 设置装备: 流星钢锤 → 武器2 (权威15、射程1、近战、耐久3) 
+[CALL] app_root::set_equipment(args={ "player": "player", "card_id": "card_133", "slot_id": "weapon_2" }) -> { "ok": true, "card_id": &"card_133", "slot_id": &"weapon_2" }
+[MSG] 我方 装备了 流星钢锤 → 武器2 (权威15、射程1、近战、耐久3) 
+[MSG] 基础框架 移动 (11,-1)→(14,-3) 消耗动力3
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 14, "r": -3 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 14, "r": -3 }, "power_cost": 3 }
+[MSG] 基础框架 移动 (11,-1)→(14,-3) 消耗动力3
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 16, "r": -3 } }) -> { "ok": false, "message": "动力不足以移动到目标格" }
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 17, "r": -5 } }) -> { "ok": false, "message": "动力不足以移动到目标格" }
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 16, "r": -4 } }) -> { "ok": false, "message": "动力不足以移动到目标格" }
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 16, "r": -4 } }) -> { "ok": false, "message": "动力不足以移动到目标格" }
+[MSG] 我方 打出了 折扣 (行动牌 )
+[MSG]   弃置 折扣 (玩家:我方 来源:action_hand 原因:打出)
+[CALL] app_root::play_action_card(args={ "player": "player", "card_id": "card_322", "payload": {  } }) -> { "ok": true, "card_id": &"card_322" }
+[MSG] 我方 打出了 折扣
+[MSG]   弃置 闪击 (玩家:我方 来源:action_hand 原因:END_TURN_HAND_LIMIT)
+[MSG] 我方 回合结束
+[CALL] app_root::end_player_turn(args={  }) -> { "ok": true, "message": "player_turn_ended" }
+[MSG] 我方 回合3结束
+[MSG] >> 敌方 回合开始
+[MSG]   └ 敌方 回合抽牌: 行动牌(2张): 回避、进攻 | 装备牌(1张): 断甲长刀
+[MSG]   └ 敌方 获得 2 金币
+[MSG] 原始框架 移动 (19,-6)→(18,-6) 消耗动力1
+[MSG] 敌方 回合结束
+[MSG]   弃置 进攻 (玩家: 来源:手牌 原因:hand_limit)
+[MSG]   弃置 回避 (玩家: 来源:手牌 原因:hand_limit)
+[MSG]   弃置 断甲长刀 (玩家: 来源:手牌 原因:end_turn_unset)
+[MSG] >> 我方 回合开始
+[MSG]   └ 我方 回合抽牌: 行动牌(2张): 回忆、防御 | 装备牌(1张): 手持推进器
+[MSG]   └ 我方 获得 2 金币
+[MSG] >> 我方 回合4开始
+[MSG] 基础框架 移动 (14,-3)→(17,-6) 消耗动力3
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 17, "r": -6 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 17, "r": -6 }, "power_cost": 3 }
+[MSG] 基础框架 移动 (14,-3)→(17,-6) 消耗动力3
+[MSG] 我方 打出了 回忆 (行动牌 )
+[MSG]   弃置 回忆 (玩家: 来源:手牌 原因:打出)
+[CALL] app_root::play_action_card(args={ "player": "player", "card_id": "card_316", "payload": {  } }) -> { "ok": true, "card_id": &"card_316" }
+[MSG] 我方 打出了 回忆
+[MSG] 我方 打出了 聚能 (行动牌 )
+[MSG]   弃置 聚能 (玩家: 来源:手牌 原因:打出)
+[CALL] app_root::play_action_card(args={ "player": "player", "card_id": "card_287", "payload": { "selected_weapon_id": &"card_133" } }) -> { "ok": true, "card_id": &"card_287" }
+[MSG] 我方 打出了 聚能
+[MSG] 我方 打出了 聚能 (行动牌 )
+[MSG]   弃置 聚能 (玩家:我方 来源:action_hand 原因:打出)
+[CALL] app_root::play_action_card(args={ "player": "player", "card_id": "card_289", "payload": { "selected_weapon_id": &"card_133" } }) -> { "ok": true, "card_id": &"card_289" }
+[MSG] 我方 打出了 聚能
+[MSG] 我方 使用攻击牌: 进攻 武器:流星钢锤(权威15/射程1/近战/耐久3)
+[MSG] !! 基础框架 向 原始框架 发动攻击
+  攻击牌:进攻 | 武器:流星钢锤(权威15/射程1/近战/耐久3) | 威力:15 | 射程:1
+[MSG] 敌方 打出了迎击牌: 防御
+[MSG]   基础框架 命中 原始框架 (威力23 → 护甲修正+5 伤害13, 损伤标记4) | 修正: 权威+4(聚能), 权威+4(聚能)
+[MSG]   结算: 基础框架 命中 原始框架
+  武器:流星钢锤(权威15/射程1/近战/耐久3) | 最终权威:23 | 伤害:13 | 损伤标记:3 | 修正: 权威+4(聚能), 权威+4(聚能)
+[MSG]   弃置 进攻 (玩家:我方 来源:action_hand 原因:ATTACK_RESOLVED)
+[MSG]   弃置 防御 (玩家:敌方 来源:action_hand 原因:ATTACK_RESOLVED)
+[CALL] app_root::begin_attack(args={ "attacker": "player", "target": "enemy", "weapon_id": "card_133", "attack_card_id": "card_188" }) -> { "ok": true, "hit": true, "cancelled": false, "damage": 13, "markers": 3, "target_mech_id_for_tokens": &"enemy_mech", "chooser_player_id": &"enemy", "pending_actions": [], "state": "resolved" }
+[MSG]   原始框架 受到 0 伤害 (剩余HP:0)
+[MSG]   原始框架 受到 0 伤害 (剩余HP:0)
+[MSG]   原始框架 受到 0 伤害 (剩余HP:0)
+[MSG]   原始框架 受到 0 伤害 (剩余HP:0)
+[MSG]   原始框架 受到 0 伤害 (剩余HP:0)
+[MSG]   原始框架 受到 0 伤害 (剩余HP:0)

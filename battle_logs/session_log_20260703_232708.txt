@@ -1,0 +1,22 @@
+════════ 会话日志 ════════
+启动时间: 20260703_232708
+
+[MSG] 我方 装备了 合金盾牌 → 武器1 (权威6、射程1、特殊、耐久4) 
+[MSG] 我方 装备了 光束霰弹枪 → 武器2 (权威9、射程3、远程、耐久3) 
+[MSG] 我方 装备了 近战装 右腿 → 右腿 (护甲1、动力3、耐久2) 
+[MSG] 我方 装备了 机动装 左腿 → 左腿 (动力4、耐久3) 
+[MSG] 敌方 装备了 投掷式飞弹 → 武器1 (权威7、射程4、特殊、耐久6) 
+[MSG] 敌方 装备了 帝国普装 头部 → 头部 (护甲1、耐久2) 
+[MSG] 敌方 装备了 热能爆弹枪 → 武器2 (权威7、射程4、远程、耐久3) 
+[MSG] 敌方 装备了 狙击装 右腿 → 右腿 (护甲2、动力2、耐久2) 
+[MSG]   └ 我方 抽牌: 行动牌(2张): 防御、破甲 | 装备牌(1张): 光束战戟
+[MSG] >> 我方 回合2开始
+[MSG]   弃置 光束霰弹枪 (玩家:我方 来源:装备区 原因:替换)
+[MSG] 我方 设置装备: 光束战戟 → 武器2 (权威14、射程3、近战、耐久4) 
+[CALL] app_root::set_equipment(args={ "player": "player", "card_id": "card_133", "slot_id": "weapon_2" }) -> { "ok": true, "card_id": &"card_133", "slot_id": &"weapon_2" }
+[MSG] 我方 装备了 光束战戟 → 武器2 (权威14、射程3、近战、耐久4) 
+[MSG] 基础框架 移动 (2,2)→(10,0) 消耗动力8
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 10, "r": 0 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 10, "r": 0 }, "power_cost": 8 }
+[MSG] 基础框架 移动 (2,2)→(10,0) 消耗动力8
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 16, "r": -2 } }) -> { "ok": false, "message": "动力不足以移动到目标格" }
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 18, "r": -4 } }) -> { "ok": false, "message": "动力不足以移动到目标格" }

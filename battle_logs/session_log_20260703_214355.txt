@@ -1,0 +1,28 @@
+════════ 会话日志 ════════
+启动时间: 20260703_214355
+
+[MSG] 我方 装备了 热能机枪 → 武器1 (权威9、射程4、远程、耐久3) 
+[MSG] 我方 装备了 联邦普装 右腿 → 右腿 (护甲2、动力2、耐久2) 
+[MSG] 我方 装备了 机动装 右臂 → 右臂 (护甲2、耐久2) 
+[MSG] 我方 装备了 机动装 左腿 → 左腿 (动力4、耐久3) 
+[MSG] 敌方 装备了 手持推进器 → 武器1 (权威6、射程1、特殊、耐久4) 
+[MSG] 敌方 装备了 量产装 头部 → 头部 (护甲2、耐久2) 
+[MSG] 敌方 装备了 维修机械臂 → 武器2 (权威4、射程3、特殊、耐久4) 
+[MSG] 敌方 装备了 机动装 躯干 → 躯干 (护甲2、动力2、耐久3) 
+[MSG]   └ 我方 抽牌: 行动牌(2张): 防御、破甲 | 装备牌(1张): 超重甲装 左臂
+[MSG] >> 我方 回合2开始
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_64" }) -> {  }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_64" }) -> {  }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_64" }) -> {  }
+[MSG] 基础框架 移动 (2,2)→(5,0) 消耗动力3
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 5, "r": 0 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 5, "r": 0 }, "power_cost": 3 }
+[MSG] 基础框架 移动 (2,2)→(5,0) 消耗动力3
+[MSG] 基础框架 移动 (5,0)→(7,-1) 消耗动力2
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 7, "r": -1 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 7, "r": -1 }, "power_cost": 2 }
+[MSG] 基础框架 移动 (5,0)→(7,-1) 消耗动力2
+[MSG] 基础框架 移动 (7,-1)→(8,-1) 消耗动力1
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 8, "r": -1 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 8, "r": -1 }, "power_cost": 1 }
+[MSG] 基础框架 移动 (7,-1)→(8,-1) 消耗动力1
+[MSG] 基础框架 移动 (8,-1)→(9,-2) 消耗动力1
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 9, "r": -2 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 9, "r": -2 }, "power_cost": 1 }
+[MSG] 基础框架 移动 (8,-1)→(9,-2) 消耗动力1

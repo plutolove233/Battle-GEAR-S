@@ -61,9 +61,9 @@ func _refresh() -> void:
 	var enemy_player = gs.players.get(&"enemy")
 	var enemy_mech = gs.get_mech_for_player(&"enemy")
 
-	# 更新装备面板
+	# 更新装备面板（敌方机甲，需要隐藏正面信息）
 	if enemy_mech:
-		_equipment_panel.configure(enemy_mech)
+		_equipment_panel.configure(enemy_mech, true)
 
 	# 清除并重建统计信息
 	for child in _stats_container.get_children():

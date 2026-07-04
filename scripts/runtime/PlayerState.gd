@@ -26,8 +26,11 @@ var once_per_turn_used: Dictionary = {}
 ## 回合内计数器（移动格数、攻击次数等，供效果条件判断）
 var turn_counters: Dictionary = {}
 
-## 玩家身上的状态效果列表（商店折扣等）
+## 玩家身上状态效果列表（商店折扣等）
 var statuses: Array[Dictionary] = []
 
 ## 行动牌手牌是否对对手明牌（用于弃牌选择时判断明暗牌）
 var hand_revealed: bool = false
+
+## 本回合已卖出装备的次数
+var sell_equipment_count_this_turn: int = 0

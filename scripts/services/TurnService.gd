@@ -30,6 +30,7 @@ func start_turn(player_id: StringName) -> Dictionary:
 	# ── 2. 重置每回合一次性标记和计数器 ──
 	player.once_per_turn_used.clear()
 	player.turn_counters.clear()
+	player.sell_equipment_count_this_turn = 0
 
 	# 重置机甲回合攻击计数
 	var mech: MechState = gs.get_mech_for_player(player_id)

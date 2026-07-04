@@ -1,0 +1,11 @@
+════════ 会话日志 ════════
+启动时间: 20260703_230919
+
+[MSG]   └ 我方 抽牌: 行动牌(2张): 闪击、维修 | 装备牌(1张): 机动装 右臂
+[MSG] >> 我方 回合2开始
+[MSG] 基础框架 移动 (2,2)→(3,1) 消耗动力1
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 3, "r": 1 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 3, "r": 1 }, "power_cost": 1 }
+[MSG] 基础框架 移动 (2,2)→(3,1) 消耗动力1
+[MSG] 我方 设置装备: 机动装 右臂 → 右臂 (护甲2、耐久2) 
+[CALL] app_root::set_equipment(args={ "player": "player", "card_id": "card_27", "slot_id": "右臂" }) -> { "ok": true, "card_id": &"card_27", "slot_id": &"右臂" }
+[MSG] 我方 装备了 机动装 右臂 → 右臂 (护甲2、耐久2) 

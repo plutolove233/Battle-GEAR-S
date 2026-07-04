@@ -1,0 +1,33 @@
+════════ 会话日志 ════════
+启动时间: 20260703_230655
+
+[MSG] 我方 装备了 扭转钢鞭 → 武器1 (权威10、射程3、近战、耐久3) 
+[MSG] 我方 装备了 帝国普装 右臂 → 右臂 (护甲2、动力1、耐久2) 
+[MSG] 我方 装备了 帝国普装 左臂 → 左臂 (护甲2、动力2、耐久2) 
+[MSG] 我方 装备了 联邦普装 躯干 → 躯干 (护甲3、动力2、耐久3) 
+[MSG] 敌方 装备了 近战装 躯干 → 躯干 (护甲2、耐久2) 
+[MSG] 敌方 装备了 联邦普装 右臂 → 右臂 (护甲3、耐久2) 
+[MSG] 敌方 装备了 狙击装 左臂 → 左臂 (护甲1、动力1、耐久2) 
+[MSG]   弃置 联邦普装 右臂 (原因:替换)
+[MSG] 敌方 装备了 量产装 右臂 → 右臂 (护甲2、动力1、耐久3) 
+[MSG]   └ 我方 抽牌: 行动牌(2张): 猛击、回避 | 装备牌(1张): 近战特装 右臂
+[MSG] >> 我方 回合2开始
+[MSG]   └ 我方 获得 4 金币
+[MSG]   弃置 近战特装 右臂 (玩家: 来源:手牌 原因:出售)
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_81" }) -> { "ok": true, "card_id": &"card_81", "gold_earned": 4 }
+[MSG] 我方 出售了 近战特装 右臂 (+4金币)
+[MSG]   └ 我方 获得 7 金币
+[MSG]   弃置 大型光束炮 (玩家: 来源:equipment_hand 原因:出售)
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_158" }) -> { "ok": true, "card_id": &"card_158", "gold_earned": 7 }
+[MSG] 我方 出售了 大型光束炮 (+7金币)
+[MSG]   弃置 联邦普装 躯干 (玩家:我方 来源:装备区 原因:替换)
+[MSG] 我方 设置装备: 量产装 躯干 → 躯干 (护甲3、动力2、耐久4) 
+[CALL] app_root::set_equipment(args={ "player": "player", "card_id": "card_2", "slot_id": "躯干" }) -> { "ok": true, "card_id": &"card_2", "slot_id": &"躯干" }
+[MSG] 我方 装备了 量产装 躯干 → 躯干 (护甲3、动力2、耐久4) 
+[MSG]   弃置 帝国普装 左臂 (玩家:我方 来源:装备区 原因:替换)
+[MSG] 我方 设置装备: 高机动装 左臂 → 左臂 (护甲2、动力2、耐久3) 
+[CALL] app_root::set_equipment(args={ "player": "player", "card_id": "card_70", "slot_id": "左臂" }) -> { "ok": true, "card_id": &"card_70", "slot_id": &"左臂" }
+[MSG] 我方 装备了 高机动装 左臂 → 左臂 (护甲2、动力2、耐久3) 
+[MSG] 我方 设置装备: 投掷式飞弹 → 武器2 (权威7、射程4、特殊、耐久6) 
+[CALL] app_root::set_equipment(args={ "player": "player", "card_id": "card_167", "slot_id": "weapon_2" }) -> { "ok": true, "card_id": &"card_167", "slot_id": &"weapon_2" }
+[MSG] 我方 装备了 投掷式飞弹 → 武器2 (权威7、射程4、特殊、耐久6) 

@@ -1,0 +1,24 @@
+════════ 会话日志 ════════
+启动时间: 20260704_125218
+
+[MSG]   └ 我方 抽牌: 行动牌(2张): 防御、强袭 | 装备牌(1张): 手持推进器
+[MSG] >> 我方 回合2开始
+[MSG] 基础框架 移动 (2,2)→(4,1) 消耗动力2
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 4, "r": 1 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 4, "r": 1 }, "power_cost": 2 }
+[MSG] 基础框架 移动 (2,2)→(4,1) 消耗动力2
+[MSG] 基础框架 移动 (4,1)→(5,0) 消耗动力1
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 5, "r": 0 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 5, "r": 0 }, "power_cost": 1 }
+[MSG] 基础框架 移动 (4,1)→(5,0) 消耗动力1
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 7, "r": -1 } }) -> { "ok": false, "message": "动力不足以移动到目标格" }
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 9, "r": -1 } }) -> { "ok": false, "message": "动力不足以移动到目标格" }
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 6, "r": 1 } }) -> { "ok": false, "message": "动力不足以移动到目标格" }
+[MSG] 基础框架 移动 (5,0)→(6,0) 消耗动力1
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 6, "r": 0 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 6, "r": 0 }, "power_cost": 1 }
+[MSG] 基础框架 移动 (5,0)→(6,0) 消耗动力1
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_171" }) -> {  }
+[MSG] 我方 设置装备: 手持推进器 → 备用1 (权威6、射程1、特殊、耐久4) 
+[CALL] app_root::set_equipment(args={ "player": "player", "card_id": "card_171", "slot_id": "reserve_1" }) -> { "ok": true, "card_id": &"card_171", "slot_id": &"reserve_1" }
+[MSG] 我方 装备了 手持推进器 → 备用1 (权威6、射程1、特殊、耐久4) 
+[MSG] 我方 设置装备: 手持推进器 → 备用2 (权威6、射程1、特殊、耐久4) 
+[CALL] app_root::set_equipment(args={ "player": "player", "card_id": "card_171", "slot_id": "reserve_2" }) -> { "ok": true, "card_id": &"card_171", "slot_id": &"reserve_2" }
+[MSG] 我方 装备了 手持推进器 → 备用2 (权威6、射程1、特殊、耐久4) 

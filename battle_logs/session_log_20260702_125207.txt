@@ -1,0 +1,179 @@
+════════ 会话日志 ════════
+启动时间: 20260702_125207
+
+[MSG]   弃置 振动匕首 (原因:替换)
+[MSG] 我方 装备了 手持推进器 → 武器1 (权威6、射程1、特殊、耐久4) 
+[MSG] 我方 装备了 帝国普装 躯干 → 躯干 (护甲2、动力2、耐久3) 
+[MSG] 我方 装备了 近战装 头部 → 头部 (动力1、耐久2) 
+[MSG] 我方 装备了 机动装 左腿 → 左腿 (动力4、耐久3) 
+[MSG] 敌方 装备了 流星钢锤 → 武器2 (权威15、射程1、近战、耐久3) 
+[MSG]   弃置 热能战斧 (原因:替换)
+[MSG] 敌方 装备了 热能机枪 → 武器1 (权威9、射程4、远程、耐久3) 
+[MSG] 敌方 装备了 机动装 右腿 → 右腿 (动力4、耐久2) 
+[MSG] 敌方 装备了 联邦普装 左臂 → 左臂 (护甲2、动力1、耐久2) 
+[MSG] 敌方 装备了 帝国普装 头部 → 头部 (护甲1、耐久2) 
+[MSG]   └ 我方 抽牌: 行动牌(2张): 双连、回避 | 装备牌(1张): 热能战镰
+[MSG] >> 我方 回合2开始
+[MSG]   弃置 光束手枪 (玩家:我方 来源:equipment_slot 原因:替换)
+[MSG] 我方 设置装备: 热能战镰 → 武器2 (权威14、射程3、近战、耐久4) 
+[CALL] app_root::set_equipment(args={ "player": "player", "card_id": "card_137", "slot_id": "weapon_2" }) -> { "ok": true, "card_id": &"card_137", "slot_id": &"weapon_2" }
+[MSG] 我方 装备了 热能战镰 → 武器2 (权威14、射程3、近战、耐久4) 
+[MSG] 基础框架 移动 (2,2)→(12,-3) 消耗动力10
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 12, "r": -3 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 12, "r": -3 }, "power_cost": 10 }
+[MSG] 基础框架 移动 (2,2)→(12,-3) 消耗动力10
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 14, "r": -4 } }) -> { "ok": false, "message": "动力不足以移动到目标格" }
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 13, "r": -5 } }) -> { "ok": false, "message": "动力不足以移动到目标格" }
+[MSG] 基础框架 移动 (12,-3)→(13,-4) 消耗动力1
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 13, "r": -4 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 13, "r": -4 }, "power_cost": 1 }
+[MSG] 基础框架 移动 (12,-3)→(13,-4) 消耗动力1
+[MSG] 我方 打出了 折扣 (行动牌 )
+[MSG]   弃置 折扣 (玩家:我方 来源:action_hand 原因:打出)
+[CALL] app_root::play_action_card(args={ "player": "player", "card_id": "card_324", "payload": {  } }) -> { "ok": true, "card_id": &"card_324" }
+[MSG] 我方 打出了 折扣
+[MSG] 我方 回合结束
+[MSG]   弃置 手持推进器 (玩家:我方 来源:equipment_hand 原因:end_turn_unset)
+[CALL] app_root::end_player_turn(args={  }) -> { "ok": true, "message": "player_turn_ended" }
+[MSG] 我方 回合2结束
+[MSG] >> 敌方 回合开始
+[MSG]   └ 敌方 回合抽牌: 行动牌(2张): 反击、维修 | 装备牌(1张): 高机动装 左臂
+[MSG]   └ 敌方 获得 2 金币
+[MSG] 原始框架 移动 (20,-6)→(19,-6) 消耗动力1
+[MSG] 敌方 回合结束
+[MSG]   弃置 维修 (玩家: 来源:手牌 原因:hand_limit)
+[MSG]   弃置 高机动装 左臂 (玩家: 来源:手牌 原因:end_turn_unset)
+[MSG] >> 我方 回合开始
+[MSG]   └ 我方 回合抽牌: 行动牌(2张): 破甲、维修 | 装备牌(1张): 近战特装 右臂
+[MSG]   └ 我方 获得 2 金币
+[MSG] >> 我方 回合3开始
+[MSG] 我方 设置装备: 近战特装 右臂 → 右臂 (护甲2、动力3、耐久4) 
+[CALL] app_root::set_equipment(args={ "player": "player", "card_id": "card_84", "slot_id": "右臂" }) -> { "ok": true, "card_id": &"card_84", "slot_id": &"右臂" }
+[MSG] 我方 装备了 近战特装 右臂 → 右臂 (护甲2、动力3、耐久4) 
+[MSG] 基础框架 移动 (13,-4)→(18,-5) 消耗动力5
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 18, "r": -5 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 18, "r": -5 }, "power_cost": 5 }
+[MSG] 基础框架 移动 (13,-4)→(18,-5) 消耗动力5
+[MSG] 我方 使用攻击牌: 破甲 武器:热能战镰(权威14/射程3/近战/耐久4)
+[MSG] !! 基础框架 向 原始框架 发动攻击
+  攻击牌:破甲 | 武器:热能战镰(权威14/射程3/近战/耐久4) | 威力:14 | 射程:3
+[MSG] 敌方 打出了迎击牌: 反击
+[MSG] 原始框架 移动 (19,-6)→(20,-6) 消耗动力1
+[MSG]   基础框架 命中 原始框架 (威力14 → 伤害6, 损伤标记2)
+[MSG]   结算: 基础框架 命中 原始框架
+  武器:热能战镰(权威14/射程3/近战/耐久4) | 最终权威:14 | 伤害:6 | 损伤标记:4
+[MSG]   弃置 破甲 (玩家: 来源:手牌 原因:ATTACK_RESOLVED)
+[MSG]   弃置 反击 (玩家: 来源:手牌 原因:ATTACK_RESOLVED)
+[CALL] app_root::begin_attack(args={ "attacker": "player", "target": "enemy", "weapon_id": "card_137", "attack_card_id": "card_217" }) -> { "ok": true, "hit": true, "cancelled": false, "damage": 6, "markers": 4, "target_mech_id_for_tokens": &"enemy_mech", "chooser_player_id": &"enemy", "pending_actions": [{ "type": &"COUNTERATTACK", "optional": true, "source_card_id": &"card_259", "source_player_id": &"enemy", "source_mech_id": &"enemy_mech", "cost": [], "weapon_id": &"card_137", "target_id": &"player_mech" }], "state": "resolved" }
+[MSG]   原始框架 受到 0 伤害 (剩余HP:0)
+[MSG]   原始框架 受到 0 伤害 (剩余HP:0)
+[MSG]   原始框架 受到 0 伤害 (剩余HP:0)
+[MSG]   原始框架 受到 0 伤害 (剩余HP:0)
+[MSG]   原始框架 受到 0 伤害 (剩余HP:0)
+[MSG]   原始框架 受到 0 伤害 (剩余HP:0)
+[MSG] ✕ 机动装 右腿 损坏! (槽位:右腿 损伤0≥耐久0)
+[MSG]   弃置 机动装 右腿 (玩家:敌方 来源:装备区 原因:broken)
+[MSG]   原始框架 受到 0 伤害 (剩余HP:0)
+[MSG]   原始框架 受到 0 伤害 (剩余HP:0)
+[MSG] 敌方 使用攻击牌: — 武器:热能机枪(权威9/射程4/远程/耐久3)
+[MSG] !! 原始框架 向 基础框架 发动攻击
+  攻击牌:— | 武器:热能机枪(权威9/射程4/远程/耐久3) | 威力:9 | 射程:4
+[MSG] 原始框架 向 基础框架 发动攻击
+[MSG] 我方 打出了迎击牌: 反击
+[MSG] 我方 回合结束
+[CALL] app_root::end_player_turn(args={  }) -> { "ok": true, "message": "player_turn_ended" }
+[MSG] 我方 回合3结束
+[MSG] >> 敌方 回合开始
+[MSG]   └ 敌方 回合抽牌: 行动牌(2张): 设陷、维修 | 装备牌(1张): 高机动装 右腿
+[MSG]   └ 敌方 获得 2 金币
+[MSG] 原始框架 移动 (20,-6)→(19,-6) 消耗动力1
+[MSG] 敌方 使用攻击牌: 预判 武器:热能机枪(权威9/射程4/远程/耐久3)
+[MSG] !! 原始框架 向 基础框架 发动攻击
+  攻击牌:预判 | 武器:热能机枪(权威9/射程4/远程/耐久3) | 威力:9 | 射程:4
+[MSG] 原始框架 向 基础框架 发动攻击
+[MSG] 我方 打出了迎击牌: 回避
+[MSG] 基础框架 移动 (18,-5)→(18,-9) 消耗动力4
+[MSG]   原始框架 命中 基础框架 (威力9 → 伤害0, 损伤标记1)
+[MSG]   结算: 原始框架 命中 基础框架
+  武器:热能机枪(权威9/射程4/远程/耐久3) | 最终权威:9 | 伤害:0 | 损伤标记:1
+[MSG]   弃置 预判 (玩家:敌方 来源:action_hand 原因:ATTACK_RESOLVED)
+[MSG]   弃置 回避 (玩家: 来源:手牌 原因:ATTACK_RESOLVED)
+[MSG]   基础框架 受到 0 伤害 (剩余HP:0)
+[MSG]   基础框架 受到 0 伤害 (剩余HP:0)
+[MSG] 敌方 回合结束
+[MSG]   弃置 高机动装 右腿 (玩家: 来源:手牌 原因:end_turn_unset)
+[MSG] >> 我方 回合开始
+[MSG]   └ 我方 回合抽牌: 行动牌(2张): 双连、回收 | 装备牌(1张): 高机动装 右臂
+[MSG]   └ 我方 获得 2 金币
+[MSG] >> 我方 回合4开始
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 3, "r": 4 } }) -> { "ok": false, "message": "动力不足以移动到目标格" }
+[MSG] 基础框架 移动 (18,-9)→(18,-5) 消耗动力4
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 18, "r": -5 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 18, "r": -5 }, "power_cost": 4 }
+[MSG] 基础框架 移动 (18,-9)→(18,-5) 消耗动力4
+[MSG] 基础框架 移动 (18,-5)→(18,-7) 消耗动力2
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 18, "r": -7 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 18, "r": -7 }, "power_cost": 2 }
+[MSG] 基础框架 移动 (18,-5)→(18,-7) 消耗动力2
+[MSG] 基础框架 移动 (18,-7)→(18,-5) 消耗动力2
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 18, "r": -5 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 18, "r": -5 }, "power_cost": 2 }
+[MSG] 基础框架 移动 (18,-7)→(18,-5) 消耗动力2
+[MSG] 我方 使用攻击牌: 猛击 武器:热能战镰(权威14/射程3/近战/耐久4)
+[MSG] !! 基础框架 向 原始框架 发动攻击
+  攻击牌:猛击 | 武器:热能战镰(权威14/射程3/近战/耐久4) | 威力:14 | 射程:3
+[MSG] 敌方 打出了迎击牌: 疾行
+[MSG] 原始框架 移动 (19,-6)→(20,-6) 消耗动力1
+[MSG]   基础框架 命中 原始框架 (威力18 → 伤害14, 损伤标记3) | 修正: 权威+4(猛击)
+[MSG]   结算: 基础框架 命中 原始框架
+  武器:热能战镰(权威14/射程3/近战/耐久4) | 最终权威:18 | 伤害:14 | 损伤标记:3 | 修正: 权威+4(猛击)
+[MSG]   弃置 猛击 (玩家:我方 来源:action_hand 原因:ATTACK_RESOLVED)
+[MSG]   弃置 疾行 (玩家:敌方 来源:action_hand 原因:ATTACK_RESOLVED)
+[CALL] app_root::begin_attack(args={ "attacker": "player", "target": "enemy", "weapon_id": "card_137", "attack_card_id": "card_210" }) -> { "ok": true, "hit": true, "cancelled": false, "damage": 14, "markers": 3, "target_mech_id_for_tokens": &"enemy_mech", "chooser_player_id": &"enemy", "pending_actions": [], "state": "resolved" }
+[MSG]   原始框架 受到 0 伤害 (剩余HP:0)
+[MSG]   原始框架 受到 0 伤害 (剩余HP:0)
+[MSG] ✕ 帝国普装 头部 损坏! (槽位:头部 损伤0≥耐久0)
+[MSG]   弃置 帝国普装 头部 (玩家:敌方 来源:装备区 原因:broken)
+[MSG]   原始框架 受到 0 伤害 (剩余HP:0)
+[MSG]   原始框架 受到 0 伤害 (剩余HP:0)
+[MSG] ✕ 联邦普装 左臂 损坏! (槽位:左臂 损伤0≥耐久0)
+[MSG]   弃置 联邦普装 左臂 (玩家:敌方 来源:装备区 原因:broken)
+[MSG]   原始框架 受到 0 伤害 (剩余HP:0)
+[MSG]   原始框架 受到 0 伤害 (剩余HP:0)
+[MSG]   弃置 近战特装 右臂 (玩家: 来源:装备区 原因:替换)
+[MSG] 我方 设置装备: 高机动装 右臂 → 右臂 (护甲3、动力1、耐久3) 
+[CALL] app_root::set_equipment(args={ "player": "player", "card_id": "card_72", "slot_id": "右臂" }) -> { "ok": true, "card_id": &"card_72", "slot_id": &"右臂" }
+[MSG] 我方 装备了 高机动装 右臂 → 右臂 (护甲3、动力1、耐久3) 
+[MSG] 我方 回合结束
+[CALL] app_root::end_player_turn(args={  }) -> { "ok": true, "message": "player_turn_ended" }
+[MSG] 我方 回合4结束
+[MSG] >> 敌方 回合开始
+[MSG]   └ 敌方 回合抽牌: 行动牌(2张): 反击、设陷 | 装备牌(1张): 近战特装 头部
+[MSG]   └ 敌方 获得 2 金币
+[MSG] 原始框架 移动 (20,-6)→(19,-6) 消耗动力1
+[MSG] 敌方 回合结束
+[MSG]   弃置 设陷 (玩家: 来源:手牌 原因:hand_limit)
+[MSG]   弃置 近战特装 头部 (玩家: 来源:手牌 原因:end_turn_unset)
+[MSG] >> 我方 回合开始
+[MSG]   └ 我方 回合抽牌: 行动牌(2张): 折扣、破甲 | 装备牌(1张): 联邦的白马 躯干
+[MSG]   └ 我方 获得 2 金币
+[MSG] >> 我方 回合5开始
+[MSG]   弃置 帝国普装 躯干 (玩家:我方 来源:装备区 原因:替换)
+[MSG] 我方 设置装备: 联邦的白马 躯干 → 躯干 (护甲4、动力2、耐久4) 
+[CALL] app_root::set_equipment(args={ "player": "player", "card_id": "card_53", "slot_id": "躯干" }) -> { "ok": true, "card_id": &"card_53", "slot_id": &"躯干" }
+[MSG] 我方 装备了 联邦的白马 躯干 → 躯干 (护甲4、动力2、耐久4) 
+[MSG] 我方 使用攻击牌: 破甲 武器:热能战镰(权威14/射程3/近战/耐久4)
+[MSG] !! 基础框架 向 原始框架 发动攻击
+  攻击牌:破甲 | 武器:热能战镰(权威14/射程3/近战/耐久4) | 威力:14 | 射程:3
+[MSG] 敌方 打出了迎击牌: 反击
+[MSG] 原始框架 移动 (19,-6)→(20,-6) 消耗动力1
+[MSG]   基础框架 命中 原始框架 (威力14 → 伤害15, 损伤标记2)
+[MSG]   结算: 基础框架 命中 原始框架
+  武器:热能战镰(权威14/射程3/近战/耐久4) | 最终权威:14 | 伤害:15 | 损伤标记:4
+[MSG]   弃置 破甲 (玩家: 来源:手牌 原因:ATTACK_RESOLVED)
+[MSG]   弃置 反击 (玩家: 来源:手牌 原因:ATTACK_RESOLVED)
+[CALL] app_root::begin_attack(args={ "attacker": "player", "target": "enemy", "weapon_id": "card_137", "attack_card_id": "card_214" }) -> { "ok": true, "hit": true, "cancelled": false, "damage": 15, "markers": 4, "target_mech_id_for_tokens": &"enemy_mech", "chooser_player_id": &"enemy", "pending_actions": [{ "type": &"COUNTERATTACK", "optional": true, "source_card_id": &"card_256", "source_player_id": &"enemy", "source_mech_id": &"enemy_mech", "cost": [], "weapon_id": &"card_137", "target_id": &"player_mech" }], "state": "resolved" }
+[MSG]   原始框架 受到 0 伤害 (剩余HP:0)
+[MSG]   原始框架 受到 0 伤害 (剩余HP:0)
+[MSG]   原始框架 受到 0 伤害 (剩余HP:0)
+[MSG]   原始框架 受到 0 伤害 (剩余HP:0)
+[MSG]   原始框架 受到 0 伤害 (剩余HP:0)
+[MSG]   原始框架 受到 0 伤害 (剩余HP:0)
+[MSG]   原始框架 受到 0 伤害 (剩余HP:0)
+[MSG]   原始框架 受到 0 伤害 (剩余HP:0)
+[MSG] ✕ 流星钢锤 损坏! (槽位:武器2 损伤0≥耐久0)
+[MSG]   弃置 流星钢锤 (玩家:敌方 来源:装备区 原因:broken)

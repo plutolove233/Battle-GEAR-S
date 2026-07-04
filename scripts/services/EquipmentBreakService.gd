@@ -9,6 +9,7 @@ extends RefCounted
 var context = null  # type: GameContext
 
 const _EffectConst = preload("res://scripts/effect_core/EffectConst.gd")
+const _EquipmentCardDef = preload("res://scripts/card_defs/EquipmentCardDef.gd")
 
 
 ## 检查装备是否损坏
@@ -81,17 +82,17 @@ func replace_equipment(player_id: StringName, mech_id: StringName, new_card_id: 
 	var slot: MechSlotState = mech.slots[slot_id]
 	var old_card: CardInstance = slot.equipped_card
 
-	# ── 如果有旧装备，移除等量区域损伤标记并弃掉 ──
-	if old_card != null:
-		var old_durability: int = slot.get_equipment_durability()
-		# 移除旧装备耐久度等值的区域损伤标记
-		var tokens_to_remove: int = mini(old_durability, slot.region_damage_tokens)
-		slot.region_damage_tokens -= tokens_to_remove
+	# ── 获取新装备的耐久值 ──
+	var new_durability: int = 0
+	var new_card: CardInstance = gs.get_card(new_card_id)
+	if new_card and new_card.def is _EquipmentCardDef:
+		new_durability = new_card.def.durability
 
+	# ── 如果有旧装备，弃掉 ──
+	if old_card != null:
 		# 取消注册旧装备效果
 		if context.effect_registry:
 			context.effect_registry.unregister_card(old_card)
-
 		# 弃掉旧装备
 		context.deck_service.discard_card(old_card.instance_id, &"replaced")
 
@@ -99,7 +100,6 @@ func replace_equipment(player_id: StringName, mech_id: StringName, new_card_id: 
 	player.equipment_hand.erase(new_card_id)
 
 	# ── 设置新装备到槽位 ──
-	var new_card: CardInstance = gs.get_card(new_card_id)
 	if new_card:
 		new_card.zone = &"equipped"
 		new_card.slot_id = slot_id
@@ -110,6 +110,11 @@ func replace_equipment(player_id: StringName, mech_id: StringName, new_card_id: 
 		# 注册新装备效果
 		if context.effect_registry:
 			context.effect_registry.register_card(new_card)
+
+	# ── 移除新装备耐久值对应的区域损伤（规则：设置新装备后移除对应耐久值的损伤） ──
+	if new_durability > 0:
+		var tokens_to_remove: int = mini(new_durability, slot.region_damage_tokens)
+		slot.region_damage_tokens -= tokens_to_remove
 
 	# ── 重算动力上限并调整当前动力 ──
 	var old_max_power: int = mech.max_power

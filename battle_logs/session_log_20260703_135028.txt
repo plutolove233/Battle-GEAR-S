@@ -1,0 +1,22 @@
+════════ 会话日志 ════════
+启动时间: 20260703_135028
+
+[MSG]   弃置 振动匕首 (原因:替换)
+[MSG] 我方 装备了 扭转钢鞭 → 武器1 (权威10、射程3、近战、耐久3) 
+[MSG] 我方 装备了 量产装 右臂 → 右臂 (护甲2、动力1、耐久3) 
+[MSG] 我方 装备了 量产装 头部 → 头部 (护甲2、耐久2) 
+[MSG] 敌方 装备了 机动装 躯干 → 躯干 (护甲2、动力2、耐久3) 
+[MSG] 敌方 装备了 机动装 左臂 → 左臂 (护甲2、动力2、耐久2) 
+[MSG] 敌方 装备了 机动装 头部 → 头部 (护甲1、耐久1) 
+[MSG]   └ 我方 抽牌: 行动牌(2张): 掩护、聚能 | 装备牌(1张): 超重甲装 左腿
+[MSG] >> 我方 回合2开始
+[CALL] app_root::play_action_card(args={ "player": "player", "card_id": "card_69", "payload": { "chosen_effect_id": &"" } }) -> { "ok": false, "message": "行动牌不在手牌中" }
+[CALL] app_root::play_action_card(args={ "player": "player", "card_id": "card_69", "payload": { "chosen_effect_id": &"" } }) -> { "ok": false, "message": "行动牌不在手牌中" }
+[CALL] app_root::play_action_card(args={ "player": "player", "card_id": "card_69", "payload": { "chosen_effect_id": &"" } }) -> { "ok": false, "message": "行动牌不在手牌中" }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_114" }) -> {  }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_114" }) -> {  }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_114" }) -> {  }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_114" }) -> {  }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_114" }) -> {  }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_114" }) -> {  }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_114" }) -> {  }

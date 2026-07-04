@@ -127,29 +127,19 @@ func _create_mech_from_frame(mech_id: StringName, owner_id: StringName, frame_id
 		w_slot.slot_kind = &"WEAPON"
 		mech.slots[weapon_slot_id] = w_slot
 
-		# 如果有基础武器，创建 CardInstance 并装备
-		if i < frame_def.base_weapons.size():
-			var weapon_def_data: Dictionary = frame_def.base_weapons[i]
-			# 基础武器可能没有 id 字段（仅有 name），生成一个框架内唯一的 id
-			var weapon_id: String = weapon_def_data.get("id", "")
-			if weapon_id == "":
-				weapon_id = "%s_base_weapon_%d" % [frame_id, i + 1]
-			# 为基础武器构建 EquipmentCardDef，确保攻击系统可读取威力/射程
-			var weapon_def: EquipmentCardDef = EquipmentCardDef.new()
-			weapon_def.card_id = StringName(weapon_id)
-			weapon_def.display_name = weapon_def_data.get("name", "基础武器")
-			weapon_def.card_kind = &"equipment"
-			weapon_def.equipment_kind = &"WEAPON"
-			weapon_def.might = int(weapon_def_data.get("damage", 0))
-			weapon_def.range_value = int(weapon_def_data.get("range", 1))
-			weapon_def.weapon_kind = StringName(weapon_def_data.get("weapon_type", ""))
-			weapon_def.durability = 999  # 基础武器不可损坏
-			var card_instance: CardInstance = _create_card_instance(
-				StringName(weapon_id), owner_id, mech_id, &"equipment_slot", weapon_slot_id
-			)
-			card_instance.def = weapon_def
-			context.game_state.cards[card_instance.instance_id] = card_instance
-			w_slot.equipped_card = card_instance
+	# ── 收集所有基础武器数据 ──
+	var base_weapons_list: Array[Dictionary] = []
+	for i: int in range(frame_def.base_weapons.size()):
+		var weapon_def_data: Dictionary = frame_def.base_weapons[i]
+		base_weapons_list.append({
+			"name": weapon_def_data.get("name", "基础武器"),
+			"might": int(weapon_def_data.get("damage", 0)),
+			"range_value": int(weapon_def_data.get("range", 1)),
+			"weapon_kind": StringName(weapon_def_data.get("weapon_type", "")),
+		})
+	# 一次性设置所有基础武器
+	if not base_weapons_list.is_empty():
+		mech.set_base_weapons(base_weapons_list)
 
 	# ── 创建2个备用槽位 ──
 	for i: int in range(2):

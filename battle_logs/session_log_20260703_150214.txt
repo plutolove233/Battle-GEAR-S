@@ -1,0 +1,34 @@
+════════ 会话日志 ════════
+启动时间: 20260703_150214
+
+[MSG] 我方 装备了 维修机械臂 → 武器1 (权威4、射程3、特殊、耐久4) 
+[MSG] 我方 装备了 量产装 右臂 → 右臂 (护甲2、动力1、耐久3) 
+[MSG]   弃置 量产装 右臂 (原因:替换)
+[MSG] 我方 装备了 重甲装 右臂 → 右臂 (护甲4、动力-1、耐久2) 
+[MSG] 我方 装备了 联邦普装 左腿 → 左腿 (护甲1、动力2、耐久2) 
+[MSG] 敌方 装备了 扭转钢鞭 → 武器1 (权威10、射程3、近战、耐久3) 
+[MSG] 敌方 装备了 机动装 左臂 → 左臂 (护甲2、动力2、耐久2) 
+[MSG] 敌方 装备了 机动装 左腿 → 左腿 (动力4、耐久3) 
+[MSG]   弃置 机动装 左臂 (原因:替换)
+[MSG] 敌方 装备了 近战装 左臂 → 左臂 (护甲2、动力2、耐久3) 
+[MSG] 敌方 装备了 狙击装 头部 → 头部 (护甲3、耐久3) 
+[MSG]   └ 我方 抽牌: 行动牌(2张): 回忆、掩护 | 装备牌(1张): 帝国的赤枭 头部
+[MSG] >> 我方 回合2开始
+[MSG] 我方 设置装备: 维修机械臂 → 武器2 (权威4、射程3、特殊、耐久4) 
+[CALL] app_root::set_equipment(args={ "player": "player", "card_id": "card_170", "slot_id": "weapon_2" }) -> { "ok": true, "card_id": &"card_170", "slot_id": &"weapon_2" }
+[MSG] 我方 装备了 维修机械臂 → 武器2 (权威4、射程3、特殊、耐久4) 
+[MSG] 我方 设置装备: 帝国的赤枭 头部 → 头部 (护甲1、动力1、耐久3) 
+[CALL] app_root::set_equipment(args={ "player": "player", "card_id": "card_55", "slot_id": "头部" }) -> { "ok": true, "card_id": &"card_55", "slot_id": &"头部" }
+[MSG] 我方 装备了 帝国的赤枭 头部 → 头部 (护甲1、动力1、耐久3) 
+[MSG]   弃置 高机动装 头部 (玩家: 来源:shop 原因:shop_refresh)
+[MSG]   弃置 超重甲装 右臂 (玩家: 来源:shop 原因:shop_refresh)
+[MSG]   弃置 帝国普装 右腿 (玩家: 来源:shop 原因:shop_refresh)
+[MSG]   弃置 帝国的神莺 右腿 (玩家: 来源:shop 原因:shop_refresh)
+[MSG]   弃置 联邦的一角兽 躯干 (玩家: 来源:shop 原因:shop_refresh)
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_177" }) -> {  }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_177" }) -> {  }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_177" }) -> {  }
+[MSG]   弃置 重甲装 右臂 (玩家:我方 来源:装备区 原因:替换)
+[MSG] 我方 设置装备: 机动装 右臂 → 右臂 (护甲2、耐久2) 
+[CALL] app_root::set_equipment(args={ "player": "player", "card_id": "card_27", "slot_id": "右臂" }) -> { "ok": true, "card_id": &"card_27", "slot_id": &"右臂" }
+[MSG] 我方 装备了 机动装 右臂 → 右臂 (护甲2、耐久2) 

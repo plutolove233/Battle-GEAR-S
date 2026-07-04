@@ -18,6 +18,11 @@ var owner_player_id: StringName = &""
 ## 框架定义
 var frame_def = null
 
+## 基础武器数据（从框架继承，不作为卡牌存在）
+## 结构: Array[Dictionary]，索引0对应weapon_1，索引1对应weapon_2
+## 结构: {name: String, might: int, range_value: int, weapon_kind: StringName}
+var base_weapons: Array[Dictionary] = []
+
 ## 当前生命值
 var current_hp: int = 25
 
@@ -71,12 +76,43 @@ func get_total_power() -> int:
 
 
 ## 获取武器槽位中的装备 instance_id 列表
+## 如果槽位为空但有基础武器，返回基础武器虚拟 ID（带槽位索引）
 func get_weapon_ids() -> Array[StringName]:
 	var result: Array[StringName] = []
-	for slot_id: StringName in [&"weapon_1", &"weapon_2"]:
-		if slots.has(slot_id) and slots[slot_id].equipped_card:
-			result.append(slots[slot_id].equipped_card.instance_id)
+	for i: int in range(2):
+		var slot_id: StringName = StringName("weapon_%d" % [i + 1])
+		if slots.has(slot_id):
+			var slot: MechSlotState = slots[slot_id]
+			if slot.equipped_card:
+				# 有装备牌，使用装备牌的 instance_id
+				result.append(slot.equipped_card.instance_id)
+			elif i < base_weapons.size() and not base_weapons[i].is_empty():
+				# 槽位为空但有基础武器，使用虚拟 ID（包含槽位索引）
+				result.append(StringName("frame_base_weapon_%d" % [i + 1]))
 	return result
+
+
+## 获取基础武器数据（用于攻击计算）
+## slot_index: 0=weapon_1, 1=weapon_2
+func get_base_weapon(slot_index: int = 0) -> Dictionary:
+	if slot_index >= 0 and slot_index < base_weapons.size():
+		return base_weapons[slot_index]
+	return {}
+
+
+## 获取所有基础武器数据
+func get_all_base_weapons() -> Array[Dictionary]:
+	return base_weapons
+
+
+## 设置基础武器数据（单把武器）
+func set_base_weapon(weapon_data: Dictionary) -> void:
+	base_weapons = [weapon_data]
+
+
+## 设置基础武器数据（多把武器）
+func set_base_weapons(weapons: Array[Dictionary]) -> void:
+	base_weapons = weapons
 
 
 ## 获取所有区域损伤标记总数

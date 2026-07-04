@@ -9,8 +9,14 @@ const _MechState = preload("res://scripts/runtime/MechState.gd")
 const _MechSlotState = preload("res://scripts/runtime/MechSlotState.gd")
 const _EquipmentCardDef = preload("res://scripts/card_defs/EquipmentCardDef.gd")
 
+## 备用区设置按钮被点击（参数：备用区槽位ID，如"reserve_1"）
+signal reserve_set_clicked(slot_id: StringName)
+
 ## 当前机甲引用
 var _mech = null  # type: MechState
+
+## 是否是敌方机甲（用于决定是否显示背面信息）
+var _is_enemy: bool = false
 
 ## 槽位显示顺序
 const SLOT_ORDER: Array[StringName] = [
@@ -31,8 +37,11 @@ const SLOT_NAMES: Dictionary = {
 
 
 ## 配置面板
-func configure(mech) -> void:
+## mech: 机甲状态
+## is_enemy: 是否是敌方机甲（用于决定是否显示背面信息）
+func configure(mech, is_enemy: bool = false) -> void:
 	_mech = mech
+	_is_enemy = is_enemy
 	_refresh()
 
 
@@ -58,6 +67,21 @@ func _refresh() -> void:
 	]
 	summary.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	add_child(summary)
+
+	# 显示基础武器信息（如果有）
+	var base_weapons = _mech.get_all_base_weapons()
+	if not base_weapons.is_empty():
+		var weapon_info = Label.new()
+		var weapons_text = ""
+		for i: int in range(base_weapons.size()):
+			var w = base_weapons[i]
+			if i > 0:
+				weapons_text += " / "
+			weapons_text += "%s[威:%d 射:%d]" % [w.get("name", ""), w.get("might", 0), w.get("range_value", 1)]
+		weapon_info.text = "基础武器: " + weapons_text
+		weapon_info.add_theme_color_override("font_color", Color.CYAN)
+		weapon_info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		add_child(weapon_info)
 
 	# 各槽位
 	for slot_id: StringName in SLOT_ORDER:
@@ -88,6 +112,32 @@ func _add_slot_row(slot_id: StringName, slot) -> void:
 				equip_label.text += " [甲%d 动%d]" % [eq_def.armor, eq_def.power]
 			elif eq_def.equipment_kind == &"WEAPON":
 				equip_label.text += " [威%d 射%d]" % [eq_def.might, eq_def.range_value]
+	elif slot_id == &"weapon_1" or slot_id == &"weapon_2":
+		# 武器槽位为空时显示基础武器信息
+		var slot_index: int = 0 if slot_id == &"weapon_1" else 1
+		var base_weapon = _mech.get_base_weapon(slot_index)
+		if not base_weapon.is_empty():
+			equip_label.text = "%s [威:%d 射:%d](空)" % [
+				base_weapon.get("name", "基础武器"),
+				base_weapon.get("might", 0),
+				base_weapon.get("range_value", 1),
+			]
+			equip_label.add_theme_color_override("font_color", Color.CYAN)
+		else:
+			equip_label.text = "（空）"
+	elif slot_id == &"reserve_1" or slot_id == &"reserve_2":
+		# 备用区：对我方显示背面信息，对敌人显示"备用 未知"
+		if slot.equipped_card and slot.equipped_card.def is _EquipmentCardDef:
+			if _is_enemy:
+				# 敌方：显示"备用 未知"
+				equip_label.text = "备用 未知"
+				equip_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+			else:
+				# 我方：显示"备用 XXX"
+				equip_label.text = "备用 %s" % slot.equipped_card.def.display_name
+				equip_label.add_theme_color_override("font_color", Color(0.85, 0.75, 0.3))
+		else:
+			equip_label.text = "（空）"
 	else:
 		equip_label.text = "（空）"
 	equip_label.custom_minimum_size = Vector2(100, 20)
@@ -98,6 +148,9 @@ func _add_slot_row(slot_id: StringName, slot) -> void:
 	if slot.equipped_card and slot.equipped_card.def is _EquipmentCardDef:
 		var durability: int = slot.equipped_card.def.durability
 		var card_dmg: int = slot.equipped_card.damage_tokens
+		# 备用区特殊规则：装备耐久视为1
+		if slot.slot_kind == &"RESERVE":
+			durability = 1
 		damage_label.text = "损伤:%d/%d" % [card_dmg, durability]
 		if card_dmg >= durability:
 			damage_label.add_theme_color_override("font_color", Color.RED)
@@ -111,11 +164,33 @@ func _add_slot_row(slot_id: StringName, slot) -> void:
 	damage_label.custom_minimum_size = Vector2(70, 20)
 	hbox.add_child(damage_label)
 
-	# 有效护甲（部件槽位）
+	# 有效护甲和动力（部件槽位）
 	if slot.slot_kind == &"PART":
 		var armor_label = Label.new()
-		armor_label.text = "护甲:%d" % slot.get_effective_armor()
-		armor_label.custom_minimum_size = Vector2(40, 20)
+		armor_label.text = "甲:%d" % slot.get_effective_armor()
+		armor_label.custom_minimum_size = Vector2(35, 20)
 		hbox.add_child(armor_label)
+
+		var power_label = Label.new()
+		power_label.text = "动:%d" % slot.get_effective_power()
+		power_label.custom_minimum_size = Vector2(35, 20)
+		hbox.add_child(power_label)
+
+	# 武器槽位显示基础武器的耐久（固定1）
+	if (slot_id == &"weapon_1" or slot_id == &"weapon_2") and not slot.equipped_card:
+		var base_weapon = _mech.get_base_weapon(0 if slot_id == &"weapon_1" else 1)
+		if not base_weapon.is_empty():
+			damage_label.text = "（基础武器）"
+			damage_label.add_theme_color_override("font_color", Color.CYAN)
+
+	# 备用区设置按钮（仅在我方且有装备时显示）
+	if (slot_id == &"reserve_1" or slot_id == &"reserve_2") and not _is_enemy:
+		if slot.equipped_card != null:
+			var set_btn = Button.new()
+			set_btn.text = "设置"
+			set_btn.custom_minimum_size = Vector2(40, 20)
+			var captured_slot_id = slot_id
+			set_btn.pressed.connect(func(): reserve_set_clicked.emit(captured_slot_id))
+			hbox.add_child(set_btn)
 
 	add_child(hbox)

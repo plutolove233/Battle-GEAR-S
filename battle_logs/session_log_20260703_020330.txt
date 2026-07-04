@@ -1,0 +1,13 @@
+════════ 会话日志 ════════
+启动时间: 20260703_020330
+
+[MSG]   └ 我方 抽牌: 行动牌(2张): 防御、聚能 | 装备牌(1张): 高机动装 头部
+[MSG] >> 我方 回合2开始
+[MSG] 我方 设置装备: 高机动装 头部 → 头部 (护甲2、耐久2) 
+[CALL] app_root::set_equipment(args={ "player": "player", "card_id": "card_70", "slot_id": "头部" }) -> { "ok": true, "card_id": &"card_70", "slot_id": &"头部" }
+[MSG] 我方 装备了 高机动装 头部 → 头部 (护甲2、耐久2) 
+[MSG]   弃置 帝国的赤枭 右腿 (玩家: 来源:shop 原因:shop_refresh)
+[MSG]   弃置 穿甲热能枪 (玩家: 来源:shop 原因:shop_refresh)
+[MSG]   弃置 高机动装 左腿 (玩家: 来源:shop 原因:shop_refresh)
+[MSG]   弃置 极电装 右腿 (玩家: 来源:shop 原因:shop_refresh)
+[MSG]   弃置 联邦的圣牛 左腿 (玩家: 来源:shop 原因:shop_refresh)

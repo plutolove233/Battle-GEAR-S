@@ -1,0 +1,50 @@
+════════ 会话日志 ════════
+启动时间: 20260703_133030
+
+[MSG]   弃置 振动匕首 (原因:替换)
+[MSG] 我方 装备了 热能战斧 → 武器1 (权威11、射程2、近战、耐久3) 
+[MSG] 我方 装备了 量产装 躯干 → 躯干 (护甲3、动力2、耐久4) 
+[MSG] 我方 装备了 近战装 左腿 → 左腿 (护甲1、动力3、耐久1) 
+[MSG] 敌方 装备了 热能爆弹枪 → 武器2 (权威7、射程4、远程、耐久3) 
+[MSG]   弃置 热能战斧 (原因:替换)
+[MSG] 敌方 装备了 火箭筒 → 武器1 (权威7、射程4、远程、耐久3) 
+[MSG] 敌方 装备了 机动装 左臂 → 左臂 (护甲2、动力2、耐久2) 
+[MSG]   └ 我方 抽牌: 行动牌(2张): 补给、回忆 | 装备牌(1张): 强合金盾牌
+[MSG] >> 我方 回合2开始
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_177" }) -> {  }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_177" }) -> {  }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_177" }) -> {  }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_177" }) -> {  }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_177" }) -> {  }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_177" }) -> {  }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_177" }) -> {  }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_177" }) -> {  }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_177" }) -> {  }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_177" }) -> {  }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_177" }) -> {  }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_177" }) -> {  }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_177" }) -> {  }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_177" }) -> {  }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_141" }) -> {  }
+[CALL] app_root::play_action_card(args={ "player": "player", "card_id": "card_20", "payload": { "chosen_effect_id": &"" } }) -> { "ok": false, "message": "行动牌不在手牌中" }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_177" }) -> {  }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_141" }) -> {  }
+[CALL] app_root::play_action_card(args={ "player": "player", "card_id": "card_20", "payload": { "chosen_effect_id": &"" } }) -> { "ok": false, "message": "行动牌不在手牌中" }
+[CALL] app_root::play_action_card(args={ "player": "player", "card_id": "card_20", "payload": { "chosen_effect_id": &"" } }) -> { "ok": false, "message": "行动牌不在手牌中" }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_177" }) -> {  }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_141" }) -> {  }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_177" }) -> {  }
+[CALL] app_root::sell_equipment(args={ "player": "player", "card_id": "card_141" }) -> {  }
+[MSG] 基础框架 移动 (2,2)→(4,2) 消耗动力2
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 4, "r": 2 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 4, "r": 2 }, "power_cost": 2 }
+[MSG] 基础框架 移动 (2,2)→(4,2) 消耗动力2
+[MSG] 基础框架 移动 (4,2)→(5,1) 消耗动力1
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 5, "r": 1 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 5, "r": 1 }, "power_cost": 1 }
+[MSG] 基础框架 移动 (4,2)→(5,1) 消耗动力1
+[MSG] 基础框架 移动 (5,1)→(7,0) 消耗动力2
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 7, "r": 0 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 7, "r": 0 }, "power_cost": 2 }
+[MSG] 基础框架 移动 (5,1)→(7,0) 消耗动力2
+[MSG] 基础框架 移动 (7,0)→(11,-2) 消耗动力4
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 11, "r": -2 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 11, "r": -2 }, "power_cost": 4 }
+[MSG] 基础框架 移动 (7,0)→(11,-2) 消耗动力4
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 17, "r": -6 } }) -> { "ok": false, "message": "机甲无法移动（动力不足或被锁定）" }

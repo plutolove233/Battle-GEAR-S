@@ -1,0 +1,9 @@
+[gd_scene load_steps=2 format=3 uid="uid://shop_panel_001"]
+
+[ext_resource type="Script" path="res://scripts/ui/shop_panel.gd" id="1_shop_panel"]
+
+[node name="ShopPanel" type="PopupPanel"]
+unique_id = 160198169
+initial_position = Vector2i(100, 100)
+size = Vector2i(400, 560)
+script = ExtResource("1_shop_panel")

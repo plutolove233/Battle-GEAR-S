@@ -38,25 +38,33 @@ var armor_modifier: int = 0
 var power_modifier: int = 0
 
 
-## 获取实际护甲值 = 基础 + 装备牌护甲 + 修正 - 区域损伤
+## 获取实际护甲值
+## 规则：有装备时只算装备的护甲，无装备时算框架基础护甲 + 修正 - 区域损伤
 func get_effective_armor() -> int:
-	var total: int = base_armor + armor_modifier
+	var total: int = armor_modifier
 	if equipped_card and equipped_card.def is _EquipmentCardDef:
 		var eq_def = equipped_card.def
 		if eq_def.equipment_kind == &"PART":
 			total += eq_def.armor
+	else:
+		# 无装备时使用框架基础护甲
+		total += base_armor
 	# 损伤降低护甲（规则书：每损伤使区域护甲 -1）
 	total -= region_damage_tokens
 	return total
 
 
-## 获取实际动力值 = 基础 + 装备牌动力 + 修正
+## 获取实际动力值
+## 规则：有装备时只算装备的动力，无装备时算框架基础动力 + 修正
 func get_effective_power() -> int:
-	var total: int = base_power + power_modifier
+	var total: int = power_modifier
 	if equipped_card and equipped_card.def is _EquipmentCardDef:
 		var eq_def = equipped_card.def
 		if eq_def.equipment_kind == &"PART":
 			total += eq_def.power
+	else:
+		# 无装备时使用框架基础动力
+		total += base_power
 	return total
 
 

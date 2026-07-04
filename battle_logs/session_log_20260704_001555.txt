@@ -1,0 +1,16 @@
+════════ 会话日志 ════════
+启动时间: 20260704_001555
+
+[MSG]   └ 我方 抽牌: 行动牌(2张): 推进、预判 | 装备牌(1张): 重型锤矛
+[MSG] >> 我方 回合2开始
+[MSG] 基础框架 移动 (2,2)→(4,0) 消耗动力2
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 4, "r": 0 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 4, "r": 0 }, "power_cost": 2 }
+[MSG] 基础框架 移动 (2,2)→(4,0) 消耗动力2
+[MSG] 基础框架 移动 (4,0)→(6,0) 消耗动力2
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 6, "r": 0 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 6, "r": 0 }, "power_cost": 2 }
+[MSG] 基础框架 移动 (4,0)→(6,0) 消耗动力2
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 9, "r": -2 } }) -> { "ok": false, "message": "机甲无法移动（动力不足或被锁定）" }
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 12, "r": -2 } }) -> { "ok": false, "message": "机甲无法移动（动力不足或被锁定）" }
+[MSG] 我方 设置装备: 帝国的神莺 右臂 → 右臂 (护甲3、动力2、耐久5) 
+[CALL] app_root::set_equipment(args={ "player": "player", "card_id": "card_123", "slot_id": "右臂" }) -> { "ok": true, "card_id": &"card_123", "slot_id": &"右臂" }
+[MSG] 我方 装备了 帝国的神莺 右臂 → 右臂 (护甲3、动力2、耐久5) 

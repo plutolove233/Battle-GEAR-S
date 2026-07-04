@@ -66,15 +66,16 @@ func declare_attack(attacker_id: StringName, target_id: StringName, weapon_id: S
 		return {"ok": false, "message": "本回合无法再攻击"}
 
 	# 验证射程（使用RangeCalculator BFS动力可达）
-	var weapon_card = gs.get_card(weapon_id)
-	var weapon_range: int = _get_weapon_range(weapon_card)
+	# 支持基础武器：如果是虚拟ID，使用基础武器数据
+	var weapon_stats: Dictionary = get_weapon_stats(attacker, weapon_id)
+	var weapon_range: int = weapon_stats.get("range_value", 1)
 	var map_cells: Dictionary = gs.map_state.cells if gs.map_state else {}
 	if not _RangeCalculator.is_in_weapon_range(attacker.position, target.position, weapon_range, map_cells):
 		return {"ok": false, "message": "目标不在射程内"}
 
 	# ── 2. 创建攻击上下文 ──
 	var attack_id: StringName = gs.next_id("attack")
-	var weapon_might: int = _get_weapon_might(weapon_card)
+	var weapon_might: int = weapon_stats.get("might", 0)
 	# P0-1: 在弃牌前保存攻击牌的效果列表（深拷贝），不再修改 attack_card.mech_id
 	var attack_card = gs.get_card(attack_card_id)
 	var attack_card_effects: Array = []
@@ -286,8 +287,9 @@ func submit_cover(attack_id: StringName, cover_card_id: StringName, cover_player
 	var attacker_id: StringName = attack_context.get("attacker_id", &"")
 	var attacker_mech = gs.mechs.get(attacker_id)
 	if attacker_mech and cover_mech:
-		var cover_weapon_card = gs.get_card(cover_weapon_ids[0])
-		var cover_weapon_range: int = _get_weapon_range(cover_weapon_card)
+		# 支持基础武器
+		var cover_weapon_stats: Dictionary = get_weapon_stats(cover_mech, cover_weapon_ids[0])
+		var cover_weapon_range: int = cover_weapon_stats.get("range_value", 1)
 		var map_cells: Dictionary = gs.map_state.cells if gs.map_state else {}
 		if not _RangeCalculator.is_in_weapon_range(cover_mech.position, attacker_mech.position, cover_weapon_range, map_cells):
 			return {"ok": false, "message": "攻击者不在掩护武器范围内"}
@@ -568,11 +570,34 @@ func _get_weapon_might(weapon_card) -> int:
 	return 0
 
 
-## 获取武器射程
+## 获取武器射程（也处理基础武器）
 func _get_weapon_range(weapon_card) -> int:
 	if weapon_card and weapon_card.def and weapon_card.def is _EquipmentCardDef:
 		return weapon_card.def.range_value
 	return 1
+
+
+## 根据 weapon_id 获取武器威力和射程（支持基础武器）
+func get_weapon_stats(attacker: MechState, weapon_id: StringName) -> Dictionary:
+	var wid_str = String(weapon_id)
+	# 检查是否是基础武器虚拟 ID（如 frame_base_weapon_1 或 frame_base_weapon_2）
+	if wid_str.begins_with("frame_base_weapon"):
+		var slot_index: int = 0
+		if wid_str.begins_with("frame_base_weapon_"):
+			slot_index = int(wid_str.substr(19)) - 1  # "frame_base_weapon_" 长度为19
+		var base_weapon = attacker.get_base_weapon(slot_index)
+		if not base_weapon.is_empty():
+			return {
+				"might": base_weapon.get("might", 0),
+				"range_value": base_weapon.get("range_value", 1),
+			}
+	# 否则从卡牌实例获取
+	var gs = context.game_state
+	var weapon_card_ref = gs.get_card(weapon_id)
+	return {
+		"might": _get_weapon_might(weapon_card_ref),
+		"range_value": _get_weapon_range(weapon_card_ref),
+	}
 
 
 ## 触发效果钩子（通过 EffectEngine）
@@ -718,6 +743,16 @@ func _resolve_card_effects_snapshot(attack_id: StringName, snapshot_key: String,
 	if not payload.has("source_mech_id"):
 		payload["source_mech_id"] = attack_context.get(source_mech_key, &"")
 	_enrich_attack_payload(payload, attack_context)
+
+	# 注入 attack 字典：ConditionChecker 的 SOURCE_OWNER_IS_ATTACKER 等条件
+	# 需要 payload["attack"]["attacker_player_id"] / ["target_player_id"]
+	if not payload.has("attack"):
+		payload["attack"] = {
+			"attacker_player_id": attack_context.get("attack_source_player_id", &""),
+			"target_player_id": attack_context.get("target_id", &""),
+			"attacker_mech_id": attack_context.get("attacker_id", &""),
+			"target_mech_id": attack_context.get("target_id", &""),
+		}
 
 	for effect in effects:
 		if effect == null:

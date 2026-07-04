@@ -1,0 +1,54 @@
+════════ 会话日志 ════════
+启动时间: 20260703_151544
+
+[MSG] 我方 装备了 帝国普装 左腿 → 左腿 (护甲1、动力2、耐久2) 
+[MSG] 我方 装备了 合金盾牌 → 武器1 (权威6、射程1、特殊、耐久4) 
+[MSG] 我方 装备了 重甲装 右臂 → 右臂 (护甲4、动力-1、耐久2) 
+[MSG] 我方 装备了 火箭筒 → 武器2 (权威7、射程4、远程、耐久3) 
+[MSG] 敌方 装备了 狙击装 躯干 → 躯干 (护甲3、动力1、耐久2) 
+[MSG] 敌方 装备了 狙击装 头部 → 头部 (护甲3、耐久3) 
+[MSG]   弃置 狙击装 头部 (原因:替换)
+[MSG] 敌方 装备了 机动装 头部 → 头部 (护甲1、耐久1) 
+[MSG] 敌方 装备了 帝国普装 左臂 → 左臂 (护甲2、动力2、耐久2) 
+[MSG] 敌方 装备了 热能爆弹枪 → 武器1 (权威7、射程4、远程、耐久3) 
+[MSG]   └ 我方 抽牌: 行动牌(2张): 强袭、维修 | 装备牌(1张): 帝国的赤枭 右腿
+[MSG] >> 我方 回合2开始
+[MSG] 基础框架 移动 (2,2)→(3,-1) 消耗动力3
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 3, "r": -1 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 3, "r": -1 }, "power_cost": 3 }
+[MSG] 基础框架 移动 (2,2)→(3,-1) 消耗动力3
+[MSG]   弃置 合金盾牌 (玩家:我方 来源:装备区 原因:替换)
+[MSG] 我方 设置装备: 合金盾牌 → 武器1 (权威6、射程1、特殊、耐久4) 
+[CALL] app_root::set_equipment(args={ "player": "player", "card_id": "card_165", "slot_id": "weapon_1" }) -> { "ok": true, "card_id": &"card_165", "slot_id": &"weapon_1" }
+[MSG] 我方 装备了 合金盾牌 → 武器1 (权威6、射程1、特殊、耐久4) 
+[MSG] 我方 设置装备: 帝国的赤枭 右腿 → 右腿 (护甲1、动力3、耐久3) 
+[CALL] app_root::set_equipment(args={ "player": "player", "card_id": "card_59", "slot_id": "右腿" }) -> { "ok": true, "card_id": &"card_59", "slot_id": &"右腿" }
+[MSG] 我方 装备了 帝国的赤枭 右腿 → 右腿 (护甲1、动力3、耐久3) 
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 11, "r": -3 } }) -> { "ok": false, "message": "动力不足以移动到目标格" }
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 14, "r": -3 } }) -> { "ok": false, "message": "动力不足以移动到目标格" }
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 12, "r": 0 } }) -> { "ok": false, "message": "动力不足以移动到目标格" }
+[MSG] 基础框架 移动 (3,-1)→(4,1) 消耗动力3
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 4, "r": 1 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 4, "r": 1 }, "power_cost": 3 }
+[MSG] 基础框架 移动 (3,-1)→(4,1) 消耗动力3
+[MSG] 基础框架 移动 (4,1)→(6,0) 消耗动力2
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 6, "r": 0 } }) -> { "ok": true, "mech_id": &"player_mech", "position": { "q": 6, "r": 0 }, "power_cost": 2 }
+[MSG] 基础框架 移动 (4,1)→(6,0) 消耗动力2
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 7, "r": -1 } }) -> { "ok": false, "message": "机甲无法移动（动力不足或被锁定）" }
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 7, "r": -1 } }) -> { "ok": false, "message": "机甲无法移动（动力不足或被锁定）" }
+[MSG]   弃置 合金盾牌 (玩家:我方 来源:装备区 原因:替换)
+[MSG] 我方 设置装备: 强合金盾牌 → 武器1 (权威8、射程1、特殊、耐久5) 
+[CALL] app_root::set_equipment(args={ "player": "player", "card_id": "card_173", "slot_id": "weapon_1" }) -> { "ok": true, "card_id": &"card_173", "slot_id": &"weapon_1" }
+[MSG] 我方 装备了 强合金盾牌 → 武器1 (权威8、射程1、特殊、耐久5) 
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 14, "r": -4 } }) -> { "ok": false, "message": "机甲无法移动（动力不足或被锁定）" }
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 12, "r": -1 } }) -> { "ok": false, "message": "机甲无法移动（动力不足或被锁定）" }
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 9, "r": -2 } }) -> { "ok": false, "message": "机甲无法移动（动力不足或被锁定）" }
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 8, "r": 2 } }) -> { "ok": false, "message": "机甲无法移动（动力不足或被锁定）" }
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 8, "r": 1 } }) -> { "ok": false, "message": "机甲无法移动（动力不足或被锁定）" }
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 8, "r": -1 } }) -> { "ok": false, "message": "机甲无法移动（动力不足或被锁定）" }
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 7, "r": -2 } }) -> { "ok": false, "message": "机甲无法移动（动力不足或被锁定）" }
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 8, "r": 0 } }) -> { "ok": false, "message": "机甲无法移动（动力不足或被锁定）" }
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 8, "r": -1 } }) -> { "ok": false, "message": "机甲无法移动（动力不足或被锁定）" }
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 10, "r": -1 } }) -> { "ok": false, "message": "机甲无法移动（动力不足或被锁定）" }
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 9, "r": -2 } }) -> { "ok": false, "message": "机甲无法移动（动力不足或被锁定）" }
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 10, "r": -1 } }) -> { "ok": false, "message": "机甲无法移动（动力不足或被锁定）" }
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 10, "r": -1 } }) -> { "ok": false, "message": "机甲无法移动（动力不足或被锁定）" }
+[CALL] app_root::move_unit(args={ "player": "player", "hex": { "q": 10, "r": -2 } }) -> { "ok": false, "message": "机甲无法移动（动力不足或被锁定）" }

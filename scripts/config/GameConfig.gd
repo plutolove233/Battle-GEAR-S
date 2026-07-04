@@ -93,3 +93,6 @@ const SELL_PRICE_BY_RARITY: Dictionary = {
 	&"SR": 3,
 	&"SSR": 5,
 }
+
+## 每回合卖出装备的最大次数
+const SELL_EQUIPMENT_LIMIT_PER_TURN: int = 2
