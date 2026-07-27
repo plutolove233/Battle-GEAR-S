@@ -1,0 +1,56 @@
+## EffectBinding.gd — 把效果绑定到运行时来源牌
+##
+## EffectBinding 是效果系统的核心连接件：
+## 将静态的 ActionEffect/CardEffect 定义与运行时的 CardInstance 实例关联。
+## 通过 source_card 可以追溯效果的来源牌、拥有者、所属机甲等信息。
+extends RefCounted
+class_name EffectBinding
+
+## Preloaded references for cross-file custom types
+const _CardInstance = preload("res://scripts/runtime/CardInstance.gd")
+
+## 来源牌实例（运行时）
+var source_card
+
+## 静态效果定义
+var effect
+
+## 行动牌打出后会离开手牌，不能把 mech_id 写回 CardInstance。
+## 快照解析可通过这些字段提供本次效果的运行时来源。
+var override_owner_player_id: StringName = &""
+var override_source_mech_id: StringName = &""
+
+## GameContext 引用（由 TimingEngine._make_binding_from_effect 注入）。
+## ConditionChecker.check_single 是 static 方法，签名只有 (binding, payload, condition)，
+## 需查询机甲存活/攻击次数的条件（ATTACK_TARGET_ALIVE 等）只能经 binding 携带 context。
+var context = null
+
+
+func _init(p_source_card, p_effect) -> void:
+	source_card = p_source_card
+	effect = p_effect
+
+
+## 获取来源牌的操控者玩家ID
+func get_owner_player_id() -> StringName:
+	if override_owner_player_id != &"":
+		return override_owner_player_id
+	if source_card == null:
+		return &""
+	return source_card.owner_player_id
+
+
+## 获取来源牌的实例ID
+func get_source_instance_id() -> StringName:
+	if source_card == null:
+		return &""
+	return source_card.instance_id
+
+
+## 获取来源牌所属机甲ID
+func get_source_mech_id() -> StringName:
+	if override_source_mech_id != &"":
+		return override_source_mech_id
+	if source_card == null:
+		return &""
+	return source_card.mech_id

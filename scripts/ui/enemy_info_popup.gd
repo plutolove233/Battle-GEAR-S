@@ -87,6 +87,17 @@ func _refresh() -> void:
 		if not damaged_slots.is_empty():
 			_add_stat("损伤部位: %s" % " ".join(damaged_slots))
 
+		# 显示联合状态（Target UI 信息：被哪些 unite 机甲联合）
+		var unite_names: Array[String] = []
+		for s: Dictionary in enemy_mech.statuses:
+			if s.get("type", &"") == &"UNITE":
+				var u_mid: StringName = s.get("unite", &"")
+				var u_mech = gs.mechs.get(u_mid) if u_mid != &"" else null
+				var u_name: String = u_mech.frame_def.display_name if (u_mech != null and u_mech.frame_def != null) else String(u_mid)
+				unite_names.append(u_name)
+		if not unite_names.is_empty():
+			_add_stat("联合状态: 被 %s 联合" % " ".join(unite_names))
+
 
 ## 添加一行统计文本
 func _add_stat(text: String) -> void:

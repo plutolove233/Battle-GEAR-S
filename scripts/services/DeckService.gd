@@ -57,12 +57,41 @@ func move_card_to_deck_bottom(card_id: StringName, deck_key: StringName) -> void
 
 
 ## 弃牌
-## 将卡牌移到弃牌堆，并触发对应钩子
+## 转发到 discard_card 动作（走动作时点体系：DISCARD_BEFORE/AFTER/SETTLE）。
+## reason 记录在动作快照里，供离场效果（联邦躯干/左臂、近战右腿等）监听 DISCARD_AFTER 时按 reason 过滤。
+## 弃置流程：快照来源→移入 tmp_zone→DISCARD_AFTER(离场效果此时点触发)→移入弃牌堆→DISCARD_SETTLE。
+## 装备牌弃置时若有离场效果（需玩家选择/产生子动作），动作会暂停在 waiting_timing，
+## 由 ActionUIBridge 接线驱动玩家选择后 continue_action 恢复；调用方不阻塞。
 func discard_card(card_id: StringName, reason: StringName) -> void:
+	if card_id == &"":
+		return
+	if context == null:
+		return
+	# 优先走 discard_card 动作（发时点，触发离场效果）
+	if context.action_service != null:
+		var src: Dictionary = {"reason": String(reason)}
+		# 从卡牌实例补全来源
+		var card = context.game_state.get_card(card_id) if context.game_state != null else null
+		if card != null:
+			src["card_instance_id"] = card_id
+			src["mech_id"] = card.mech_id
+			src["player_id"] = card.owner_player_id
+		context.action_service.execute(&"discard_card", {
+			"card_ids": [card_id],
+			"reason": reason,
+			"executor": &"system_default",
+			"source": src,
+		})
+		return
+	# 退路：action_service 未就绪（初始化/测试），走 legacy 同步移牌
+	_discard_card_legacy(card_id, reason)
+
+
+## Legacy 同步弃牌（action_service 未就绪时退路，不发育动作时点）
+func _discard_card_legacy(card_id: StringName, reason: StringName) -> void:
 	var gs: GameState = context.game_state
 	var deck_state: DeckState = gs.deck_state
 
-	# 更新卡牌实例区域
 	var card: CardInstance = gs.get_card(card_id)
 	var from_zone: StringName = &""
 	var owner_player_id: StringName = &""
@@ -70,8 +99,9 @@ func discard_card(card_id: StringName, reason: StringName) -> void:
 		from_zone = card.zone
 		owner_player_id = card.owner_player_id
 		card.zone = &"discard"
+		if card.def and card.def.card_kind == &"action" and context.has_method("unregister_hand_card_availability"):
+			context.unregister_hand_card_availability(card_id)
 
-	# 按卡牌类型分入对应弃牌堆
 	if card and card.def:
 		match card.def.card_kind:
 			&"action":
@@ -79,7 +109,6 @@ func discard_card(card_id: StringName, reason: StringName) -> void:
 			&"equipment":
 				deck_state.equipment_discard_pile.append(card_id)
 			_:
-				# 其他类型（事件、机师等）归入行动弃牌堆
 				deck_state.action_discard_pile.append(card_id)
 	else:
 		deck_state.action_discard_pile.append(card_id)
@@ -89,8 +118,6 @@ func discard_card(card_id: StringName, reason: StringName) -> void:
 		"reason": String(reason),
 	})
 
-	# 通知消息面板（不绑定任何效果，不改变游戏行为）
-	# 先写日志再发通知，使面板 _advance_log_index 能跳过该日志条目，避免重复
 	if context.effect_engine:
 		context.effect_engine.fire_hook(_EffectConst.HOOK_CARD_DISCARDED_NOTIFY, {
 			"card_id": String(card_id),
@@ -236,8 +263,11 @@ func _create_card_instance_from_def(card_def_id: StringName, zone: StringName) -
 	return instance_id
 
 
-## 洗牌（Fisher-Yates 洗牌算法）
+## 洗牌（Fisher-Yates，走 context.rng 同步随机，锁步双端一致）
 func _shuffle_array(arr: Array) -> void:
+	if context != null and context.rng != null:
+		context.synced_shuffle(arr)
+		return
 	for i: int in range(arr.size() - 1, 0, -1):
 		var j: int = randi() % (i + 1)
 		var tmp = arr[i]

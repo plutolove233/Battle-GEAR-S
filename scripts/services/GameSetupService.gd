@@ -18,14 +18,21 @@ func setup_tutorial_battle(data_registry: DataRegistry) -> Dictionary:
 	var gs: GameState = context.game_state
 	gs.reset_all()
 
+	# 清空 TimingEngine 监听器：开新局时确保无上一局残留的状态/临时监听器
+	# （状态监听器用 action_id="" 注册，不随动作 cleanup 清除，需在此显式清空）
+	if context.timing_engine != null:
+		context.timing_engine.temporary_listeners.clear()
+		context.timing_engine.suppressed_effects.clear()
+		context.timing_engine.permanent_listeners.clear()
+
 	# ── 1. 读取教学战役配置 ──
 	var battle_config: Dictionary = data_registry.get_tutorial_battle()
 	if battle_config.is_empty():
 		return {"ok": false, "message": "未找到教学战役配置"}
 
 	# ── 2. 创建双方玩家 ──
-	var player: PlayerState = _create_player(&"player", 15)
-	var enemy: PlayerState = _create_player(&"enemy", 15)
+	var player: PlayerState = _create_player(&"player", 15, true)
+	var enemy: PlayerState = _create_player(&"enemy", 15, false)
 	gs.players[player.player_id] = player
 	gs.players[enemy.player_id] = enemy
 
@@ -74,10 +81,11 @@ func setup_tutorial_battle(data_registry: DataRegistry) -> Dictionary:
 
 
 ## 创建玩家状态
-func _create_player(pid: StringName, gold: int) -> PlayerState:
+func _create_player(pid: StringName, gold: int, is_human: bool = true) -> PlayerState:
 	var p: PlayerState = PlayerState.new()
 	p.player_id = pid
 	p.gold = gold
+	p.is_human = is_human
 	return p
 
 

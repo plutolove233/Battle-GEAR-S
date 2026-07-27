@@ -12,11 +12,17 @@ const _EquipmentCardDef = preload("res://scripts/card_defs/EquipmentCardDef.gd")
 ## 备用区设置按钮被点击（参数：备用区槽位ID，如"reserve_1"）
 signal reserve_set_clicked(slot_id: StringName)
 
+## 装备主动效果"发动"按钮被点击（参数：来源牌实例ID, 效果ID）
+signal equipment_active_clicked(card_instance_id: StringName, effect_id: StringName)
+
 ## 当前机甲引用
 var _mech = null  # type: MechState
 
 ## 是否是敌方机甲（用于决定是否显示背面信息）
 var _is_enemy: bool = false
+
+## GameContext 引用（用于扫描装备 DIRECT 主动效果，仅玩家面板注入）
+var _context = null
 
 ## 槽位显示顺序
 const SLOT_ORDER: Array[StringName] = [
@@ -39,9 +45,11 @@ const SLOT_NAMES: Dictionary = {
 ## 配置面板
 ## mech: 机甲状态
 ## is_enemy: 是否是敌方机甲（用于决定是否显示背面信息）
-func configure(mech, is_enemy: bool = false) -> void:
+## game_context: 可选，注入后显示该机甲装备的 DIRECT 主动效果"发动"按钮
+func configure(mech, is_enemy: bool = false, game_context = null) -> void:
 	_mech = mech
 	_is_enemy = is_enemy
+	_context = game_context
 	_refresh()
 
 
@@ -68,31 +76,48 @@ func _refresh() -> void:
 	summary.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	add_child(summary)
 
-	# 显示基础武器信息（如果有）
-	var base_weapons = _mech.get_all_base_weapons()
-	if not base_weapons.is_empty():
-		var weapon_info = Label.new()
-		var weapons_text = ""
-		for i: int in range(base_weapons.size()):
-			var w = base_weapons[i]
-			if i > 0:
-				weapons_text += " / "
-			weapons_text += "%s[威:%d 射:%d]" % [w.get("name", ""), w.get("might", 0), w.get("range_value", 1)]
-		weapon_info.text = "基础武器: " + weapons_text
-		weapon_info.add_theme_color_override("font_color", Color.CYAN)
-		weapon_info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		add_child(weapon_info)
+	# 基础武器信息不再单列一行：武器槽（weapon_1/weapon_2）为空时
+	# 已在 _add_slot_row 中显示基础武器名与威/射，无需重复。
+	# 本机甲装备主动效果索引：card_instance_id -> Array[Dictionary{effect, bind_ctx}]
+	# 仅在 _refresh 内构建一次，供各槽位行查询自己该挂哪些「触发」按钮，
+	# 避免每个槽位行都重复扫描、把同一按钮挂到所有槽位上。
+	var _active_by_card: Dictionary = {}
+	if not _is_enemy and _context != null and _context.get("timing_engine") != null:
+		var _TC = preload("res://scripts/action_core/TimingConst.gd")
+		for timing: StringName in _context.timing_engine.permanent_listeners:
+			var entries: Array = _context.timing_engine.permanent_listeners[timing]
+			for entry in entries:
+				if entry == null or not (entry is Dictionary):
+					continue
+				var eff = entry.get("effect")
+				if eff == null or eff.mode != _TC.MODE_DIRECT:
+					continue
+				# 跳过 actions 为空的 DIRECT 占位效果（001卖出权限、002/008/014/016/021派生值实时重算、023无效果）
+				# 这些没有可执行的主动动作，不该挂「触发」按钮（点了也没反应）。
+				if eff.actions == null or eff.actions.is_empty():
+					continue
+				var bind_ctx: Dictionary = entry.get("binding_context", {})
+				if String(bind_ctx.get("mech_id", &"")) != String(_mech.mech_id):
+					continue
+				var cid: StringName = bind_ctx.get("card_instance_id", &"")
+				if cid == &"":
+					continue
+				if not _active_by_card.has(cid):
+					_active_by_card[cid] = []
+				_active_by_card[cid].append({"effect": eff, "bind_ctx": bind_ctx})
 
 	# 各槽位
 	for slot_id: StringName in SLOT_ORDER:
 		if not _mech.slots.has(slot_id):
 			continue
 		var slot: MechSlotState = _mech.slots[slot_id]
-		_add_slot_row(slot_id, slot)
+		_add_slot_row(slot_id, slot, _active_by_card)
 
 
 ## 添加单行槽位显示
-func _add_slot_row(slot_id: StringName, slot) -> void:
+## active_by_card: card_instance_id -> Array[Dictionary{effect, bind_ctx}]，
+## 本槽位 equipped_card 命中的主动效果会在此行内挂「触发」按钮。
+func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}) -> void:
 	var hbox = HBoxContainer.new()
 
 	# 槽位名
@@ -192,5 +217,24 @@ func _add_slot_row(slot_id: StringName, slot) -> void:
 			var captured_slot_id = slot_id
 			set_btn.pressed.connect(func(): reserve_set_clicked.emit(captured_slot_id))
 			hbox.add_child(set_btn)
+
+	# 装备主动效果「触发」按钮：仅挂在该效果来源装备所在的槽位行内，
+	# 按 equipped_card.instance_id 查 active_by_card 命中（仅玩家面板、有 context 时）。
+	if not _is_enemy and slot.equipped_card != null and not active_by_card.is_empty():
+		var inst_id: StringName = slot.equipped_card.instance_id
+		if active_by_card.has(inst_id):
+			for item: Dictionary in active_by_card[inst_id]:
+				var eff = item.get("effect")
+				var bind_ctx: Dictionary = item.get("bind_ctx", {})
+				var btn = Button.new()
+				btn.text = "触发"
+				btn.tooltip_text = eff.description
+				# 与备用区「设置」按钮同尺寸，避免撑满屏幕；效果详情靠悬停浮框显示
+				btn.custom_minimum_size = Vector2(40, 20)
+				btn.add_theme_color_override("font_color", Color(0.6, 0.9, 0.7))
+				var cid: StringName = bind_ctx.get("card_instance_id", &"")
+				var eid: StringName = eff.effect_id
+				btn.pressed.connect(func(): equipment_active_clicked.emit(cid, eid))
+				hbox.add_child(btn)
 
 	add_child(hbox)

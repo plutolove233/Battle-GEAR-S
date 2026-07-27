@@ -20,6 +20,7 @@ var mech_id: StringName = &""
 ## 当前所在区域
 ## &"action_hand" / &"equipment_hand" / &"equipment_slot" / &"weapon_slot"
 ## &"event_slot" / &"pilot_slot" / &"reserve_slot" / &"discard"
+## &"temp_zone"（使用行动牌动作执行期间，牌离开持有者进入临时区，结算后才进 discard）
 ## &"action_deck" / &"equipment_deck" / &"advanced_equipment_deck"
 ## &"pilot_deck" / &"event_deck" / &"shop"
 var zone: StringName = &""
@@ -41,6 +42,13 @@ var timer: int = 0
 
 ## 通用计数器（武器蓄能、事件进度等）
 var counters: Dictionary = {}
+
+## 对哪些玩家可见（展示牌效果持续展示时使用）
+## 存储玩家ID列表：Array[StringName]
+var known_to: Array[StringName] = []
+
+## 聚能状态层数（用于武器蓄能）
+var energy_charge_stacks: int = 0
 
 
 func _init(p_instance_id: StringName = &"", p_def = null) -> void:

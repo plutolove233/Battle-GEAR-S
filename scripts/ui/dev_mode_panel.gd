@@ -1,12 +1,14 @@
 ## DevModePanel.gd — 开发者模式面板
 ##
 ## 提供卡牌和属性修改的调试UI。
+## 直接操作 GameContext/GameState，不依赖额外的 DevModeService。
 class_name DevModePanel
 extends Control
 
+const _CardInstance = preload("res://scripts/runtime/CardInstance.gd")
+
 ## 引用
 var context: GameContext = null
-var dev_mode_service = null  # type: DevModeService
 
 ## UI元素
 var player_dropdown: OptionButton
@@ -20,6 +22,13 @@ var mech_info_label: Label
 
 ## 当前选中的玩家
 var current_player_id: StringName = &""
+## 防止刷新玩家下拉时 select() → item_selected → _refresh_all 递归
+var _refreshing_player_list: bool = false
+
+## PvP client 模式：true 时不本地改 state，而是 emit dev_edit_requested 让 app_root 转发 intent 给 host
+var network_mode: bool = false
+## dev 编辑请求（client 模式）：op + params（含 target 玩家）
+signal dev_edit_requested(op: StringName, params: Dictionary)
 
 ## 颜色
 const COLOR_ACTION = Color(0.2, 0.6, 1.0)
@@ -27,28 +36,75 @@ const COLOR_EQUIP = Color(1.0, 0.6, 0.2)
 const COLOR_DANGER = Color(1.0, 0.3, 0.3)
 const COLOR_SUCCESS = Color(0.3, 0.9, 0.4)
 
+## 信号：关闭面板
+signal close_requested
+
+
 func _ready() -> void:
-	visible = false  # 默认隐藏，按快捷键显示
+	visible = false
 	_setup_ui()
 
 
 func _setup_ui() -> void:
-	# 主容器
-	var main_vbox = VBoxContainer.new()
-	main_vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
-	main_vbox.add_theme_constant_override("separation", 8)
+	# 半透明背景
+	var bg := ColorRect.new()
+	bg.color = Color(0.0, 0.0, 0.0, 0.75)
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(bg)
+
+	# 主容器 — 占满全屏，内容由 ScrollContainer 裁剪
+	var main_vbox := VBoxContainer.new()
+	main_vbox.anchor_left = 0.0
+	main_vbox.anchor_top = 0.0
+	main_vbox.anchor_right = 1.0
+	main_vbox.anchor_bottom = 1.0
+	main_vbox.offset_top = 8
+	main_vbox.offset_bottom = 8
+	main_vbox.offset_left = 8
+	main_vbox.offset_right = 8
+	main_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	main_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	main_vbox.add_theme_constant_override("separation", 6)
 	add_child(main_vbox)
 
-	# 标题
-	var title = Label.new()
-	title.text = "🔧 开发者模式"
-	title.add_theme_font_size_override("font_size", 20)
-	main_vbox.add_child(title)
+	# ScrollContainer — 面板内容过长时可滚动
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	main_vbox.add_child(scroll)
 
-	# 玩家选择
-	var player_hbox = HBoxContainer.new()
-	main_vbox.add_child(player_hbox)
-	var player_label = Label.new()
+	# 外部 MarginContainer 限制宽度
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 32)
+	margin.add_theme_constant_override("margin_right", 32)
+	scroll.add_child(margin)
+
+	# 内容区
+	var content := VBoxContainer.new()
+	content.add_theme_constant_override("separation", 6)
+	margin.add_child(content)
+
+	# ── 标题行 + 关闭按钮 ──
+	var header_hbox := HBoxContainer.new()
+	content.add_child(header_hbox)
+
+	var title := Label.new()
+	title.text = "🔧 开发者模式"
+	title.add_theme_font_size_override("font_size", 18)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header_hbox.add_child(title)
+
+	var close_btn := Button.new()
+	close_btn.text = "× 关闭"
+	close_btn.custom_minimum_size = Vector2(80, 28)
+	close_btn.pressed.connect(_on_close)
+	header_hbox.add_child(close_btn)
+
+	# ── 玩家选择 ──
+	var player_hbox := HBoxContainer.new()
+	content.add_child(player_hbox)
+	var player_label := Label.new()
 	player_label.text = "玩家: "
 	player_hbox.add_child(player_label)
 	player_dropdown = OptionButton.new()
@@ -56,489 +112,791 @@ func _setup_ui() -> void:
 	player_dropdown.item_selected.connect(_on_player_selected)
 	player_hbox.add_child(player_dropdown)
 
-	# 分割线
-	main_vbox.add_child(_create_separator())
+	content.add_child(_create_separator())
 
 	# === 行动牌部分 ===
-	var action_section = _create_section("行动牌管理", COLOR_ACTION)
-	main_vbox.add_child(action_section)
+	var action_section := _create_section("行动牌管理", COLOR_ACTION)
+	content.add_child(action_section)
 
-	# 添加行动牌
-	var add_action_hbox = HBoxContainer.new()
+	var add_action_hbox := HBoxContainer.new()
 	action_section.add_child(add_action_hbox)
-	var add_action_label = Label.new()
-	add_action_label.text = "添加: "
-	add_action_hbox.add_child(add_action_label)
+	add_action_hbox.add_child(_make_label("添加: "))
 	action_card_dropdown = OptionButton.new()
 	action_card_dropdown.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	add_action_hbox.add_child(action_card_dropdown)
-	var add_action_btn = Button.new()
+	var add_action_btn := Button.new()
 	add_action_btn.text = "添加"
 	add_action_btn.pressed.connect(_on_add_action_card)
 	add_action_hbox.add_child(add_action_btn)
 
-	# 弃置行动牌
-	var discard_action_hbox = HBoxContainer.new()
+	var discard_action_hbox := HBoxContainer.new()
 	action_section.add_child(discard_action_hbox)
-	var discard_action_btn = Button.new()
+	var discard_action_btn := Button.new()
 	discard_action_btn.text = "弃置所有行动牌"
 	discard_action_btn.pressed.connect(_on_discard_all_action_cards)
 	discard_action_hbox.add_child(discard_action_btn)
 
-	# 行动牌列表显示
+	var discard_one_hbox := HBoxContainer.new()
+	action_section.add_child(discard_one_hbox)
+	var discard_one_btn := Button.new()
+	discard_one_btn.text = "弃置手牌中第一张行动牌"
+	discard_one_btn.pressed.connect(_on_discard_one_action_card)
+	discard_one_hbox.add_child(discard_one_btn)
+
 	action_cards_label = Label.new()
 	action_cards_label.autowrap_mode = TextServer.AUTOWRAP_WORD
-	action_cards_label.custom_minimum_size.y = 60
+	action_cards_label.custom_minimum_size.y = 50
 	action_section.add_child(action_cards_label)
 
-	# 分割线
-	main_vbox.add_child(_create_separator())
+	content.add_child(_create_separator())
 
 	# === 装备牌部分 ===
-	var equip_section = _create_section("装备牌管理", COLOR_EQUIP)
-	main_vbox.add_child(equip_section)
+	var equip_section := _create_section("装备牌管理", COLOR_EQUIP)
+	content.add_child(equip_section)
 
-	# 添加装备牌
-	var add_equip_hbox = HBoxContainer.new()
+	var add_equip_hbox := HBoxContainer.new()
 	equip_section.add_child(add_equip_hbox)
-	var add_equip_label = Label.new()
-	add_equip_label.text = "添加: "
-	add_equip_hbox.add_child(add_equip_label)
+	add_equip_hbox.add_child(_make_label("添加: "))
 	equipment_card_dropdown = OptionButton.new()
 	equipment_card_dropdown.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	add_equip_hbox.add_child(equipment_card_dropdown)
-	var add_equip_btn = Button.new()
-	add_equip_btn.text = "添加到手牌"
+	var add_equip_btn := Button.new()
+	add_equip_btn.text = "添加"
 	add_equip_btn.pressed.connect(_on_add_equipment_card)
 	add_equip_hbox.add_child(add_equip_btn)
 
-	# 设置到槽位
-	var set_slot_hbox = HBoxContainer.new()
+	var set_slot_hbox := HBoxContainer.new()
 	equip_section.add_child(set_slot_hbox)
-	var set_slot_label = Label.new()
-	set_slot_label.text = "设置到槽位: "
-	set_slot_hbox.add_child(set_slot_label)
+	set_slot_hbox.add_child(_make_label("设置手牌第一张装备到槽位: "))
 	slot_dropdown = OptionButton.new()
 	slot_dropdown.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	set_slot_hbox.add_child(slot_dropdown)
-	var set_slot_btn = Button.new()
+	var set_slot_btn := Button.new()
 	set_slot_btn.text = "设置"
 	set_slot_btn.pressed.connect(_on_set_equipment_to_slot)
 	set_slot_hbox.add_child(set_slot_btn)
 
-	# 弃置装备牌
-	var discard_equip_btn = Button.new()
-	discard_equip_btn.text = "弃置所有装备牌"
+	var discard_equip_section := HBoxContainer.new()
+	equip_section.add_child(discard_equip_section)
+	var discard_equip_btn := Button.new()
+	discard_equip_btn.text = "弃置所有未设置装备牌"
 	discard_equip_btn.pressed.connect(_on_discard_all_equipment_cards)
-	equip_section.add_child(discard_equip_btn)
+	discard_equip_section.add_child(discard_equip_btn)
+	var unequip_all_btn := Button.new()
+	unequip_all_btn.text = "卸下所有已设置装备"
+	unequip_all_btn.pressed.connect(_on_unequip_all_equipment)
+	discard_equip_section.add_child(unequip_all_btn)
 
-	# 装备牌列表显示
 	equipment_label = Label.new()
 	equipment_label.autowrap_mode = TextServer.AUTOWRAP_WORD
-	equipment_label.custom_minimum_size.y = 80
+	equipment_label.custom_minimum_size.y = 70
 	equip_section.add_child(equipment_label)
 
-	# 分割线
-	main_vbox.add_child(_create_separator())
+	content.add_child(_create_separator())
 
 	# === 区域损伤部分 ===
-	var damage_section = _create_section("区域损伤管理", COLOR_DANGER)
-	main_vbox.add_child(damage_section)
+	var damage_section := _create_section("区域损伤管理", COLOR_DANGER)
+	content.add_child(damage_section)
 
-	var damage_hbox = HBoxContainer.new()
+	var damage_hbox := HBoxContainer.new()
 	damage_section.add_child(damage_hbox)
-	var damage_slot_label = Label.new()
-	damage_slot_label.text = "槽位: "
-	damage_hbox.add_child(damage_slot_label)
-	var damage_slot_dropdown = OptionButton.new()
+	damage_hbox.add_child(_make_label("槽位: "))
+	var damage_slot_dropdown := OptionButton.new()
 	damage_slot_dropdown.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	damage_slot_dropdown.name = "DamageSlotDropdown"
 	damage_hbox.add_child(damage_slot_dropdown)
-	var add_damage_btn = Button.new()
-	add_damage_btn.text = "+1 损伤"
+	var add_damage_btn := Button.new()
+	add_damage_btn.text = "+1"
 	add_damage_btn.pressed.connect(_on_add_region_damage)
 	damage_hbox.add_child(add_damage_btn)
-	var remove_damage_btn = Button.new()
-	remove_damage_btn.text = "-1 损伤"
+	var remove_damage_btn := Button.new()
+	remove_damage_btn.text = "-1"
 	remove_damage_btn.pressed.connect(_on_remove_region_damage)
 	damage_hbox.add_child(remove_damage_btn)
 
-	# 分割线
-	main_vbox.add_child(_create_separator())
+	var damage_all_hbox := HBoxContainer.new()
+	damage_section.add_child(damage_all_hbox)
+	var clear_damage_btn := Button.new()
+	clear_damage_btn.text = "清除所有区域损伤"
+	clear_damage_btn.pressed.connect(_on_clear_all_region_damage)
+	damage_all_hbox.add_child(clear_damage_btn)
+
+	content.add_child(_create_separator())
 
 	# === 属性修改器部分 ===
-	var modify_section = _create_section("属性修改器", COLOR_SUCCESS)
-	main_vbox.add_child(modify_section)
+	var modify_section := _create_section("属性修改器", COLOR_SUCCESS)
+	content.add_child(modify_section)
 
 	# HP修改
-	var hp_hbox = HBoxContainer.new()
+	var hp_hbox := HBoxContainer.new()
 	modify_section.add_child(hp_hbox)
-	var hp_label = Label.new()
-	hp_label.text = "生命值: "
-	hp_hbox.add_child(hp_label)
-	var hp_minus_btn = Button.new()
+	hp_hbox.add_child(_make_label("生命值: "))
+	var hp_minus_btn := Button.new()
 	hp_minus_btn.text = "-10"
 	hp_minus_btn.pressed.connect(func(): _on_modify_hp(-10))
 	hp_hbox.add_child(hp_minus_btn)
-	var hp_plus_btn = Button.new()
+	var hp_plus_btn := Button.new()
 	hp_plus_btn.text = "+10"
 	hp_plus_btn.pressed.connect(func(): _on_modify_hp(10))
 	hp_hbox.add_child(hp_plus_btn)
-	var hp_set_btn = Button.new()
-	hp_set_btn.text = "设为满血"
+	var hp_set_btn := Button.new()
+	hp_set_btn.text = "满血"
 	hp_set_btn.pressed.connect(_on_set_full_hp)
 	hp_hbox.add_child(hp_set_btn)
 
 	# 动力修改
-	var power_hbox = HBoxContainer.new()
+	var power_hbox := HBoxContainer.new()
 	modify_section.add_child(power_hbox)
-	var power_label = Label.new()
-	power_label.text = "动力: "
-	power_hbox.add_child(power_label)
-	var power_minus_btn = Button.new()
+	power_hbox.add_child(_make_label("动力: "))
+	var power_minus_btn := Button.new()
 	power_minus_btn.text = "-5"
 	power_minus_btn.pressed.connect(func(): _on_modify_power(-5))
 	power_hbox.add_child(power_minus_btn)
-	var power_plus_btn = Button.new()
+	var power_plus_btn := Button.new()
 	power_plus_btn.text = "+5"
 	power_plus_btn.pressed.connect(func(): _on_modify_power(5))
 	power_hbox.add_child(power_plus_btn)
-	var power_set_btn = Button.new()
-	power_set_btn.text = "设为满动力"
+	var power_set_btn := Button.new()
+	power_set_btn.text = "满动力"
 	power_set_btn.pressed.connect(_on_set_full_power)
 	power_hbox.add_child(power_set_btn)
 
 	# 金币修改
-	var gold_hbox = HBoxContainer.new()
+	var gold_hbox := HBoxContainer.new()
 	modify_section.add_child(gold_hbox)
-	var gold_label = Label.new()
-	gold_label.text = "金币: "
-	gold_hbox.add_child(gold_label)
-	var gold_minus_btn = Button.new()
+	gold_hbox.add_child(_make_label("金币: "))
+	var gold_minus_btn := Button.new()
 	gold_minus_btn.text = "-10"
 	gold_minus_btn.pressed.connect(func(): _on_modify_gold(-10))
 	gold_hbox.add_child(gold_minus_btn)
-	var gold_plus_btn = Button.new()
+	var gold_plus_btn := Button.new()
 	gold_plus_btn.text = "+10"
 	gold_plus_btn.pressed.connect(func(): _on_modify_gold(10))
 	gold_hbox.add_child(gold_plus_btn)
-	var gold_set_btn = Button.new()
+	var gold_set_btn := Button.new()
 	gold_set_btn.text = "设为50"
 	gold_set_btn.pressed.connect(_on_set_gold_50)
 	gold_hbox.add_child(gold_set_btn)
 
+	# 护甲修改
+	var armor_hbox := HBoxContainer.new()
+	modify_section.add_child(armor_hbox)
+	armor_hbox.add_child(_make_label("护甲(所有区域+1): "))
+	var armor_plus_btn := Button.new()
+	armor_plus_btn.text = "+1"
+	armor_plus_btn.pressed.connect(func(): _on_modify_armor(1))
+	armor_hbox.add_child(armor_plus_btn)
+	var armor_minus_btn := Button.new()
+	armor_minus_btn.text = "-1"
+	armor_minus_btn.pressed.connect(func(): _on_modify_armor(-1))
+	armor_hbox.add_child(armor_minus_btn)
+
 	# 机甲信息显示
 	mech_info_label = Label.new()
 	mech_info_label.autowrap_mode = TextServer.AUTOWRAP_WORD
-	mech_info_label.custom_minimum_size.y = 60
+	mech_info_label.custom_minimum_size.y = 50
 	modify_section.add_child(mech_info_label)
 
-	# 分割线
-	main_vbox.add_child(_create_separator())
 
-	# 关闭按钮
-	var close_btn = Button.new()
-	close_btn.text = "关闭开发者模式 (F1)"
-	close_btn.pressed.connect(_on_close)
-	main_vbox.add_child(close_btn)
+func _make_label(text: String) -> Label:
+	var lbl := Label.new()
+	lbl.text = text
+	return lbl
 
 
-func _create_section(title: String, color: Color) -> VBoxContainer:
-	var section = VBoxContainer.new()
+func _create_section(title_text: String, color: Color) -> VBoxContainer:
+	var section := VBoxContainer.new()
 	section.add_theme_constant_override("separation", 4)
 
-	var label = Label.new()
-	label.text = title
+	var label := Label.new()
+	label.text = title_text
 	label.add_theme_color_override("font_color", color)
-	label.add_theme_font_size_override("font_size", 16)
+	label.add_theme_font_size_override("font_size", 14)
 	section.add_child(label)
 
 	return section
 
 
 func _create_separator() -> HSeparator:
-	var sep = HSeparator.new()
+	var sep := HSeparator.new()
 	sep.add_theme_constant_override("separation", 4)
 	return sep
 
 
-func setup(context: GameContext) -> void:
-	self.context = context
-	self.dev_mode_service = context.dev_mode_service
+func setup(p_context: GameContext) -> void:
+	context = p_context
+	_refresh_all()
+
+
+# ═══════════════════════════════════════════
+# 刷新UI方法
+# ═══════════════════════════════════════════
+
+func _refresh_all() -> void:
 	_refresh_player_list()
+	_refresh_action_card_list()
+	_refresh_equipment_card_list()
+	_refresh_slot_list()
+	_update_info_display()
+
+
+func _gs() -> GameState:
+	return context.game_state if context else null
+
+
+func _current_player() -> PlayerState:
+	var gs := _gs()
+	if gs == null or current_player_id == &"":
+		return null
+	return gs.players.get(current_player_id)
+
+
+func _current_mech() -> MechState:
+	var gs := _gs()
+	if gs == null or current_player_id == &"":
+		return null
+	return gs.get_mech_for_player(current_player_id)
 
 
 func _refresh_player_list() -> void:
-	if dev_mode_service == null:
-		return
+	_refreshing_player_list = true
+	_refresh_player_list_impl()
+	_refreshing_player_list = false
 
+
+func _refresh_player_list_impl() -> void:
 	player_dropdown.clear()
-	var player_ids = dev_mode_service.get_all_player_ids()
-	for i in range(player_ids.size()):
-		var pid = player_ids[i]
-		player_dropdown.add_item(String(pid), i)
-		player_dropdown.set_item_metadata(i, pid)
+	var gs := _gs()
+	if gs == null:
+		return
+	# 首次进入：默认选第一个玩家；否则保留当前已选玩家
+	if current_player_id == &"" or not gs.players.has(current_player_id):
+		current_player_id = gs.players.keys()[0] if not gs.players.is_empty() else &""
+	var select_index := 0
+	var index := 0
+	for pid: StringName in gs.players:
+		player_dropdown.add_item(String(pid), index)
+		player_dropdown.set_item_metadata(index, pid)
+		if pid == current_player_id:
+			select_index = index
+		index += 1
+	if index > 0:
+		# select() 在选中项变化时触发 item_selected → _on_player_selected → _refresh_all。
+		# _refreshing_player_list 守卫让递归回调直接 return，避免无限递归。
+		player_dropdown.select(select_index)
 
-	if player_ids.size() > 0:
-		player_dropdown.select(0)
-		_on_player_selected(0)
 
-
-func _on_player_selected(index: int) -> void:
-	var metadata = player_dropdown.get_item_metadata(index)
-	if metadata != null:
+func _on_player_selected(_index: int) -> void:
+	if _refreshing_player_list:
+		return
+	var metadata = player_dropdown.get_item_metadata(_index)
+	if metadata != null and metadata != current_player_id:
 		current_player_id = metadata
-		_refresh_action_card_list()
-		_refresh_equipment_card_list()
-		_refresh_slot_list()
-		_update_info_display()
+		_refresh_all()
 
 
 func _refresh_action_card_list() -> void:
-	if dev_mode_service == null:
-		return
-
 	action_card_dropdown.clear()
-	var card_ids = dev_mode_service.get_action_card_ids()
-	for i in range(card_ids.size()):
-		var cid = card_ids[i]
-		var name = dev_mode_service.get_card_display_name(cid)
-		action_card_dropdown.add_item(String(name), i)
-		action_card_dropdown.set_item_metadata(i, cid)
+	if context == null or context.card_database == null:
+		return
+	var db = context.card_database
+	var index := 0
+	for card_id: StringName in db.card_defs:
+		var def = db.card_defs[card_id]
+		if def == null:
+			continue
+		if def.card_kind == &"action":
+			action_card_dropdown.add_item("%s [%s]" % [def.display_name, String(def.rarity)], index)
+			action_card_dropdown.set_item_metadata(index, card_id)
+			index += 1
 
 
 func _refresh_equipment_card_list() -> void:
-	if dev_mode_service == null:
-		return
-
 	equipment_card_dropdown.clear()
-	var part_ids = dev_mode_service.get_equipment_part_ids()
-	var weapon_ids = dev_mode_service.get_equipment_weapon_ids()
-
-	# 先添加部件
-	for i in range(part_ids.size()):
-		var cid = part_ids[i]
-		var name = dev_mode_service.get_card_display_name(cid)
-		equipment_card_dropdown.add_item("[部件] " + String(name), i)
-		equipment_card_dropdown.set_item_metadata(i, cid)
-
-	# 再添加武器
-	for i in range(weapon_ids.size()):
-		var cid = weapon_ids[i]
-		var name = dev_mode_service.get_card_display_name(cid)
-		equipment_card_dropdown.add_item("[武器] " + String(name), part_ids.size() + i)
-		equipment_card_dropdown.set_item_metadata(part_ids.size() + i, cid)
+	if context == null or context.card_database == null:
+		return
+	var db = context.card_database
+	var index := 0
+	for card_id: StringName in db.card_defs:
+		var def = db.card_defs[card_id]
+		if def == null:
+			continue
+		if def.card_kind == &"equipment":
+			var prefix := ""
+			match def.equipment_kind:
+				&"PART": prefix = "[部件] "
+				&"WEAPON": prefix = "[武器] "
+				_: prefix = "[装备] "
+			equipment_card_dropdown.add_item("%s%s [%s]" % [prefix, def.display_name, String(def.rarity)], index)
+			equipment_card_dropdown.set_item_metadata(index, card_id)
+			index += 1
 
 
 func _refresh_slot_list() -> void:
-	if dev_mode_service == null:
-		return
-
 	slot_dropdown.clear()
-	var damage_slot_dropdown = find_child("DamageSlotDropdown", true, false) as OptionButton
+	var damage_slot_dropdown := find_child("DamageSlotDropdown", true, false) as OptionButton
+	if damage_slot_dropdown != null:
+		damage_slot_dropdown.clear()
 
-	var slot_ids = dev_mode_service.get_mech_slot_ids(current_player_id)
-	for i in range(slot_ids.size()):
-		var sid = slot_ids[i]
-		slot_dropdown.add_item(String(sid), i)
-		slot_dropdown.set_item_metadata(i, sid)
-
+	var mech := _current_mech()
+	if mech == null:
+		return
+	var index := 0
+	for slot_id: StringName in mech.slots:
+		var slot: MechSlotState = mech.slots[slot_id]
+		var slot_name := String(slot_id)
+		if slot.equipped_card and slot.equipped_card.def:
+			slot_name += " (%s)" % slot.equipped_card.def.display_name
+		slot_dropdown.add_item(slot_name, index)
+		slot_dropdown.set_item_metadata(index, slot_id)
 		if damage_slot_dropdown != null:
-			damage_slot_dropdown.add_item(String(sid), i)
-			damage_slot_dropdown.set_item_metadata(i, sid)
-
-	if slot_ids.size() > 0:
-		slot_dropdown.select(0)
-		if damage_slot_dropdown != null:
-			damage_slot_dropdown.select(0)
+			damage_slot_dropdown.add_item("%s (损伤:%d)" % [String(slot_id), slot.region_damage_tokens], index)
+			damage_slot_dropdown.set_item_metadata(index, slot_id)
+		index += 1
 
 
 func _update_info_display() -> void:
-	if dev_mode_service == null:
-		return
+	var gs := _gs()
+	var player := _current_player()
+	var mech := _current_mech()
 
-	# 更新行动牌列表
-	var action_cards = dev_mode_service.get_player_action_cards(current_player_id)
-	var action_text = "行动牌 (" + str(action_cards.size()) + "张): "
-	for i in range(action_cards.size()):
-		var cid = action_cards[i]
-		var name = dev_mode_service.get_card_display_name(cid)
-		action_text += String(name)
-		if i < action_cards.size() - 1:
-			action_text += ", "
-	action_cards_label.text = action_text
+	# ── 行动牌列表 ──
+	if player and not player.action_hand.is_empty():
+		var action_text := "行动牌 (%d张): " % player.action_hand.size()
+		var names: Array[String] = []
+		for card_id: StringName in player.action_hand:
+			var card: CardInstance = gs.get_card(card_id) if gs else null
+			if card and card.def:
+				names.append(card.def.display_name)
+			else:
+				names.append(String(card_id))
+		action_text += ", ".join(names)
+		action_cards_label.text = action_text
+	else:
+		action_cards_label.text = "行动牌: 无"
 
-	# 更新装备牌列表
-	var equip_cards = dev_mode_service.get_player_equipment_cards(current_player_id)
-	var equip_text = "装备牌 (" + str(equip_cards.size()) + "张):\n"
-	for i in range(equip_cards.size()):
-		var card = equip_cards[i]
-		equip_text += "[" + String(card.zone) + "] " + String(card.display_name)
-		if card.has("slot_id") and card.slot_id != "":
-			equip_text += " (槽位: " + String(card.slot_id) + ")"
-		equip_text += "\n"
-	equipment_label.text = equip_text
+	# ── 装备牌列表 ──
+	var equip_lines: Array[String] = []
+	if mech:
+		for slot_id: StringName in mech.slots:
+			var slot: MechSlotState = mech.slots[slot_id]
+			if slot.equipped_card and slot.equipped_card.def:
+				var durability: int = slot.equipped_card.def.durability
+				var sd_text := "损伤:%d/%d" % [slot.region_damage_tokens, durability]
+				equip_lines.append("  [%s] %s %s" % [String(slot_id), slot.equipped_card.def.display_name, sd_text])
+			else:
+				equip_lines.append("  [%s] (空) 损伤:%d" % [String(slot_id), slot.region_damage_tokens])
+		var hand_count := player.equipment_hand.size() if player else 0
+		equip_lines.append("  手牌: %d张" % hand_count)
+	else:
+		equip_lines.append("  (无机甲)")
+	equipment_label.text = "装备牌:\n%s" % "\n".join(equip_lines)
 
-	# 更新机甲信息
-	var mech_info = dev_mode_service.get_mech_info(current_player_id)
-	if not mech_info.is_empty():
-		mech_info_label.text = "机甲: %s | HP: %d/%d | 动力: %d/%d | 护甲: %d | 金币: %d | 攻击: %d/%d | %s" % [
-			String(mech_info.get("mech_id", "")),
-			mech_info.get("current_hp", 0),
-			mech_info.get("max_hp", 0),
-			mech_info.get("power", 0),
-			mech_info.get("max_power", 0),
-			mech_info.get("armor", 0),
-			mech_info.get("gold", 0),
-			mech_info.get("attack_count", 0),
-			mech_info.get("max_attacks", 0),
-			"已摧毁" if mech_info.get("destroyed", false) else "存活"
+	# ── 机甲信息 ──
+	if mech:
+		var player_gold: int = player.gold if player else 0
+		mech_info_label.text = "机甲: %s | HP: %d/%d | 动力: %d | 护甲: %d | 金币: %d | %s" % [
+			String(current_player_id),
+			mech.current_hp, mech.max_hp,
+			mech.power,
+			mech.get_armor(),
+			player_gold,
+			"已摧毁" if mech.destroyed else "存活"
 		]
+	else:
+		mech_info_label.text = ""
 
+
+# ═══════════════════════════════════════════
+# 行动牌操作
+# ═══════════════════════════════════════════
 
 func _on_add_action_card() -> void:
-	if dev_mode_service == null:
+	var gs := _gs()
+	var player := _current_player()
+	if gs == null or player == null or context == null:
 		return
-	var index = action_card_dropdown.get_selected_id()
-	var card_id = action_card_dropdown.get_item_metadata(index)
-	if card_id != null:
-		dev_mode_service.add_action_card_to_player(current_player_id, card_id)
-		_update_info_display()
+
+	var index := action_card_dropdown.get_selected_id()
+	if index < 0:
+		return
+	var card_id: StringName = action_card_dropdown.get_item_metadata(index)
+	if card_id == &"":
+		return
+	if network_mode:
+		dev_edit_requested.emit(&"add_action_card", {"target": current_player_id, "card_id": card_id})
+		return
+	var def = context.card_database.get_card(card_id)
+	if def == null:
+		return
+
+	# 创建 CardInstance
+	var inst := _CardInstance.new(gs.next_id("card"), def)
+	inst.owner_player_id = current_player_id
+	inst.mech_id = _current_mech().mech_id if _current_mech() else &""
+	inst.zone = &"action_hand"
+	gs.cards[inst.instance_id] = inst
+
+	# 加入手牌
+	player.action_hand.append(inst.instance_id)
+
+	# 注册 AVAILABILITY 效果（迎击牌等）
+	if context.has_method("register_hand_card_availability"):
+		context.register_hand_card_availability(inst.instance_id)
+
+	_update_info_display()
 
 
 func _on_discard_all_action_cards() -> void:
-	if dev_mode_service == null:
+	var gs := _gs()
+	var player := _current_player()
+	if gs == null or player == null or context == null:
 		return
-	dev_mode_service.discard_all_action_cards_from_player(current_player_id)
+	if network_mode:
+		dev_edit_requested.emit(&"discard_all_action_cards", {"target": current_player_id})
+		return
+	for card_id: StringName in player.action_hand.duplicate():
+		_do_discard_action_card(card_id, player)
+
 	_update_info_display()
 
 
-func _on_add_equipment_card() -> void:
-	if dev_mode_service == null:
+func _on_discard_one_action_card() -> void:
+	var gs := _gs()
+	var player := _current_player()
+	if gs == null or player == null or context == null:
 		return
-	var index = equipment_card_dropdown.get_selected_id()
-	var card_id = equipment_card_dropdown.get_item_metadata(index)
-	if card_id != null:
-		dev_mode_service.add_equipment_card_to_player(current_player_id, card_id)
-		_update_info_display()
+	if network_mode:
+		dev_edit_requested.emit(&"discard_one_action_card", {"target": current_player_id})
+		return
+	if player.action_hand.is_empty():
+		return
+	_do_discard_action_card(player.action_hand[0], player)
+	_update_info_display()
+
+
+func _do_discard_action_card(card_id: StringName, player: PlayerState) -> void:
+	if context and context.has_method("unregister_hand_card_availability"):
+		context.unregister_hand_card_availability(card_id)
+	var card: CardInstance = _gs().get_card(card_id)
+	if card:
+		card.zone = &"discard"
+	player.action_hand.erase(card_id)
+
+
+# ═══════════════════════════════════════════
+# 装备牌操作
+# ═══════════════════════════════════════════
+
+func _on_add_equipment_card() -> void:
+	var gs := _gs()
+	var player := _current_player()
+	if gs == null or player == null or context == null:
+		return
+
+	var index := equipment_card_dropdown.get_selected_id()
+	if index < 0:
+		return
+	var card_id: StringName = equipment_card_dropdown.get_item_metadata(index)
+	if card_id == &"":
+		return
+	if network_mode:
+		dev_edit_requested.emit(&"add_equipment_card", {"target": current_player_id, "card_id": card_id})
+		return
+	var def = context.card_database.get_card(card_id)
+	if def == null:
+		return
+
+	# 创建 CardInstance
+	var inst := _CardInstance.new(gs.next_id("card"), def)
+	inst.owner_player_id = current_player_id
+	inst.mech_id = _current_mech().mech_id if _current_mech() else &""
+	inst.zone = &"equipment_hand"
+	gs.cards[inst.instance_id] = inst
+
+	# 加入装备手牌
+	player.equipment_hand.append(inst.instance_id)
+
+	_update_info_display()
 
 
 func _on_set_equipment_to_slot() -> void:
-	if dev_mode_service == null:
+	var gs := _gs()
+	var player := _current_player()
+	var mech := _current_mech()
+	if gs == null or player == null or mech == null or context == null:
 		return
 
-	# 获取玩家手牌中的第一张装备牌
-	var equip_cards = dev_mode_service.get_player_equipment_cards(current_player_id)
-	var hand_card = null
-	for card in equip_cards:
-		if card.zone == "hand":
-			hand_card = card
+	# 获取下拉选中的装备牌定义（选哪张设哪张，不再固定取手牌第一张）
+	var equip_index := equipment_card_dropdown.get_selected_id()
+	if equip_index < 0:
+		return
+	var card_def_id: StringName = equipment_card_dropdown.get_item_metadata(equip_index)
+	if card_def_id == &"":
+		return
+	var def = context.card_database.get_card(card_def_id)
+	if def == null:
+		return
+
+	# 获取选中的槽位
+	var slot_index := slot_dropdown.get_selected_id()
+	if slot_index < 0:
+		return
+	var slot_id: StringName = slot_dropdown.get_item_metadata(slot_index)
+	if slot_id == &"":
+		return
+
+	if network_mode:
+		dev_edit_requested.emit(&"set_equipment_to_slot", {"target": current_player_id, "card_def_id": card_def_id, "slot_id": slot_id})
+		return
+
+	# 若该玩家手牌已有这张牌的实例，复用之；否则创建一个新实例加入手牌
+	# （card_set_service.set_equipment 要求卡牌在玩家手牌中）
+	var equip_card_id: StringName = &""
+	for cid: StringName in player.equipment_hand:
+		var c: CardInstance = gs.get_card(cid)
+		if c and c.def and c.def.card_id == card_def_id:
+			equip_card_id = cid
 			break
+	if equip_card_id == &"":
+		var inst := _CardInstance.new(gs.next_id("card"), def)
+		inst.owner_player_id = current_player_id
+		inst.mech_id = mech.mech_id
+		inst.zone = &"equipment_hand"
+		gs.cards[inst.instance_id] = inst
+		player.equipment_hand.append(inst.instance_id)
+		equip_card_id = inst.instance_id
 
-	if hand_card == null:
-		return
-
-	var slot_index = slot_dropdown.get_selected_id()
-	var slot_id = slot_dropdown.get_item_metadata(slot_index)
-	if slot_id != null:
-		dev_mode_service.set_equipment_card_to_slot(current_player_id, hand_card.instance_id, slot_id)
+	# 调用 CardSetService 设置（handle slot compatibility, replacement, damage cleanup）
+	if context.card_set_service:
+		var result: Dictionary = context.card_set_service.set_equipment(current_player_id, equip_card_id, slot_id)
+		if not result.get("ok", false):
+			# 类型不匹配等：把刚创建的临时实例从手牌撤回，避免残留
+			if player.equipment_hand.has(equip_card_id):
+				player.equipment_hand.erase(equip_card_id)
+				gs.cards.erase(equip_card_id)
 		_update_info_display()
-
-
-func _on_discard_all_equipment_cards() -> void:
-	if dev_mode_service == null:
 		return
 
-	var equip_cards = dev_mode_service.get_player_equipment_cards(current_player_id)
-	for card in equip_cards:
-		dev_mode_service.discard_equipment_card_from_player(current_player_id, card.instance_id)
-
+	# fallback: 手动设置
+	_manual_set_equipment(equip_card_id, slot_id)
 	_update_info_display()
 
 
-func _on_add_region_damage() -> void:
-	if dev_mode_service == null:
+func _manual_set_equipment(card_id: StringName, slot_id: StringName) -> void:
+	var gs := _gs()
+	var player := _current_player()
+	var mech := _current_mech()
+	if gs == null or player == null or mech == null:
 		return
 
-	var damage_slot_dropdown = find_child("DamageSlotDropdown", true, false) as OptionButton
+	if not mech.slots.has(slot_id):
+		return
+	var slot: MechSlotState = mech.slots[slot_id]
+	var card: CardInstance = gs.get_card(card_id)
+	if card == null:
+		return
+
+	# 简单类型检查
+	if slot.slot_kind == &"WEAPON" and card.def.equipment_kind != &"WEAPON":
+		return
+	if slot.slot_kind == &"PART" and card.def.equipment_kind != &"PART":
+		return
+
+	# 替换已有装备
+	if slot.equipped_card != null:
+		context.deck_service.discard_card(slot.equipped_card.instance_id, &"replaced")
+		slot.equipped_card = null
+
+	# 移除耐久值对应的区域损伤
+	var durability: int = card.def.durability
+	if durability > 0:
+		var to_remove := mini(durability, slot.region_damage_tokens)
+		slot.region_damage_tokens -= to_remove
+
+	player.equipment_hand.erase(card_id)
+	card.zone = &"equipped"
+	card.slot_id = slot_id
+	card.mech_id = mech.mech_id
+	slot.equipped_card = card
+
+
+func _on_discard_all_equipment_cards() -> void:
+	var gs := _gs()
+	var player := _current_player()
+	if gs == null or player == null or context == null:
+		return
+	if network_mode:
+		dev_edit_requested.emit(&"discard_all_equipment_cards", {"target": current_player_id})
+		return
+	for card_id: StringName in player.equipment_hand.duplicate():
+		context.deck_service.discard_card(card_id, &"dev_mode")
+	player.equipment_hand.clear()
+	_update_info_display()
+
+
+func _on_unequip_all_equipment() -> void:
+	var gs := _gs()
+	var mech := _current_mech()
+	if gs == null or mech == null or context == null:
+		return
+	if network_mode:
+		dev_edit_requested.emit(&"unequip_all_equipment", {"target": current_player_id})
+		return
+	for slot_id: StringName in mech.slots:
+		var slot: MechSlotState = mech.slots[slot_id]
+		if slot.equipped_card != null:
+			context.deck_service.discard_card(slot.equipped_card.instance_id, &"replaced")
+			slot.equipped_card = null
+	_update_info_display()
+
+
+# ═══════════════════════════════════════════
+# 区域损伤操作
+# ═══════════════════════════════════════════
+
+func _get_selected_damage_slot() -> MechSlotState:
+	var slot_id := _get_selected_damage_slot_id()
+	if slot_id == &"":
+		return null
+	var mech := _current_mech()
+	if mech == null or not mech.slots.has(slot_id):
+		return null
+	return mech.slots[slot_id]
+
+
+## 取损伤槽位下拉选中的 slot_id（network_mode emit 用）
+func _get_selected_damage_slot_id() -> StringName:
+	var damage_slot_dropdown := find_child("DamageSlotDropdown", true, false) as OptionButton
 	if damage_slot_dropdown == null:
-		return
+		return &""
+	var idx := damage_slot_dropdown.get_selected_id()
+	if idx < 0:
+		return &""
+	var slot_id: StringName = damage_slot_dropdown.get_item_metadata(idx)
+	return slot_id
 
-	var slot_index = damage_slot_dropdown.get_selected_id()
-	var slot_id = damage_slot_dropdown.get_item_metadata(slot_index)
-	if slot_id != null:
-		dev_mode_service.add_region_damage(current_player_id, slot_id, 1)
-		_update_info_display()
+
+func _on_add_region_damage() -> void:
+	if network_mode:
+		var sid := _get_selected_damage_slot_id()
+		if sid != &"":
+			dev_edit_requested.emit(&"add_region_damage", {"target": current_player_id, "slot_id": sid})
+		return
+	var slot: MechSlotState = _get_selected_damage_slot()
+	if slot != null:
+		slot.region_damage_tokens += 1
+	_refresh_all()
 
 
 func _on_remove_region_damage() -> void:
-	if dev_mode_service == null:
+	if network_mode:
+		var sid := _get_selected_damage_slot_id()
+		if sid != &"":
+			dev_edit_requested.emit(&"remove_region_damage", {"target": current_player_id, "slot_id": sid})
 		return
+	var slot: MechSlotState = _get_selected_damage_slot()
+	if slot != null and slot.region_damage_tokens > 0:
+		slot.region_damage_tokens -= 1
+	_refresh_all()
 
-	var damage_slot_dropdown = find_child("DamageSlotDropdown", true, false) as OptionButton
-	if damage_slot_dropdown == null:
+
+func _on_clear_all_region_damage() -> void:
+	if network_mode:
+		dev_edit_requested.emit(&"clear_all_region_damage", {"target": current_player_id})
 		return
+	var mech := _current_mech()
+	if mech == null:
+		return
+	for slot_id: StringName in mech.slots:
+		mech.slots[slot_id].region_damage_tokens = 0
+	_refresh_all()
 
-	var slot_index = damage_slot_dropdown.get_selected_id()
-	var slot_id = damage_slot_dropdown.get_item_metadata(slot_index)
-	if slot_id != null:
-		dev_mode_service.remove_region_damage(current_player_id, slot_id, 1)
-		_update_info_display()
 
+# ═══════════════════════════════════════════
+# 属性修改器
+# ═══════════════════════════════════════════
 
 func _on_modify_hp(amount: int) -> void:
-	if dev_mode_service == null:
+	if network_mode:
+		dev_edit_requested.emit(&"modify_hp", {"target": current_player_id, "amount": amount})
 		return
-	dev_mode_service.modify_mech_hp(current_player_id, amount)
+	var mech := _current_mech()
+	if mech:
+		mech.current_hp = clampi(mech.current_hp + amount, 0, mech.max_hp)
 	_update_info_display()
 
 
 func _on_set_full_hp() -> void:
-	if dev_mode_service == null:
+	if network_mode:
+		dev_edit_requested.emit(&"set_full_hp", {"target": current_player_id})
 		return
-	var mech_info = dev_mode_service.get_mech_info(current_player_id)
-	if not mech_info.is_empty():
-		dev_mode_service.set_mech_hp(current_player_id, mech_info.get("max_hp", 0))
-		_update_info_display()
+	var mech := _current_mech()
+	if mech:
+		mech.current_hp = mech.max_hp
+	_update_info_display()
 
 
 func _on_modify_power(amount: int) -> void:
-	if dev_mode_service == null:
+	if network_mode:
+		dev_edit_requested.emit(&"modify_power", {"target": current_player_id, "amount": amount})
 		return
-	dev_mode_service.modify_mech_power(current_player_id, amount)
+	var mech := _current_mech()
+	if mech:
+		mech.power = maxi(0, mech.power + amount)
 	_update_info_display()
 
 
 func _on_set_full_power() -> void:
-	if dev_mode_service == null:
+	if network_mode:
+		dev_edit_requested.emit(&"set_full_power", {"target": current_player_id})
 		return
-	var mech_info = dev_mode_service.get_mech_info(current_player_id)
-	if not mech_info.is_empty():
-		dev_mode_service.set_mech_power(current_player_id, mech_info.get("max_power", 0))
-		_update_info_display()
+	var mech := _current_mech()
+	if mech:
+		mech.power = mech.max_power
+	_update_info_display()
 
 
 func _on_modify_gold(amount: int) -> void:
-	if dev_mode_service == null:
+	if network_mode:
+		dev_edit_requested.emit(&"modify_gold", {"target": current_player_id, "amount": amount})
 		return
-	dev_mode_service.modify_player_gold(current_player_id, amount)
+	var player := _current_player()
+	if player:
+		player.gold = maxi(0, player.gold + amount)
 	_update_info_display()
 
 
 func _on_set_gold_50() -> void:
-	if dev_mode_service == null:
+	if network_mode:
+		dev_edit_requested.emit(&"set_gold_50", {"target": current_player_id})
 		return
-	# 先设为0再加50
-	dev_mode_service.modify_player_gold(current_player_id, -999)
-	dev_mode_service.modify_player_gold(current_player_id, 50)
+	var player := _current_player()
+	if player:
+		player.gold = 50
 	_update_info_display()
 
 
+func _on_modify_armor(amount: int) -> void:
+	if network_mode:
+		dev_edit_requested.emit(&"modify_armor", {"target": current_player_id, "amount": amount})
+		return
+	var mech := _current_mech()
+	if mech:
+		for slot_id: StringName in mech.slots:
+			mech.slots[slot_id].armor_modifier += amount
+	_update_info_display()
+
+
+# ═══════════════════════════════════════════
+# 面板控制
+# ═══════════════════════════════════════════
+
 func _on_close() -> void:
-	visible = false
+	close_requested.emit()
 
 
 func toggle() -> void:
-	visible = !visible
+	visible = not visible
 	if visible:
-		_refresh_player_list()
+		_refresh_all()

@@ -7,6 +7,7 @@ extends RefCounted
 
 const _CardInstance = preload("res://scripts/runtime/CardInstance.gd")
 const _EquipmentCardDef = preload("res://scripts/card_defs/EquipmentCardDef.gd")
+const _GenEquipEffects = preload("res://scripts/generated_database/GeneratedEquipmentEffects.gd")
 
 ## 槽位标识（&"头部"/&"躯干"/&"右臂"/&"左臂"/&"右腿"/&"左腿"
 ##          /&"weapon_1"/&"weapon_2"/&"reserve_1"/&"reserve_2"
@@ -40,9 +41,10 @@ var power_modifier: int = 0
 
 ## 获取实际护甲值
 ## 规则：有装备时只算装备的护甲，无装备时算框架基础护甲 + 修正 - 区域损伤
+## 重甲装（effect_014）：损伤不影响此牌所在区域提供的护甲（不减 region_damage_tokens）
 func get_effective_armor() -> int:
 	var total: int = armor_modifier
-	if equipped_card and equipped_card.def is _EquipmentCardDef:
+	if _is_equipment_active() and equipped_card.def is _EquipmentCardDef:
 		var eq_def = equipped_card.def
 		if eq_def.equipment_kind == &"PART":
 			total += eq_def.armor
@@ -50,7 +52,9 @@ func get_effective_armor() -> int:
 		# 无装备时使用框架基础护甲
 		total += base_armor
 	# 损伤降低护甲（规则书：每损伤使区域护甲 -1）
-	total -= region_damage_tokens
+	# 重甲装 effect_014：本区域装备正面设置时，损伤不影响护甲
+	if not _GenEquipEffects.card_has_damage_immune_armor(equipped_card):
+		total -= region_damage_tokens
 	return total
 
 
@@ -58,7 +62,7 @@ func get_effective_armor() -> int:
 ## 规则：有装备时只算装备的动力，无装备时算框架基础动力 + 修正
 func get_effective_power() -> int:
 	var total: int = power_modifier
-	if equipped_card and equipped_card.def is _EquipmentCardDef:
+	if _is_equipment_active() and equipped_card.def is _EquipmentCardDef:
 		var eq_def = equipped_card.def
 		if eq_def.equipment_kind == &"PART":
 			total += eq_def.power
@@ -75,13 +79,17 @@ func has_equipment() -> bool:
 
 ## 获取装备牌的耐久值（无装备返回0）
 func get_equipment_durability() -> int:
-	if not equipped_card or not equipped_card.def is _EquipmentCardDef:
+	if not _is_equipment_active() or not equipped_card.def is _EquipmentCardDef:
 		return 0
 	return equipped_card.def.durability
 
 
 ## 装备是否已损坏（损伤 ≥ 耐久）
 func is_equipment_broken() -> bool:
-	if not equipped_card:
+	if not _is_equipment_active():
 		return false
 	return equipped_card.damage_tokens >= get_equipment_durability()
+
+
+func _is_equipment_active() -> bool:
+	return equipped_card != null and not bool(equipped_card.counters.get("_pending_equipment_activation", false))

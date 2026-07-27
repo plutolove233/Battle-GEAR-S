@@ -47,8 +47,8 @@ const DAMAGE_TOKEN_PER_POWER: int = 5
 ## 商店普通装备槽数
 const SHOP_NORMAL_SLOTS: int = 3
 
-## 刷新商店费用
-const SHOP_REFRESH_COST: int = 2
+## 刷新商店费用（每回合1次）
+const SHOP_REFRESH_COST: int = 3
 
 ## 查看隐藏高级装备费用
 const SHOP_REVEAL_COST: int = 2

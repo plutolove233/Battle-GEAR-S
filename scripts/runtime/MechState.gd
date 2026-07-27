@@ -8,6 +8,7 @@ extends RefCounted
 const _MechSlotState = preload("res://scripts/runtime/MechSlotState.gd")
 const _CardInstance = preload("res://scripts/runtime/CardInstance.gd")
 const _MechFrameDef = preload("res://scripts/card_defs/MechFrameDef.gd")
+const _GenEquipEffects = preload("res://scripts/generated_database/GeneratedEquipmentEffects.gd")
 
 ## 机甲唯一 ID
 var mech_id: StringName = &""
@@ -53,25 +54,41 @@ var max_attacks_per_turn: int = 1
 ## 是否已被摧毁
 var destroyed: bool = false
 
+## 临时护甲加成（防御牌等：本次攻击结算后恢复）
+## 由 ADD_MECH_TEMP_ARMOR 增加，登记到攻击动作 record["temp_armor_grants"]，
+## 攻击动作 _step_cleanup 结算后恢复。get_armor() 计入，故装备面板可见。
+var temp_armor_bonus: int = 0
+
 
 ## ── 查询方法 ──
 
 
-## 获取总护甲 = 所有部件槽位 effective_armor 之和
+## 获取总护甲 = 所有部件槽位 effective_armor 之和 + 派生值加成
+## 派生值：联邦普装·头部（其他区域每张联邦装备+1护甲）实时重算
 func get_armor() -> int:
 	var total: int = 0
 	for slot_id: StringName in [&"头部", &"躯干", &"右臂", &"左臂", &"右腿", &"左腿"]:
 		if slots.has(slot_id):
 			total += slots[slot_id].get_effective_armor()
+	# 联邦普装·头部动态护甲：该机甲头部若有 effect_002，加 其他区域联邦装备数
+	total += _GenEquipEffects.compute_faction_armor_bonus(self, &"头部")
+	# 临时护甲加成（防御牌等，本次攻击结算后恢复）
+	total += temp_armor_bonus
 	return total
 
 
-## 获取总动力 = 所有部件槽位 effective_power 之和
+## 获取总动力 = 所有部件槽位 effective_power 之和 + 派生值加成
+## 派生值：帝国普装·头部（其他区域每张帝国装备+1动力上限）+ 重甲右臂/机动右腿(损伤≥1)+1 + 机动左腿(损伤≥2)+1
 func get_total_power() -> int:
 	var total: int = 0
 	for slot_id: StringName in [&"头部", &"躯干", &"右臂", &"左臂", &"右腿", &"左腿"]:
 		if slots.has(slot_id):
 			total += slots[slot_id].get_effective_power()
+	# 帝国普装·头部动态动力上限：头部若有 effect_008，加 其他区域帝国装备数
+	total += _GenEquipEffects.compute_faction_power_bonus(self, &"头部")
+	# 各 slot 损伤阈值动力加成（重甲右臂/机动右腿 effect_016 阈值1，机动左腿 effect_021 阈值2）
+	for slot_id: StringName in [&"头部", &"躯干", &"右臂", &"左臂", &"右腿", &"左腿"]:
+		total += _GenEquipEffects.slot_damage_threshold_power_bonus(self, slot_id)
 	return total
 
 
@@ -166,3 +183,121 @@ func can_move() -> bool:
 	if has_status(&"cannot_move"):
 		return false
 	return power > 0
+
+
+## ── 新状态系统方法 ──
+
+
+## 获取指定类型的状态（返回第一个匹配的状态字典）
+func get_status(status_type: StringName) -> Dictionary:
+	for s: Dictionary in statuses:
+		if s.get("type", &"") == status_type:
+			return s
+	return {}
+
+
+## 获取指定类型的所有状态实例
+func get_all_statuses(status_type: StringName) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for s: Dictionary in statuses:
+		if s.get("type", &"") == status_type:
+			result.append(s)
+	return result
+
+
+## 获取指定状态的层数（可叠加状态如聚能/折扣）
+func get_status_stacks(status_type: StringName) -> int:
+	for s: Dictionary in statuses:
+		if s.get("type", &"") == status_type:
+			return int(s.get("stacks", 1))
+	return 0
+
+
+## 添加或叠加状态（可叠加状态：聚能/折扣）
+func add_or_stack_status(status_type: StringName, stacks: int = 1, data: Dictionary = {}) -> void:
+	# 可叠加状态类型
+	var stackable_types: Array[StringName] = [&"ENERGY_CHARGE", &"DISCOUNT"]
+	if status_type in stackable_types:
+		for s: Dictionary in statuses:
+			if s.get("type", &"") == status_type:
+				s["stacks"] = int(s.get("stacks", 1)) + stacks
+				# 合并附加数据
+				for key: String in data:
+					if not s.has(key):
+						s[key] = data[key]
+				return
+	# 不可叠加或不存在 → 新增
+	var new_status: Dictionary = {"type": status_type, "stacks": stacks}
+	new_status.merge(data, true)
+	statuses.append(new_status)
+
+
+## 减少状态层数（层数到0时移除）
+func decrement_status_stacks(status_type: StringName, amount: int = 1, remove_if_zero: bool = true) -> void:
+	for i: int in range(statuses.size()):
+		var s: Dictionary = statuses[i]
+		if s.get("type", &"") == status_type:
+			var current: int = int(s.get("stacks", 1))
+			current -= amount
+			if current <= 0 and remove_if_zero:
+				statuses.remove_at(i)
+			else:
+				s["stacks"] = max(0, current)
+			return
+
+
+## 移除指定类型和来源的状态（用于联合/锁定等独立状态）
+func remove_status_with_source(status_type: StringName, source_player_id: StringName) -> void:
+	statuses = statuses.filter(func(s: Dictionary) -> bool:
+		if s.get("type", &"") != status_type:
+			return true
+		return String(s.get("source_player_id", &"")) != String(source_player_id)
+	)
+
+
+## 减少指定状态的持续时间（持续到0时移除）
+## 返回因 duration 归 0 被移除的状态对象列表（含 status_id，供监听器注销用）
+func tick_status_duration(status_type: StringName) -> Array:
+	var to_remove: Array[int] = []
+	var removed: Array = []
+	for i: int in range(statuses.size()):
+		var s: Dictionary = statuses[i]
+		if s.get("type", &"") == status_type:
+			var duration: int = int(s.get("duration", 0))
+			if duration > 0:
+				duration -= 1
+				if duration <= 0:
+					to_remove.append(i)
+					removed.append(s)
+				else:
+					s["duration"] = duration
+	# 从后往前移除，避免索引偏移
+	for i: int in to_remove:
+		statuses.remove_at(i)
+	return removed
+
+
+## 检查是否有来自指定玩家的锁定状态
+func is_locked_by(attacker_player_id: StringName) -> bool:
+	for s: Dictionary in statuses:
+		if s.get("type", &"") == &"LOCKED" and String(s.get("source_player_id", &"")) == String(attacker_player_id):
+			return true
+	return false
+
+
+## 检查是否有联合状态（来自指定unite机甲）
+func has_unite_with(unite_mech_id: StringName) -> bool:
+	for s: Dictionary in statuses:
+		if s.get("type", &"") == &"UNITE" and String(s.get("unite_mech_id", &"")) == String(unite_mech_id):
+			return true
+	return false
+
+
+## 获取折扣状态的总层数（用于商店价格计算）
+func get_discount_stacks() -> int:
+	return get_status_stacks(&"DISCOUNT")
+
+
+## 获取聚能状态的总层数（用于威力加成计算）
+func get_energy_charge_stacks() -> int:
+	return get_status_stacks(&"ENERGY_CHARGE")

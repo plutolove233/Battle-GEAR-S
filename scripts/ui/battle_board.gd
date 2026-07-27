@@ -31,6 +31,9 @@ const HOVER_FILL := Color(0.16, 0.19, 0.22, 0.15)
 const HOVER_BORDER := Color(0.24, 0.32, 0.38, 0.6)
 const HIGHLIGHT_FILL := Color(0.2, 0.6, 0.3, 0.25)
 const HIGHLIGHT_BORDER := Color(0.3, 0.8, 0.4, 0.7)
+# 可攻击格（范围内有机甲的格）红色闪烁层
+const ATTACK_TARGET_FILL := Color(0.9, 0.15, 0.15, 0.45)
+const ATTACK_TARGET_BORDER := Color(1.0, 0.3, 0.3, 0.9)
 const TEXT_COLOR := Color(0.62, 0.68, 0.72)
 
 const BORDER_WIDTH := 2.0
@@ -42,6 +45,11 @@ var hovered_hex: Dictionary = {}
 var background_texture: Texture2D  # 网格背景
 var base_background_texture: Texture2D  # 底层地图背景
 var highlighted_hexes: Dictionary = {}  # key: "q,r" → true
+# 可攻击格高亮层（红色闪烁）：key "q,r" → true
+var attack_target_hexes: Dictionary = {}
+# 闪烁动画累计时间与开关
+var _blink_accum: float = 0.0
+var _blink_enabled: bool = false
 
 # 缩放适配：将 2368×942 的网格缩放到控件实际大小
 var _grid_scale: float = 1.0
@@ -49,26 +57,30 @@ var _grid_offset: Vector2 = Vector2.ZERO  # 居中偏移
 
 func configure(new_tiles: Array, new_units: Dictionary) -> void:
 	# 直接使用战斗系统的 axial 地图，转换为 odd-q 显示
-	tiles.clear()
-	for tile in new_tiles:
-		if typeof(tile) != TYPE_DICTIONARY:
-			continue
-		var q: int = int(tile.get("q", 0))
-		var r: int = int(tile.get("r", 0))
-		var grid_pos := _axial_to_grid(q, r)
-		var key := Vector2i(grid_pos.col, grid_pos.row)
-		var tile_type := "normal"
-		# 检查是否为阻挡格
-		if tile.has("blocked") and tile.blocked:
-			tile_type = "blocked"
-		tiles[key] = {
-			"col": grid_pos.col,
-			"row": grid_pos.row,
-			"q": q,
-			"r": r,
-			"type": tile_type,
-			"enabled": true
-		}
+	# tiles（地形）在一场战斗中不变，仅在数量变化（新战斗/地图切换）时重建，
+	# 避免每次 _refresh_battle 都清空重建 192 格字典导致移动循环卡顿。
+	var tiles_changed: bool = tiles.size() != new_tiles.size()
+	if tiles_changed:
+		tiles.clear()
+		for tile in new_tiles:
+			if typeof(tile) != TYPE_DICTIONARY:
+				continue
+			var q: int = int(tile.get("q", 0))
+			var r: int = int(tile.get("r", 0))
+			var grid_pos := _axial_to_grid(q, r)
+			var key := Vector2i(grid_pos.col, grid_pos.row)
+			var tile_type := "normal"
+			# 检查是否为阻挡格
+			if tile.has("blocked") and tile.blocked:
+				tile_type = "blocked"
+			tiles[key] = {
+				"col": grid_pos.col,
+				"row": grid_pos.row,
+				"q": q,
+				"r": r,
+				"type": tile_type,
+				"enabled": true
+			}
 	units.clear()
 	for side in new_units.keys():
 		var unit: Dictionary = new_units[side]
@@ -120,13 +132,17 @@ func _screen_to_grid_coords(screen_pos: Vector2) -> Vector2:
 	return (screen_pos - _grid_offset) / _grid_scale
 
 func _load_background() -> void:
+	# 纹理只需加载一次（load 有缓存但仍非零开销），避免每次 configure 重建都重复 load
+	# 导致移动循环卡顿。已加载则直接复用。
+	if background_texture != null and base_background_texture != null:
+		return
 	# 加载网格背景
 	var grid_path := "res://asset/BattleField/hex_grid_redrawn_crisp_1536x768.png"
-	if ResourceLoader.exists(grid_path):
+	if background_texture == null and ResourceLoader.exists(grid_path):
 		background_texture = load(grid_path)
 	# 加载底层地图背景
 	var base_path := "res://asset/BattleField/图层1-最底背景图/地图背景图.png"
-	if ResourceLoader.exists(base_path):
+	if base_background_texture == null and ResourceLoader.exists(base_path):
 		base_background_texture = load(base_path)
 
 func _draw() -> void:
@@ -153,6 +169,13 @@ func _draw() -> void:
 			border_color = HIGHLIGHT_BORDER
 		draw_colored_polygon(points, fill_color)
 		draw_polyline(points + PackedVector2Array([points[0]]), border_color, BORDER_WIDTH / _grid_scale)
+		# 可攻击格红色闪烁叠加（压在绿色范围之上）
+		if attack_target_hexes.has(tile_key):
+			var blink_t: float = (sin(_blink_accum * 5.0) * 0.5 + 0.5) if _blink_enabled else 1.0
+			var red_fill := Color(ATTACK_TARGET_FILL.r, ATTACK_TARGET_FILL.g, ATTACK_TARGET_FILL.b, ATTACK_TARGET_FILL.a * blink_t)
+			var red_border := Color(ATTACK_TARGET_BORDER.r, ATTACK_TARGET_BORDER.g, ATTACK_TARGET_BORDER.b, ATTACK_TARGET_BORDER.a * blink_t)
+			draw_colored_polygon(points, red_fill)
+			draw_polyline(points + PackedVector2Array([points[0]]), red_border, (BORDER_WIDTH * 1.6) / _grid_scale)
 		_draw_hex_label(tile, center)
 		_draw_special_icon(tile, center)
 	# 绘制单位
@@ -192,11 +215,20 @@ func _notification(what: int) -> void:
 			hovered_hex = {}
 			queue_redraw()
 
+# 闪烁动画：累计时间并触发重绘
+func _process(delta: float) -> void:
+	if not _blink_enabled:
+		return
+	_blink_accum += delta
+	queue_redraw()
+
 func _draw_hex_label(hex: Dictionary, center: Vector2) -> void:
 	var font := _draw_font()
 	if font == null:
 		return
 	var font_size := int(12.0 / _grid_scale)
+	if font_size <= 0:
+		return
 	var text := "%d,%d" % [int(hex.get("q", 0)), int(hex.get("r", 0))]
 	var text_size := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
 	draw_string(font, center - text_size * 0.5 + Vector2(0, 4), text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, TEXT_COLOR)
@@ -242,8 +274,17 @@ func _draw_unit(side: String, unit: Dictionary) -> void:
 		return
 	var label := "我" if side == "player" else "敌"
 	var font_size := int(18.0 / _grid_scale)
+	if font_size <= 0:
+		return
 	var text_size := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
 	draw_string(font, center - text_size * 0.5 + Vector2(0, 6), label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(0.94, 0.96, 0.98))
+	# 联合状态标记：被联合的机甲下方显示 "联×N"（N=与之联合的 unite 机甲数）。
+	# 详细 unite 机甲名见 unit.unite_statuses；棋盘格空间有限只标数量。
+	var unite_list: Array = unit.get("unite_statuses", [])
+	if not unite_list.is_empty():
+		var unite_label := "联×%d" % unite_list.size()
+		var unite_size := font.get_string_size(unite_label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
+		draw_string(font, center - unite_size * 0.5 + Vector2(0, 6 + font_size + 2), unite_label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(1.0, 0.85, 0.2))
 
 func _draw_font() -> Font:
 	var font := get_theme_default_font()
@@ -330,4 +371,24 @@ func highlight_hexes(hexes: Array[Dictionary]) -> void:
 ## 清除高亮
 func clear_highlight() -> void:
 	highlighted_hexes.clear()
+	clear_attack_targets()
+	queue_redraw()
+
+## 高亮可攻击格（红色闪烁层）。与绿色范围层叠加显示。
+func highlight_attack_targets(hexes: Array[Dictionary]) -> void:
+	attack_target_hexes.clear()
+	for hex: Dictionary in hexes:
+		var key: String = "%s,%s" % [int(hex.get("q", 0)), int(hex.get("r", 0))]
+		attack_target_hexes[key] = true
+	_blink_enabled = not attack_target_hexes.is_empty()
+	_blink_accum = 0.0
+	set_process(_blink_enabled)
+	queue_redraw()
+
+## 清除可攻击格红色高亮层（停止闪烁）
+func clear_attack_targets() -> void:
+	attack_target_hexes.clear()
+	_blink_enabled = false
+	_blink_accum = 0.0
+	set_process(false)
 	queue_redraw()

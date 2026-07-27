@@ -188,18 +188,24 @@ func reveal_hidden_advanced(player_id: StringName) -> Dictionary:
 	return {"ok": true, "message": "已查看隐藏高级装备"}
 
 
-## 刷新商店（花费金币，重新抽取所有槽位）
+## 刷新商店（每回合1次，花费3金币，将现有卡牌放回弃牌堆并重新抽取所有槽位）
 func refresh_shop(player_id: StringName) -> Dictionary:
 	var gs = context.game_state
 	var player = gs.players.get(player_id)
 	if player == null:
 		return {"ok": false, "message": "玩家不存在"}
 
+	# 每回合1次限制（once_per_turn_used 在 TURN_START 时清空）
+	var refresh_key = &"refresh_shop"
+	if player.once_per_turn_used.get(refresh_key, 0) > 0:
+		return {"ok": false, "message": "本回合已使用过刷新商店"}
+
 	var price: int = _GameConfig.SHOP_REFRESH_COST
 	if player.gold < price:
 		return {"ok": false, "message": "金币不足（需要%d）" % price}
 
 	player.gold -= price
+	player.once_per_turn_used[refresh_key] = 1
 
 	# 将现有商店卡牌放回弃牌堆
 	var shop = gs.shop_state
@@ -215,32 +221,73 @@ func refresh_shop(player_id: StringName) -> Dictionary:
 	return initialize_shop()
 
 
-## 检查玩家是否有折扣可用
+## 检查玩家是否有折扣可用（折扣层数 = mech DISCOUNT 状态 stacks）
 func has_discount(player_id: StringName) -> bool:
-	var gs = context.game_state
-	var player = gs.players.get(player_id)
-	if player == null:
-		return false
-	var info = _get_discount_status(player)
-	return info.uses > 0
+	return get_discount_uses(player_id) > 0
 
 
-## 获取折扣剩余次数
+## 获取折扣剩余次数（mech DISCOUNT 状态 stacks 之和）
 func get_discount_uses(player_id: StringName) -> int:
 	var gs = context.game_state
-	var player = gs.players.get(player_id)
-	if player == null:
+	var mech = gs.get_mech_for_player(player_id)
+	if mech == null:
 		return 0
-	var info = _get_discount_status(player)
-	return info.uses
+	var total: int = 0
+	for status in mech.statuses:
+		if status.get("type", &"") == &"DISCOUNT":
+			total += int(status.get("stacks", 0))
+	return total
 
 
 ## ── 内部方法 ──
 
 
-## 获取购买价格（基于稀有度）
+## 获取玩家折扣状态（返回首个 DISCOUNT 状态对象，供 _consume_discount_use 修改）
+func _get_discount_status(player) -> Dictionary:
+	var gs = context.game_state
+	# player 是 PlayerState，需反查其机甲
+	var mech = gs.get_mech_for_player(player.player_id) if player != null else null
+	if mech == null:
+		return {"uses": 0, "status": {}}
+	for status in mech.statuses:
+		if status.get("type", &"") == &"DISCOUNT":
+			return {"uses": int(status.get("stacks", 0)), "status": status}
+	return {"uses": 0, "status": {}}
+
+
+## 消耗一次折扣层数（mech DISCOUNT 状态 stacks-1，归0时移除状态并注销监听器）
+func _consume_discount_use(player) -> void:
+	var gs = context.game_state
+	var mech = gs.get_mech_for_player(player.player_id) if player != null else null
+	if mech == null:
+		return
+	for status in mech.statuses:
+		if status.get("type", &"") != &"DISCOUNT":
+			continue
+		var stacks: int = int(status.get("stacks", 0))
+		if stacks <= 1:
+			# 层数归0，移除状态（走 game_actions.remove_status 注销监听器）
+			var status_id: StringName = status.get("status_id", &"")
+			if context.game_actions != null and status_id != &"":
+				context.game_actions.remove_status({
+					"target_id": mech.mech_id,
+					"status_id": status_id,
+					"status_type": &"DISCOUNT",
+				})
+			else:
+				mech.statuses.erase(status)
+		else:
+			status["stacks"] = stacks - 1
+		return
+
+
+## 获取购买价格（文档第133行：默认 cost×1.5 向上取整）
+## 优先用卡牌 cost 字段；cost 缺省时退回稀有度查表
 func _get_buy_price(card) -> int:
 	if card and card.def:
+		# EquipmentCardDef 有 cost 字段
+		if "cost" in card.def and int(card.def.cost) > 0:
+			return ceil(int(card.def.cost) * 1.5)
 		var rarity: StringName = card.def.rarity
 		match rarity:
 			&"N":
@@ -263,61 +310,11 @@ func _get_face_value_price(card) -> int:
 
 
 ## 获取玩家折扣状态
-func _get_discount_status(player) -> Dictionary:
-	for status in player.statuses:
-		if status.get("type") == &"SHOP_BUY_MODIFIER" and status.get("face_value", false):
-			return {
-				"uses": status.get("uses", 0),
-				"modifier_id": status.get("modifier_id", &""),
-			}
+## （旧版基于 player.statuses SHOP_BUY_MODIFIER 已废弃，统一改读 mech DISCOUNT stacks，
+##  实现见上方 _get_discount_status；此占位保留以防外部误调用）
+func _get_discount_status_legacy(player) -> Dictionary:
 	return {"uses": 0, "modifier_id": &""}
 
-
-## 消耗一次折扣使用次数
-func _consume_discount_use(player) -> void:
-	for status in player.statuses:
-		if status.get("type") == &"SHOP_BUY_MODIFIER" and status.get("face_value", false):
-			var uses: int = status.get("uses", 0)
-			status["uses"] = uses - 1
-			if status["uses"] <= 0:
-				# 移除过期状态
-				player.statuses.erase(status)
-			return
-
-
-## 重置商店（花费金币，将所有卡牌放回牌堆底并补满）
-func reset_shop(player_id: StringName) -> Dictionary:
-	var gs = context.game_state
-	var player = gs.players.get(player_id)
-	if player == null:
-		return {"ok": false, "message": "玩家不存在"}
-
-	var price: int = 2  # 重置商店费用
-	if player.gold < price:
-		return {"ok": false, "message": "金币不足（需要%d）" % price}
-
-	# 检查是否已使用过
-	var reset_key = &"reset_shop"
-	if player.once_per_turn_used.get(reset_key, 0) > 0:
-		return {"ok": false, "message": "本回合已使用过重置商店"}
-
-	player.gold -= price
-
-	# 将现有商店卡牌放回牌堆底
-	var shop = gs.shop_state
-	for card_id: StringName in shop.normal_slots:
-		if card_id != &"":
-			context.deck_service.move_card_to_deck_bottom(card_id, &"equipment_deck")
-	if shop.advanced_slot != &"":
-		context.deck_service.move_card_to_deck_bottom(shop.advanced_slot, &"advanced_equipment_deck")
-	if shop.hidden_advanced_slot != &"":
-		context.deck_service.move_card_to_deck_bottom(shop.hidden_advanced_slot, &"advanced_equipment_deck")
-
-	# 标记已使用
-	player.once_per_turn_used[reset_key] = 1
-
-	# 重新初始化
-	return initialize_shop()
 
 
 ## 补充普通装备槽位

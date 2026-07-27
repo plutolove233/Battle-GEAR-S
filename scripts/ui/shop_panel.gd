@@ -1,8 +1,10 @@
 ## ShopPanel.gd — 商店面板
 ##
-## 显示商店中的装备牌，支持购买、查看隐藏牌、重置商店等操作。
+## 显示商店中的装备牌，支持购买、查看隐藏牌、刷新商店等操作。
 extends PopupPanel
 class_name ShopPanel
+
+const _GameConfig = preload("res://scripts/config/GameConfig.gd")
 
 ## 购买普通装备信号
 signal normal_equipment_buy_clicked(slot_index: int)
@@ -12,8 +14,6 @@ signal advanced_equipment_buy_clicked()
 signal buy_hidden_advanced_clicked()
 ## 查看隐藏高级装备信号
 signal reveal_hidden_clicked()
-## 重置商店信号
-signal reset_shop_clicked()
 ## 刷新商店信号
 signal refresh_shop_clicked()
 ## 关闭信号
@@ -21,6 +21,8 @@ signal closed()
 
 var _context = null  # type: GameContext
 var _content: VBoxContainer
+## 本窗口控制的玩家（PvP host=player, client=enemy）。显示该玩家的金币/折扣。
+var local_player_id: StringName = &"player"
 
 ## 普通装备槽按钮（3个）
 var _normal_slot_buttons: Array[Button] = []
@@ -28,8 +30,6 @@ var _normal_slot_buttons: Array[Button] = []
 var _advanced_slot_button: Button = null
 ## 隐藏槽按钮
 var _hidden_slot_button: Button = null
-## 重置商店按钮
-var _reset_shop_button: Button = null
 ## 刷新商店按钮
 var _refresh_shop_button: Button = null
 ## 玩家金币显示
@@ -72,16 +72,9 @@ func _ready() -> void:
 	button_box.add_theme_constant_override("separation", 10)
 	vbox.add_child(button_box)
 
-	# 重置商店按钮（每回合1次，2金币）
-	_reset_shop_button = Button.new()
-	_reset_shop_button.text = "重置商店(2G)"
-	_reset_shop_button.custom_minimum_size = Vector2(120, 36)
-	_reset_shop_button.pressed.connect(func(): reset_shop_clicked.emit())
-	button_box.add_child(_reset_shop_button)
-
-	# 刷新商店按钮
+	# 刷新商店按钮（每回合1次）
 	_refresh_shop_button = Button.new()
-	_refresh_shop_button.text = "刷新(2G)"
+	_refresh_shop_button.text = "刷新(%dG)" % _GameConfig.SHOP_REFRESH_COST
 	_refresh_shop_button.custom_minimum_size = Vector2(100, 36)
 	_refresh_shop_button.pressed.connect(func(): refresh_shop_clicked.emit())
 	button_box.add_child(_refresh_shop_button)
@@ -115,18 +108,24 @@ func _refresh() -> void:
 
 	var gs = _context.game_state
 	var shop = gs.shop_state
-	var player = gs.players.get(&"player")
+	var player = gs.players.get(local_player_id)
 
-	# 更新金币显示
+	# 更新金币显示（附折扣层数）
 	if player and _gold_label:
-		_gold_label.text = "金币: %d" % player.gold
+		var gold_text: String = "金币: %d" % player.gold
+		if _context.shop_service != null:
+			var discount_uses: int = _context.shop_service.get_discount_uses(local_player_id)
+			if discount_uses > 0:
+				gold_text += "   当前折扣 ×%d" % discount_uses
+		_gold_label.text = gold_text
 
-	# 更新重置商店按钮状态
-	if _reset_shop_button and player:
-		var reset_key = &"reset_shop"
-		var reset_used: bool = player.once_per_turn_used.get(reset_key, 0) > 0
-		_reset_shop_button.disabled = reset_used or (player.gold < 2)
-		_reset_shop_button.tooltip_text = "本回合已使用" if reset_used else "将商店所有牌放回牌堆底并补满（2金币）"
+	# 更新刷新商店按钮状态（每回合1次：已用或金币不足则禁用）
+	if _refresh_shop_button and player:
+		var refresh_key = &"refresh_shop"
+		var refresh_used: bool = player.once_per_turn_used.get(refresh_key, 0) > 0
+		var refresh_price: int = _GameConfig.SHOP_REFRESH_COST
+		_refresh_shop_button.disabled = refresh_used or (player.gold < refresh_price)
+		_refresh_shop_button.tooltip_text = "本回合已使用" if refresh_used else "将商店所有牌放回弃牌堆并重新抽取（%d金币，每回合1次）" % refresh_price
 
 	# ── 普通装备槽（3个）────
 	_add_section("普通装备", Color(0.85, 0.75, 0.3))
@@ -213,7 +212,7 @@ func _on_hidden_slot_clicked() -> void:
 	if _context == null:
 		return
 	var gs = _context.game_state
-	var player = gs.players.get(&"player")
+	var player = gs.players.get(local_player_id)
 	if player == null:
 		return
 

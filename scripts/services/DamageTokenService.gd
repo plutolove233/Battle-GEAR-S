@@ -202,17 +202,18 @@ func _choose_slot_for_token(mech: MechState) -> StringName:
 			_:
 				other_slots.append(slot_id)
 
-	# 按优先级返回第一个可用槽位
+	# 按优先级返回第一个可用槽位（走 context.rng 同步随机，锁步双端一致）
+	var _r = context.rng if context != null and context.rng != null else null
 	if not equipped_parts.is_empty():
-		return equipped_parts[randi() % equipped_parts.size()]
+		return equipped_parts[(_r.randi() if _r != null else randi()) % equipped_parts.size()]
 	if not equipped_weapons.is_empty():
-		return equipped_weapons[randi() % equipped_weapons.size()]
+		return equipped_weapons[(_r.randi() if _r != null else randi()) % equipped_weapons.size()]
 	if not empty_parts.is_empty():
-		return empty_parts[randi() % empty_parts.size()]
+		return empty_parts[(_r.randi() if _r != null else randi()) % empty_parts.size()]
 	if not empty_weapons.is_empty():
-		return empty_weapons[randi() % empty_weapons.size()]
+		return empty_weapons[(_r.randi() if _r != null else randi()) % empty_weapons.size()]
 	if not other_slots.is_empty():
-		return other_slots[randi() % other_slots.size()]
+		return other_slots[(_r.randi() if _r != null else randi()) % other_slots.size()]
 
 	return &""
 

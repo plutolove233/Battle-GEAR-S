@@ -5,6 +5,10 @@ extends RefCounted
 ## 玩家唯一 ID（&"player" / &"enemy"）
 var player_id: StringName = &""
 
+## 是否由人类控制（true=人类，需要 UI 弹窗/选框；false=AI，由 AIController 代码决策）
+## 多玩家时按此字段路由 UI，而非 hardcoded player_id == &"player"。
+var is_human: bool = true
+
 ## 金币
 var gold: int = 15
 

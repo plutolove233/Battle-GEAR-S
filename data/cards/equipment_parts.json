@@ -2027,5 +2027,21 @@
     "effect_ids": [
       "equipment_effect_088"
     ]
+  },
+  {
+    "id": "part_test_001_测试_右腿",
+    "category": "part",
+    "set_name": "测试",
+    "slot": "右腿",
+    "rarity": "N",
+    "count": 1,
+    "effect_text": "被攻击时可响应：用当前动力移动1次。",
+    "armor": 1,
+    "power": 0,
+    "durability": 2,
+    "cost": 2,
+    "effect_ids": [
+      "equipment_effect_test_respond"
+    ]
   }
 ]

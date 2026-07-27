@@ -22,6 +22,20 @@ window/size/resizable=true
 
 SessionLogger="*res://scripts/services/session_logger.gd"
 
+[debug]
+
+file_logging/enable_file_logging=true
+file_logging/log_path="F:/Battle-GEAR-S/godot_logs/godot.log"
+file_logging/max_log_files=10
+file_logging/log_verbose=true
+file_logging/log_warnings=true
+file_logging/log_errors=true
+file_logging/log_script_print_output=true
+gdscript/warnings/enabled=true
+settings/stdout/print_warnings=true
+settings/stderr/print_warnings=true
+settings/verbose_stdout=true
+
 [physics]
 
 3d/physics_engine="Jolt Physics"

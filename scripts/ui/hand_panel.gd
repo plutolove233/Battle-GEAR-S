@@ -13,6 +13,9 @@ signal equipment_card_clicked(card_id: StringName)
 ## 当前 GameContext 引用
 var _context = null  # type: GameContext
 
+## 本面板显示哪一方的手牌（PvP host=player, client=enemy）。默认 player 兼容原 PvE。
+var local_player_id: StringName = &"player"
+
 ## 上次手牌中的卡牌ID集合（用于检测新抽的牌）
 var _last_action_hand: Array[StringName] = []
 var _last_equip_hand: Array[StringName] = []
@@ -34,8 +37,8 @@ func _refresh() -> void:
 		return
 
 	var gs = _context.game_state
-	# 始终读取玩家手牌，不依赖 active_player_id（初始化时可能为空）
-	var player = gs.players.get(&"player")
+	# 读 local_player_id 的手牌（PvP 双窗口各看己方）；找不到则回退 active_player_id
+	var player = gs.players.get(local_player_id)
 	if not player:
 		# 回退到 active_player_id
 		player = gs.players.get(gs.active_player_id)
@@ -120,15 +123,17 @@ func _add_section_label(text: String) -> void:
 
 
 ## 卡牌滑入动画
+##
+## 注意：HandPanel 是 HBoxContainer，子节点的 position 由容器自动管理，
+## 容器在 add_child 后并不会立即重排（重排发生在下一帧的
+## NOTIFICATION_SORT_CHILDREN）。若在 add_child 后立即读取 btn.position
+## 做 tween，读到的是未排序的初始值（所有按钮堆在 (0,0)），导致新抽到的牌
+## 挤在左侧、要点一次其他可点击处才归位。
+## 因此滑入动画只使用不被容器管理的属性（透明度），彻底避免与布局时机竞争。
 func _animate_card_slide_in(btn: Button) -> void:
-	# 从右侧滑入
-	var target_pos: Vector2 = btn.position
-	btn.position.x += 200.0
 	btn.modulate.a = 0.0
 	var tween = create_tween()
-	tween.set_parallel(true)
-	tween.tween_property(btn, "position:x", target_pos.x, 0.3).set_ease(Tween.EASE_OUT)
-	tween.tween_property(btn, "modulate:a", 1.0, 0.2)
+	tween.tween_property(btn, "modulate:a", 1.0, 0.25).set_ease(Tween.EASE_OUT)
 
 
 ## 打牌上浮效果（由外部调用）

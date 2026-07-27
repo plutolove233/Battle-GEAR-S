@@ -8,7 +8,6 @@ extends RefCounted
 
 var context = null  # type: GameContext
 
-const _EffectConst = preload("res://scripts/effect_core/EffectConst.gd")
 const _EquipmentCardDef = preload("res://scripts/card_defs/EquipmentCardDef.gd")
 
 
@@ -32,19 +31,9 @@ func check_equipment_broken(mech_id: StringName, slot_id: StringName) -> void:
 	if broken_card == null:
 		return
 
-	# 触发装备摧毁钩子
-	_fire_hook(_EffectConst.HOOK_EQUIPMENT_BROKEN, {
-		"mech_id": String(mech_id),
-		"slot_id": String(slot_id),
-		"card_id": String(broken_card.instance_id),
-	})
-
-	# 取消注册效果
-	if context.effect_registry:
-		context.effect_registry.unregister_card(broken_card)
-
-	# 弃掉损坏装备
-	context.deck_service.discard_card(broken_card.instance_id, &"broken")
+	# 弃掉损坏装备（走 discard_card 动作发 DISCARD_AFTER 时点，近战右腿等离场效果按 reason=damage_durability 触发）
+	# discard_card 动作的 move_to_tmp 步骤会注销装备的 permanent listener。
+	context.deck_service.discard_card(broken_card.instance_id, &"damage_durability")
 
 	# 清空槽位
 	slot.equipped_card = null
@@ -88,48 +77,44 @@ func replace_equipment(player_id: StringName, mech_id: StringName, new_card_id: 
 	if new_card and new_card.def is _EquipmentCardDef:
 		new_durability = new_card.def.durability
 
-	# ── 如果有旧装备，弃掉 ──
+	# ── 如果有旧装备，弃掉（走 discard_card 动作发 DISCARD_AFTER 时点，reason=equipment_replace） ──
 	if old_card != null:
-		# 取消注册旧装备效果
-		if context.effect_registry:
-			context.effect_registry.unregister_card(old_card)
-		# 弃掉旧装备
-		context.deck_service.discard_card(old_card.instance_id, &"replaced")
+		# 注销旧装备的 permanent listener（discard_card 动作的 move_to_tmp 也会注销，此处显式调用确保替换流程内立即失效）
+		if context.timing_engine != null:
+			context.timing_engine.unregister_permanent_listeners_for_card(old_card.instance_id)
+		context.deck_service.discard_card(old_card.instance_id, &"equipment_replace")
 
 	# ── 从装备手牌移除新装备 ──
 	player.equipment_hand.erase(new_card_id)
 
-	# ── 设置新装备到槽位 ──
-	if new_card:
-		new_card.zone = &"equipped"
-		new_card.slot_id = slot_id
-		new_card.mech_id = mech_id
-		new_card.damage_tokens = 0  # 新装备无损伤
-		slot.equipped_card = new_card
-
-		# 注册新装备效果
-		if context.effect_registry:
-			context.effect_registry.register_card(new_card)
-
-	# ── 移除新装备耐久值对应的区域损伤（规则：设置新装备后移除对应耐久值的损伤） ──
+	# ── 设置新装备到槽位（走 set_equipment 动作注册装备效果到 TimingEngine） ──
+	# 新装备无损伤：先确保区域损伤不超新耐久（动作的 _step_remove_damage 会按耐久移除）
 	if new_durability > 0:
 		var tokens_to_remove: int = mini(new_durability, slot.region_damage_tokens)
 		slot.region_damage_tokens -= tokens_to_remove
+
+	if new_card and context.action_service != null:
+		# 临时把新装备放回手牌，让 set_equipment 动作走标准设置流程（含效果注册）
+		player.equipment_hand.append(new_card_id)
+		context.action_service.execute(&"set_equipment", {
+			"card_id": new_card_id,
+			"mech_id": mech_id,
+			"slot_id": slot_id,
+			"source": {"player_id": player_id, "mech_id": mech_id, "card_instance_id": new_card_id},
+		})
+	elif new_card:
+		# 退路：action_service 未就绪，同步设置（不发时点、不注册装备效果）
+		new_card.zone = &"equipped"
+		new_card.slot_id = slot_id
+		new_card.mech_id = mech_id
+		new_card.damage_tokens = 0
+		slot.equipped_card = new_card
 
 	# ── 重算动力上限并调整当前动力 ──
 	var old_max_power: int = mech.max_power
 	mech.max_power = mech.get_total_power()
 	var power_delta: int = mech.max_power - old_max_power
 	mech.power = maxi(0, mech.power + power_delta)
-
-	# ── 触发装备设置钩子 ──
-	_fire_hook(_EffectConst.HOOK_EQUIPMENT_SET, {
-		"player_id": player_id,
-		"mech_id": String(mech_id),
-		"card_id": String(new_card_id),
-		"slot_id": String(slot_id),
-		"replaced": old_card != null,
-	})
 
 	gs.write_log(&"equipment_replaced", {
 		"player_id": String(player_id),
@@ -141,9 +126,3 @@ func replace_equipment(player_id: StringName, mech_id: StringName, new_card_id: 
 
 
 ## ── 内部方法 ──
-
-
-## 触发效果钩子
-func _fire_hook(hook_name: StringName, payload: Dictionary = {}) -> void:
-	if context.effect_engine:
-		context.effect_engine.fire_hook(hook_name, payload)

@@ -5,6 +5,7 @@
 ## 并通过 GameState.log 追赶补漏。
 extends VBoxContainer
 class_name BattleMessageLog
+const SLog = preload("res://scripts/services/slog.gd")
 
 const _EffectConst = preload("res://scripts/effect_core/EffectConst.gd")
 const _EquipmentCardDef = preload("res://scripts/card_defs/EquipmentCardDef.gd")
@@ -31,6 +32,7 @@ const DISCARD_REASONS: Dictionary = {
 	"EFFECT_RANDOM_DISCARD": "效果随机弃置", "EVENT_TIMER_ZERO": "事件计时归零",
 	"DESTROYED": "破坏", "PLAY_AS_CARD_COST": "当作他牌打出",
 	"EQUIPMENT_BROKEN_BY_DAMAGE": "损伤致坏",
+	"hand_limit": "超出上限", "end_turn_unset": "未设置装备",
 }
 
 ## 抽牌原因 → 中文名
@@ -82,10 +84,18 @@ func on_hook_fired(hook: StringName, payload: Dictionary) -> void:
 		_advance_log_index()
 
 
+## 新动作系统：TimingEngine 时点信号回调
+## 将新时点事件翻译为中文消息并显示
+func on_timing_fired(timing: StringName, payload: Dictionary) -> void:
+	var text := _translate_timing(timing, payload)
+	if text != "":
+		add_message(text)
+
+
 ## 追加一条消息并自动滚动
 func add_message(text: String) -> void:
 	_messages.append(text)
-	SessionLogger.log_message(text)
+	SLog.log_message(text)
 	_rebuild_display()
 
 
@@ -104,7 +114,7 @@ func _catch_up_log() -> void:
 		var text := _translate_log_entry(entry)
 		if text != "":
 			_messages.append(text)
-			SessionLogger.log_message(text)
+			SLog.log_message(text)
 		_last_log_index += 1
 	_rebuild_display()
 
@@ -199,6 +209,23 @@ func _translate_hook(hook: StringName, payload: Dictionary) -> String:
 			return _fmt_hp_healed_hook(payload)
 		&"ON_MECH_DESTROYED":
 			return _fmt_mech_destroyed_hook(payload)
+		# ── 新增：动力/状态 ──
+		&"ON_POWER_CHANGED":
+			return _fmt_power_changed_hook(payload)
+		&"ON_STATUS_ADDED":
+			return _fmt_status_added_hook(payload)
+		&"ON_STATUS_REMOVED":
+			return _fmt_status_removed_hook(payload)
+		&"ON_GOLD_CHANGED":
+			return _fmt_gold_changed_hook(payload)
+		&"ON_CARD_GAINED":
+			return _fmt_card_gained_hook(payload)
+		&"ON_CARD_TRANSFERRED":
+			return _fmt_card_transferred_hook(payload)
+		&"ON_ENERGY_APPLIED_TO_WEAPON":
+			return _fmt_energy_applied_hook(payload)
+		&"ON_ATTACK_NEGATED":
+			return _fmt_attack_negated_hook(payload)
 	return ""
 
 
@@ -395,7 +422,9 @@ func _fmt_damage_dealt_hook(payload: Dictionary) -> String:
 	var target := _mech_display_name(String(payload.get("target_id", payload.get("mech_id", &""))))
 	var amount: int = int(payload.get("amount", 0))
 	var hp: int = int(payload.get("current_hp", 0))
-	return "  [color=orange]%s 受到 %d 伤害[/color] (剩余HP:%d)" % [target, amount, hp]
+	var source: String = String(payload.get("source_card_id", &""))
+	var source_text := _card_display_name(payload.get("source_card_id", &""))
+	return "  [color=orange]%s 受到 %d 伤害[/color] (剩余HP:%d | 来源:%s)" % [target, amount, hp, source_text]
 
 
 func _fmt_token_placed_hook(payload: Dictionary) -> String:
@@ -408,7 +437,8 @@ func _fmt_token_placed_hook(payload: Dictionary) -> String:
 func _fmt_gold_gained_hook(payload: Dictionary) -> String:
 	var name := _player_name(String(payload.get("player_id", &"")))
 	var amount: int = int(payload.get("amount", 0))
-	return "  └ %s 获得 %d 金币" % [name, amount]
+	var reason: String = String(payload.get("reason", &""))
+	return "  └ %s 获得 %d 金币 (原因:%s)" % [name, amount, reason]
 
 
 func _fmt_hp_healed_hook(payload: Dictionary) -> String:
@@ -434,6 +464,81 @@ func _fmt_mech_moved_hook(payload: Dictionary) -> String:
 func _fmt_mech_destroyed_hook(payload: Dictionary) -> String:
 	var mech_name := _mech_display_name(String(payload.get("mech_id", &"")))
 	return "[color=red]✕ %s 被摧毁![/color]" % mech_name
+
+
+func _fmt_power_changed_hook(payload: Dictionary) -> String:
+	var mech_name := _mech_display_name(String(payload.get("mech_id", &"")))
+	var delta: int = int(payload.get("delta", 0))
+	var current: int = int(payload.get("current_power", 0))
+	var reason: String = String(payload.get("reason", &""))
+	var sign := "+" if delta >= 0 else ""
+	var reason_text := " (%s)" % reason if reason != "" else ""
+	return "  └ %s 动力%s%d → 当前:%d%s" % [mech_name, sign, delta, current, reason_text]
+
+
+func _fmt_status_added_hook(payload: Dictionary) -> String:
+	var target_id: String = String(payload.get("target_id", payload.get("mech_id", payload.get("player_id", &""))))
+	var target_name := _mech_display_name(target_id)
+	var status: Dictionary = payload.get("status", {})
+	var status_type: String = String(status.get("type", &""))
+	var source_card := _card_display_name(status.get("source_card_id", &""))
+	var delta: int = int(status.get("delta", 0))
+	var detail := ""
+	if delta != 0:
+		var sign := "+" if delta >= 0 else ""
+		detail = " 数值:%s%d" % [sign, delta]
+	return "  └ %s 获得状态:%s%s (来源:%s)" % [target_name, status_type, detail, source_card]
+
+
+func _fmt_status_removed_hook(payload: Dictionary) -> String:
+	var target_id: String = String(payload.get("target_id", &""))
+	var target_name := _mech_display_name(target_id)
+	var status: Dictionary = payload.get("status", {})
+	var status_type: String = String(status.get("type", &""))
+	var reason: String = String(payload.get("reason", &""))
+	var reason_text := " (%s)" % reason if reason != "" else ""
+	return "  └ %s 移除状态:%s%s" % [target_name, status_type, reason_text]
+
+
+func _fmt_gold_changed_hook(payload: Dictionary) -> String:
+	var name := _player_name(String(payload.get("player_id", &"")))
+	var delta: int = int(payload.get("delta", 0))
+	var current: int = int(payload.get("current_gold", 0))
+	var reason: String = String(payload.get("reason", &""))
+	var sign := "+" if delta >= 0 else ""
+	var reason_text := " (%s)" % reason if reason != "" else ""
+	return "  └ %s 金币%s%d → 当前:%d%s" % [name, sign, delta, current, reason_text]
+
+
+func _fmt_card_gained_hook(payload: Dictionary) -> String:
+	var name := _player_name(String(payload.get("player_id", &"")))
+	var card_name := _card_display_name(payload.get("card_id", &""))
+	var from_zone: String = String(payload.get("from_zone", &""))
+	var reason: String = String(payload.get("reason", &""))
+	var reason_text := " (%s)" % reason if reason != "" else ""
+	var from_text := " 从%s" % from_zone if from_zone != "" else ""
+	return "[color=#9ad]%s 获得 %s%s%s[/color]" % [name, card_name, from_text, reason_text]
+
+
+func _fmt_card_transferred_hook(payload: Dictionary) -> String:
+	var card_name := _card_display_name(payload.get("card_id", &""))
+	var from_name := _player_name(String(payload.get("from_player_id", &"")))
+	var to_name := _player_name(String(payload.get("to_player_id", &"")))
+	var reason: String = String(payload.get("reason", &""))
+	var reason_text := " (%s)" % reason if reason != "" else ""
+	return "[color=#9ad]%s → %s: %s%s[/color]" % [from_name, to_name, card_name, reason_text]
+
+
+func _fmt_energy_applied_hook(payload: Dictionary) -> String:
+	var mech_name := _mech_display_name(String(payload.get("mech_id", &"")))
+	var weapon_name := _card_display_name(payload.get("weapon_id", &""))
+	var delta: int = int(payload.get("delta", 0))
+	return "[color=yellow]%s 对 %s 施加聚能 (+%d威力)[/color]" % [mech_name, weapon_name, delta]
+
+
+func _fmt_attack_negated_hook(payload: Dictionary) -> String:
+	var source_card := _card_display_name(payload.get("source_card_id", &""))
+	return "[color=green]✓ 攻击被无效! (来源:%s)[/color]" % source_card
 
 
 # ═══════════════════════════════════════════
@@ -510,6 +615,55 @@ func _translate_log_entry(entry: Dictionary) -> String:
 		"mech_destroyed":
 			var mech_name := _mech_display_name(String(entry.get("mech_id", "")))
 			return "[color=red]✕ %s 被摧毁![/color]" % mech_name
+		"gold_gained":
+			var name := _player_name(String(entry.get("player_id", "")))
+			var amount: int = int(entry.get("amount", 0))
+			var cur: int = int(entry.get("current_gold", 0))
+			var reason: String = String(entry.get("reason", ""))
+			return "  └ %s 获得 %d 金币 (当前:%d 原因:%s)" % [name, amount, cur, reason]
+		"hp_healed":
+			var target := _mech_display_name(String(entry.get("mech_id", "")))
+			var amount: int = int(entry.get("amount", 0))
+			var hp: int = int(entry.get("current_hp", 0))
+			return "  [color=green]%s 回复 %d HP[/color] (当前HP:%d)" % [target, amount, hp]
+		"power_changed":
+			var mech_name := _mech_display_name(String(entry.get("mech_id", "")))
+			var delta: int = int(entry.get("delta", 0))
+			var cur: int = int(entry.get("current_power", 0))
+			var reason: String = String(entry.get("reason", ""))
+			var sign := "+" if delta >= 0 else ""
+			return "  └ %s 动力%s%d → 当前:%d (%s)" % [mech_name, sign, delta, cur, reason]
+		"damage_dealt":
+			var target := _mech_display_name(String(entry.get("mech_id", "")))
+			var amount: int = int(entry.get("amount", 0))
+			var hp: int = int(entry.get("current_hp", 0))
+			return "  [color=orange]%s 受到 %d 伤害[/color] (剩余HP:%d)" % [target, amount, hp]
+		"damage_token_placed":
+			var target := _mech_display_name(String(entry.get("mech_id", "")))
+			var slot := _slot_display_name(String(entry.get("slot_id", "")))
+			return "  └ %s 放置 1 个损伤标记 → %s" % [target, slot]
+		"cards_drawn":
+			var name := _player_name(String(entry.get("player_id", "")))
+			var kind: String = String(entry.get("card_kind", ""))
+			var kind_text := "行动牌" if kind == "action" else "装备牌"
+			var card_ids: Array = entry.get("card_ids", [])
+			var names: Array = []
+			for cid in card_ids:
+				names.append(_card_display_name(cid))
+			var list := "、".join(names) if names.size() > 0 else ""
+			var reason: String = String(entry.get("reason", ""))
+			return "[color=#9ad]%s 抽 %d 张%s: %s[/color] (来源:%s)" % [name, int(entry.get("count", 0)), kind_text, list, reason]
+		"card_gained":
+			var name := _player_name(String(entry.get("player_id", "")))
+			var card_name := _card_display_name(entry.get("card_id", &""))
+			var reason: String = String(entry.get("reason", ""))
+			return "[color=#9ad]%s 获得 %s (%s)[/color]" % [name, card_name, reason]
+		"status_added":
+			var target := _mech_display_name(String(entry.get("target_id", "")))
+			var st: String = String(entry.get("status_type", ""))
+			var delta: int = int(entry.get("delta", 0))
+			var detail := " 数值:%+d" % delta if delta != 0 else ""
+			return "  └ %s 获得状态:%s%s" % [target, st, detail]
 	return ""
 
 
@@ -535,8 +689,466 @@ func _fmt_turn_draw_log(entry: Dictionary) -> String:
 
 
 # ═══════════════════════════════════════════
-# 辅助方法
+# Timing 翻译（新动作系统）— 详细参数输出
 # ═══════════════════════════════════════════
+
+
+## 时点名 → 中文消息
+const TIMING_NAMES: Dictionary = {
+	&"ROUND_START": "新轮次开始",
+	&"TURN_BEFORE_START": "回合开始前",
+	&"TURN_START": "回合开始时",
+	&"TURN_AFTER_START": "回合开始后",
+	&"TURN_BEFORE_END": "回合结束前",
+	&"TURN_END": "回合结束时",
+	&"TURN_AFTER_END": "回合结束后",
+	&"ATTACK_BEFORE": "攻击前",
+	&"ATTACK_PRE": "攻击时前",
+	&"ATTACK_AT": "攻击时",
+	&"ATTACK_AFTER": "攻击后",
+	&"ATTACK_SETTLE": "攻击结算",
+	&"USE_ACTION_BEFORE": "使用行动牌前",
+	&"USE_ACTION_AT": "使用行动牌时",
+	&"USE_ACTION_AFTER": "使用行动牌后",
+	&"USE_ACTION_SETTLE": "使用行动牌结算",
+	&"STAT_MOD_BEFORE": "数值修正前",
+	&"STAT_MOD_AFTER": "数值修正后",
+	&"STAT_MOD_SETTLE": "数值修正结算",
+	&"BASIC_MOVE_BEFORE": "基础移动前",
+	&"BASIC_MOVE_AT": "基础移动时",
+	&"BASIC_MOVE_AFTER": "基础移动后",
+	&"BASIC_MOVE_SETTLE": "基础移动结算",
+	&"SINGLE_MOVE_SETTLE": "单次移动结算",
+	&"SET_EQUIP_BEFORE": "设置装备牌前",
+	&"SET_EQUIP_AT": "设置装备牌时",
+	&"SET_EQUIP_AFTER": "设置装备牌后",
+	&"SET_EQUIP_SETTLE": "设置装备牌结算",
+	&"GAIN_CARD_BEFORE": "获取牌前",
+	&"GAIN_CARD_AFTER": "获取牌后",
+	&"GAIN_CARD_SETTLE": "获取牌结算",
+	&"DISCARD_BEFORE": "弃置牌前",
+	&"DISCARD_AFTER": "弃置牌后",
+	&"DISCARD_SETTLE": "弃置牌结算",
+	&"EFFECT_FIRE_BEFORE": "效果发动前",
+	&"EFFECT_FIRE_AFTER": "效果发动后",
+	&"EFFECT_FIRE_SETTLE": "效果发动结算",
+	&"HP_CHANGE_BEFORE": "生命变动前",
+	&"HP_CHANGE_AFTER": "生命变动后",
+	&"HP_CHANGE_SETTLE": "生命变动结算",
+	&"DAMAGE_CHANGE_BEFORE": "损伤变动前",
+	&"DAMAGE_CHANGE_AFTER": "损伤变动后",
+	&"DAMAGE_CHANGE_SETTLE": "损伤变动结算",
+	&"SHOW_CARD_BEFORE": "展示牌前",
+	&"SHOW_CARD_AFTER": "展示牌后",
+	&"SHOW_CARD_SETTLE": "展示牌结算",
+	&"VICTORY_REACHED": "达到胜利条件",
+}
+
+
+func _translate_timing(timing: StringName, payload: Dictionary) -> String:
+	var name: String = TIMING_NAMES.get(timing, "")
+	if name == "":
+		return ""
+	var action_type: String = String(payload.get("action_type", ""))
+	var player_id: String = String(payload.get("player_id", ""))
+	var prefix := ""
+	if player_id != "":
+		prefix = _player_name(player_id) + " "
+
+	# 攻击时点的特殊格式化
+	match timing:
+		&"ATTACK_AT":
+			var attacker := _mech_display_name(String(payload.get("attacker_id", &"")))
+			var target := _mech_display_name(String(payload.get("target_id", &"")))
+			var weapon_id: String = String(payload.get("weapon_id", &""))
+			var weapon_name := _weapon_info(weapon_id) if weapon_id != "" else "未选择武器"
+			var power: int = int(payload.get("weapon_might", payload.get("power", 0)))
+			var rng: int = int(payload.get("weapon_range", payload.get("range_value", 0)))
+			var responded: bool = payload.get("responded", false)
+			var response_text := ""
+			if responded:
+				var response_src := _card_display_name(payload.get("response_card_id", &""))
+				response_text = " | 已响应(%s)" % response_src
+			var source_text := _source_text(payload)
+			return "[color=red]⏱ 攻击时 | 攻击方:%s | 目标:%s | 武器:%s | 威力:%d | 射程:%d%s | 来源:%s[/color]" % [attacker, target, weapon_name, power, rng, response_text, source_text]
+		&"ATTACK_BEFORE":
+			var attacker := _mech_display_name(String(payload.get("attacker_id", &"")))
+			var weapon_id: String = String(payload.get("weapon_id", &""))
+			var weapon_name := _weapon_info(weapon_id) if weapon_id != "" else "未选择武器"
+			var power: int = int(payload.get("weapon_might", payload.get("power", 0)))
+			var rng: int = int(payload.get("weapon_range", payload.get("range_value", 0)))
+			var source_text := _source_text(payload)
+			return "[color=#cc8]⏱ 攻击前 | 攻击方:%s | 武器:%s | 威力:%d | 射程:%d | 来源:%s[/color]" % [attacker, weapon_name, power, rng, source_text]
+		&"ATTACK_PRE":
+			var attacker := _mech_display_name(String(payload.get("attacker_id", &"")))
+			var target := _mech_display_name(String(payload.get("target_id", &"")))
+			var max_targets: int = int(payload.get("max_targets", 1))
+			var source_text := _source_text(payload)
+			return "[color=#cc8]⏱ 攻击时前 | 攻击方:%s | 目标:%s | 可选目标数:%d | 来源:%s[/color]" % [attacker, target, max_targets, source_text]
+		&"ATTACK_AFTER":
+			var attacker := _mech_display_name(String(payload.get("attacker_id", &"")))
+			var target := _mech_display_name(String(payload.get("target_id", &"")))
+			var hit: bool = payload.get("hit", false)
+			var damage: int = int(payload.get("damage", 0))
+			var markers: int = int(payload.get("markers", 0))
+			var power: int = int(payload.get("power", 0))
+			var source_text := _source_text(payload)
+			if hit:
+				return "[color=yellow]⏱ 攻击后 | %s → %s 命中 | 威力:%d | 伤害:%d | 损伤:%d | 来源:%s[/color]" % [attacker, target, power, damage, markers, source_text]
+			return "[color=gray]⏱ 攻击后 | %s → %s 未命中 | 来源:%s[/color]" % [attacker, target, source_text]
+		&"ATTACK_SETTLE":
+			var attacker := _mech_display_name(String(payload.get("attacker_id", &"")))
+			var target := _mech_display_name(String(payload.get("target_id", &"")))
+			var hit: bool = payload.get("hit", false)
+			var responded: bool = payload.get("responded", false)
+			var details := ""
+			if hit:
+				var damage: int = int(payload.get("damage", 0))
+				var markers: int = int(payload.get("markers", 0))
+				details = "命中 伤害:%d 损伤:%d" % [damage, markers]
+			else:
+				details = "未命中"
+			if responded:
+				details += " [已响应]"
+			return "[color=#88aacc]⏱ 攻击结算 | %s → %s | %s[/color]" % [attacker, target, details]
+		&"USE_ACTION_AT":
+			var card_name := _card_display_name(payload.get("card_instance_id", &""))
+			var mech_id: String = String(payload.get("mech_id", payload.get("source_mech_id", &"")))
+			var mech_name := _mech_display_name(mech_id)
+			var source_mech_id: String = String(payload.get("source_mech_id", &""))
+			var source_name := _mech_display_name(source_mech_id)
+			var source_text := _source_text(payload)
+			return "[color=cyan]⏱ 使用行动牌时 | 牌:%s | 执行者:%s | 所属机甲:%s | 来源:%s[/color]" % [card_name, mech_name, source_name, source_text]
+		&"USE_ACTION_BEFORE":
+			var card_name := _card_display_name(payload.get("card_instance_id", &""))
+			var mech_id: String = String(payload.get("mech_id", payload.get("source_mech_id", &"")))
+			var mech_name := _mech_display_name(mech_id)
+			var source_text := _source_text(payload)
+			return "[color=cyan]⏱ 使用行动牌前 | 牌:%s | 机甲:%s | 来源:%s[/color]" % [card_name, mech_name, source_text]
+		&"USE_ACTION_AFTER":
+			var card_name := _card_display_name(payload.get("card_instance_id", &""))
+			return "[color=cyan]⏱ 使用行动牌后 | 牌:%s[/color]" % card_name
+		&"USE_ACTION_SETTLE":
+			var card_name := _card_display_name(payload.get("card_instance_id", &""))
+			return "[color=cyan]⏱ 使用行动牌结算 | 牌:%s[/color]" % card_name
+		&"STAT_MOD_BEFORE":
+			var target_id: String = String(payload.get("target_id", payload.get("mech_id", &"")))
+			var target_name := _mech_display_name(target_id)
+			var stat_type: String = String(payload.get("stat_type", ""))
+			var value: int = int(payload.get("value", 0))
+			var method: String = String(payload.get("method", "add"))
+			var method_text := _method_text(method)
+			var sign := "+" if value >= 0 else ""
+			var target_type_text := _stat_target_type_text(stat_type)
+			var source_text := _source_text(payload)
+			return "[color=#cc8]⏱ 数值修正前 | 对象:%s(%s) | 类型:%s | 方式:%s | 数值:%s%d | 来源:%s[/color]" % [target_name, target_type_text, stat_type, method_text, sign, value, source_text]
+		&"STAT_MOD_AFTER":
+			var target_id: String = String(payload.get("target_id", payload.get("mech_id", &"")))
+			var target_name := _mech_display_name(target_id)
+			var stat_type: String = String(payload.get("stat_type", ""))
+			var old_value: int = int(payload.get("old_value", 0))
+			var new_value: int = int(payload.get("new_value", 0))
+			var method: String = String(payload.get("method", "add"))
+			var method_text := _method_text(method)
+			var target_type_text := _stat_target_type_text(stat_type)
+			var source_text := _source_text(payload)
+			return "[color=#88aacc]⏱ 数值修正后 | 对象:%s(%s) | 类型:%s | 方式:%s | %d→%d | 来源:%s[/color]" % [target_name, target_type_text, stat_type, method_text, old_value, new_value, source_text]
+		&"STAT_MOD_SETTLE":
+			var target_id: String = String(payload.get("target_id", payload.get("mech_id", &"")))
+			var target_name := _mech_display_name(target_id)
+			var stat_type: String = String(payload.get("stat_type", ""))
+			return "[color=#88aacc]⏱ 数值修正结算 | 对象:%s | 类型:%s[/color]" % [target_name, stat_type]
+		&"HP_CHANGE_BEFORE":
+			var mech_ids: Array = payload.get("mech_ids", [])
+			var target_name := _mech_display_name(String(mech_ids[0] if mech_ids.size() > 0 else ""))
+			var value: int = int(payload.get("value", 0))
+			var method: String = String(payload.get("method", "decrease"))
+			var method_text := _method_text(method)
+			var reason: String = String(payload.get("reason", ""))
+			var source_text := _source_text(payload)
+			return "[color=orange]⏱ 生命变动前 | 对象:%s | 方式:%s | 数值:%d | 原因:%s | 来源:%s[/color]" % [target_name, method_text, value, reason, source_text]
+		&"HP_CHANGE_AFTER":
+			var mech_ids: Array = payload.get("mech_ids", [])
+			var target_name := _mech_display_name(String(mech_ids[0] if mech_ids.size() > 0 else ""))
+			var old_hp: int = int(payload.get("old_hp", 0))
+			var new_hp: int = int(payload.get("new_hp", 0))
+			var method: String = String(payload.get("method", "decrease"))
+			var method_text := _method_text(method)
+			var value: int = int(payload.get("value", 0))
+			return "[color=orange]⏱ 生命变动后 | 对象:%s | 方式:%s%d | HP:%d→%d[/color]" % [target_name, method_text, value, old_hp, new_hp]
+		&"HP_CHANGE_SETTLE":
+			var mech_ids: Array = payload.get("mech_ids", [])
+			var target_name := _mech_display_name(String(mech_ids[0] if mech_ids.size() > 0 else ""))
+			return "[color=orange]⏱ 生命变动结算 | 对象:%s[/color]" % target_name
+		&"DAMAGE_CHANGE_BEFORE":
+			var mech_ids: Array = payload.get("mech_ids", [])
+			var target_name := _mech_display_name(String(mech_ids[0] if mech_ids.size() > 0 else ""))
+			var value: int = int(payload.get("value", 0))
+			var method: String = String(payload.get("method", "increase"))
+			var method_text := _method_text(method)
+			var reason: String = String(payload.get("reason", ""))
+			var source_text := _source_text(payload)
+			var slots: Array = payload.get("slots", [])
+			var slots_text := "、".join(slots.map(func(s): return _slot_display_name(String(s)))) if slots.size() > 0 else "全部"
+			var executor: String = String(payload.get("executor", ""))
+			var executor_text := _mech_display_name(executor) if executor != "" else "系统"
+			return "[color=orange]⏱ 损伤变动前 | 对象:%s | 区域:%s | 方式:%s%d | 原因:%s | 执行者:%s | 来源:%s[/color]" % [target_name, slots_text, method_text, value, reason, executor_text, source_text]
+		&"DAMAGE_CHANGE_AFTER":
+			var mech_ids: Array = payload.get("mech_ids", [])
+			var target_name := _mech_display_name(String(mech_ids[0] if mech_ids.size() > 0 else ""))
+			var value: int = int(payload.get("value", 0))
+			var method: String = String(payload.get("method", "increase"))
+			var method_text := _method_text(method)
+			return "[color=orange]⏱ 损伤变动后 | 对象:%s | 方式:%s%d[/color]" % [target_name, method_text, value]
+		&"DAMAGE_CHANGE_SETTLE":
+			var mech_ids: Array = payload.get("mech_ids", [])
+			var target_name := _mech_display_name(String(mech_ids[0] if mech_ids.size() > 0 else ""))
+			return "[color=orange]⏱ 损伤变动结算 | 对象:%s[/color]" % target_name
+		&"GAIN_CARD_BEFORE":
+			var card_ids: Array = payload.get("card_ids", [])
+			var count: int = card_ids.size() if card_ids.size() > 0 else int(payload.get("count", 0))
+			var reason: String = String(payload.get("reason", ""))
+			var from_zone: String = String(payload.get("from_zone", ""))
+			var target_mech_id: String = String(payload.get("mech_id", payload.get("target_mech_id", &"")))
+			var target_name := _mech_display_name(target_mech_id)
+			var source_text := _source_text(payload)
+			var card_names: Array = []
+			for cid in card_ids:
+				card_names.append(_card_display_name(cid))
+			var cards_text := "、".join(card_names) if card_names.size() > 0 else "%d张" % count
+			return "[color=#9ad]⏱ 获取牌前 | 牌:%s | 对象:%s | 来源:%s | 原因:%s | 效果来源:%s[/color]" % [cards_text, target_name, from_zone, reason, source_text]
+		&"GAIN_CARD_AFTER":
+			var card_ids: Array = payload.get("card_ids", [])
+			var names: Array = []
+			for cid in card_ids:
+				names.append(_card_display_name(cid))
+			var list := "、".join(names) if names.size() > 0 else "未知"
+			var target_mech_id: String = String(payload.get("mech_id", payload.get("target_mech_id", &"")))
+			var target_name := _mech_display_name(target_mech_id)
+			var reason: String = String(payload.get("reason", ""))
+			return "[color=#9ad]⏱ 获取牌后 | 牌:%s | 对象:%s | 原因:%s[/color]" % [list, target_name, reason]
+		&"GAIN_CARD_SETTLE":
+			return "[color=#9ad]⏱ 获取牌结算[/color]"
+		&"DISCARD_BEFORE":
+			var card_ids: Array = payload.get("card_ids", [])
+			var count: int = int(payload.get("count", 0))
+			var reason: String = String(payload.get("reason", ""))
+			var executor: String = String(payload.get("executor", ""))
+			var executor_text := _mech_display_name(executor) if executor != "" else "系统"
+			var source_text := _source_text(payload)
+			var card_names: Array = []
+			for cid in card_ids:
+				card_names.append(_card_display_name(cid))
+			var cards_text := "、".join(card_names) if card_names.size() > 0 else "%d张" % count
+			return "[color=gray]⏱ 弃置牌前 | 牌:%s | 数量:%d | 执行方:%s | 原因:%s | 来源:%s[/color]" % [cards_text, count, executor_text, reason, source_text]
+		&"DISCARD_AFTER":
+			var card_ids: Array = payload.get("card_ids", [])
+			var names: Array = []
+			for cid in card_ids:
+				names.append(_card_display_name(cid))
+			var list := "、".join(names) if names.size() > 0 else "未知"
+			var reason: String = String(payload.get("reason", ""))
+			return "[color=gray]⏱ 弃置牌后 | 牌:%s | 原因:%s[/color]" % [list, reason]
+		&"DISCARD_SETTLE":
+			return "[color=gray]⏱ 弃置牌结算[/color]"
+		&"SET_EQUIP_BEFORE":
+			var card_name := _card_display_name(payload.get("card_id", &""))
+			var mech_id: String = String(payload.get("mech_id", &""))
+			var mech_name := _mech_display_name(mech_id)
+			var source_text := _source_text(payload)
+			return "[color=green]⏱ 设置装备前 | 装备:%s | 机甲:%s | 来源:%s[/color]" % [card_name, mech_name, source_text]
+		&"SET_EQUIP_AT":
+			var card_name := _card_display_name(payload.get("card_id", &""))
+			var slot_id: String = String(payload.get("slot_id", &""))
+			var slot_name := _slot_display_name(slot_id)
+			var mech_id: String = String(payload.get("mech_id", &""))
+			var mech_name := _mech_display_name(mech_id)
+			return "[color=green]⏱ 设置装备时 | 装备:%s | 区域:%s | 机甲:%s[/color]" % [card_name, slot_name, mech_name]
+		&"SET_EQUIP_AFTER":
+			var card_name := _card_display_name(payload.get("card_id", &""))
+			var slot_id: String = String(payload.get("slot_id", &""))
+			var slot_name := _slot_display_name(slot_id)
+			var mech_id: String = String(payload.get("mech_id", &""))
+			var mech_name := _mech_display_name(mech_id)
+			return "[color=green]⏱ 设置装备后 | 装备:%s → %s | 机甲:%s[/color]" % [card_name, slot_name, mech_name]
+		&"SET_EQUIP_SETTLE":
+			var card_name := _card_display_name(payload.get("card_id", &""))
+			return "[color=green]⏱ 设置装备结算 | 装备:%s[/color]" % card_name
+		&"EFFECT_FIRE_BEFORE":
+			var effect_id: String = String(payload.get("effect_id", &""))
+			var source_text := _source_text(payload)
+			var target_text := _effect_targets_text(payload)
+			return "[color=#cc8]⏱ 效果发动前 | 效果ID:%s | 对象:%s | 来源:%s[/color]" % [effect_id, target_text, source_text]
+		&"EFFECT_FIRE_AFTER":
+			var effect_id: String = String(payload.get("effect_id", &""))
+			return "[color=#88aacc]⏱ 效果发动后 | 效果ID:%s[/color]" % effect_id
+		&"EFFECT_FIRE_SETTLE":
+			var effect_id: String = String(payload.get("effect_id", &""))
+			return "[color=#88aacc]⏱ 效果发动结算 | 效果ID:%s[/color]" % effect_id
+		&"BASIC_MOVE_BEFORE":
+			var mech_name := _mech_display_name(String(payload.get("mech_id", &"")))
+			var target_q: int = int(payload.get("target_q", 0))
+			var target_r: int = int(payload.get("target_r", 0))
+			var power: int = int(payload.get("current_power", 0))
+			var source_text := _source_text(payload)
+			return "[color=#9ad]⏱ 基础移动前 | 机甲:%s | 目标:(%d,%d) | 当前动力:%d | 来源:%s[/color]" % [mech_name, target_q, target_r, power, source_text]
+		&"BASIC_MOVE_AT":
+			var mech_name := _mech_display_name(String(payload.get("mech_id", &"")))
+			var cost: int = int(payload.get("power_cost", 0))
+			return "[color=#9ad]⏱ 基础移动时 | 机甲:%s | 消耗动力:%d[/color]" % [mech_name, cost]
+		&"BASIC_MOVE_AFTER":
+			var mech_name := _mech_display_name(String(payload.get("mech_id", &"")))
+			var target_q: int = int(payload.get("target_q", 0))
+			var target_r: int = int(payload.get("target_r", 0))
+			var remaining_power: int = int(payload.get("remaining_power", 0))
+			return "[color=#9ad]⏱ 基础移动后 | 机甲:%s → (%d,%d) | 剩余动力:%d[/color]" % [mech_name, target_q, target_r, remaining_power]
+		&"BASIC_MOVE_SETTLE":
+			var mech_name := _mech_display_name(String(payload.get("mech_id", &"")))
+			return "[color=#9ad]⏱ 基础移动结算 | 机甲:%s[/color]" % mech_name
+		&"SINGLE_MOVE_SETTLE":
+			var mech_name := _mech_display_name(String(payload.get("mech_id", &"")))
+			return "[color=#9ad]⏱ 单次移动结算 | 机甲:%s[/color]" % mech_name
+		&"SHOW_CARD_BEFORE":
+			var card_names: Array = []
+			var card_ids: Array = payload.get("card_ids", [])
+			for cid in card_ids:
+				card_names.append(_card_display_name(cid))
+			var cards_text := "、".join(card_names) if card_names.size() > 0 else "未知"
+			var viewer := _mech_display_name(String(payload.get("viewer_mech_id", &"")))
+			var persistent: bool = payload.get("persistent", false)
+			var persist_text := " [持续展示]" if persistent else ""
+			return "[color=#9ad]⏱ 展示牌前 | 牌:%s | 展示给:%s%s[/color]" % [cards_text, viewer, persist_text]
+		&"SHOW_CARD_AFTER":
+			var card_names: Array = []
+			var card_ids: Array = payload.get("card_ids", [])
+			for cid in card_ids:
+				card_names.append(_card_display_name(cid))
+			var cards_text := "、".join(card_names) if card_names.size() > 0 else "未知"
+			return "[color=#9ad]⏱ 展示牌后 | 牌:%s[/color]" % cards_text
+		&"SHOW_CARD_SETTLE":
+			return "[color=#9ad]⏱ 展示牌结算[/color]"
+		&"VICTORY_REACHED":
+			var victory_type: String = String(payload.get("victory_type", ""))
+			var winner := _player_name(String(payload.get("winner_id", &"")))
+			return "[color=gold]★ 达到胜利条件! | 方式:%s | 胜利者:%s[/color]" % [victory_type, winner]
+		_:
+			if action_type != "":
+				return "[color=#88aacc][⏱ %s%s: %s] 参数:%s[/color]" % [prefix, _action_type_display(action_type), name, _compact_payload(payload)]
+			return "[color=#88aacc][⏱ %s] 参数:%s[/color]" % [name, _compact_payload(payload)]
+
+
+# ═══════════════════════════════════════════
+# 辅助方法 — 新增
+# ═══════════════════════════════════════════
+
+
+## 修正方式 → 中文
+func _method_text(method: String) -> String:
+	match method:
+		"add", "increase": return "增加"
+		"sub", "decrease": return "减少"
+		"restore": return "回复"
+	return method
+
+
+## 数值类型 → 对象类型描述
+func _stat_target_type_text(stat_type: String) -> String:
+	match stat_type:
+		"护甲", "armor": return "机甲"
+		"动力", "power": return "机甲"
+		"金币", "gold": return "机甲"
+		"威力", "might", "attack_power": return "攻击动作"
+		"范围", "range", "attack_range": return "攻击动作"
+	return "对象"
+
+
+## 来源信息 → 可读文本
+func _source_text(payload: Dictionary) -> String:
+	var parts: Array = []
+	var effect_id: String = String(payload.get("effect_id", &""))
+	if effect_id != "":
+		parts.append("效果:%s" % effect_id)
+	var source_card := _card_display_name(payload.get("source_card_id", &""))
+	if source_card != "—" and source_card != "":
+		parts.append("牌:%s" % source_card)
+	var source_mech_id: String = String(payload.get("source_mech_id", &""))
+	if source_mech_id != "":
+		var mech_name := _mech_display_name(source_mech_id)
+		if mech_name != source_mech_id:
+			parts.append("机甲:%s" % mech_name)
+	var source_action_id: String = String(payload.get("source_action_id", payload.get("action_id", &"")))
+	if source_action_id != "":
+		parts.append("动作:%s" % source_action_id)
+	var card_instance_id: String = String(payload.get("card_instance_id", &""))
+	if card_instance_id != "" and source_card == "—":
+		var cn := _card_display_name(card_instance_id)
+		if cn != card_instance_id:
+			parts.append("牌:%s" % cn)
+	return "、".join(parts) if not parts.is_empty() else "系统"
+
+
+## 效果目标 → 可读文本
+func _effect_targets_text(payload: Dictionary) -> String:
+	var parts: Array = []
+	var target_id: String = String(payload.get("target_id", &""))
+	if target_id != "":
+		parts.append(_mech_display_name(target_id))
+	var target_ids: Array = payload.get("target_ids", [])
+	for tid in target_ids:
+		parts.append(_mech_display_name(String(tid)))
+	var target_card_id: String = String(payload.get("target_card_id", payload.get("weapon_id", &"")))
+	if target_card_id != "":
+		parts.append(_card_display_name(target_card_id))
+	return "、".join(parts) if not parts.is_empty() else "—"
+
+
+func _action_type_display(action_type: String) -> String:
+	match action_type:
+		"attack": return "攻击"
+		"use_action_card": return "使用行动牌"
+		"stat_modify": return "数值修正"
+		"basic_move": return "基础移动"
+		"single_move": return "单次移动"
+		"set_equipment": return "设置装备"
+		"gain_card": return "获取牌"
+		"discard_card": return "弃牌"
+		"effect_fire": return "效果发动"
+		"hp_change": return "生命变动"
+		"damage_change": return "损伤变动"
+		"show_card": return "展示牌"
+		"turn": return "回合"
+		"charge": return "聚能"
+		"repair": return "维修"
+		"lock_on": return "锁定"
+		"combine": return "联合"
+	return action_type
+
+
+# ═══════════════════════════════════════════
+# 辅助方法 — 原有
+# ═══════════════════════════════════════════
+
+
+## 压缩 payload 为简洁的字符串显示
+func _compact_payload(payload: Dictionary) -> String:
+	var parts: Array = []
+	for key in payload.keys():
+		# 跳过一些大字段
+		if key == "modifiers" or key == "available_cards":
+			continue
+		var value = payload[key]
+		var value_str := ""
+		if value is Array:
+			if value.size() <= 3:
+				value_str = str(value)
+			else:
+				value_str = "[%d项]" % value.size()
+		elif value is Dictionary:
+			value_str = "{...}"
+		else:
+			value_str = str(value)
+		parts.append("%s:%s" % [key, value_str])
+	return "{" + ", ".join(parts) + "}"
 
 
 ## 行动牌类型 → 中文
@@ -552,6 +1164,7 @@ func _action_type_text(at: String) -> String:
 func _zone_text(zone: String) -> String:
 	match zone:
 		"hand": return "手牌"
+		"temp_zone": return "临时区"
 		"equipped": return "装备区"
 		"discard": return "弃牌堆"
 		"deck": return "牌库"

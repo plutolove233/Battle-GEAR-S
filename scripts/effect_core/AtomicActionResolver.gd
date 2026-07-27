@@ -5,6 +5,7 @@
 ## 所有 GameContext 引用替代了原设计的 Autoload 单例。
 extends RefCounted
 class_name AtomicActionResolver
+const SLog = preload("res://scripts/services/slog.gd")
 
 
 ## 解析单个动作字典，分发到 GameActions 对应方法
@@ -17,8 +18,18 @@ static func resolve(binding: EffectBinding, payload: Dictionary, action: Diction
 	var action_type: StringName = action.get("type", &"")
 	var params: Dictionary = _resolve_params(action.get("params", {}), binding, payload)
 
-	# P0-0: 诊断日志
-	print("[AtomicActionResolver] action=%s params=%s" % [String(action_type), JSON.stringify(params).left(120)])
+	# P0-0: 诊断日志 → 使用 SessionLogger 记录详细动作信息
+	var source_info := {
+		"effect_id": binding.effect.effect_id if binding.effect else &"",
+		"card_id": binding.get_source_instance_id() if binding else &"",
+		"mech_id": binding.get_source_mech_id() if binding else &"",
+		"player_id": binding.get_owner_player_id() if binding else &"",
+	}
+	SLog.log_action_step(
+		payload.get("action_id", &"") if payload else &"",
+		action_type, &"resolve", 0,
+		params, source_info
+	)
 
 	match action_type:
 		# ── 攻击相关 ──
@@ -27,6 +38,12 @@ static func resolve(binding: EffectBinding, payload: Dictionary, action: Diction
 
 		&"MODIFY_ATTACK_POWER":
 			context.game_actions.modify_attack_power(params)
+
+		# 破甲 effect2：修改当前攻击动作的 extra_markers。
+		# 注意：正常路径由 ActionService._execute_atomic_action 直接特判处理（可拿到 parent_action），
+		# 此分支仅作防御性兜底——AtomicActionResolver 无法直接访问 parent_action，故 noop 并告警。
+		&"MODIFY_ATTACK_MARKERS":
+			push_warning("AtomicActionResolver: MODIFY_ATTACK_MARKERS 应由 ActionService 处理，此处 noop")
 
 		&"MODIFY_ATTACK_RANGE":
 			context.game_actions.modify_attack_range(params)
@@ -134,10 +151,46 @@ static func resolve(binding: EffectBinding, payload: Dictionary, action: Diction
 
 		# ── 状态 ──
 		&"ADD_STATUS":
-			context.game_actions.add_status(params)
+			# 支持简化参数格式：status_type + duration
+			# 也支持完整参数格式：target_id + status dict
+			var status_type: StringName = params.get("status_type", &"")
+			var duration = params.get("duration", 1)
+			var target_is_attack_target: bool = params.get("target_is_attack_target", false)
+
+			var target_id: StringName = params.get("target_id", &"")
+			if target_id == &"":
+				# 如果指定了 target_is_attack_target，从攻击 payload 获取目标
+				if target_is_attack_target and context.game_state.current_attack_id != &"":
+					var attack: Dictionary = context.game_state.attacks.get(context.game_state.current_attack_id, {})
+					target_id = attack.get("target_id", &"")
+				else:
+					target_id = binding.get_source_mech_id()
+
+			if target_id == &"" or status_type == &"":
+				push_error("ADD_STATUS 缺少 target_id/status_type")
+				return
+
+			var status: Dictionary = {
+				"type": status_type,
+				"duration": duration,
+				"source_card_id": params.get("source_card_id", binding.get_source_instance_id()),
+				"source_player_id": binding.get_owner_player_id(),
+			}
+
+			# 如果有 stacks 参数
+			if params.has("stacks"):
+				status["stacks"] = params["stacks"]
+
+			context.game_actions.add_status({
+				"target_id": target_id,
+				"status": status,
+			})
 
 		&"REMOVE_STATUS":
 			context.game_actions.remove_status(params)
+
+		&"DECREMENT_STATUS_DURATION":
+			context.game_actions.decrement_status_duration(params)
 
 		&"ADD_RULE_MODIFIER":
 			context.game_actions.add_rule_modifier(params)
@@ -244,6 +297,9 @@ static func resolve(binding: EffectBinding, payload: Dictionary, action: Diction
 
 		&"DRAW_ADVANCED_EQUIPMENT":
 			context.game_actions.draw_advanced_equipment(params)
+
+		&"AWAKEN_DRAW":
+			context.game_actions.awaken_draw(params)
 
 		&"PLACE_CARD_IN_DECK_FACE_UP":
 			context.game_actions.place_card_in_deck_face_up(params)

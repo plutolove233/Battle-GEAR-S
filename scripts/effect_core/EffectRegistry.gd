@@ -12,7 +12,7 @@ class_name EffectRegistry
 const _GameContext = preload("res://scripts/runtime/GameContext.gd")
 const _CardInstance = preload("res://scripts/runtime/CardInstance.gd")
 const _CardEffect = preload("res://scripts/effect_core/CardEffect.gd")
-const _EffectBinding = preload("res://scripts/effect_core/EffectBinding.gd")
+const _EffectBinding = preload("res://scripts/action_core/EffectBinding.gd")
 const _EffectConst = preload("res://scripts/effect_core/EffectConst.gd")
 
 ## 依赖注入：GameContext 容器

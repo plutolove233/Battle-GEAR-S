@@ -50,7 +50,8 @@ func _trigger_gold_marker(mech_id: StringName, _marker: Dictionary) -> Dictionar
 	if player == null:
 		return {"ok": false, "message": "找不到玩家"}
 
-	var roll: int = randi() % _GameConfig.GOLD_MARKER_D6 + 1
+	var _r = context.rng if context != null and context.rng != null else null
+	var roll: int = (_r.randi() if _r != null else randi()) % _GameConfig.GOLD_MARKER_D6 + 1
 	player.gold += roll
 
 	gs.write_log(&"marker_gold", {

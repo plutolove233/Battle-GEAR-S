@@ -1,0 +1,114 @@
+## basic_move_action.gd — 基础移动动作
+##
+## 按新规则文档定义的基础移动动作生命周期：
+##   ① 提取目标格子 → 发出 BASIC_MOVE_BEFORE
+##   ② 消耗动力 → 发出 BASIC_MOVE_AT
+##   ③ 移动位置 → 发出 BASIC_MOVE_AFTER
+##   ④ 基础移动结算 → 发出 BASIC_MOVE_SETTLE
+##
+## 参考：new_logic/各动作的生命周期与时点.docx "基础移动动作"
+extends Action
+class_name BasicMoveAction
+
+const _TimingConst = preload("res://scripts/action_core/TimingConst.gd")
+const _HexGrid = preload("res://scripts/battle/hex_grid.gd")
+
+
+func _init() -> void:
+	action_type = &"basic_move"
+
+
+func setup_steps() -> void:
+	steps = [
+		{step_name = &"extract_target",  timing_point = _TimingConst.BASIC_MOVE_BEFORE, handler = _step_extract_target},
+		{step_name = &"consume_power",   timing_point = _TimingConst.BASIC_MOVE_AT,     handler = _step_consume_power},
+		{step_name = &"move_position",   timing_point = _TimingConst.BASIC_MOVE_AFTER,  handler = _step_move_position},
+		{step_name = &"settle",          timing_point = _TimingConst.BASIC_MOVE_SETTLE, handler = _step_settle},
+	]
+
+
+func get_display_name() -> String:
+	return "基础移动"
+
+
+## ① 提取目标格子
+## 检查：目标格子对机甲的当前可用动力是否可达
+func _step_extract_target(action: Action) -> Dictionary:
+	var mech_id: StringName = action.record.get("mech_id", &"")
+	var target_cell: StringName = action.record.get("target_cell", &"")
+	var mech = context.game_state.mechs.get(mech_id)
+	if mech == null or target_cell == &"":
+		return {"error": "缺少机甲或目标格"}
+	var parts: PackedStringArray = String(target_cell).split(",")
+	if parts.size() < 2:
+		return {"error": "目标格格式错误"}
+	var target := {"q": int(parts[0]), "r": int(parts[1])}
+	if _HexGrid.distance(mech.position, target) != 1:
+		return {"error": "基础移动只能移动到相邻格"}
+	var cell = context.game_state.map_state.get_cell(target)
+	if cell == null:
+		return {"error": "目标格不在地图上"}
+	var terrain: StringName = cell.terrain if "terrain" in cell else &"NORMAL"
+	if terrain == &"RED":
+		return {"error": "不可通过的地形"}
+	for other_id: StringName in context.game_state.mechs:
+		var other = context.game_state.mechs[other_id]
+		if other_id != mech_id and not other.destroyed and _HexGrid.key(other.position) == _HexGrid.key(target):
+			return {"error": "目标格已被占据"}
+	var cost: int = 2 if terrain == &"GREEN" else 1
+	var available_power: int = int(action.record.get("available_power", mech.power))
+	if cost > mech.power or cost > available_power:
+		return {"error": "动力不足"}
+	return {"power_cost": cost}
+
+
+## ② 消耗动力
+func _step_consume_power(action: Action) -> Dictionary:
+	var result: Dictionary = {}
+	var mech_id: StringName = action.record.get("mech_id", &"")
+	var target_cell: StringName = action.record.get("target_cell", &"")
+
+	if mech_id == &"" or target_cell == &"":
+		return result
+
+	var mech = context.game_state.mechs.get(mech_id)
+	if mech == null:
+		return result
+
+	var cost: int = int(action.record.get("power_cost", 0))
+	if cost <= 0:
+		return {"error": "无效的移动消耗"}
+
+	# 消耗动力
+	if context.game_actions != null:
+		context.game_actions.spend_power({"mech_id": mech_id, "amount": cost})
+
+	result["power_cost"] = cost
+	return result
+
+
+## ③ 移动机甲位置
+func _step_move_position(action: Action) -> Dictionary:
+	var result: Dictionary = {}
+	var mech_id: StringName = action.record.get("mech_id", &"")
+	var target_cell: StringName = action.record.get("target_cell", &"")
+
+	if mech_id == &"" or target_cell == &"" or context.map_service == null:
+		return result
+
+	var parts := target_cell.split(",")
+	if parts.size() >= 2:
+		var target_hex := {"q": int(parts[0]), "r": int(parts[1])}
+		var move_result: Dictionary = context.map_service.commit_basic_move(
+			mech_id, target_hex, int(action.record.get("power_cost", 0))
+		)
+		if not move_result.get("ok", false):
+			return {"error": move_result.get("message", "移动失败")}
+		result["moved_to"] = target_cell
+
+	return result
+
+
+## ④ 基础移动结算
+func _step_settle(action: Action) -> Dictionary:
+	return {}

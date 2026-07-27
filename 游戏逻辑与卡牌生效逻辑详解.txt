@@ -1,0 +1,862 @@
+================================================================================
+机斗战甲 (Battle-GEAR-S) — 当前游戏逻辑与卡牌生效逻辑详解
+================================================================================
+【说明】本文完全基于当前代码（scripts/）梳理，不参考 new_logic/ 设计文档。
+       代码反映的是"现在实际怎么跑"，可能与规则书有出入。
+生成日期：2026-07-14
+
+
+================================================================================
+第一部分　整体架构与两条效果系统
+================================================================================
+
+游戏运行在 Godot 4.6，主场景 res://scenes/app/app_root.tscn，1536×768。
+核心数据流：
+  rule/*.xlsx → tools/export_rule_data → data/*.json → DataRegistry →
+  CardDatabase(→CardDef) → 各系统运行时读取
+
+当前代码里**并存两套效果系统**，这是理解全貌的关键：
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ 系统            │ 位置                         │ 状态   │ 用在哪              │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ Action Engine   │ scripts/action_core/         │ 主系统 │ 行动牌、装备牌效果  │
+│ (新)            │ scripts/action_defs/         │        │ 所有玩家/游戏动作   │
+│                 │ GeneratedActionEffects.gd    │        │                    │
+│                 │ GeneratedEquipmentEffects.gd │        │                    │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ Hook/Effect     │ scripts/effect_core/         │ 兼容层 │ 机师牌效果(121张)   │
+│ Engine (旧)     │ GeneratedPilotEffects.gd     │ 待删   │ DamageTokenService │
+│                 │                              │        │ 的部分hook调用     │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+重要事实：
+- 行动牌(24张)效果全部走新 ActionEffect 体系（GeneratedActionEffects.gd）。
+- 装备牌(42张N部件 + R/SR/SSR)效果走新体系（GeneratedEquipmentEffects.gd）。
+- 机师牌(88张数据/121个效果定义)效果仍走旧 CardEffect+hook 体系
+  （GeneratedPilotEffects.gd），且大量用 CUSTOM_EFFECT_CHECK_TEXT 占位
+  （即只写了描述文本、原子动作尚未真正实现）。
+- DamageTokenService 仍调用旧 effect_engine.fire_hook(HOOK_DAMAGE_DEALT)。
+
+入口约定：所有玩家/游戏动作都通过
+  context.action_service.execute(action_type, params)
+统一发起，不再往 EffectEngine 加新逻辑。
+
+
+================================================================================
+第二部分　Action Engine（新系统）核心机制
+================================================================================
+
+------------------------------------------------------------
+2.1 统一入口 ActionService（scripts/action_core/ActionService.gd）
+------------------------------------------------------------
+三个对外方法：
+  execute(action_type, params)        创建并执行动作
+  continue_action(action_id, input)   恢复等待输入的动作
+  cancel_action(action_id)            取消动作（递归取消子树）
+  execute_sub_action(action_def, payload, parent_action)  效果产生的子动作
+
+init_factories() 注册 13 个动作类型工厂（见第三部分）。
+
+子动作分两类：
+- 原子动作（_is_atomic_action == true）：不创建 Action 实例，直接分发到
+  context.game_actions.xxx。共约 80+ 种原子操作（MODIFY_ATTACK_MIGHT、
+  ADD_STATUS、DRAW_ACTION、PLACE_DAMAGE_TOKENS、ROLL_D6…）。
+- 非原子子动作（EXECUTE_ATTACK/EXECUTE_STAT_MODIFY 等）：创建 Action 实例，
+  显式登记 parent_action_id / pending_sub_action_ids 父子关系，由 ActionEngine 驱动。
+
+几个"特判"原子动作直接写父动作 record（不走 game_actions）：
+  MODIFY_ATTACK_MARKERS   → parent.record["extra_markers"] += delta
+  MODIFY_ATTACK_MIGHT     → parent.record["extra_might"]   += delta
+  MODIFY_ATTACK_RANGE     → parent.record["extra_range"]   += delta（支持 min_value 钳制）
+  SET_ATTACK_EFFECTIVE_WEAPON_KIND → parent.record["effective_weapon_type"]
+  MODIFY_ATTACK_TEMP_ARMOR→ 原 attack 动作 record["temporary_armor_bonus"]
+  RESPOND_ATTACK          → 原 attack 动作 record["responded"/"counter_attacked"]
+  NEGATE_ATTACK           → attack.negated = true
+  SET_ATTACK_UNNEGATABLE  → attack.unnegatable = true
+  CANCEL_PARENT_ACTION    → 沿 parent 链找指定类型祖先并取消
+  DISCARD_SELF_AND_REDUCE_ATTACK_MARKERS → 弃本牌 + record["extra_markers"] -= max
+  DRAW_EQUIPMENT_AND_IMMEDIATELY_SET → 抽装备并立即设置到原区域
+  OFFER_DAMAGE_REDIRECT   → 实际由 TimingEngine 拦截弹窗
+
+------------------------------------------------------------
+2.2 Action 基类（Action.gd）
+------------------------------------------------------------
+字段：
+  action_id, action_type, source(来源dict), record(随步骤更新的记录),
+  steps[], current_step_index, state, context,
+  negated(被识破无效), unnegatable(不可被识破),
+  pending_sub_action_ids[](等待的子动作), parent_action_id,
+  _execute_attack_ran(诊断用)
+
+状态：pending / running / waiting_input / waiting_timing /
+      waiting_sub_action / completed / cancelled
+
+每个 step = {step_name, timing_point, handler}
+  timing_point 在 handler 执行**前** fire（重要：先 fire 时点再跑 handler）
+
+------------------------------------------------------------
+2.3 ActionEngine（ActionEngine.gd）驱动流程
+------------------------------------------------------------
+execute_action(action):
+  1. 守卫：已 completed/cancelled 拒绝重复执行（修 bug3b 二次结算）
+  2. state=running
+  3. _run_step_loop 从 current_step_index+1 开始
+     每个 step：
+       a. 若有 timing_point → TimingEngine.fire_timing（可能让 action 暂停成 waiting_timing）
+       b. 若 attack 被 negated → 跳到 settle step
+       c. 调 handler(action) → 返回 result
+       d. result.need_input=true → 暂停 waiting_input，发 action_needs_input 信号
+       e. result.sub_action_created=true → 暂停 waiting_sub_action 等子动作
+  4. 全部跑完 → _complete_action
+
+continue_action(action_id, input_data):
+  - 仅 waiting_input/waiting_timing/waiting_sub_action 可恢复
+  - waiting_input 恢复时**重新执行当前 step handler**（回填玩家输入）
+  - waiting_timing/waiting_sub_action 恢复时**不重跑**当前 step（避免重复 fire）
+  - 然后继续后续 step
+
+cancel_action：递归取消子树 → 标 cancelled → 通知父动作从等待列表移除 → cleanup。
+
+父子等待：子动作 _complete_action 时用 call_deferred 通知父动作
+（避免清理过程中递归）；父动作所有子动作结束后 continue_action 恢复。
+
+------------------------------------------------------------
+2.4 TimingEngine（TimingEngine.gd）时点与监听
+------------------------------------------------------------
+fire_timing(timing, action):
+  1. payload = action.record 副本 + action_id/action_type
+  2. 收集监听器：permanent_listeners（装备/机师持续效果）
+     + temporary_listeners（行动牌临时效果、状态效果、手牌AVAILABILITY）
+     按 listen_action_type / 绑定 action_id 过滤
+  3. 分离出 AVAILABILITY 模式效果 → 若有则开响应窗口、暂停动作并 return
+  4. 常规监听器按 priority 升序（同优先级按注册 seq "先来后到"）依次 _execute_effect
+  5. 任一监听器让 action 进 waiting_timing（如请求目标选择）则中断循环
+
+监听器注册：
+  register_permanent_listener(timing, effect, binding_context)
+    — 装备 set_equipment 时注册；binding_context 携带
+      {card_instance_id, mech_id, player_id, card_def_id}
+  register_temporary_listener(timing, action_id, action_type, effect, ...)
+    — 行动牌使用时注册，绑定到 action_id
+  register_status_listener — 状态施加时注册，status_id 关联
+  register_availability_listener — 手牌迎击牌注册为响应窗口可用牌
+
+注销：
+  unregister_permanent_listeners_for_card(card_id) — 装备弃置/替换
+  unregister_listeners_for_action / _for_card / _for_status
+
+每回合1次控制（once_per_turn_key）：
+  _once_per_turn_used = { "card_id:key": {turn_number: used_count} }
+  触发前检查 used >= once_per_turn_max 则跳过；执行后 +1。
+  scope=turn_number，换回合自动失效。
+
+挂起效果（_pending_effect）：optional 弃牌/目标选择/二选一/损伤转移
+  需要玩家输入时存 {effect, payload, phase}，弹窗；
+  resume_pending_effect 注入输入后续跑 _execute_effect / _pay_costs + _execute_actions。
+
+------------------------------------------------------------
+2.5 _execute_effect 执行链（单个效果如何生效）
+------------------------------------------------------------
+顺序：
+  1. requires_effect 检查（依赖的前置效果是否已执行）
+  2. _check_conditions（ConditionChecker）
+  3. once_per_turn 检查
+  4. _check_targets（TargetChecker）；需要玩家选目标则 _request_target_selection 挂起
+  5. _check_costs（CostChecker）；optional 弃牌则 _request_optional_discard 挂起
+  6. _pay_costs
+  7. _execute_actions：遍历 effect.actions[] 逐个执行
+     - REGISTER_LISTEN → 注册临时监听器
+     - CHOOSE_ONE → 二选一/多选一，未选则挂起 choose_one_effect 弹窗
+     - OFFER_DAMAGE_REDIRECT → 损伤转移弹窗（AI 自动决策，玩家挂起 redirect_select）
+     - 其它 → execute_sub_action(act, payload, action)
+  8. 标记 once_per_turn used
+  9. _mark_effect_executed（供 requires_effect 查询）
+     若迎击牌效果，同步标记到原 attack 动作（跨动作 requires_effect）
+
+来源解析 _make_binding_from_effect：
+  优先 payload.binding_context（装备 permanent listener），
+  退回 action.source（行动牌 DIRECT/临时监听）。
+  装备效果触发时 action 是被监听时点所属动作（如 attack），
+  其 source 是攻击方而非装备牌——故装备 condition 必须从 binding_context 取。
+
+
+================================================================================
+第三部分　13 种动作类型（scripts/action_defs/）
+================================================================================
+每种动作 setup_steps() 定义步骤数组 [{step_name, timing_point, handler}]。
+TimingConst 定义所有时点常量（见 2.x 已列）。
+
+------------------------------------------------------------
+3.1 attack（attack_action.gd）攻击动作 ★核心
+------------------------------------------------------------
+8 步：
+  ① extract_attack_info  无时点   记录 attacker_mechs/attack_source/target_count
+  ② select_weapon        ATTACK_BEFORE  选武器（已指定则直接用）；记录
+       weapon_might/weapon_range/effective_weapon_type
+  ③ select_target        ATTACK_PRE     选目标并验范围；
+       有效范围 = weapon_range + extra_range（最低1）
+  ④ execute_attack       ATTACK_AT      初始化 responded/counter_attacked=false（幂等）；
+       【响应窗口在此 fire】：AVAILABILITY 迎击牌暂停动作
+  ⑤ check_hit            无时点   hit = 目标在有效范围内且未 destroyed；negated→hit=false
+  ⑥ calculate_damage     ATTACK_AFTER   伤害=max(0, weapon_might+extra_might - (护甲+temp_armor))
+       损伤=floor(攻击威力/5) + extra_markers - damage_reduction
+       【破甲 effect2/防御等在此后写入 extra_markers/temp_armor，统一一次结算】
+  ⑦ apply_damage         无时点   产生子动作 hp_change（伤害）+ damage_change（损伤）；
+       损伤放置者：被响应→目标玩家，否则→攻击者玩家
+  ⑧ settle               ATTACK_SETTLE  弃攻击牌/迎击牌，写 attack_resolved/attack_miss 日志
+
+伤害公式（BattleMath 一致）：
+  damage = max(0, 攻击威力 - (目标护甲 + 临时护甲) - damage_reduction)
+  markers = floor(攻击威力 / 5) + extra_markers    （攻击威力含 extra_might）
+  每 5 点攻击力 = 1 枚损伤标记
+
+武器来源：frame_base_weapon_N（机甲框架自带武器，trim_prefix 解析索引）
+  或 CardInstance（设置的武器装备牌）。
+
+------------------------------------------------------------
+3.2 use_action_card（use_action_card_action.gd）使用行动牌 ★核心
+------------------------------------------------------------
+5 步：
+  ① validate_card    USE_ACTION_BEFORE  验证牌可用、记录 mech_id；
+       攻击牌检查 can_attack()；纯 AVAILABILITY 牌禁止主动打出
+  ② card_to_temp_zone 无时点  从手牌移除→temp_zone；
+       注销手牌 AVAILABILITY 监听；注册 DIRECT/LISTEN 效果临时监听器
+  ③ fire_use_action_at USE_ACTION_AT  空 handler（修"框点两次不生效"拆分）
+  ④ execute_effects  USE_ACTION_AFTER  执行 DIRECT 效果；
+       攻击牌 attack_count_this_turn+=1；
+       注册延迟 LISTEN（bind_to_sub）到 DIRECT 产生的 attack 子动作；
+       若有未完成子动作 → sub_action_created 暂停
+  ⑤ settle           USE_ACTION_SETTLE  非虚拟牌进行动弃牌堆
+
+LISTEN 效果三种绑定：
+  bind_to_attack_action=true → 绑到原 attack 动作（迎击牌 effect2，如反击的反击攻击）
+  bind_to_sub=true           → 延迟绑到 DIRECT 产生的子动作（如破甲 effect2 绑 attack A）
+  否则                       → 绑到本 use_action_card 动作
+
+------------------------------------------------------------
+3.3 set_equipment（set_equipment_action.gd）设置装备牌 ★核心
+------------------------------------------------------------
+7 步：
+  ① extract_info     无时点
+  ② select_slot      无时点  选区域（已指定则直接用）
+  ③ discard_old      无时点  弃置旧装备：先注销旧装备 permanent_listener，
+       再 discard_card(reason=equipment_replace)，slot.equipped_card=null
+  ④ remove_damage    SET_EQUIP_BEFORE  按新装备耐久度移除区域内损伤
+  ⑤ place_equip      SET_EQUIP_AT   装备设置到区域；
+       注册装备效果（_register_equipment_effects）；
+       PART 槽重算 max_power 并调整当前动力
+  ⑥ activate_equip   SET_EQUIP_AFTER  空步（效果已注册）
+  ⑦ settle           SET_EQUIP_SETTLE  fire 时点
+
+_register_equipment_effects：
+  查 GeneratedEquipmentEffects.get_effects_for_card 取 effect_id 列表。
+  - 派生值型效果（002/008/014/016/021/023）不注册监听器，实时重算。
+  - DIRECT 主动效果（无 listen_timing）注册到"以 effect_id 为虚拟时点"，
+    供 equipment_panel/skill_bar 扫描主动触发。
+  - LISTEN 效果注册到 effect.listen_timing，携带 binding_context。
+  弃置/替换时 unregister_permanent_listeners_for_card。
+
+------------------------------------------------------------
+3.4 basic_move（basic_move_action.gd）基础移动
+------------------------------------------------------------
+4 步：extract_target(BASIC_MOVE_BEFORE) → consume_power(BASIC_MOVE_AT) →
+      move_position(BASIC_MOVE_AFTER) → settle(BASIC_MOVE_SETTLE)
+动力消耗：NORMAL=1，GREEN=2，RED 不可通过。
+通过 MapService.move_mech_to_hex 改位置。
+
+------------------------------------------------------------
+3.5 single_move（single_move_action.gd）单次移动
+------------------------------------------------------------
+迎击牌（回避/疾行/反击/识破）的移动用此。
+支持 power_fraction（如 0.5=半动力）、use_current_power（全动力）、loop_until_cancel、max_cells。
+时点 BASIC_MOVE_SETTLE / SINGLE_MOVE_SETTLE。
+
+其余动作类型（每个 setup_steps 定义步骤+时点）：
+  stat_modify       STAT_MOD_BEFORE/AFTER/SETTLE      数值修正（护甲/动力/威力）
+  gain_card         GAIN_CARD_BEFORE/AFTER/SETTLE     获取牌（指定/随机/弃牌堆）
+  discard_card      DISCARD_BEFORE/AFTER/SETTLE       弃牌（含 from_target 从目标手牌弃）
+  steal_action_card 抢牌（识破 effect1：from_attacker 偷1）
+  effect_fire       EFFECT_FIRE_BEFORE/AFTER/SETTLE   按 effect_id 发动效果
+  hp_change         HP_CHANGE_BEFORE/AFTER/SETTLE     生命变动（damage_change 前 fire DAMAGE_REDIRECT_WINDOW）
+  damage_change     DAMAGE_CHANGE_BEFORE/AFTER/SETTLE 损伤变动；
+                    place_damage_tokens 前 fire DAMAGE_REDIRECT_WINDOW（损伤转移窗口）
+  show_card         SHOW_CARD_BEFORE/AFTER/SETTLE     展示/翻看牌
+
+
+================================================================================
+第四部分　回合 / 轮次流程
+================================================================================
+
+TurnService（scripts/services/TurnService.gd）
+
+start_turn(player_id)：
+  1. active_player_id=player_id, phase=TURN_START
+     player("player") 回合则 turn_number+=1
+  2. 清 once_per_turn_used / turn_counters / sell_equipment_count；
+     mech.attack_count_this_turn=0
+  3. 位次1玩家回合开始前 fire ROUND_START
+  4. fire TURN_BEFORE_START
+  5. fire TURN_START；restore_power(full) 回满动力
+  6. 抽 2 行动牌（每张 register_hand_card_availability 注册 AVAILABILITY 监听）
+  7. 抽 1 装备牌
+  8. gain_gold(2)
+  9. phase=MAIN
+  10. fire TURN_AFTER_START
+
+end_turn(player_id)：
+  1. phase=TURN_END
+  2. fire TURN_BEFORE_END
+  3. fire TURN_END；event_timer_service.tick_on_turn_end 推进事件计时
+  4. 弃超 action_card_limit 的行动牌（pop_back）
+  5. 弃全部未设置装备牌
+  6. _clean_this_turn_durations：清 THIS_TURN 状态（含 POWER_MODIFIER 反算动力）
+  7. fire TURN_AFTER_END
+  8. victory_service.check_victory()
+
+RoundService：1v1 轮换 turn_order，player 为位次1。
+
+时点全览（TimingConst）：
+  回合：ROUND_START / TURN_BEFORE_START / TURN_START / TURN_AFTER_START
+        / TURN_BEFORE_END / TURN_END / TURN_AFTER_END
+  攻击：ATTACK_BEFORE / ATTACK_PRE / ATTACK_AT / ATTACK_AFTER / ATTACK_SETTLE
+  使用行动牌：USE_ACTION_BEFORE / USE_ACTION_AT / USE_ACTION_AFTER / USE_ACTION_SETTLE
+  移动：BASIC_MOVE_BEFORE/AT/AFTER/SETTLE，SINGLE_MOVE_SETTLE
+  装备：SET_EQUIP_BEFORE/AT/AFTER/SETTLE
+  其它：STAT_MOD_* / GAIN_CARD_* / DISCARD_* / EFFECT_FIRE_* / HP_CHANGE_*
+        / DAMAGE_CHANGE_* / SHOW_CARD_*
+  特殊：DAMAGE_REDIRECT_WINDOW（损伤转移）、VICTORY_REACHED
+
+响应窗口机制：
+  attack 的 ATTACK_AT 时点 fire 时，TimingEngine 收集 AVAILABILITY 监听器
+  （手牌中的迎击牌，availability_condition=RESPOND_ATTACK 等）。
+  有可用牌 → response_window_opened 信号 → ActionUIBridge 弹响应面板 →
+  attack 暂停 waiting_timing。
+  玩家选迎击牌 → handle_response_selection 发起 use_action_card 子动作
+  （注入 attack_action_id），attack 切 waiting_sub_action 等其完成。
+  玩家取消（空选）→ continue_action 恢复 attack 继续 check_hit/apply_damage/settle。
+  重入保护：_handled_response_actions 按 action_id 去重，防双信号重复触发。
+
+
+================================================================================
+第五部分　战斗系统
+================================================================================
+
+- HexGrid：轴向坐标 q,r；24×8 地图。
+- RangeCalculator：BFS 范围计算（地形感知：GREEN=2动力，RED阻挡）。
+- BattleMath：damage=max(0,attack-armor)，markers=floor(attack/5)。
+- 攻击流程见 3.1。
+- 损伤放置（DamageTokenService）：
+    place_one_token_at_slot（玩家逐枚选槽位）
+    place_damage_tokens（AI 自动放置）
+  优先级：已装备部件 > 已装备武器 > 空部件 > 空武器 > 其他
+  规则：有装备槽位时，空槽位不可放置。
+  每放一枚：region_damage_tokens+1，有装备则 equipped_card.damage_tokens+1，
+  然后 equipment_break_service.check_equipment_broken。
+  注：DamageTokenService 仍调旧 effect_engine.fire_hook(HOOK_DAMAGE_DEALT)。
+- 装备破坏：损伤 ≥ 耐久度 → EquipmentBreakService 走破坏流程（注销→弃置）。
+- 地图标记：GOLD（D6 得金）、EVENT（抽事件）、TRAP（范围1爆破 伤害3 损伤1）。
+
+胜利条件（VictoryService.check_victory）：
+  - 机甲 destroyed → 对方胜
+  - HP≤0 → 对方胜
+  - 回合数 ≥ turn_limit（默认12，GameConfig.MAX_TURNS=30，temp_values 可覆盖）
+    → 比 HP，HP 高者胜；HP 相同则进攻方不利（判负）
+  达成时 fire VICTORY_REACHED 时点。
+
+
+================================================================================
+第六部分　卡牌生效逻辑（逐个）—— 行动牌（24张，新体系）
+================================================================================
+来源：GeneratedActionEffects.gd
+每张牌 → 1~3 个 ActionEffect，模式 DIRECT/LISTEN/AVAILABILITY。
+状态效果（聚能/联合/锁定/折扣）有独立 LISTEN 效果，施加状态时注册为临时监听器。
+
+------------------------------------------------------------
+1. 进攻 action_001  attack_basic_direct (DIRECT)
+   动作：EXECUTE_ATTACK target_count=1。基础攻击牌，打1目标。
+
+2. 强袭 action_002
+   - assault_effect1 (DIRECT)：EXECUTE_ATTACK 打1目标。
+   - assault_effect2 (LISTEN, ATTACK_AFTER, priority=-1)：
+     条件 ATTACK_WAS_RESPONDED（被迎击）→ EXECUTE_SINGLE_MOVE 全动力循环移动。
+
+3. 猛击 action_003
+   - smash_effect1 (DIRECT)：EXECUTE_ATTACK。
+   - smash_effect2 (LISTEN, ATTACK_BEFORE)：MODIFY_ATTACK_MIGHT delta=+4
+     （写 attack A 的 extra_might，结算时计入威力）。
+
+4. 破甲 action_004
+   - armor_break_effect1 (DIRECT)：EXECUTE_ATTACK。
+   - armor_break_effect2 (LISTEN, ATTACK_AFTER, 条件 ATTACK_HIT)：
+     MODIFY_ATTACK_MARKERS delta=+2（写 extra_markers，命中则损伤+2）。
+
+5. 双连 action_005  dual_strike_direct (DIRECT)
+   EXECUTE_ATTACK target_count=2。打2目标。
+
+6. 闪击 action_006
+   - flash_effect1 (DIRECT)：EXECUTE_ATTACK。
+   - flash_effect2 (LISTEN, ATTACK_SETTLE)：
+     条件 HAS_ACTION_CARD_IN_HAND + ATTACK_TARGET_ALIVE + WEAPON_CAN_ATTACK_AGAIN；
+     费用 optional DISCARD_ACTION_CARD 1（弹窗选弃牌再攻/取消）；
+     动作 EXECUTE_ATTACK use_previous_weapon+use_previous_target（同武器同目标再攻）。
+
+7. 回避 action_008（迎击牌）
+   - evade_availability (AVAILABILITY, RESPOND_ATTACK, priority 5)：被攻击时可用。
+   - evade_effect1 (DIRECT)：RESPOND_ATTACK + EXECUTE_SINGLE_MOVE 1/2动力循环移动。
+
+8. 疾行 action_011（迎击牌）
+   - rush_availability (AVAILABILITY, RESPOND_ATTACK)。
+   - rush_effect1 (DIRECT)：RESPOND_ATTACK + 全动力循环移动。
+
+9. 防御 action_009（迎击牌）
+   - defend_availability (AVAILABILITY, RESPOND_ATTACK)。
+   - defend_effect1 (DIRECT)：RESPOND_ATTACK + MODIFY_ATTACK_TEMP_ARMOR +5
+     + MODIFY_ATTACK_MARKERS -1（本次攻击护甲+5、损伤-1）。
+
+10. 反击 action_010（迎击牌）
+    - counter_availability (AVAILABILITY, RESPOND_ATTACK)。
+    - counter_effect1 (DIRECT)：RESPOND_ATTACK + 1/2动力循环移动。
+    - counter_effect2 (LISTEN, ATTACK_SETTLE, requires_effect=counter_effect1,
+      bind_to_attack_action)：EXECUTE_ATTACK target_is_original_attacker
+      （对原攻击者反击）。
+
+11. 维修 action_013  repair_direct (DIRECT)
+    目标规则 TARGET_IS_ADJACENT_OR_SELF（自身+1格内机甲）；
+    CHOOSE_ONE 二选一：回复4生命 / 移除2损伤。
+
+12. 聚能 action_014  energy_direct (DIRECT)
+    目标规则 CHOOSE_OWN_WEAPON；
+    APPLY_ENERGY_TO_WEAPON delta=4（对选中的武器施加1层聚能状态）。
+    聚能状态效果（施加状态时注册）：
+      - energy_status_might (LISTEN, ATTACK_BEFORE, 条件 WEAPON_HAS_ENERGY_CHARGE)：
+        EXECUTE_STAT_MODIFY might +4*N（N=聚能层数）
+      - energy_status_clear_on_attack (LISTEN, ATTACK_SETTLE, requires energy_status_might)：
+        REMOVE_STATUS ENERGY_CHARGE（攻击结算后清除）
+      - energy_status_clear_on_turn_end (LISTEN, TURN_AFTER_END)：回合结束清除
+
+13. 推进 action_015
+    - thrust_effect1 (DIRECT)：EXECUTE_STAT_MODIFY power +5。
+    - thrust_effect2 (LISTEN, USE_ACTION_AT, 条件 USED_COUNTER_CARD)：
+      监听迎击牌使用，CHOOSE_ONE 可选执行推进效果1（power+5）。
+
+14. 掩护 action_016（迎击牌，友方被攻击时）
+    - cover_availability (AVAILABILITY, ALLY_IN_RANGE_TARGETED, priority 10)：
+      攻击目标为持有者最大武器范围内的友方机甲时可用。
+    - cover_effect1 (LISTEN, ATTACK_AT)：MODIFY_ATTACK_MIGHT delta=-5
+      （每用1张掩护威力-5，多张累加）。
+
+15. 联合 action_018
+    - unite_effect1 (DIRECT, 目标 CHOOSE_OTHER_MECH)：
+      ADD_STATUS UNITE duration=THIS_TURN（对选中的机甲施加联合状态）。
+    - unite_effect2 (LISTEN, USE_ACTION_BEFORE)：
+      CHOOSE_ONE：联合其他机甲 / 弃此牌抽1张行动牌（CANCEL_PARENT_ACTION 中断使用）。
+    联合状态效果：
+      - unite_status_attack (LISTEN, ATTACK_SETTLE, 条件 UNITE_ATTACKER_IS_UNITE_MECH)：
+        CHOOSE_ONE 可选：联合攻击——立即使用1张持有的攻击牌
+        （EXECUTE_USE_ACTION_CARD card_action_type=攻击）。
+      - unite_status_clear (LISTEN, TURN_AFTER_END)：回合结束清除。
+
+16. 回收 action_019  recycle_direct (DIRECT)
+    EXECUTE_GAIN_CARD from_zone=equipment_discard, count=1, random（随机获1张装备弃牌）。
+
+17. 回忆 action_020  recall_direct (DIRECT)
+    EXECUTE_GAIN_CARD from_zone=action_discard, count=2, random（随机获2张行动弃牌）。
+
+18. 折扣 action_021  discount_direct (DIRECT)
+    ADD_STATUS DISCOUNT stacks=2（对自身施加2层折扣状态）。
+    折扣状态：discount_clear_on_turn_end (LISTEN, TURN_AFTER_END, 条件 HAS_DISCOUNT_STATUS)
+      → 回合结束清除。
+
+19. 补给 action_022  supply_direct (DIRECT)
+    DRAW_ACTION 2 + DRAW_EQUIPMENT 1。
+
+20. 锁定 action_023  lock_on_direct (DIRECT, 目标 CHOOSE_OTHER_MECH)
+    APPLY_OR_CHECK_LOCKED mode=apply duration=1（对选中机甲施加锁定状态）。
+    锁定状态效果：
+      - lock_status_suppress_response (LISTEN, ATTACK_AT, priority 20,
+        条件 TARGET_HAS_LOCK_FROM_ATTACKER)：APPLY_CANNOT_RESPOND
+        suppress_below_priority=20（封锁低于20优先级的响应，识破30仍可）。
+      - lock_status_clear_on_hit (LISTEN, ATTACK_AFTER, 条件 ATTACK_HIT+锁定)：
+        REMOVE_STATUS LOCKED。
+      - lock_status_duration_tick (LISTEN, TURN_AFTER_END)：
+        DECREMENT_STATUS_DURATION LOCKED（持续-1，为0移除）。
+
+21. 预判 action_007
+    - predict_effect1 (DIRECT)：EXECUTE_ATTACK。
+    - predict_effect2 (LISTEN, ATTACK_PRE)：ADD_STATUS LOCKED target_is_attack_target=true
+      + EXECUTE_DISCARD from_target count=1（对目标施加锁定并弃目标1张行动牌）。
+    - predict_effect3 (LISTEN, ATTACK_AT)：SET_ATTACK_UNNEGATABLE（攻击不可被识破）。
+
+22. 识破 action_012（迎击牌）
+    - expose_availability (AVAILABILITY, RESPOND_ATTACK, priority 30)。
+    - expose_effect1 (DIRECT)：RESPOND_ATTACK
+      + EXECUTE_STEAL from_attacker count=1 choose（从攻击者手牌选1张获取）
+      + EXECUTE_SINGLE_MOVE 全动力移动。
+    - expose_effect2 (DIRECT, requires_effect=expose_effect1)：NEGATE_ATTACK
+      （无效攻击，跳过其时点与步骤直接进结算）。
+
+23. 觉醒 action_024  awaken_direct (DIRECT)
+    AWAKEN_DRAW：从弃牌堆搜预判/识破，若不存在则选种类，
+    获取弃牌堆1张+牌堆顶1张，共2次。
+
+
+================================================================================
+第七部分　卡牌生效逻辑（逐个）—— 装备牌（42张N部件，新体系）
+================================================================================
+来源：GeneratedEquipmentEffects.gd
+7套（联邦/帝国/重甲/机动/狙击/近战 普装 + 量产装）× 6部位 = 42张 N 部件。
+共用 31 个 effect_id（equipment_effect_001~031）。
+注册方式：set_equipment 设置到区域后 _register_equipment_effects 注册 permanent_listener；
+派生值型不注册，由 MechState/MechSlotState 实时重算。
+以下按 effect_id 列出（同型效果共用）。
+
+001 量产装·已设置可卖出（part_001~006）
+    权限型：不注册监听器。sell_equipment_panel 识别后列出可卖的已设置装备。
+    占位 ActionEffect，实际卖出走 CardSetService。
+
+002 联邦普装·头部：其他区域每设1张"联邦"装备则护甲+1
+    派生值实时重算（compute_faction_armor_bonus），由 MechState.get_armor 调用。
+
+003 联邦普装·躯干：从区域弃置时移除原区域全部损伤
+    LISTEN DISCARD_AFTER，条件 DISCARD_IS_SELF_FROM_SLOT；
+    REMOVE_DAMAGE_TOKENS_FROM_DISCARD_ORIGIN_SLOT amount=-1（全部）。
+
+004 联邦普装·右臂：将要在其他"联邦"装备上设损伤时可转移至本区域
+    LISTEN DAMAGE_REDIRECT_WINDOW，priority 20，
+    条件 REDIRECT_TARGET_HAS_FACTION_EQUIP(联邦)；
+    OFFER_DAMAGE_REDIRECT max_points=-1（不限点数）。
+
+005 联邦普装·左臂 / 近战装·左腿：从区域弃置时抽1装备并立即设置
+    LISTEN DISCARD_AFTER；DRAW_EQUIPMENT_AND_IMMEDIATELY_SET
+    （抽装备到原区域，区域空则自动 set_equipment）。
+
+006 联邦普装·右腿：被指定为攻击目标时可当前回合动力+2
+    LISTEN ATTACK_PRE，条件 SELF_MECH_IS_ATTACK_TARGET；
+    CHOOSE_ONE optional：EXECUTE_STAT_MODIFY power +2 THIS_TURN。
+
+007 联邦普装·左腿：被命中时可弃此牌减最多2损伤
+    LISTEN ATTACK_AFTER，条件 SELF_MECH_IS_ATTACK_TARGET + ATTACK_HIT
+    + ATTACK_MARKERS_ABOVE 0；
+    DISCARD_SELF_AND_REDUCE_ATTACK_MARKERS max_reduce=2（弃本牌+extra_markers-2）。
+
+008 帝国普装·头部：其他区域每设1张"帝国"装备则动力+1
+    派生值实时重算（compute_faction_power_bonus），由 MechState.get_total_power 调用。
+
+009 帝国普装·躯干：被攻击目标时可当前回合动力+3，之后护甲-2
+    LISTEN ATTACK_PRE；CHOOSE_ONE optional：
+    EXECUTE_STAT_MODIFY power +3 THIS_TURN + MODIFY_ARMOR -2 PERMANENT。
+
+010 帝国普装·右臂：攻击结算后回复2动力
+    LISTEN ATTACK_SETTLE，条件 SELF_MECH_IS_ATTACKER；
+    CHOOSE_ONE optional：RESTORE_POWER 2。
+
+011 帝国普装·左臂：攻击结算后回复1动力
+    同010，RESTORE_POWER 1。
+
+012 帝国普装·右腿：每回合1次，累计移动8格后回复2动力
+    LISTEN BASIC_MOVE_AFTER，once_per_turn_key，
+    条件 MOVED_DISTANCE_THIS_TURN_ABOVE 8 + SELF_MECH_IS_MOVE_SUBJECT；
+    CHOOSE_ONE optional：RESTORE_POWER 2。
+
+013 帝国普装·左腿：每回合1次，累计移动8格后回复1动力
+    同012，RESTORE_POWER 1。
+
+014 重甲装·头部/左臂/右腿/左腿：损伤不影响此区域护甲
+    派生值实时重算（slot_has_damage_immune_armor / card_has_damage_immune_armor），
+    由 MechSlotState.get_effective_armor 调用。
+
+015 重甲装·躯干：被攻击目标时可弃2行动牌，当前回合护甲+4
+    LISTEN ATTACK_PRE，条件 SELF_MECH_IS_ATTACK_TARGET + OWNER_ACTION_HAND_ABOVE 2；
+    费用 DISCARD_ACTION_CARD 2；MODIFY_ATTACK_TEMP_ARMOR +4。
+
+016 重甲装·右臂 / 机动装·右腿：此牌损伤≥1时动力+1
+    派生值实时重算（slot_damage_threshold_power_bonus，阈值1）。
+
+017 机动装·头部：每我方回合1次，消耗4动力抽1行动牌
+    DIRECT 主动效果（equipment_panel/skill_bar 触发），once_per_turn_key；
+    条件 IS_OWNER_MAIN_PHASE + OWNER_POWER_ABOVE_OR_EQUAL 4；
+    费用 SPEND_POWER 4；DRAW_ACTION 1。
+
+018 机动装·躯干：被攻击目标时可弃2行动牌，当前回合动力+5
+    LISTEN ATTACK_PRE；费用 DISCARD_ACTION_CARD 2；
+    EXECUTE_STAT_MODIFY power +5 THIS_TURN。
+
+019 机动装·右臂：其他装备将因新损伤弃置时可把最多2损伤转移到本区域
+    LISTEN DAMAGE_REDIRECT_WINDOW，priority 20，条件 REDIRECT_HAS_DESTROYABLE_EQUIP；
+    OFFER_DAMAGE_REDIRECT max_points=2。
+
+020 机动装·左臂：攻击命中后回复3动力
+    LISTEN ATTACK_AFTER，条件 SELF_MECH_IS_ATTACKER + ATTACK_HIT；
+    CHOOSE_ONE optional：RESTORE_POWER 3。
+
+021 机动装·左腿：此牌损伤≥2时动力+1
+    派生值实时重算（阈值2）。
+
+022 狙击装·头部：使用远程武器攻击时范围+1
+    LISTEN ATTACK_BEFORE，条件 SELF_MECH_IS_ATTACKER
+    + ATTACK_EFFECTIVE_WEAPON_KIND(远程)；MODIFY_ATTACK_RANGE +1。
+
+023 狙击装·躯干：无效果（占位）。
+
+024 狙击装·右臂：每我方回合1次，弃1行动牌回复1动力
+    DIRECT 主动效果，once_per_turn_key；
+    条件 IS_OWNER_MAIN_PHASE + HAS_ACTION_CARD_IN_HAND；
+    费用 DISCARD_ACTION_CARD 1；RESTORE_POWER 1。
+
+025 狙击装·左臂：远程武器攻击时可弃1牌使威力+2
+    LISTEN ATTACK_BEFORE，条件 SELF_MECH_IS_ATTACKER
+    + ATTACK_EFFECTIVE_WEAPON_KIND(远程) + HAS_ACTION_CARD_IN_HAND；
+    费用 optional DISCARD_ACTION_CARD 1；MODIFY_ATTACK_MIGHT +2。
+
+026 狙击装·右腿：打出攻击牌时可移动到相邻1格
+    LISTEN USE_ACTION_AT，条件 USED_CARD_TYPE_IS(攻击) + USED_CARD_OWNER_IS_SELF；
+    CHOOSE_ONE optional：EXECUTE_SINGLE_MOVE max_cells=1。
+
+027 狙击装·左腿：打出迎击牌时可移动到相邻1格
+    同026，条件 USED_CARD_TYPE_IS(迎击)。
+
+028 近战装·头部：非近战武器范围-2(最低1)+威力+3+转近战
+    LISTEN ATTACK_BEFORE，priority 20（先于030），
+    条件 SELF_MECH_IS_ATTACKER + ATTACK_EFFECTIVE_WEAPON_KIND_NOT(近战)；
+    CHOOSE_ONE optional：MODIFY_ATTACK_RANGE -2 min_value=1
+    + MODIFY_ATTACK_MIGHT +3 + SET_ATTACK_EFFECTIVE_WEAPON_KIND 近战。
+
+029 近战装·躯干：打出迎击牌时当前回合护甲+2
+    LISTEN USE_ACTION_AT，条件 USED_CARD_TYPE_IS(迎击) + USED_CARD_OWNER_IS_SELF；
+    MODIFY_ARMOR +2 THIS_TURN。
+
+030 近战装·右臂/左臂：近战武器攻击时可弃1牌使威力+2
+    LISTEN ATTACK_BEFORE，priority 10（晚于028转换），
+    条件 SELF_MECH_IS_ATTACKER + ATTACK_EFFECTIVE_WEAPON_KIND(近战)
+    + HAS_ACTION_CARD_IN_HAND；
+    费用 optional DISCARD_ACTION_CARD 1；MODIFY_ATTACK_MIGHT +2。
+
+031 近战装·右腿：因损伤从区域弃置时可移除机甲其他区域最多2损伤
+    LISTEN DISCARD_AFTER，条件 DISCARD_IS_SELF_FROM_SLOT + DISCARD_REASON_IS(damage_durability)；
+    CHOOSE_ONE optional：REMOVE_DAMAGE_TOKENS_OTHER_SLOTS amount=2。
+
+派生值 helper（GeneratedEquipmentEffects 静态方法）：
+  is_equipment_active(card) — 在区域+face_up+未disabled
+  count_faction_equipment(mech, exclude_slot, substring) — 数同名装备
+  compute_faction_armor_bonus / compute_faction_power_bonus
+  slot_has_damage_immune_armor / card_has_damage_immune_armor
+  slot_damage_threshold_power_bonus — 按 effect_016(阈值1)/021(阈值2) 返回 +1
+
+注：装备牌数据共 126 部件 + 40 武器，但效果定义只覆盖 42 张 N 部件。
+R/SR/SSR 装备牌暂无新体系效果定义。
+
+
+================================================================================
+第八部分　卡牌生效逻辑（逐个）—— 机师牌（88张数据，旧体系）
+================================================================================
+来源：GeneratedPilotEffects.gd（3476行，分4批）
+体系：旧 CardEffect + hook（scripts/effect_core/EffectConst）
+  mode: MODE_ACTIVE(主动) / MODE_PASSIVE(被动) / MODE_STATIC(静态)
+  hook: HOOK_OWNER_MAIN_PHASE / HOOK_TURN_START / HOOK_ATTACK_HIT
+        / HOOK_ATTACK_MISS / HOOK_ATTACK_DECLARED / HOOK_ATTACK_RESOLVED
+        / HOOK_ATTACK_MODIFIER_WINDOW / HOOK_DAMAGE_MODIFIER_WINDOW
+        / HOOK_REACTION_CARD_PLAYED / HOOK_ACTION_CARD_PLAYED
+        / HOOK_ATTACK_CARD_PLAYED / HOOK_CARD_PLAYED / HOOK_CARD_DISCARDED
+        / HOOK_MECH_MOVED / HOOK_MECH_TARGETED_BY_ATTACK
+        / HOOK_OWNER_TAKE_DAMAGE / HOOK_EQUIPMENT_SET
+        / HOCK_EQUIPMENT_DISCARDED_FROM_SLOT / HOOK_EQUIPMENT_SOLD
+        / HOOK_SHOP_CARD_BOUGHT / HOOK_EVENT_SET / HOOK_ROUND_START
+        / HOOK_TURN_END / HOOK_OTHER_MECH_TURN_START / HOOK_ACTION_CARD_DRAWN 等
+
+重要：机师效果**尚未接入新 Action Engine**，走 EffectEngine。
+且大量效果用 CUSTOM_EFFECT_CHECK_TEXT 占位（仅描述文本，原子动作未实现）。
+以下按批次列出已实装的非占位效果（动作真正会执行的）。
+once_per_turn_key 控制每回合次数。
+
+------------------------------------------------------------ 批次M：N机师 pilot_059~088
+059 薇尔：损伤数分支（<4获3金 / =4视为补给 / >4移除2损伤）。路由器+3子效果。
+060 铠德：攻击未命中三选一（抽2 / 回3动力 / 获4金）。路由器+3子效果。
+061 艾希：回合开始抽2行动牌，可给3格内机甲最多2张。TRANSFER_ACTION_CARDS。
+062 洛尔恩：2张当掩护；掩护消除额外效果并视为进攻（占位）。
+063 布彻尔：1张当进攻；进攻被响应抽2/未响应弃目标1（占位）。
+064 柏格：弃1装备获2金+抽1装备，武器再抽1行动（占位）。
+065 柔嘉：牌堆顶翻看（占位）。
+066 骇客：移动后查看3格内机甲1张随机行动牌（占位）。
+067 丹：2张当双连。
+068 冰魄：迎击范围-2（占位 miss 抽2）。
+069 影刹：回合结束未攻击下次威力+4 / 未移动下次范围+2（路由器占位）。
+070 烈火：攻击命中抽3行动牌。
+071 弥雅：回合后选3格内机甲使其抽3弃1。
+072 卡修：辅助牌回4动 / 攻击牌回4动 / 迎击牌回5动（3子效果，路由器占位）。
+073 法尔科：弃2行动抽1高级装备（背面朝上备用区，占位）。
+074 泰特：近战弃1威力+3；他方回合弃1获此效（TOGGLE_EFFECT_ON_MECH）。
+075 肯尼斯：弃1行动；行动牌被弃时抽1或下次威力+3（占位）。
+076 疾风：攻击被响应获迎击牌 / 迎击响应获攻击牌（占位）。
+077 维奥拉：1张当推进；推进下次威力+2 可对2格机甲（占位）。
+078 芮贝卡：3格内受伤弃1回2生命+抽1。
+079 莉诺：原价购买商店装备（SHOP_BUY_MODIFIER）。
+080 墨尘：地图标记交互（占位）。
+081 汀兰：绿格子光环（占位）。
+082 温斯顿：交牌+下回合攻击+1；攻击牌当掩护/维修/推进（3选1，路由器占位）。
+083 瓦恩：武器加名称改类型+3威或+1范围（占位）；他方花2金获效。
+084 莎菲雅：2张当联合+抽2；联合用攻后获3金。
+085 莽克：装备弃置获金（自4/他3，路由器占位）。
+086 獠鼠：攻击骰子分支（占位）。
+087 塔妮拉：交1牌获2金；他用后各抽1（占位）。
+088 征服：宣言类型+展示+弃置（占位）。
+
+------------------------------------------------------------ 批次L：R机师 pilot_029~058
+029 远程范围+1；1张当聚能。
+030 1张当防御；用后抽1+下回合攻击+1。
+031 交牌抽牌护甲（占位）。
+032 弃1行动上限+2。
+033 弃1装备抽1装备；本局1次弃2抽高级。
+034 未伤害攻击损伤-1；记录伤害机甲命中+3伤害回3生命（占位）。
+035 轮开始选机甲跟踪抽牌（占位）。
+036 花2金抽1；弃2行动获3金。
+037 被攻击查看+偷1牌+手牌多则威力-5（占位）。
+038 选2台抽1回3动。
+039 未命中抽1+再攻（MODIFY_ATTACK_COUNT +1）。
+040 近战弃1锁定。
+041 花3金抽2。
+042 弃牌后抽1；弃所有抽1（占位）。
+043 抽牌前宣言匹配再抽1（占位）。
+044 损伤X抽X弃X-1（占位）。
+045 弃3行动获攻牌；每2次4伤害（占位）。
+046 查看获取隐藏装备（占位）。
+047 攻击时强制或交牌（FORCE_MECH_ACTION，占位）。
+048 攻击损伤+1+优先决定位置（占位）。
+049 帝国伤害转移；受伤后下次+X（占位）。
+050 4+X范围耗2动1伤害；受伤X+1弃牌（占位）。
+051 失去事件抽1；本局1次取消事件（占位）。
+052 弃1行动抽1装备。
+053 装备设置/弃置抽2+上限+1。
+054 购买后获3金或抽1（占位）。
+055 卖出价格×2（占位）。
+056 未命中抽装备或获金（占位）；他方花2金获效。
+057 1张当设陷；弃牌移陷阱（占位）。
+058 展示行动牌按类型加成（占位）。
+
+------------------------------------------------------------ 批次K：SR机师 pilot_011~028
+011 迪恩：2张当疾行/反击+抽1；疾行回4动力 / 反击威力+3。
+012 玛丽尔：攻击偷1牌+目标动力-3；命中抽1回3动力。
+013 巴托洛夫：免疫攻击外伤害（占位）；攻击双方护甲动力-4+命中伤害+3。
+014 亚伦：选机师牌使其行动上限+2（占位）。
+015 诺拉：空手时类型转换（占位）；全部牌当进攻/防御（占位）。
+016 默多克：展示1张+2张视为该牌（占位）。
+017 伏特：2张当强袭/猛击/破甲（占位）。
+（018~028 结构同，多为"当作X牌+使用时加成"模式，部分占位）
+
+------------------------------------------------------------ 批次J：SSR机师 pilot_001~010
+（结构同上，SSR 效果更复杂，大量 CUSTOM 占位）
+
+总结：机师效果当前状态——
+- 数据88张，效果定义121个（含路由器/子效果拆分）。
+- 真正有可执行原子动作的约占少数（抽牌/回动力/获金/弃牌/偷牌/范围威力修正等）。
+- 大量"当作X牌""宣言""展示""骰子分支""伤害转移""变量累计"等
+  复杂效果用 CUSTOM_EFFECT_CHECK_TEXT 占位，运行时仅记日志、不真正执行。
+- 接入路径仍是旧 EffectEngine，未迁移到 Action Engine 时点监听。
+
+
+================================================================================
+第九部分　服务层（16个 retained services）
+================================================================================
+TurnService       回合开始/结束流程（见第四部分）
+RoundService      1v1 轮换
+CardSetService    装备设置（槽位校验/替换）+ 卖出（按稀有度 N1/R2/SR3/SSR5，2次/回合）
+DeckService       抽牌（自动洗牌）、弃牌、组牌
+DeckBuildService  从 CardDatabase 组牌（SR/SSR→高级牌堆）
+MapService        机甲移动（BFS 寻路、地形消耗、标记触发）
+MarkerService     地图标记效果 GOLD/EVENT/TRAP
+ShopService       商店：3普通+1高级+1隐藏槽，买/刷新/揭示
+DamageTokenService 损伤放置（优先级见第五部分）+ 装备破坏检查
+EquipmentBreakService 装备破坏流程（耐久超限→注销→弃置）+ 替换
+EventTimerService 事件牌计时（回合结束倒计时）
+GameSetupService  教学对战初始状态
+VictoryService    胜负判定（见第五部分）
+DevModeService    F3 开发者模式（改手牌/装备/属性/损伤）
+session_logger.gd SessionLogger 单例（一次启动一个日志文件）
+slog.gd           SLog preload 代理（-s 测试模式裸 autoload 不可解析）
+
+原子状态变更集中在 GameActions（context.game_actions），
+被 ActionService._dispatch_atomic_action 调用，提供：
+  攻击相关：start_attack_declare_attack / modify_attack_power / modify_attack_range
+            / apply_cannot_respond / apply_or_check_locked / consume_next_attack_power_buff
+  属性：modify_armor / modify_mech_power / spend_power / restore_power / restore_weapon_power
+  抽牌：draw_action_cards / draw_equipment_cards / gain_specific_card
+        / random_draw_from_discard_or_deck / transfer_action_cards
+  金币：gain_gold / spend_gold / shop_buy_modifier
+  伤害损伤：deal_damage / place_damage_tokens / modify_damage_tokens
+            / remove_damage_tokens / redirect_damage_tokens / heal_hp
+  移动设置：move_mech / set_card_to_slot / place_or_trigger_trap
+  弃置破坏：discard_card / discard_action_card / destroy_card / play_as_card
+  状态：add_status / remove_status / decrement_status_duration / add_rule_modifier
+  事件计时：reduce_event_timer / set_event_timer / track_event_progress
+  其它：reveal_or_peek_card / roll_d6 / toggle_aura_target / custom_effect_check_text
+  批次3原语：apply_energy_to_weapon / steal_action_card / convert_weapon_kind ...
+  阶段4机师：swap_hand_limit_and_attack_count ...
+  （约 80+ 个原子方法）
+
+
+================================================================================
+第十部分　运行时状态对象（scripts/runtime/）
+================================================================================
+GameContext   DI容器：GameState + CardDatabase + ActionEngine/Registry/TimingEngine
+              /ActionService/ActionUIBridge + 16 services + 旧 effect_engine/registry
+GameState     players/mechs/cards/attacks/map/deck/shop/log/phase/turn_number
+              /current_attack_id(新流程已不设)/temp_values(turn_limit等)
+PlayerState   gold / action_hand / equipment_hand / action_card_limit
+              / once_per_turn_used / turn_counters / sell_equipment_count_this_turn
+MechState     hp/max_hp / power/max_power / position / slots / statuses
+              / attack_count_this_turn / destroyed
+              get_armor()（含联邦头部加值）/ get_total_power()（含帝国头部+损伤阈值加值）
+              / get_weapon_ids() / get_base_weapon(idx) / can_attack()
+MechSlotState slot_kind(PART/WEAPON/RESERVE/EVENT/PILOT) / equipped_card
+              / base_armor/power/durability / region_damage_tokens
+              get_effective_armor()（重甲损伤免疫）/ get_equipment_durability()
+CardInstance  def / zone(hand/equipment_slot/weapon_slot/temp_zone/discard...)
+              / slot_id / mech_id / owner_player_id / damage_tokens / timer
+              / counters / disabled / face_down
+DeckState     action/equipment/advanced_equipment/pilot/event + 各 discard
+ShopState     3 normal + 1 advanced + 1 hidden 槽
+MapState      cells(keyed "q,r") + markers
+MapCellState  terrain(NORMAL/GREEN/RED) / move_cost / passable
+MapMarkerState type(GOLD/EVENT/TRAP) / revealed
+
+
+================================================================================
+第十一部分　关键设计要点与已知坑（代码注释佐证）
+================================================================================
+1. 时点在 handler 前 fire：故 ATTACK_AT 的 responded 字段在 execute_attack
+   handler 执行前还没写入——强袭 effect2 改听 ATTACK_AFTER 才能读到 responded。
+
+2. 攻击二次结算 bug3b：已加幂等守卫（_execute_attack_ran + execute_action
+   拒绝重跑 completed/cancelled 动作）。某些 deferred 通知路径可能二次驱动。
+
+3. 迎击响应窗口去重：_handled_response_actions 按 attack action_id 去重，
+   防 response_selected/availability_effect_selected 双信号重复触发导致
+   同一迎击牌用两次、误绑到 single_move 子动作、攻击卡死不结算。
+
+4. 状态机恢复约束：continue_action 仅接受 waiting_input/timing/sub_action，
+   故父动作恢复前不能先置 running（会被拒、卡死）。
+
+5. 装备效果来源：permanent listener 触发时 action 是被监听时点所属动作（如 attack），
+   其 source 是攻击方而非装备牌。装备 condition 必须从 binding_context 取
+   card_instance_id/mech_id/player_id。
+
+6. 派生值型装备效果（联邦/帝国头部、重甲头部、损伤阈值动力）不注册监听器，
+   在 MechState/MechSlotState 查询时实时重算，避免 hook 顺序问题。
+
+7. USE_ACTION_AT 拆两步：原 card_to_temp_zone 同时挂时点+handler 会导致
+   时点在牌进临时区前 fire，CHOOSE_ONE 挂起跳过 handler→牌不进临时区、
+   效果不注册。拆为 card_to_temp_zone(无时点) + fire_use_action_at(空handler)。
+
+8. 机师效果仍是旧体系且大量占位：当前机师牌效果大部分未真正生效，
+   迁移到 Action Engine 是后续工作。
+
+9. 损伤转移窗口 DAMAGE_REDIRECT_WINDOW：damage_change 动作在 place_damage_tokens
+   前 fire，转移效果（联邦右臂/机动右臂）监听并弹汇总窗选转移点数，
+   AI 自动决策转移保护装备。
+
+10. 每回合1次用 once_per_turn_key + card_instance_id 区分来源，scope=turn_number
+    自动失效。
+
+================================================================================
+（文档完）
+================================================================================

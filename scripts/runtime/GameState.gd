@@ -51,8 +51,8 @@ var current_damage_context_id: StringName = &""
 ## 待处理的自定义效果
 var pending_custom_effects: Array[Dictionary] = []
 
-## 回合数
-var turn_number: int = 1
+## 回合数（0 = 尚未开始任何回合；首次 start_turn("player") 递增到 1 = 第一回合）
+var turn_number: int = 0
 
 ## 当前行动玩家 ID
 var active_player_id: StringName = &""
@@ -95,7 +95,7 @@ func reset_all() -> void:
 	current_attack_id = &""
 	current_damage_context_id = &""
 	pending_custom_effects.clear()
-	turn_number = 1
+	turn_number = 0
 	active_player_id = &""
 	phase = &""
 	log.clear()

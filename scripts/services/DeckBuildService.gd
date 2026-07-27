@@ -102,8 +102,11 @@ func _get_deck_key_for_card(card_def) -> StringName:
 			return &"action_deck"  # 默认放行动牌堆
 
 
-## Fisher-Yates 洗牌
+## Fisher-Yates 洗牌（走 context.rng 同步随机，锁步双端一致）
 func _shuffle_deck(deck: Array[StringName]) -> void:
+	if context != null and context.rng != null:
+		context.synced_shuffle(deck)
+		return
 	for i: int in range(deck.size() - 1, 0, -1):
 		var j: int = randi() % (i + 1)
 		var tmp: StringName = deck[i]

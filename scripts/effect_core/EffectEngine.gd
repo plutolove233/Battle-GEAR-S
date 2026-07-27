@@ -8,14 +8,15 @@
 ## 数据结构来源于规则表 Effect全牌表.xlsx "核心执行框架" 第4行。
 extends RefCounted
 class_name EffectEngine
+const SLog = preload("res://scripts/services/slog.gd")
 
 ## Preloaded references for cross-file custom types
 const _GameContext = preload("res://scripts/runtime/GameContext.gd")
-const _EffectBinding = preload("res://scripts/effect_core/EffectBinding.gd")
+const _EffectBinding = preload("res://scripts/action_core/EffectBinding.gd")
 const _CardEffect = preload("res://scripts/effect_core/CardEffect.gd")
-const _ConditionChecker = preload("res://scripts/effect_core/ConditionChecker.gd")
-const _TargetChecker = preload("res://scripts/effect_core/TargetChecker.gd")
-const _CostChecker = preload("res://scripts/effect_core/CostChecker.gd")
+const _ConditionChecker = preload("res://scripts/action_core/ConditionChecker.gd")
+const _TargetChecker = preload("res://scripts/action_core/TargetChecker.gd")
+const _CostChecker = preload("res://scripts/action_core/CostChecker.gd")
 const _AtomicActionResolver = preload("res://scripts/effect_core/AtomicActionResolver.gd")
 const _EffectConst = preload("res://scripts/effect_core/EffectConst.gd")
 
@@ -84,13 +85,13 @@ func _dispatch_hook(hook: StringName, payload: Dictionary) -> void:
 	bindings.sort_custom(func(a, b) -> bool:
 		return a.effect.priority < b.effect.priority
 	)
-	# P0-0: 诊断日志
+	# P0-0: 诊断日志 → 使用 SessionLogger
 	if bindings.size() > 0:
 		var binding_info: String = ""
 		for b in bindings:
 			if b.effect:
 				binding_info += "%s(src=%s) " % [String(b.effect.effect_id), String(b.source_card.instance_id) if b.source_card else "?"]
-		print("[EffectEngine] hook=%s bindings=%d: %s" % [String(hook), bindings.size(), binding_info])
+		SLog.log_timing(hook, &"", &"hook_dispatch", {"bindings_count": bindings.size(), "bindings": binding_info, "payload_keys": str(payload.keys()) if payload else "[]"})
 	for binding in bindings:
 		_try_resolve_binding(binding, payload, false)
 
@@ -120,14 +121,17 @@ func _try_resolve_binding(binding, payload: Dictionary, is_manual: bool) -> bool
 
 	# 3. 条件检查
 	if not _ConditionChecker.check_all(binding, payload, effect.conditions):
+		SLog.log_effect(effect.effect_id, {"card_id": binding.get_source_instance_id(), "mech_id": binding.get_source_mech_id()}, &"", "condition_check", {"status": "skipped", "reason": "conditions_not_met"})
 		return false
 
 	# 4. 目标检查
 	if not _TargetChecker.check_all(binding, payload, effect.target_rules):
+		SLog.log_effect(effect.effect_id, {"card_id": binding.get_source_instance_id(), "mech_id": binding.get_source_mech_id()}, &"", "target_check", {"status": "skipped", "reason": "targets_not_valid"})
 		return false
 
 	# 5. 费用检查
 	if not _CostChecker.can_pay_all(binding, payload, effect.costs, context):
+		SLog.log_effect(effect.effect_id, {"card_id": binding.get_source_instance_id(), "mech_id": binding.get_source_mech_id()}, &"", "cost_check", {"status": "skipped", "reason": "costs_not_payable"})
 		return false
 
 	# 6. 支付费用
@@ -136,6 +140,9 @@ func _try_resolve_binding(binding, payload: Dictionary, is_manual: bool) -> bool
 	# 7. 逐个执行动作
 	for action in effect.actions:
 		_AtomicActionResolver.resolve(binding, payload, action, context)
+
+	# 记录效果执行完成
+	SLog.log_effect(effect.effect_id, {"card_id": binding.get_source_instance_id(), "mech_id": binding.get_source_mech_id()}, &"", String(effect.effect_id), {"status": "completed", "actions_count": effect.actions.size()})
 
 	# 8. 标记每回合效果使用次数
 	if effect.once_per_turn_key != &"":

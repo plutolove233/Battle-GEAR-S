@@ -12,11 +12,14 @@ var card_defs: Dictionary = {}
 ## 效果定义索引：effect_id → CardEffect
 var effect_defs: Dictionary = {}
 
+## 卡牌加载器引用（供 GeneratedEquipmentEffects 查 effect_ids_map）
+var loader = null
+
 
 ## 从 DataRegistry 加载所有卡牌定义和效果定义
 func load_all(registry: DataRegistry) -> void:
 	# 加载卡牌定义（JSON → CardDef）
-	var loader := CardDatabaseLoader.new()
+	loader = CardDatabaseLoader.new()
 	card_defs = loader.load_from_registry(registry)
 
 	# 加载效果定义（手写存根 → CardEffect）
@@ -24,6 +27,13 @@ func load_all(registry: DataRegistry) -> void:
 
 	# 将效果绑定到对应卡牌
 	_bind_effects_to_cards(loader.get_effect_ids_map())
+
+
+## 获取 card_id → [effect_id, ...] 映射（装备效果注册用）
+func get_effect_ids_map() -> Dictionary:
+	if loader != null:
+		return loader.get_effect_ids_map()
+	return {}
 
 
 ## 根据 card_id 获取 CardDef，找不到返回 null

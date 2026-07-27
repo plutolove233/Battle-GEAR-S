@@ -97,6 +97,91 @@ func move_mech_to_hex(mech_id: StringName, target: Dictionary, power_budget: int
 	return {"ok": true, "mech_id": mech_id, "position": target, "power_cost": power_cost}
 
 
+## 计算到目标格的最低动力路径（不包含起点，包含终点）。
+## GREEN=2、NORMAL=1、RED不可通过；其他机甲所在格不可进入。
+func find_optimal_path(mech_id: StringName, target: Dictionary, power_budget: int) -> Array[Dictionary]:
+	var gs: GameState = context.game_state
+	var mech: MechState = gs.mechs.get(mech_id)
+	if mech == null or not gs.map_state.has_cell(target):
+		return []
+	var start: Dictionary = mech.position.duplicate()
+	var start_key: String = HexGrid.key(start)
+	var target_key: String = HexGrid.key(target)
+	if start_key == target_key:
+		return []
+
+	var blocked: Dictionary = {}
+	for other_id: StringName in gs.mechs:
+		var other: MechState = gs.mechs[other_id]
+		if other_id != mech_id and not other.destroyed:
+			blocked[HexGrid.key(other.position)] = true
+
+	var frontier: Array[Dictionary] = [{"hex": start, "cost": 0}]
+	var costs: Dictionary = {start_key: 0}
+	var previous: Dictionary = {}
+	while not frontier.is_empty():
+		frontier.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return int(a["cost"]) < int(b["cost"]))
+		var current_entry: Dictionary = frontier.pop_front()
+		var current: Dictionary = current_entry["hex"]
+		var current_key: String = HexGrid.key(current)
+		var current_cost: int = int(current_entry["cost"])
+		if current_cost != int(costs.get(current_key, 1 << 30)):
+			continue
+		if current_key == target_key:
+			break
+		for neighbor: Dictionary in HexGrid.neighbors(current):
+			var neighbor_key: String = HexGrid.key(neighbor)
+			if blocked.has(neighbor_key):
+				continue
+			var cell = gs.map_state.cells.get(neighbor_key)
+			if cell == null:
+				continue
+			var terrain: StringName = _get_cell_terrain(cell)
+			if terrain == &"RED" or terrain == &"blocked":
+				continue
+			var step_cost: int = 2 if terrain == &"GREEN" or terrain == &"rough" else 1
+			var next_cost: int = current_cost + step_cost
+			if next_cost > power_budget or next_cost >= int(costs.get(neighbor_key, 1 << 30)):
+				continue
+			costs[neighbor_key] = next_cost
+			previous[neighbor_key] = current_key
+			frontier.append({"hex": neighbor, "cost": next_cost})
+
+	if not costs.has(target_key):
+		return []
+	var reversed_path: Array[Dictionary] = []
+	var cursor: String = target_key
+	while cursor != start_key:
+		var parts: PackedStringArray = cursor.split(",")
+		reversed_path.append({"q": int(parts[0]), "r": int(parts[1])})
+		if not previous.has(cursor):
+			return []
+		cursor = previous[cursor]
+	reversed_path.reverse()
+	return reversed_path
+
+
+## 基础移动的“更新位置”阶段调用：这里只提交位置，不再次扣动力。
+func commit_basic_move(mech_id: StringName, target: Dictionary, power_cost: int) -> Dictionary:
+	var gs: GameState = context.game_state
+	var mech: MechState = gs.mechs.get(mech_id)
+	if mech == null:
+		return {"ok": false, "message": "机甲不存在"}
+	var old_position: Dictionary = mech.position.duplicate()
+	mech.position = {"q": int(target.get("q", 0)), "r": int(target.get("r", 0))}
+	_fire_hook(_EffectConst.HOOK_MECH_MOVED, {
+		"mech_id": String(mech_id), "from": old_position, "to": target, "power_spent": power_cost,
+	})
+	# 地图标记触发尚未实装，移动时暂不处理标记（避免调用未实现的 MapState.get_marker_at）。
+	gs.write_log(&"mech_moved", {
+		"mech_id": String(mech_id),
+		"from_q": int(old_position.get("q", 0)), "from_r": int(old_position.get("r", 0)),
+		"to_q": int(target.get("q", 0)), "to_r": int(target.get("r", 0)),
+		"power_cost": power_cost,
+	})
+	return {"ok": true, "position": target, "power_cost": power_cost}
+
+
 ## ── 内部方法 ──
 
 
