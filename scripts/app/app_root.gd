@@ -96,6 +96,33 @@ var _damage_placement_target_mech_id: StringName = &""
 ## 锁步损伤放置：当前面板对应的 damage_change 动作 ID（完成时直接恢复该动作，避免被并发的
 ## 装备离场效果弹窗覆盖 ActionUIBridge 单一等待动作槽，导致攻击牌卡在临时区）
 var _damage_placement_action_id: StringName = &""
+## 损伤面板挂起栈：攻击损伤放置中途被效果移除损伤打断时，挂起当前面板状态+动作ID+目标机甲，
+## 待移除完成后恢复续操作（LIFO，支持嵌套）。解决两个 damage_change 交错复用单面板实例。
+var _damage_suspend_stack: Array = []
+## 模态弹窗堆栈（LIFO）：仅顶层面板可见可点；新弹窗入栈隐藏下层避免重影，
+## 顶层 visible=false 时由 visibility_changed 自动出栈并恢复下层。
+## 解决装备效果弹窗挤压重叠（问题1）与损伤面板+效果弹窗重叠（问题2）。
+var _popup_stack: Array = []
+var _popup_scrim: ColorRect = null
+var _popup_suppress_vis: bool = false
+var _popup_stylebox_cache: Dictionary = {}
+var _POPUP_BG := Color(0.08, 0.09, 0.12, 1.0)
+var _POPUP_ACCENT_COLORS := {
+	&"damage_token_placement": Color(0.85, 0.75, 0.3),
+	&"effect_choice": Color(0.45, 0.7, 1.0),
+	&"choice_select": Color(0.45, 0.7, 1.0),
+	&"use_card_confirm": Color(0.45, 0.7, 1.0),
+	&"integer_select": Color(0.55, 0.85, 0.55),
+	&"redirect_select": Color(0.9, 0.6, 0.4),
+	&"discard_card_select": Color(0.75, 0.55, 0.95),
+	&"thrust_select": Color(0.5, 0.85, 0.85),
+	&"immediate_set_equipment": Color(0.6, 0.85, 0.5),
+	&"unite_attack_select": Color(0.95, 0.6, 0.6),
+	&"awaken_select": Color(0.95, 0.8, 0.4),
+	&"weapon_select": Color(0.7, 0.7, 0.78),
+	&"weapon_charge_select": Color(0.7, 0.7, 0.78),
+	&"response_window": Color(0.85, 0.45, 0.45),
+}
 ## 弃牌选择面板
 var discard_select_panel = null  # type: DiscardSelectPanel
 ## 推进多选面板（推进 effect2：使用迎击牌时选若干推进一起打出）
@@ -1239,6 +1266,18 @@ func _show_battle() -> void:
 	popup_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
 	popup_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(popup_overlay)
+	# 模态弹窗遮罩：弹窗显示时全屏暗色遮罩，挡住棋盘/取消按钮/下层面板，
+	# 仅顶层弹窗（popup_overlay 内，位于遮罩之上）可交互。位置保持在 popup_overlay 之下。
+	_popup_stack.clear()
+	_damage_suspend_stack.clear()
+	if _popup_scrim == null or not is_instance_valid(_popup_scrim):
+		_popup_scrim = ColorRect.new()
+		_popup_scrim.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_popup_scrim.color = Color(0.0, 0.0, 0.0, 0.7)
+		_popup_scrim.mouse_filter = Control.MOUSE_FILTER_STOP
+		_popup_scrim.visible = false
+		add_child(_popup_scrim)
+	move_child(_popup_scrim, popup_overlay.get_index())
 
 	# 逐格移动模态遮罩（在 popup_overlay 之上）：移动中拦截全屏点击，点任意位置停止移动。
 	# 透明不遮挡画面；mouse_filter IGNORE 时不拦截（非移动阶段），STOP 时拦截（移动阶段）。
@@ -1351,6 +1390,10 @@ func _show_battle() -> void:
 	awaken_select_panel.selection_cancelled.connect(Callable(self, "_on_awaken_selection_cancelled"))
 	awaken_select_panel.visible = false
 	popup_overlay.add_child(awaken_select_panel)
+	# 模态弹窗堆栈：监听各弹窗面板可见性，面板被处理器隐藏(visible=false)时自动出栈
+	for _pp in [response_panel, weapon_picker_panel, damage_placement_panel, choice_panel, discard_select_panel, thrust_select_panel, immediate_set_equipment_panel, unite_attack_select_panel, awaken_select_panel]:
+		if _pp != null:
+			_pp.visibility_changed.connect(Callable(self, "_on_popup_visibility_changed").bind(_pp))
 
 	# ── 开发者面板（初始隐藏，F3 切换）──
 	dev_panel = _DevModePanel.new()
@@ -2391,7 +2434,128 @@ func _on_action_ui_popup_requested(popup_type: StringName, params: Dictionary) -
 			return  # 对方弹窗,本端不显示,等对方 input
 	# 弹窗显示：关闭移动模态遮罩，让玩家与弹窗交互（移动 pacing 期间弹出的 effect_017 等）
 	_update_move_overlay()
+	# 记录展示前可见的弹窗面板，供 _present_popup 识别新弹出的面板（板选类无面板则不入栈）
+	var _vis_before: Array = _visible_popup_panels()
 	_show_popup(popup_type, params)
+	var _new_panel: Control = _newly_visible_popup_panel(_vis_before)
+	if _new_panel != null:
+		_present_popup(popup_type, _new_panel)
+
+
+## ── 模态弹窗堆栈 ──
+## 入栈：新弹窗置顶，隐藏下层面板（避免重影），显示模态遮罩，按类型上强调色。
+## 出栈：面板被处理器设 visible=false 时由 visibility_changed 自动触发；损伤面板完成时
+## 可能已被堆栈隐藏（visible 无变化不触发回调），由 _dismiss_popup_panel 显式出栈。
+func _present_popup(popup_type: StringName, panel: Control) -> void:
+	if panel == null or not is_instance_valid(panel):
+		return
+	_popup_suppress_vis = true
+	# 隐藏下层面板（避免重影）；同面板重弹则不隐藏
+	if not _popup_stack.is_empty() and _popup_stack.back().panel != panel:
+		var lower: Control = _popup_stack.back().panel
+		if lower != null and is_instance_valid(lower):
+			lower.visible = false
+	# 移除既有同面板条目（重弹场景），再入栈
+	for i in range(_popup_stack.size() - 1, -1, -1):
+		if _popup_stack[i].panel == panel:
+			_popup_stack.remove_at(i)
+	_popup_stack.append({"popup_type": popup_type, "panel": panel})
+	if _popup_scrim != null and is_instance_valid(_popup_scrim):
+		_popup_scrim.visible = true
+	panel.visible = true
+	if panel.get_parent() == popup_overlay:
+		popup_overlay.move_child(panel, -1)
+	_apply_popup_accent(popup_type, panel)
+	_popup_suppress_vis = false
+
+
+## 从堆栈移除指定面板条目；若为顶层则恢复下层，堆栈空则关闭遮罩。
+func _pop_popup_entry(panel: Control) -> void:
+	var idx := -1
+	for i in range(_popup_stack.size()):
+		if _popup_stack[i].panel == panel:
+			idx = i
+			break
+	if idx == -1:
+		return
+	_popup_stack.remove_at(idx)
+	if _popup_stack.is_empty():
+		if _popup_scrim != null and is_instance_valid(_popup_scrim):
+			_popup_scrim.visible = false
+	else:
+		var nt: Control = _popup_stack.back().panel
+		if nt != null and is_instance_valid(nt):
+			if not nt.visible:
+				nt.visible = true
+			if nt.get_parent() == popup_overlay:
+				popup_overlay.move_child(nt, -1)
+
+
+## 面板可见性变化回调：仅处理"隐藏"（处理器设 visible=false）-> 自动出栈
+func _on_popup_visibility_changed(panel: Control) -> void:
+	if _popup_suppress_vis:
+		return
+	if panel == null or not is_instance_valid(panel):
+		return
+	if panel.visible:
+		return
+	_pop_popup_entry(panel)
+
+
+## 显式关闭并出栈某面板（损伤面板完成时可能已被堆栈隐藏，visible 无变化不会触发回调）
+func _dismiss_popup_panel(panel: Control) -> void:
+	if panel == null or not is_instance_valid(panel):
+		return
+	_popup_suppress_vis = true
+	if panel.visible:
+		panel.visible = false
+	_popup_suppress_vis = false
+	_pop_popup_entry(panel)
+
+
+## 按 popup_type 给 PanelContainer 面板上不透明背景+强调色描边（与按钮配色区分，避免重影）
+func _apply_popup_accent(popup_type: StringName, panel: Control) -> void:
+	if panel == null or not is_instance_valid(panel):
+		return
+	if not (panel is PanelContainer):
+		return
+	var accent: Color = _POPUP_ACCENT_COLORS.get(popup_type, Color(0.6, 0.6, 0.65))
+	var sb = _popup_stylebox_cache.get(accent)
+	if sb == null:
+		sb = StyleBoxFlat.new()
+		sb.bg_color = _POPUP_BG
+		sb.set_border_width_all(3)
+		sb.border_color = accent
+		sb.set_corner_radius_all(6)
+		sb.set_content_margin_all(12)
+		_popup_stylebox_cache[accent] = sb
+	panel.add_theme_stylebox_override("panel", sb)
+
+
+## 当前可见的弹窗面板列表（板选类无面板，不在此列）
+func _visible_popup_panels() -> Array:
+	var out: Array = []
+	for p in [response_panel, weapon_picker_panel, damage_placement_panel, choice_panel, discard_select_panel, thrust_select_panel, immediate_set_equipment_panel, unite_attack_select_panel, awaken_select_panel]:
+		if p != null and is_instance_valid(p) and p.visible:
+			out.append(p)
+	return out
+
+
+## 找出展示后新可见的弹窗面板（即本次 _show_popup 弹出的）
+func _newly_visible_popup_panel(before: Array) -> Control:
+	for p in [response_panel, weapon_picker_panel, damage_placement_panel, choice_panel, discard_select_panel, thrust_select_panel, immediate_set_equipment_panel, unite_attack_select_panel, awaken_select_panel]:
+		if p != null and is_instance_valid(p) and p.visible and not (p in before):
+			return p
+	return null
+
+
+func _clear_popup_stack() -> void:
+	_popup_suppress_vis = true
+	_popup_stack.clear()
+	_damage_suspend_stack.clear()
+	if _popup_scrim != null and is_instance_valid(_popup_scrim):
+		_popup_scrim.visible = false
+	_popup_suppress_vis = false
 
 
 ## 实际显示弹窗（锁步下仅本方 owner 弹窗走到此,对方弹窗已在 _on_action_ui_popup_requested 拦截）
@@ -2508,6 +2672,14 @@ func _show_popup(popup_type: StringName, params: Dictionary) -> void:
 				_refresh_battle()
 		&"damage_token_placement":
 			if damage_placement_panel:
+				# 若损伤面板已在显示（攻击损伤放置中途被效果移除损伤打断），先挂起当前面板
+				# 状态+动作ID+目标机甲，待移除完成后恢复续操作（两个 damage_change 交错复用单面板）
+				if damage_placement_panel.visible:
+					_damage_suspend_stack.append({
+						"state": damage_placement_panel.suspend_state(),
+						"action_id": _damage_placement_action_id,
+						"target_mech_id": _damage_placement_target_mech_id,
+					})
 				# damage_change 动作的 input_params 用 mech_ids(数组)；兼容旧 target_mech_id
 				var target_mech_id: StringName = params.get("target_mech_id", &"")
 				if target_mech_id == &"":
@@ -3317,21 +3489,36 @@ func _handle_attack_result(result: Dictionary) -> void:
 
 ## 损伤放置完成回调
 func _on_damage_placement_completed() -> void:
-	damage_placement_panel.visible = false
+	var dp_action_id: StringName = _damage_placement_action_id
+	_damage_placement_action_id = &""
+	_dismiss_popup_panel(damage_placement_panel)
+	var resolved: bool = false
 	if battle and battle.context:
 		# 优先用面板记录的 damage_change 动作 ID 直接恢复（避免被并发的装备离场效果弹窗
 		# 覆盖 ActionUIBridge 单一等待动作槽，导致 damage_change 不结算、攻击牌卡临时区）。
-		var dp_action_id: StringName = _damage_placement_action_id
-		_damage_placement_action_id = &""
 		if dp_action_id != &"":
 			_net_exec("damage_placement_done", {"action_id": dp_action_id})
-			return
-		# 退路：无记录动作 ID，走原 ui_confirmed 路径（依赖共享等待槽）
-		if battle.context.action_ui_bridge:
-			var wait_info: Dictionary = battle.context.action_ui_bridge.get_waiting_action_info()
-			if wait_info.get("input_type", &"") == &"place_damage_tokens":
-				_net_exec("ui_confirmed", {"data": {"placed": true}})
-				return
+			resolved = true
+		else:
+			# 退路：无记录动作 ID，走原 ui_confirmed 路径（依赖共享等待槽）
+			if battle.context.action_ui_bridge:
+				var wait_info: Dictionary = battle.context.action_ui_bridge.get_waiting_action_info()
+				if wait_info.get("input_type", &"") == &"place_damage_tokens":
+					_net_exec("ui_confirmed", {"data": {"placed": true}})
+					resolved = true
+	# 恢复被挂起的损伤放置面板（攻击损伤设置被效果移除损伤打断后的续操作）：
+	# restore 攻击面板状态+动作ID+目标机甲，重新显示让玩家继续放剩余 token。
+	# 完成后 resolve 攻击 damage_change -> 攻击结算 -> 反击弹出。
+	if not _damage_suspend_stack.is_empty():
+		var ctx: Dictionary = _damage_suspend_stack.pop_back()
+		if damage_placement_panel and is_instance_valid(damage_placement_panel):
+			damage_placement_panel.resume_state(ctx.get("state", {}))
+			_damage_placement_action_id = ctx.get("action_id", &"")
+			_damage_placement_target_mech_id = ctx.get("target_mech_id", &"")
+			_present_popup(&"damage_token_placement", damage_placement_panel)
+		return
+	if resolved:
+		return
 	# 旧链路已废弃：不再走 attack_flow / _last_player_attack_result / _maybe_trigger_ai_counterattack
 	_refresh_battle()
 	_finish_battle_if_needed()
@@ -4552,6 +4739,10 @@ func _clear_screen() -> void:
 		shop_panel.queue_free()
 	# popup_overlay 承载的弹窗面板不再随 current_screen（margin 子树）释放，
 	# 因它们改挂 popup_overlay（在 self 下），需显式释放。
+	_clear_popup_stack()
+	if _popup_scrim and is_instance_valid(_popup_scrim):
+		_popup_scrim.queue_free()
+	_popup_scrim = null
 	if popup_overlay and is_instance_valid(popup_overlay):
 		popup_overlay.queue_free()
 	if _move_overlay and is_instance_valid(_move_overlay):

@@ -1195,6 +1195,14 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 		# 必须等玩家选完二选一后再次 resume，才会真正完成。
 		if action.state == &"waiting_timing" and _pending_effect.has(action.action_id):
 			return
+		# 守卫：内嵌动作创建了挂起子动作（如 effect_031 CHOOSE_ONE 确认后 EXECUTE_DAMAGE_CHANGE
+		# -> damage_change 需输入损伤移除面板）：须切 waiting_effect_action 等其完成
+		# （剩余内嵌动作已存 _seq 由 _continue_seq 续跑），否则父动作被推进、子动作孤立，
+		# 其面板被后续时点（如 ATTACK_SETTLE 反击攻击）抢占——近战右腿+反击弹窗冲突根因。
+		# 与 choose_integer 阶段（L1224）同款守卫。
+		if _last_created_sub_action_paused(action):
+			action.state = &"waiting_effect_action"
+			return
 		# 恢复动作继续结算（use_action_card 的 settle 等后续步骤）
 		if context.action_engine != null:
 			action.state = &"waiting_input"

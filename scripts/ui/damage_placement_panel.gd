@@ -78,6 +78,28 @@ func configure_removal(game_context, target_mech_id: StringName, token_count: in
 	_refresh()
 
 
+## 挂起当前面板运行时状态（攻击损伤放置中途被效果移除损伤打断时保存，待恢复后续操作）
+func suspend_state() -> Dictionary:
+	return {
+		"target_mech_id": _target_mech_id,
+		"remaining_tokens": _remaining_tokens,
+		"removal_mode": _removal_mode,
+		"exclude_slot_id": _exclude_slot_id,
+		"source_attack_id": _source_attack_id,
+		"source_text": _source_text,
+	}
+
+## 恢复挂起的面板状态并刷新显示
+func resume_state(state: Dictionary) -> void:
+	_target_mech_id = state.get("target_mech_id", &"")
+	_remaining_tokens = int(state.get("remaining_tokens", 0))
+	_removal_mode = bool(state.get("removal_mode", false))
+	_exclude_slot_id = state.get("exclude_slot_id", &"")
+	_source_attack_id = state.get("source_attack_id", &"")
+	_source_text = String(state.get("source_text", ""))
+	_ensure_styled()
+	_refresh()
+
 ## 确保面板背景样式已应用（深色不透明 + 金色描边，战场上清晰可读）
 func _ensure_styled() -> void:
 	custom_minimum_size = Vector2(380, 0)
