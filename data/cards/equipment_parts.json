@@ -134,7 +134,7 @@
     "slot": "右臂",
     "rarity": "N",
     "count": 1,
-    "effect_text": "将要在其他名称带有联邦的装备牌上设置损伤时，可以将损伤移至此牌所在区域。",
+    "effect_text": "每次即将设置损伤到我方机甲时，可以将最多2损伤移至此牌所在区域。",
     "armor": 3,
     "power": 0,
     "durability": 2,
@@ -166,7 +166,7 @@
     "slot": "右腿",
     "rarity": "N",
     "count": 1,
-    "effect_text": "机甲被指定为攻击目标时，可在当前回合动力+2。",
+    "effect_text": "机甲被指定为攻击目标时，可以使当前回合动力+2。",
     "armor": 2,
     "power": 2,
     "durability": 2,
@@ -264,7 +264,7 @@
     "count": 1,
     "effect_text": "每回合1次，机甲在当前回合内累积移动过8个格子，可回复2动力。",
     "armor": 1,
-    "power": 1,
+    "power": 2,
     "durability": 2,
     "cost": 3,
     "effect_ids": [
@@ -280,7 +280,7 @@
     "count": 1,
     "effect_text": "每回合1次，机甲在当前回合内累积移动过8个格子，可回复1动力。",
     "armor": 1,
-    "power": 2,
+    "power": 3,
     "durability": 2,
     "cost": 3,
     "effect_ids": [
@@ -294,13 +294,13 @@
     "slot": "头部",
     "rarity": "N",
     "count": 1,
-    "effect_text": "损伤不会影响此牌所在区域提供的护甲。",
+    "effect_text": "损伤不会影响机甲区域提供的护甲，除非机甲部件装备区域总损伤数≥3。",
     "armor": 1,
     "power": 1,
     "durability": 2,
     "cost": 2,
     "effect_ids": [
-      "equipment_effect_014"
+      "equipment_effect_089"
     ]
   },
   {
@@ -326,7 +326,7 @@
     "slot": "右臂",
     "rarity": "N",
     "count": 1,
-    "effect_text": "此牌上设置的损伤≥1时，动力+1。",
+    "effect_text": "此牌上设置的损伤≥1时，此牌动力+1。",
     "armor": 4,
     "power": -1,
     "durability": 2,
@@ -390,11 +390,11 @@
     "slot": "头部",
     "rarity": "N",
     "count": 1,
-    "effect_text": "每我方回合1次，可以消耗4动力抽1张行动牌。",
+    "effect_text": "每回合1次，消耗动力后，若没有动力剩余，则可以回复2动力并用当前动力移动。",
     "armor": 1,
-    "power": 0,
-    "durability": 1,
-    "cost": 1,
+    "power": 1,
+    "durability": 2,
+    "cost": 2,
     "effect_ids": [
       "equipment_effect_017"
     ]
@@ -406,7 +406,7 @@
     "slot": "躯干",
     "rarity": "N",
     "count": 1,
-    "effect_text": "机甲被指定为攻击目标时，可弃置2张行动牌，当前回合动力+5。",
+    "effect_text": "机甲被指定为攻击目标时，可弃置2张行动牌，使当前回合动力+5。",
     "armor": 2,
     "power": 2,
     "durability": 3,
@@ -422,13 +422,14 @@
     "slot": "右臂",
     "rarity": "N",
     "count": 1,
-    "effect_text": "其他区域设置的装备牌会因即将设置的损伤而弃置时，可以将最多2损伤转移至此牌所在区域。",
-    "armor": 2,
-    "power": 0,
+    "effect_text": "我方回合或使用迎击牌时，可以弃置此牌，使当前回合动力+4。",
+    "armor": 1,
+    "power": 1,
     "durability": 2,
     "cost": 2,
     "effect_ids": [
-      "equipment_effect_019"
+      "equipment_effect_019",
+      "equipment_effect_032"
     ]
   },
   {
@@ -440,9 +441,9 @@
     "count": 1,
     "effect_text": "机甲发动的攻击命中后，回复3动力。",
     "armor": 2,
-    "power": 2,
+    "power": 1,
     "durability": 2,
-    "cost": 3,
+    "cost": 2,
     "effect_ids": [
       "equipment_effect_020"
     ]
@@ -454,13 +455,13 @@
     "slot": "右腿",
     "rarity": "N",
     "count": 1,
-    "effect_text": "此牌上设置的损伤≥1时，动力+1。",
+    "effect_text": "此牌上每设置有1损伤，此牌动力+1。",
     "armor": 0,
     "power": 4,
     "durability": 2,
     "cost": 3,
     "effect_ids": [
-      "equipment_effect_016"
+      "equipment_effect_021"
     ]
   },
   {
@@ -470,10 +471,10 @@
     "slot": "左腿",
     "rarity": "N",
     "count": 1,
-    "effect_text": "此牌上设置的损伤≥2时，动力+1。",
+    "effect_text": "此牌上每设置有1损伤，此牌动力+1。",
     "armor": 0,
     "power": 4,
-    "durability": 3,
+    "durability": 2,
     "cost": 3,
     "effect_ids": [
       "equipment_effect_021"
@@ -486,11 +487,11 @@
     "slot": "头部",
     "rarity": "N",
     "count": 1,
-    "effect_text": "使用远程武器发动攻击时，该攻击范围+1。",
+    "effect_text": "我方远程武器范围+1。",
     "armor": 3,
     "power": 0,
     "durability": 3,
-    "cost": 4,
+    "cost": 3,
     "effect_ids": [
       "equipment_effect_022"
     ]
@@ -502,11 +503,11 @@
     "slot": "躯干",
     "rarity": "N",
     "count": 1,
-    "effect_text": "无。",
+    "effect_text": "被远程武器攻击时，可以弃置此牌，使此次攻击威力-4。",
     "armor": 3,
     "power": 1,
     "durability": 2,
-    "cost": 2,
+    "cost": 3,
     "effect_ids": [
       "equipment_effect_023"
     ]
@@ -518,7 +519,7 @@
     "slot": "右臂",
     "rarity": "N",
     "count": 1,
-    "effect_text": "每我方回合1次，可以弃置1张行动牌，回复1动力。",
+    "effect_text": "我方回合1次，可以弃置1张行动牌，回复2动力。",
     "armor": 1,
     "power": 1,
     "durability": 2,
@@ -550,7 +551,7 @@
     "slot": "右腿",
     "rarity": "N",
     "count": 1,
-    "effect_text": "打出攻击牌时，可立即移动到相邻的1个格子上。",
+    "effect_text": "使用攻击牌时，可立即移动到相邻的1个格子上。",
     "armor": 2,
     "power": 2,
     "durability": 2,
@@ -566,7 +567,7 @@
     "slot": "左腿",
     "rarity": "N",
     "count": 1,
-    "effect_text": "打出迎击牌时，可立即移动到相邻的1个格子上。",
+    "effect_text": "使用迎击牌时，可立即移动到相邻的1个格子上。",
     "armor": 2,
     "power": 2,
     "durability": 2,
@@ -584,7 +585,7 @@
     "count": 1,
     "effect_text": "可以将发动攻击武器的范围-2(不会低于1)，然后威力+3，类型变为近战武器(以上效果不适用于近战武器)。",
     "armor": 0,
-    "power": 1,
+    "power": 2,
     "durability": 2,
     "cost": 2,
     "effect_ids": [
@@ -598,11 +599,11 @@
     "slot": "躯干",
     "rarity": "N",
     "count": 1,
-    "effect_text": "打出迎击牌时，当前回合护甲+2。",
+    "effect_text": "使用迎击牌时，当前回合护甲+2，动力+2。",
     "armor": 2,
-    "power": 0,
+    "power": 1,
     "durability": 2,
-    "cost": 2,
+    "cost": 3,
     "effect_ids": [
       "equipment_effect_029"
     ]
@@ -648,7 +649,7 @@
     "count": 1,
     "effect_text": "此牌因损伤而从区域中弃置时可移除机甲其他区域内最多2损伤。",
     "armor": 1,
-    "power": 3,
+    "power": 2,
     "durability": 2,
     "cost": 3,
     "effect_ids": [
@@ -664,9 +665,9 @@
     "count": 1,
     "effect_text": "此牌从区域中弃置时可立即抽1张装备牌并设置到区域上(若不立即设置则需要直接弃置)。",
     "armor": 1,
-    "power": 3,
+    "power": 2,
     "durability": 1,
-    "cost": 3,
+    "cost": 2,
     "effect_ids": [
       "equipment_effect_005"
     ]
@@ -684,7 +685,7 @@
     "durability": 3,
     "cost": 3,
     "effect_ids": [
-      "equipment_effect_032"
+      "equipment_effect_033"
     ]
   },
   {
@@ -700,7 +701,7 @@
     "durability": 5,
     "cost": 5,
     "effect_ids": [
-      "equipment_effect_033"
+      "equipment_effect_034"
     ]
   },
   {
@@ -716,7 +717,7 @@
     "durability": 4,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_033"
+      "equipment_effect_034"
     ]
   },
   {
@@ -732,7 +733,7 @@
     "durability": 4,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_033"
+      "equipment_effect_034"
     ]
   },
   {
@@ -748,7 +749,7 @@
     "durability": 3,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_032"
+      "equipment_effect_033"
     ]
   },
   {
@@ -764,7 +765,7 @@
     "durability": 3,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_032"
+      "equipment_effect_033"
     ]
   },
   {
@@ -790,13 +791,13 @@
     "slot": "躯干",
     "rarity": "R",
     "count": 1,
-    "effect_text": "打出迎击牌响应攻击时，可以使该攻击威力-5，之后设置2损伤在此牌上。",
+    "effect_text": "使用迎击牌响应攻击时，可以设置1损伤在此牌上，之后使该攻击威力-4。",
     "armor": 4,
     "power": 2,
     "durability": 4,
     "cost": 5,
     "effect_ids": [
-      "equipment_effect_034"
+      "equipment_effect_035"
     ]
   },
   {
@@ -812,7 +813,7 @@
     "durability": 3,
     "cost": 3,
     "effect_ids": [
-      "equipment_effect_035"
+      "equipment_effect_036"
     ]
   },
   {
@@ -828,7 +829,7 @@
     "durability": 3,
     "cost": 3,
     "effect_ids": [
-      "equipment_effect_036"
+      "equipment_effect_037"
     ]
   },
   {
@@ -844,7 +845,7 @@
     "durability": 3,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_037"
+      "equipment_effect_038"
     ]
   },
   {
@@ -860,7 +861,7 @@
     "durability": 3,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_038"
+      "equipment_effect_039"
     ]
   },
   {
@@ -886,13 +887,14 @@
     "slot": "躯干",
     "rarity": "R",
     "count": 1,
-    "effect_text": "每回合1次，可以消耗2*n数量的金币(n为整数)，当前回合动力+n，此效果可以在打出迎击牌时使用。",
+    "effect_text": "每回合1次，可以弃置X数量的行动牌（X最低为1），当前回合动力+2倍X的数值，此效果可以在使用迎击牌时使用。",
     "armor": 3,
     "power": 2,
     "durability": 4,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_039"
+      "equipment_effect_040",
+      "equipment_effect_041"
     ]
   },
   {
@@ -908,7 +910,7 @@
     "durability": 3,
     "cost": 3,
     "effect_ids": [
-      "equipment_effect_040"
+      "equipment_effect_042"
     ]
   },
   {
@@ -924,7 +926,7 @@
     "durability": 3,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_041"
+      "equipment_effect_043"
     ]
   },
   {
@@ -940,7 +942,7 @@
     "durability": 3,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_042"
+      "equipment_effect_044"
     ]
   },
   {
@@ -956,7 +958,7 @@
     "durability": 3,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_043"
+      "equipment_effect_045"
     ]
   },
   {
@@ -966,13 +968,13 @@
     "slot": "头部",
     "rarity": "R",
     "count": 1,
-    "effect_text": "损伤不会影响此牌所在区域提供的护甲，除非此牌上设置的损伤≥2。",
+    "effect_text": "损伤不会影响机甲区域提供的护甲，除非机甲部件装备区域总损伤数≥4。",
     "armor": 2,
     "power": 1,
     "durability": 3,
     "cost": 3,
     "effect_ids": [
-      "equipment_effect_044"
+      "equipment_effect_046"
     ]
   },
   {
@@ -988,7 +990,7 @@
     "durability": 4,
     "cost": 5,
     "effect_ids": [
-      "equipment_effect_045"
+      "equipment_effect_047"
     ]
   },
   {
@@ -998,13 +1000,13 @@
     "slot": "右臂",
     "rarity": "R",
     "count": 1,
-    "effect_text": "此牌上设置有损伤≥2时，动力+2。",
+    "effect_text": "此牌上设置有损伤≥2时，此牌动力+2。",
     "armor": 5,
     "power": -1,
     "durability": 3,
     "cost": 3,
     "effect_ids": [
-      "equipment_effect_046"
+      "equipment_effect_048"
     ]
   },
   {
@@ -1020,7 +1022,7 @@
     "durability": 3,
     "cost": 3,
     "effect_ids": [
-      "equipment_effect_044"
+      "equipment_effect_049"
     ]
   },
   {
@@ -1036,7 +1038,7 @@
     "durability": 3,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_044"
+      "equipment_effect_049"
     ]
   },
   {
@@ -1052,7 +1054,7 @@
     "durability": 3,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_044"
+      "equipment_effect_049"
     ]
   },
   {
@@ -1062,13 +1064,13 @@
     "slot": "头部",
     "rarity": "R",
     "count": 1,
-    "effect_text": "每我方回合2次，可以消耗4动力抽1张行动牌。",
-    "armor": 2,
-    "power": 0,
+    "effect_text": "每回合1次，消耗动力后，若没有动力剩余，则可以回复3动力并用当前动力移动。",
+    "armor": 1,
+    "power": 2,
     "durability": 2,
-    "cost": 2,
+    "cost": 3,
     "effect_ids": [
-      "equipment_effect_047"
+      "equipment_effect_050"
     ]
   },
   {
@@ -1084,7 +1086,7 @@
     "durability": 4,
     "cost": 5,
     "effect_ids": [
-      "equipment_effect_048"
+      "equipment_effect_051"
     ]
   },
   {
@@ -1094,13 +1096,14 @@
     "slot": "右臂",
     "rarity": "R",
     "count": 1,
-    "effect_text": "我方回合，可以将区域内的此牌弃置，之后移除机甲区域上原先设置于此牌上损伤数量的损伤。",
-    "armor": 3,
-    "power": 1,
+    "effect_text": "我方回合或使用迎击牌时，可以弃置此牌，使当前回合动力+5。",
+    "armor": 1,
+    "power": 2,
     "durability": 3,
     "cost": 3,
     "effect_ids": [
-      "equipment_effect_049"
+      "equipment_effect_052",
+      "equipment_effect_053"
     ]
   },
   {
@@ -1114,9 +1117,9 @@
     "armor": 2,
     "power": 2,
     "durability": 3,
-    "cost": 4,
+    "cost": 3,
     "effect_ids": [
-      "equipment_effect_050"
+      "equipment_effect_054"
     ]
   },
   {
@@ -1126,13 +1129,13 @@
     "slot": "右腿",
     "rarity": "R",
     "count": 1,
-    "effect_text": "此牌上设置的损伤≥2时，动力+2。",
+    "effect_text": "此牌上每设置有1损伤，此牌动力+1。",
     "armor": 1,
     "power": 4,
     "durability": 3,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_051"
+      "equipment_effect_021"
     ]
   },
   {
@@ -1142,13 +1145,13 @@
     "slot": "左腿",
     "rarity": "R",
     "count": 1,
-    "effect_text": "此牌上设置的损伤≥3时，动力+2。",
+    "effect_text": "此牌上每设置有1损伤，此牌动力+1。",
     "armor": 1,
     "power": 4,
-    "durability": 4,
+    "durability": 3,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_052"
+      "equipment_effect_021"
     ]
   },
   {
@@ -1158,13 +1161,13 @@
     "slot": "头部",
     "rarity": "R",
     "count": 1,
-    "effect_text": "使用远程武器发动攻击时，攻击范围+2。",
+    "effect_text": "我方远程武器范围+2。",
     "armor": 4,
     "power": 0,
     "durability": 4,
-    "cost": 5,
+    "cost": 4,
     "effect_ids": [
-      "equipment_effect_053"
+      "equipment_effect_055"
     ]
   },
   {
@@ -1174,13 +1177,14 @@
     "slot": "躯干",
     "rarity": "R",
     "count": 1,
-    "effect_text": "此牌从区域中弃置时可获得2金币。",
+    "effect_text": "被远程武器攻击时，可以弃置此牌，使此次攻击威力-4。此牌从区域中弃置时可获得2金币。",
     "armor": 4,
     "power": 1,
     "durability": 3,
-    "cost": 3,
+    "cost": 4,
     "effect_ids": [
-      "equipment_effect_054"
+      "equipment_effect_023",
+      "equipment_effect_056"
     ]
   },
   {
@@ -1190,13 +1194,13 @@
     "slot": "右臂",
     "rarity": "R",
     "count": 1,
-    "effect_text": "每我方回合1次，可以弃置1张行动牌，回复2动力。",
+    "effect_text": "我方回合1次，可以弃置1张行动牌，回复3动力。",
     "armor": 2,
     "power": 1,
     "durability": 3,
     "cost": 3,
     "effect_ids": [
-      "equipment_effect_055"
+      "equipment_effect_057"
     ]
   },
   {
@@ -1212,7 +1216,7 @@
     "durability": 3,
     "cost": 3,
     "effect_ids": [
-      "equipment_effect_056"
+      "equipment_effect_058"
     ]
   },
   {
@@ -1222,13 +1226,13 @@
     "slot": "右腿",
     "rarity": "R",
     "count": 1,
-    "effect_text": "打出攻击牌时，可立即移动到相邻的1个格子上，之后回复1动力。",
+    "effect_text": "使用攻击牌时，立即回复2动力，之后可立即移动到相邻的1个格子上。",
     "armor": 2,
     "power": 3,
     "durability": 3,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_057"
+      "equipment_effect_059"
     ]
   },
   {
@@ -1238,13 +1242,13 @@
     "slot": "左腿",
     "rarity": "R",
     "count": 1,
-    "effect_text": "打出迎击牌时，本回合动力可立即+2，之后移动到相邻的1个格子上。",
+    "effect_text": "使用迎击牌时，立即回复2动力，之后可立即移动到相邻的1个格子上。",
     "armor": 2,
     "power": 3,
     "durability": 3,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_058"
+      "equipment_effect_060"
     ]
   },
   {
@@ -1256,11 +1260,11 @@
     "count": 1,
     "effect_text": "可以将发动攻击武器的范围-2(不会低于1)，然后威力+4，类型变为近战武器(以上效果不适用于近战武器)。",
     "armor": 1,
-    "power": 1,
+    "power": 2,
     "durability": 3,
     "cost": 3,
     "effect_ids": [
-      "equipment_effect_059"
+      "equipment_effect_061"
     ]
   },
   {
@@ -1270,13 +1274,13 @@
     "slot": "躯干",
     "rarity": "R",
     "count": 1,
-    "effect_text": "打出迎击牌时，当前回合护甲+2，动力+2。",
-    "armor": 3,
-    "power": 0,
+    "effect_text": "使用迎击牌时，当前回合护甲+3，动力+3。",
+    "armor": 2,
+    "power": 2,
     "durability": 3,
-    "cost": 3,
+    "cost": 4,
     "effect_ids": [
-      "equipment_effect_060"
+      "equipment_effect_062"
     ]
   },
   {
@@ -1292,7 +1296,7 @@
     "durability": 4,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_061"
+      "equipment_effect_063"
     ]
   },
   {
@@ -1308,7 +1312,7 @@
     "durability": 4,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_061"
+      "equipment_effect_063"
     ]
   },
   {
@@ -1320,11 +1324,11 @@
     "count": 1,
     "effect_text": "此牌从区域中弃置时可使机甲回复3动力，之后可以用当前所有动力进行移动。",
     "armor": 2,
-    "power": 3,
+    "power": 2,
     "durability": 3,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_062"
+      "equipment_effect_064"
     ]
   },
   {
@@ -1336,9 +1340,9 @@
     "count": 1,
     "effect_text": "此牌从区域中弃置时可立即抽1张装备牌并设置到区域上(若不立即设置则需要直接弃置)。",
     "armor": 2,
-    "power": 3,
+    "power": 2,
     "durability": 2,
-    "cost": 4,
+    "cost": 3,
     "effect_ids": [
       "equipment_effect_005"
     ]
@@ -1356,8 +1360,8 @@
     "durability": 4,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_032",
-      "equipment_effect_054"
+      "equipment_effect_033",
+      "equipment_effect_056"
     ]
   },
   {
@@ -1373,8 +1377,8 @@
     "durability": 6,
     "cost": 6,
     "effect_ids": [
-      "equipment_effect_032",
-      "equipment_effect_033"
+      "equipment_effect_033",
+      "equipment_effect_034"
     ]
   },
   {
@@ -1390,8 +1394,8 @@
     "durability": 5,
     "cost": 5,
     "effect_ids": [
-      "equipment_effect_032",
-      "equipment_effect_063"
+      "equipment_effect_033",
+      "equipment_effect_065"
     ]
   },
   {
@@ -1407,8 +1411,8 @@
     "durability": 5,
     "cost": 5,
     "effect_ids": [
-      "equipment_effect_032",
-      "equipment_effect_063"
+      "equipment_effect_033",
+      "equipment_effect_065"
     ]
   },
   {
@@ -1424,8 +1428,8 @@
     "durability": 4,
     "cost": 5,
     "effect_ids": [
-      "equipment_effect_032",
-      "equipment_effect_054"
+      "equipment_effect_033",
+      "equipment_effect_056"
     ]
   },
   {
@@ -1441,8 +1445,8 @@
     "durability": 4,
     "cost": 5,
     "effect_ids": [
-      "equipment_effect_032",
-      "equipment_effect_054"
+      "equipment_effect_033",
+      "equipment_effect_056"
     ]
   },
   {
@@ -1458,7 +1462,7 @@
     "durability": 4,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_064"
+      "equipment_effect_066"
     ]
   },
   {
@@ -1468,13 +1472,13 @@
     "slot": "躯干",
     "rarity": "SR",
     "count": 1,
-    "effect_text": "机甲被指定为攻击目标时，可以弃置1张行动牌响应此攻击，使该攻击威力-5，之后设置2损伤在此牌上。",
+    "effect_text": "机甲被指定为攻击目标时，可以弃置2张行动牌，使该攻击威力-4。",
     "armor": 5,
     "power": 2,
     "durability": 5,
     "cost": 6,
     "effect_ids": [
-      "equipment_effect_065"
+      "equipment_effect_067"
     ]
   },
   {
@@ -1490,7 +1494,7 @@
     "durability": 4,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_066"
+      "equipment_effect_068"
     ]
   },
   {
@@ -1506,7 +1510,7 @@
     "durability": 4,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_066"
+      "equipment_effect_068"
     ]
   },
   {
@@ -1516,13 +1520,13 @@
     "slot": "右腿",
     "rarity": "SR",
     "count": 1,
-    "effect_text": "每我方回合1次，可以弃置1张行动牌，之后抽1张行动牌或回复2动力。",
+    "effect_text": "我方回合1次，可以弃置1张行动牌，之后抽1张行动牌或回复2动力。",
     "armor": 2,
     "power": 3,
     "durability": 4,
     "cost": 5,
     "effect_ids": [
-      "equipment_effect_067"
+      "equipment_effect_069"
     ]
   },
   {
@@ -1538,7 +1542,7 @@
     "durability": 4,
     "cost": 5,
     "effect_ids": [
-      "equipment_effect_038"
+      "equipment_effect_039"
     ]
   },
   {
@@ -1554,7 +1558,7 @@
     "durability": 4,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_068"
+      "equipment_effect_070"
     ]
   },
   {
@@ -1564,13 +1568,14 @@
     "slot": "躯干",
     "rarity": "SR",
     "count": 1,
-    "effect_text": "每回合1次，可以消耗2*n数量的金币(n为整数)，之后移动n个格子(无视动力)，此效果也可以在打出迎击牌时使用。",
+    "effect_text": "每回合1次，可以弃置X数量的行动牌（X最低为1），之后移动X个格子(无视动力)，此效果也可以在使用迎击牌时使用。",
     "armor": 4,
     "power": 2,
     "durability": 5,
     "cost": 6,
     "effect_ids": [
-      "equipment_effect_069"
+      "equipment_effect_071",
+      "equipment_effect_072"
     ]
   },
   {
@@ -1586,7 +1591,7 @@
     "durability": 4,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_070"
+      "equipment_effect_073"
     ]
   },
   {
@@ -1602,7 +1607,7 @@
     "durability": 4,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_070"
+      "equipment_effect_073"
     ]
   },
   {
@@ -1618,7 +1623,7 @@
     "durability": 4,
     "cost": 5,
     "effect_ids": [
-      "equipment_effect_042"
+      "equipment_effect_044"
     ]
   },
   {
@@ -1634,7 +1639,7 @@
     "durability": 4,
     "cost": 5,
     "effect_ids": [
-      "equipment_effect_042"
+      "equipment_effect_044"
     ]
   },
   {
@@ -1644,14 +1649,14 @@
     "slot": "头部",
     "rarity": "SR",
     "count": 1,
-    "effect_text": "使用远程武器发动攻击时，攻击范围+2。损伤不会影响此牌所在区域提供的护甲，除非此牌上设置的损伤≥2。",
+    "effect_text": "我方远程武器范围+2。损伤不会影响此牌所在区域提供的护甲，除非此牌上设置的损伤≥3。",
     "armor": 3,
     "power": 1,
     "durability": 4,
     "cost": 5,
     "effect_ids": [
-      "equipment_effect_053",
-      "equipment_effect_044"
+      "equipment_effect_055",
+      "equipment_effect_074"
     ]
   },
   {
@@ -1661,13 +1666,13 @@
     "slot": "躯干",
     "rarity": "SR",
     "count": 1,
-    "effect_text": "机甲被指定为攻击目标时，可弃置2张行动牌，使当前回合护甲+5，动力+2。",
+    "effect_text": "机甲被指定为攻击目标时，可弃置2张行动牌，使当前回合护甲+5，并且若此攻击是远程武器发出的，则其威力-4。",
     "armor": 4,
     "power": 3,
     "durability": 5,
     "cost": 6,
     "effect_ids": [
-      "equipment_effect_071"
+      "equipment_effect_075"
     ]
   },
   {
@@ -1677,13 +1682,15 @@
     "slot": "右臂",
     "rarity": "SR",
     "count": 1,
-    "effect_text": "此牌上设置有≥2枚损伤时，动力+2。",
+    "effect_text": "此牌上设置有≥2枚损伤时，此牌动力+2。我方回合或使用迎击牌时，可以弃置此牌，使机甲本回合动力+4。",
     "armor": 6,
     "power": -1,
     "durability": 4,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_072"
+      "equipment_effect_048",
+      "equipment_effect_019",
+      "equipment_effect_032"
     ]
   },
   {
@@ -1693,13 +1700,14 @@
     "slot": "左臂",
     "rarity": "SR",
     "count": 1,
-    "effect_text": "使用远程武器发动攻击时，可以弃置1张行动牌，使威力+3。",
+    "effect_text": "使用远程武器发动攻击时，可以弃置1张行动牌，使威力+3。损伤不会影响此牌所在区域提供的护甲，除非此牌上设置的损伤≥3。",
     "armor": 3,
     "power": 1,
     "durability": 4,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_056"
+      "equipment_effect_058",
+      "equipment_effect_074"
     ]
   },
   {
@@ -1709,14 +1717,14 @@
     "slot": "右腿",
     "rarity": "SR",
     "count": 1,
-    "effect_text": "打出攻击牌时，可立即移动到相邻的1个格子上。损伤不会影响此牌所在区域提供的护甲，除非此牌上设置的损伤≥2。",
+    "effect_text": "使用攻击牌时，可立即移动到相邻的1个格子上。损伤不会影响此牌所在区域提供的护甲，除非此牌上设置的损伤≥3。",
     "armor": 2,
     "power": 3,
     "durability": 4,
     "cost": 5,
     "effect_ids": [
       "equipment_effect_026",
-      "equipment_effect_044"
+      "equipment_effect_074"
     ]
   },
   {
@@ -1726,14 +1734,14 @@
     "slot": "左腿",
     "rarity": "SR",
     "count": 1,
-    "effect_text": "打出迎击牌时，可立即移动到相邻的1个格子上。损伤不会影响此牌所在区域提供的护甲，除非此牌上设置的损伤≥2。",
+    "effect_text": "使用迎击牌时，可立即移动到相邻的1个格子上。损伤不会影响此牌所在区域提供的护甲，除非此牌上设置的损伤≥3。",
     "armor": 2,
     "power": 3,
     "durability": 4,
     "cost": 5,
     "effect_ids": [
       "equipment_effect_027",
-      "equipment_effect_044"
+      "equipment_effect_074"
     ]
   },
   {
@@ -1743,13 +1751,13 @@
     "slot": "头部",
     "rarity": "SR",
     "count": 1,
-    "effect_text": "可以将发动攻击武器的范围-2(不会低于1)，然后威力+4，类型变为近战武器。",
+    "effect_text": "可以将发动攻击武器的范围-2(不会低于1)，然后威力+4，类型变为近战武器，之后回复2动力。",
     "armor": 2,
     "power": 1,
     "durability": 4,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_073"
+      "equipment_effect_076"
     ]
   },
   {
@@ -1761,11 +1769,11 @@
     "count": 1,
     "effect_text": "机甲被指定为攻击目标时，可弃置2张行动牌，立即抽1张行动牌(若是迎击牌可以立即响应该攻击)，并使当前回合动力+3。",
     "armor": 2,
-    "power": 1,
+    "power": 3,
     "durability": 5,
     "cost": 5,
     "effect_ids": [
-      "equipment_effect_074"
+      "equipment_effect_077"
     ]
   },
   {
@@ -1777,11 +1785,11 @@
     "count": 1,
     "effect_text": "使用近战武器发动攻击时，可以弃置2张行动牌，使威力+3，之后可以选择攻击目标区域最多2张牌效果无效直到本回合结束。",
     "armor": 3,
-    "power": 3,
+    "power": 2,
     "durability": 4,
     "cost": 5,
     "effect_ids": [
-      "equipment_effect_075"
+      "equipment_effect_078"
     ]
   },
   {
@@ -1793,11 +1801,11 @@
     "count": 1,
     "effect_text": "使用近战武器发动攻击时，可以弃置2张行动牌，使威力+3，之后可以选择攻击目标区域最多2张牌效果无效直到本回合结束。",
     "armor": 3,
-    "power": 3,
+    "power": 2,
     "durability": 4,
     "cost": 5,
     "effect_ids": [
-      "equipment_effect_075"
+      "equipment_effect_078"
     ]
   },
   {
@@ -1807,14 +1815,14 @@
     "slot": "右腿",
     "rarity": "SR",
     "count": 1,
-    "effect_text": "此牌上设置有≥2枚损伤时，动力+2。此牌从区域中弃置时可移除机甲其他区域内最多2损伤。",
+    "effect_text": "此牌上每设置有1损伤，此牌动力+1。此牌从区域中弃置时可移除机甲其他区域内最多2损伤。",
     "armor": 2,
     "power": 4,
     "durability": 4,
     "cost": 5,
     "effect_ids": [
-      "equipment_effect_072",
-      "equipment_effect_076"
+      "equipment_effect_021",
+      "equipment_effect_079"
     ]
   },
   {
@@ -1824,13 +1832,13 @@
     "slot": "左腿",
     "rarity": "SR",
     "count": 1,
-    "effect_text": "此牌上设置有≥2枚损伤时，动力+2。此牌从区域中弃置时可立即抽1张装备牌并设置到区域上(若不立即设置则需要直接弃置)。",
+    "effect_text": "此牌上每设置有1损伤，此牌动力+1。此牌从区域中弃置时可立即抽1张装备牌并设置到区域上(若不立即设置则需要直接弃置)。",
     "armor": 2,
     "power": 4,
     "durability": 4,
     "cost": 5,
     "effect_ids": [
-      "equipment_effect_072",
+      "equipment_effect_021",
       "equipment_effect_005"
     ]
   },
@@ -1847,7 +1855,7 @@
     "durability": 5,
     "cost": 6,
     "effect_ids": [
-      "equipment_effect_077"
+      "equipment_effect_080"
     ]
   },
   {
@@ -1857,13 +1865,13 @@
     "slot": "躯干",
     "rarity": "SSR",
     "count": 1,
-    "effect_text": "机甲被指定为攻击目标时，可以直接无效该攻击，之后设置5损伤到此牌上。",
+    "effect_text": "机甲被指定为攻击目标时，可以设置4损伤到此牌上，之后直接无效该攻击。",
     "armor": 5,
     "power": 3,
     "durability": 6,
     "cost": 8,
     "effect_ids": [
-      "equipment_effect_078"
+      "equipment_effect_081"
     ]
   },
   {
@@ -1879,7 +1887,7 @@
     "durability": 5,
     "cost": 6,
     "effect_ids": [
-      "equipment_effect_079"
+      "equipment_effect_082"
     ]
   },
   {
@@ -1895,7 +1903,7 @@
     "durability": 5,
     "cost": 6,
     "effect_ids": [
-      "equipment_effect_080"
+      "equipment_effect_083"
     ]
   },
   {
@@ -1911,8 +1919,7 @@
     "durability": 5,
     "cost": 7,
     "effect_ids": [
-      "equipment_effect_081",
-      "equipment_effect_082"
+      "equipment_effect_084"
     ]
   },
   {
@@ -1928,7 +1935,7 @@
     "durability": 5,
     "cost": 7,
     "effect_ids": [
-      "equipment_effect_083"
+      "equipment_effect_085"
     ]
   },
   {
@@ -1944,7 +1951,7 @@
     "durability": 5,
     "cost": 6,
     "effect_ids": [
-      "equipment_effect_084"
+      "equipment_effect_086"
     ]
   },
   {
@@ -1960,8 +1967,8 @@
     "durability": 6,
     "cost": 8,
     "effect_ids": [
-      "equipment_effect_085",
-      "equipment_effect_086"
+      "equipment_effect_087",
+      "equipment_effect_088"
     ]
   },
   {
@@ -1977,7 +1984,7 @@
     "durability": 5,
     "cost": 6,
     "effect_ids": [
-      "equipment_effect_087"
+      "equipment_effect_090"
     ]
   },
   {
@@ -1993,7 +2000,7 @@
     "durability": 5,
     "cost": 6,
     "effect_ids": [
-      "equipment_effect_079"
+      "equipment_effect_082"
     ]
   },
   {
@@ -2003,13 +2010,13 @@
     "slot": "右腿",
     "rarity": "SSR",
     "count": 1,
-    "effect_text": "每回合1次，机甲在当前回合内消耗了8动力，可无视动力移动2格。",
+    "effect_text": "每回合1次，机甲在当前回合内消耗了8动力，可无视动力移动2格，并回复2动力。",
     "armor": 4,
     "power": 3,
     "durability": 5,
     "cost": 7,
     "effect_ids": [
-      "equipment_effect_088"
+      "equipment_effect_091"
     ]
   },
   {
@@ -2019,13 +2026,13 @@
     "slot": "左腿",
     "rarity": "SSR",
     "count": 1,
-    "effect_text": "每回合1次，机甲在当前回合内消耗了8动力，可无视动力移动2格。",
+    "effect_text": "每回合1次，机甲在当前回合内消耗了8动力，可无视动力移动2格，并回复2动力。",
     "armor": 4,
     "power": 3,
     "durability": 5,
     "cost": 7,
     "effect_ids": [
-      "equipment_effect_088"
+      "equipment_effect_091"
     ]
   },
   {

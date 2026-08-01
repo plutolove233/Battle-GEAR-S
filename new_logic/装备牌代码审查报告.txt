@@ -1,0 +1,408 @@
+================================================================================
+装备牌代码审查报告 —— 效果文本 vs 落地代码逻辑核对
+================================================================================
+生成日期：2026-07-29
+权威依据：new_logic/装备牌部件_全部装备牌信息.txt（126张装备牌，唯一权威）
+代码依据：scripts/generated_database/GeneratedEquipmentEffects.gd（91个 effect_id 定义）
+          + scripts/action_core/ConditionChecker.gd / TimingEngine.gd / ActionService.gd
+          + scripts/runtime/MechSlotState.gd（派生值实时重算接入）
+          + scripts/ui/sell_equipment_panel.gd（effect_001 接入）
+
+--------------------------------------------------------------------------------
+一、总体结论
+--------------------------------------------------------------------------------
+本次任务1已将 equipment_parts.json 的 effect_text 与数值（护甲/动力/耐久/金币）
+全量同步至权威文档（52张牌共76处字段修改，比对差异归零，全部测试 PASSED 无回归）。
+
+任务2逐效果深读代码核对 126 张牌的 effect_ids 指向的代码实现，结论：
+  ✅ 完全正确（代码与权威一致）：118 张牌
+  ⚠️ 存在偏差/未实现（需后续 session 修正）：8 张牌（分属 7 个 effect_id）
+
+重要说明：本次审查发现大量牌的「JSON 文本」此前是旧设计文案，但「代码」其实已
+提前重写成新设计（如 025/027/029/030/050/067/069/071/072/074/077/078/092/103/104/
+105/106/107/108/109/113/114/116 等）。任务1把这些牌的文本同步到权威后，代码与文本
+现已一致——这些不是偏差，是「代码领先文本，现已对齐」。下方仅列出真正仍有偏差的牌。
+
+--------------------------------------------------------------------------------
+二、偏差清单（按严重度排序）
+================================================================================
+
+████【MAJOR-1】056 帝国的赤枭·躯干  (effect_040 DIRECT + effect_041 LISTEN) ████████
+权威效果文本：
+  每回合1次，可以弃置X数量的行动牌（X最低为1），当前回合动力+2倍X的数值，
+  此效果可以在使用迎击牌时使用。
+当前代码行为（GeneratedEquipmentEffects.gd L1178-1241）：
+  effect_040（主阶段 DIRECT）/ effect_041（迎击 LISTEN USE_ACTION_AT）均用
+  CHOOSE_INTEGER 选 n → SPEND_GOLD 2*n 金币 → EXECUTE_STAT_MODIFY 动力+n。
+  即「花 2n 金币，动力+n」，资源是【金币】，倍率是【1倍】。
+偏差：
+  ① 资源错误：权威是【弃置行动牌】，代码是【消耗金币】。
+  ② 倍率错误：权威动力加成是【+2X】，代码是【+n】（1倍）。
+  ③ 两者共享 once_per_turn_key="red_owl_torso_gold_power"（每回合1次，主阶段/迎击共享），
+     这部分符合权威「此效果可以在使用迎击牌时使用」。
+正确逻辑：
+  每回合1次（主阶段或使用迎击牌时），选 X（X≥1，上限=当前行动牌手牌数），
+  弃置 X 张行动牌，本回合动力 +2X。
+修复方案：
+  - effect_040 / effect_041 的 actions 把 CHOOSE_INTEGER 的：
+      max_value_expr: "floor($binding_context.owner_gold / 2)"
+      actions: [SPEND_GOLD 2*n, STAT_MODIFY power value_expr=$choice.n]
+    改为：
+      max_value_expr: "$binding_context.owner_action_hand_count"  ← 需新增此 binding
+      actions: [
+        {"type": &"DISCARD_ACTION_CARD", "params": {"count_expr": "$choice.n", "player_id": "$binding_context.player_id"}},
+        {"type": &"EXECUTE_STAT_MODIFY", "params": {"target_id": "$binding_context.mech_id", "stat_type": &"power", "value_expr": "2 * $choice.n", "method": &"add", "duration": &"THIS_TURN"}}
+      ]
+  - 条件 GOLD_ABOVE threshold=2 改为 OWNER_ACTION_HAND_ABOVE threshold=1（至少1张才能弃）。
+  - 需在 ActionService._resolve_atomic_value / binding_context 注入 owner_action_hand_count
+    （玩家行动手牌数）。label 文案改为「弃置 n 张行动牌，本回合动力+2n」。
+  - once_per_turn_key 保留不变。
+  - 同步更新 effect_040/041 的 description 与 display_name（金币→行动牌）。
+影响测试：test_equipment_effects.gd 中 red_owl 相关结构断言可能需更新文案。
+
+████【MAJOR-2】098 帝国的雄鹰·躯干  (effect_071 DIRECT + effect_072 LISTEN) ████████
+权威效果文本：
+  每回合1次，可以弃置X数量的行动牌（X最低为1），之后移动X个格子(无视动力)，
+  此效果也可以在使用迎击牌时使用。
+当前代码行为（L1894-1959）：
+  effect_071（主阶段）/ effect_072（迎击）均用 CHOOSE_INTEGER 选 n →
+  SPEND_GOLD 2*n → EXECUTE_SINGLE_MOVE max_cells=n free_move=true。即「花 2n 金币，
+  免费移动 n 格」，资源是【金币】。
+偏差：
+  资源错误：权威是【弃置行动牌 X 张】，代码是【消耗 2n 金币】。移动 n 格/免费部分正确。
+正确逻辑：
+  每回合1次（主阶段或使用迎击牌时），选 X（X≥1，上限=行动手牌数），弃置 X 张行动牌，
+  无视动力移动 X 格。
+修复方案：
+  - effect_071 / effect_072 的 CHOOSE_INTEGER：
+      max_value_expr 改为 "$binding_context.owner_action_hand_count"
+      actions 把 SPEND_GOLD 换成
+        {"type": &"DISCARD_ACTION_CARD", "params": {"count_expr": "$choice.n", "player_id": "$binding_context.player_id"}}
+      保留 EXECUTE_SINGLE_MOVE max_cells_expr=$choice.n free_move=true
+  - 条件 GOLD_ABOVE threshold=1 改为 OWNER_ACTION_HAND_ABOVE threshold=1。
+  - 需新增 owner_action_hand_count binding（与 MAJOR-1 相同）。
+  - once_per_turn_key="eagle_torso_gold_move" 保留（建议改名为 eagle_torso_card_move）。
+  - 同步 description/display_name。
+备注：MAJOR-1 与 MAJOR-2 是同一类问题（金币→行动牌），可一并修复，共用新增的
+      owner_action_hand_count binding 与 DISCARD_ACTION_CARD count_expr 支持。
+
+████【MEDIUM-3】125 / 126 帝国的神莺·右腿·左腿  (effect_091) ██████████████████
+权威效果文本：
+  每回合1次，机甲在当前回合内消耗了8动力，可无视动力移动2格，并回复2动力。
+当前代码行为（L2392-2417）：
+  BASIC_MOVE_AFTER + POWER_SPENT_THIS_TURN_ABOVE 8 → CHOOSE_ONE → 仅
+  EXECUTE_SINGLE_MOVE max_cells=2 free_move=true。缺少「回复2动力」。
+偏差：权威结尾有「并回复2动力」，代码未回复。
+正确逻辑：消耗8动力后，可无视动力移动2格，并回复2动力。
+修复方案（一行级，易修）：
+  在 effect_091 的 option.actions 中，EXECUTE_SINGLE_MOVE 之前加：
+    {"type": &"RESTORE_POWER", "params": {"amount": 2}}
+  （移动前先回复，或移动后回复均可；权威未限定顺序，建议回复在前）
+  同步 description 加「，并回复2动力」。
+备注：极低风险，改完跑 test_equipment_effects.gd 的 lark_suite21 结构断言即可。
+
+████【MEDIUM-4】119 联邦的一角兽·右腿  (effect_084) ██████████████████████████
+权威效果文本：
+  响应对我方的攻击，可以设置2损伤到此牌上，机甲可立即移动2个格子。
+  发动此效果后，可以立即继续发动此效果。
+当前代码行为（L2278-2308 + TimingEngine.gd L2104-2129）：
+  AVAILABILITY 响应攻击 → RESPOND_ATTACK + REPEAT_SELF_DAMAGE_AND_FREE_MOVE。
+  但 REPEAT_SELF_DAMAGE_AND_FREE_MOVE 在 TimingEngine 是【单轮】实现：
+  注释明写「单轮：fixed_slot 自损 + free_move 移动。（"可继续发动"循环待实机/F3 补）」。
+  即只自损2+移动2一次，不循环。
+偏差：权威「发动此效果后，可以立即继续发动此效果」的【循环】未实现。
+正确逻辑：每次发动=自损2+免费移动2格；发动完后可再次发动（直到玩家取消/无格可移/
+         自损致本牌弃置/无法再承受损伤）。
+修复方案：
+  在 TimingEngine REPEAT_SELF_DAMAGE_AND_FREE_MOVE 分支末尾，当 allow_continue=true
+  且来源牌仍在槽（stop_if_source_leaves_slot 校验）且仍可承受损伤（SELF_DAMAGE_TOKENS_BELOW
+  门槛）时，重新挂起一次 need_input「是否继续发动？」，玩家确认则再次执行自损2+移动2，
+  取消则结束。可用现有 CHOOSE_ONE optional 机制循环；或新增一个 loop 计数挂在 action.record。
+  注意每次循环都要重新校验 SELF_DAMAGE_TOKENS_BELOW threshold=5（自损2后若≥耐久会弃置，
+   应停止——已有 _source_equipment_discarded 守卫可复用）。
+  同步 TimingEngine 注释去掉「单轮」。
+
+████【MEDIUM-5】122 帝国的神莺·躯干  (effect_087 + effect_088) █████████████████
+权威效果文本：
+  此牌也可以当作威力20，范围6的远程武器使用。使用此牌发动攻击需要消耗当前所有动力
+  (不为0)，且直到下个我方回合开始无法回复。
+当前代码行为：
+  - effect_087（L2424-2434）：权限型占位，提供 get_virtual_weapon_from_equipment(card)
+    helper（L2659-2671）返回 {might:20, range_value:6, weapon_kind:远程, is_virtual:true}。
+  - effect_088（L2440-2460）：ATTACK_BEFORE priority 30，ATTACK_SOURCE_IS_SELF +
+    OWNER_POWER_ABOVE_OR_EQUAL 1 → SPEND_POWER ALL_CURRENT（强制）+ ADD_STATUS
+    CANNOT_RESTORE_POWER UNTIL_OWNER_TURN_START。
+  - get_virtual_weapon_from_equipment 全工程【无调用方】（仅定义未接入）。
+偏差：
+  effect_087 的虚拟武器未接入武器选择/攻击流程——玩家在游戏中根本无法选择此虚拟武器
+  发动攻击。effect_088 的耗尽动力+禁回逻辑已写好，但因为没有途径用虚拟武器攻击，
+  effect_088 永远不会触发。
+正确逻辑：装备此牌的机甲，在选武器攻击时可多出一个「帝国的神莺·躯干（威力20/范围6/
+         远程）」选项；选它攻击时强制消耗全部当前动力（须>0），并施加「直到下个我方
+         回合开始无法回复动力」状态。
+修复方案：
+  - weapon_picker_panel（武器选择面板）：列出可选武器时，除 frame_base_weapon 与已装备
+    武器外，遍历机甲 6 部件 slot，对每张正面装备牌调用
+    GeneratedEquipmentEffects.get_virtual_weapon_from_equipment(card)，非空则加入选项；
+    可选条件 current_power > 0（requires_current_power_above=0）。
+  - attack 动作 / AttackRuleChecker：当选中虚拟武器时，attack.record 标记 source 为该
+    装备牌（ATTACK_SOURCE_IS_SELF 才能让 effect_088 触发）；武器 might/range 取自虚拟武器
+    条目；虚拟武器不占武器槽、不消耗武器耐久。
+  - 验证 effect_088 的 ATTACK_SOURCE_IS_SELF 判定能命中虚拟武器来源（可能需在
+    ConditionChecker 里让 ATTACK_SOURCE_IS_SELF 识别虚拟武器的 source_card_id）。
+  - 这是 UI + 动作解析的接入工程，非纯数据修改，建议单独 session 做 + 配 F3 实机验证。
+备注：effect_087 description 已正确；get_virtual_weapon_from_equipment 已正确；缺的只是
+      「调用方接线」。优先级中（SSR 终局牌，但当前完全不可用）。
+
+████【MINOR-6 / PARTIAL】110 极电装·躯干  (effect_077) ███████████████████████
+权威效果文本：
+  机甲被指定为攻击目标时，可弃置2张行动牌，立即抽1张行动牌(若是迎击牌可以立即响应
+  该攻击)，并使当前回合动力+3。
+当前代码行为（L2075-2095）：
+  ATTACK_PRE target → 弃2牌 + DRAW_ACTION 1 + 动力+3。
+  注释明写：「即时迎击"若抽到迎击牌可立即响应"需 bind_result_to + OPEN_OR_USE_RESPONSE
+   完整流程，暂简化为弃2抽1动力+3，待实机/F3 补」。
+偏差：权威括号内「(若是迎击牌可以立即响应该攻击)」未实现——抽到的1张若为迎击牌，
+      应可立即作为对该攻击的迎击响应打出，代码只是抽到手牌就结束。
+正确逻辑：抽1张行动牌后，若该牌是迎击牌，给玩家选项「立即用此牌迎击响应此次攻击」，
+         确认则走迎击响应流程（OPEN_OR_USE_RESPONSE），取消则牌留手牌。
+修复方案：
+  - DRAW_ACTION 后接一个条件分支：检查刚抽到的牌 action_type=="迎击"，
+    若是则挂起 need_input（CHOOSE_ONE optional）「是否立即用此迎击牌响应攻击？」，
+    确认 → 调 OPEN_OR_USE_RESPONSE（attack_id=当前攻击, response_card_id=抽到的牌）；
+    取消 → 无事。
+  - 需要 DRAW_ACTION 能 bind 结果（bind_result_to），把抽到的牌 instance 暴露给后续
+    条件/动作。AtomicActionResolver 已有 OPEN_OR_USE_RESPONSE（L63），可直接复用。
+备注：核心三段（弃2/抽1/动力+3）已正确，仅迎击即时响应缺失。优先级低-中。
+
+████【MINOR-7】113 极电装·右腿  (effect_079) ████████████████████████████████
+权威效果文本：
+  此牌上每设置有1损伤，此牌动力+1。此牌从区域中弃置时可移除机甲其他区域内最多2损伤。
+当前代码行为（L2143-2166）：
+  effect_021（每损伤+1动力，已正确）+ effect_079：DISCARD_AFTER →
+  EXECUTE_DAMAGE_CHANGE value=2 method=decrease exclude_slot_id=$binding_context.slot_id。
+  但注释明写：「exclude_slot_id 排除来源槽暂未接入面板，待实机/F3 补；来源槽损伤可能也被选」。
+  且 damage_change_action.gd 中 grep exclude_slot_id【无匹配】——即 exclude_slot_id 参数
+  在 decrease 路径未被读取/使用。
+偏差：权威「机甲其他区域」=排除此牌原所在槽；代码的移除损伤 UI 可能允许选中来源槽
+      的损伤（未真正排除）。
+正确逻辑：移除损伤时只能选机甲【其他】区域（排除此牌原槽）的损伤，最多2点。
+修复方案：
+  - 在 damage_change_action.gd 的 decrease 分支（复用维修移除损伤 UI 路径）读取
+    params.exclude_slot_id，在弹窗列出可选损伤槽位时跳过该 slot_id；
+    或在 damage_placement_panel 的移除模式过滤掉 exclude_slot_id。
+  - effect_079 的 exclude_slot_id 参数已传 "$binding_context.slot_id"，只需让下游消费它。
+备注：041 近战装·右腿（effect_031 REMOVE_DAMAGE_TOKENS_OTHER_SLOTS）用的是另一个动作
+      类型，已正确排除；effect_079 走 EXECUTE_DAMAGE_CHANGE decrease 路径才漏。优先级低。
+
+--------------------------------------------------------------------------------
+三、cosmetic（不影响行为，建议顺手清理）
+--------------------------------------------------------------------------------
+- GeneratedEquipmentEffects.gd L136 注释仍写「将要在其他名称带"联邦"的装备牌上设置损伤时」，
+  但 effect_004 实际条件 REDIRECT_TARGET_HAS_ANY_EQUIP 已是【任意装备】（ConditionChecker.gd
+  L616-636 注释亦明写「不限联邦」），与权威 009「其他装备牌即将设置损伤时」一致。
+  → 仅改注释为「其他装备牌即将设置损伤时」即可，代码无需动。
+
+--------------------------------------------------------------------------------
+四、已逐项核对为「正确」的效果（118 张牌，节选关键说明）
+--------------------------------------------------------------------------------
+以下效果代码与权威完全一致，无需改动（仅举要，余者类同已核对）：
+- effect_001（001-006 量产装·设置后可卖出）：sell_equipment_panel.gd L173 识别
+  equipment_effect_001 列出已设置装备 ✓
+- effect_002/008/066/070（联邦/帝国头部派生护甲/动力）：compute_faction_armor_bonus/
+  compute_faction_power_bonus/compute_head_faction_*，含自身/排除自身语义正确 ✓
+- effect_014/089/046/049/074（损伤不影响护甲各阈值变体）：card_damage_immune_armor_amount
+  分别处理 无条件免疫/总损伤<3/总损伤<4/此牌<2/此牌<3 ✓
+- effect_016/021/048（损伤≥阈值或每损伤+动力）：slot_damage_threshold_power_bonus，
+  region_damage_tokens 与 card.damage_tokens 同步递增（DamageTokenService L36/40/82/86），
+  max(region,card) 在装备时二者相等，行为正确 ✓
+- effect_017/050（机动/高机动头·耗尽动力回复并移动）：025/067 文本旧但代码已是新机制 ✓
+- effect_019/032/052/053（弃置此牌加动力·主动/迎击双路径）：027/069/105 ✓
+- effect_023（032/074 狙击躯干·被远程攻击弃牌减威力4）：032 文本旧为「无」代码已对 ✓
+- effect_035（050 白马躯干·迎击置1损伤减威力4）/ effect_039（054/096 置2损伤减3）/
+  effect_067（092 圣牛躯干·弃2牌减威力4）/ effect_081（116 一角兽躯干·置4损伤无效攻击）/
+  effect_085（120 置3损伤减5）：数值与顺序均与权威一致 ✓
+- effect_040/041 之外的 CHOOSE_INTEGER（effect_040/041/071/072 之外的整数选择无）——
+  其余整数/多选效果（effect_063/078 NEGATE_EQUIPMENT_EFFECT、effect_065 抽装备设置或卖出、
+  effect_069 弃1抽1或回复2、effect_084 自损移动）均正确 ✓
+- effect_055/074/055 组合（103/106/107/108 轰雷·范围+2/威力+3/移动+免疫阈值3）✓
+- effect_076（109 极电头·范围-2威力+4转近战回复2，适用近战，无近战限制）✓
+- effect_080/086（115/121 全场阵营光环）：get_global_faction_equipment_aura_bonus ✓
+- effect_090（123 神莺右臂·置2损伤抽3回复3）、effect_082/083（117/118/124 置损伤加威力/
+  加攻击次数）✓
+
+--------------------------------------------------------------------------------
+五、修复优先级建议（供后续 session 接力）
+--------------------------------------------------------------------------------
+P0（一行级，立即修，零风险）：
+  - MEDIUM-3 effect_091（125/126）补 RESTORE_POWER 2
+P1（同类批量修，需新增1个 binding + DISCARD_ACTION_CARD count_expr）：
+  - MAJOR-1 effect_040/041（056）金币→弃行动牌、动力+n→+2n
+  - MAJOR-2 effect_071/072（098）金币→弃行动牌
+P2（UI/动作接线工程，建议单独 session + F3 实机）：
+  - MEDIUM-5 effect_087/088（122）虚拟武器接入武器选择面板
+  - MEDIUM-4 effect_084（119）「可继续发动」循环
+  - PARTIAL-6 effect_077（110）抽到迎击牌可立即响应
+P3（小修）：
+  - MINOR-7 effect_079（113）exclude_slot_id 接入移除损伤 UI
+  - cosmetic effect_004 注释
+
+--------------------------------------------------------------------------------
+六、本次已完成的任务1改动（备查）
+--------------------------------------------------------------------------------
+- data/cards/equipment_parts.json：52张牌共76处字段修改（effect_text + armor/power/
+  durability/cost 全量同步至权威文档），effect_ids 未动。
+- 比对脚本：compare_eq.py（生成 eq_diff_report.txt，现差异为0）
+- 应用脚本：apply_eq_json.py
+- 测试：timeout 300 Godot --headless -s res://tests/run_tests.gd → TESTS PASSED（exit 0）
+================================================================================
+
+
+================================================================================
+零、紧急新增（2026-07-29 二次核查，用户反馈后补充）-- 系统级，优先级最高
+================================================================================
+（本节为用户实机反馈后的二次深查发现，优先级高于上面一~六节。）
+
+████【CRITICAL-A】THIS_TURN 护甲+X 完全不生效（影响 6 张牌）████████████████████
+权威效果文本（举例 020 重甲装·躯干）：机甲被指定为攻击目标时，可弃置2张行动牌，当前回合护甲+4。
+当前代码行为：
+  effect_015/029/047/062/075/009 用 EXECUTE_STAT_MODIFY armor method=add duration=THIS_TURN
+  -> stat_modify_action._apply_one_stat -> GameActions.modify_armor。
+  modify_armor（GameActions.gd L300-345）只：①往 mech.statuses 追加
+  {type=&"ARMOR_MODIFIER", delta=X, duration=THIS_TURN}；②仅 THIS_ATTACK 时写 attack
+  ["temporary_armor_bonus"]。但 get_armor（MechState.gd L71-80）= 各槽 get_effective_armor
+  + 联邦头部派生 + temp_armor_bonus，【不遍历 mech.statuses / 不读 ARMOR_MODIFIER】。
+  全工程 grep "ARMOR_MODIFIER" 只有创建处(GameActions L314)与机师引用
+  (GeneratedPilotEffects L2136)，【无消费方】。伤害计算 attack_action L243 用 get_armor()。
+偏差：所有「当前回合护甲+X」写入死状态 -> 护甲不变 -> 不减伤。受影响牌：
+  014 帝国普装·躯干(effect_009)：动力+3(正常)+护甲-2(不生效，惩罚也没扣)
+  020 重甲装·躯干(effect_015)：护甲+4 不生效
+  038 近战装·躯干(effect_029)：护甲+2 不生效（动力+2 正常）
+  062 超重甲装·躯干(effect_047)：护甲+5 不生效
+  080 近战特装·躯干(effect_062)：护甲+3 不生效（动力+3 正常）
+  104 轰雷装·躯干(effect_075)：护甲+5 不生效
+  （注：防御牌 +5 当年正因同问题改走 temp_armor_bonus / MODIFY_ATTACK_TEMP_ARMOR 写
+   attack record temporary_armor_bonus，L246 读；THIS_ATTACK 路径有效，THIS_TURN 没修。）
+正确逻辑：当前回合护甲+X 应整回合提升 get_armor()，回合结束清除。
+修复方案（推荐最小改动）：MechState.get_armor() 末尾遍历 mech.statuses，累加所有
+  type==&"ARMOR_MODIFIER" 且 String(duration)!="THIS_ATTACK" 的 delta（排除 THIS_ATTACK
+  以免与 attack record temporary_armor_bonus 双计）。回合结束 _clean_this_turn_durations
+  已移除 THIS_TURN 的 ARMOR_MODIFIER 状态，移除后 get_armor 自动不再计入，无需显式还原。
+  验证：写行为测试，发动 effect_015 弃2牌后同回合再挨打，伤害应减4。风险低。
+
+████【CRITICAL-B】狙击装头部「远程武器范围+X」完全不生效（影响 3 张牌：031/073/103）████████
+权威：031 狙击装·头部「我方远程武器范围+1」/ 073 狙击影装·头部「我方远程武器范围+2」/ 103 轰雷装·头部「我方远程武器范围+2」(103 另含损伤免疫 effect_074)。注：031 用 effect_022(+1)，073 与 103 共用 effect_055(+2)——同型效果共用同一 effect_id，故 effect_id 是 2 个、受影响牌是 3 张。
+当前代码：effect_022/055 用 LISTEN ATTACK_BEFORE + 远程条件 -> MODIFY_ATTACK_RANGE
+  delta=+1/+2 -> ActionService 写父 attack record["extra_range"]。attack_action L117/141
+  选目标校验与 L213 命中判定确读 weapon_range+extra_range；时序也对(select_weapon先于
+  select_target)。
+偏差（为何不起作用）：
+  ① 预检查 app_root._on_action_card_clicked L1424-1446 用 _get_weapon_range(L4007，仅基础
+    range_value)判「是否有可攻击目标」。唯一目标在 base+1 时直接报「没有可攻击的目标」
+    并 return，攻击发动不了。
+  ② 目标高亮 _show_popup attack_target_select L2282-2292 用 params.weapon_range 画绿格，
+    该值来自 attack_action _step_select_target input_params L160 = record["weapon_range"]
+    （基础值，不含 extra_range）。高亮只到基础射程，玩家看不到/点不到 +1 格目标。
+  AI _auto_select_attack_target L310 同样用基础值。故对人类/AI 都不可用。
+正确逻辑：被动常驻，所有远程武器有效射程(预检查/高亮/选目标/命中)始终 +X。
+修复方案（推荐：effect_022/055 改派生值，仿 effect_002）：
+  - 新增 GeneratedEquipmentEffects.get_passive_weapon_range_bonus(mech, weapon_kind)：
+    远程武器时查头部牌 effect_022->+1 / effect_055->+2。
+  - app_root._get_weapon_range L4007：return 基础+helper(mech,武器kind)（修预检查①）。
+  - attack_action._step_select_weapon L88-89：result["weapon_range"]=基础+helper（存进record，
+    命中L213/选目标校验L117 自动含之）。
+  - attack_action._step_select_target input_params L160：
+    "weapon_range": record["weapon_range"] + int(record["extra_range"])（让高亮也反映可选
+    范围-2 的 extra_range，顺带改善 effect_028/061/076 的 UX）。
+  - effect_022/055 改 mode=DIRECT 派生占位(无 actions/无 listener，仿 effect_002/008)，
+    删 listener 注册防双计。
+  - 验证：行为测试，狙击头+base range=1 远程武器能选/命中 2 格外目标。风险中(动record/高亮)。
+  附(低优 UX)：effect_028/061/076「范围-2(可选)」高亮同用基础射程，玩家可能选到超出
+  (基础-2)范围目标随后判未命中；修 L160 extra_range 后一并改善。
+
+████【已核实正确】动力模型三种区分（用户关注点）████████████████████████████████
+权威区分与代码实现完全一致，无需改动：
+  ①「此牌动力+X」(加上限)：派生 get_total_power()(MechState L85)；max_power 在 set/break/
+    sell 装备时同步为 get_total_power()(set_equipment L243/GameActions L2065/CardSetService
+    L171,258/EquipmentBreak L43,115/GameSetup L173)。涉及 effect_002/008/016/021/048/066/070。✅
+  ②「当前回合动力+X」(可超上限、仅本回合)：modify_mech_power(L349) THIS_TURN 时
+    mech.power=maxi(0,power+delta)不夹上限，注册 POWER_MODIFIER；回末 _clean_this_turn
+    _durations(L226-227) clamp(power-delta,0,max_power) 还原。涉及 effect_006/009/018/029/
+    038/051/053/062/068/075/077 等。✅
+  ③「回复X动力」(不超阈值、保留至下个我方回合开始 full 回复)：restore_power(L445)
+    clamp(power+amount,0,max_power)夹上限，不注册 duration 故保留；回合开始 restore_power
+    "full"(L81)补满；CANNOT_RESTORE_POWER 拦截。涉及 effect_010/011/012/013/020/024/044/
+    045/054/057/059/060/064/069/076/090/091。✅
+  故 038 近战装·躯干：+动力正确，+护甲不生效(见 CRITICAL-A)。
+================================================================================
+
+
+================================================================================
+七、修复完成记录（2026-07-29 session）
+================================================================================
+本 session 已修复 7 项，全部新增行为测试且全量测试 PASSED 无回归。另发现并修复
+若干审查报告未记录的运行期 bug（"完全正确"系定义层审查，运行期实未触发）。
+
+✅【CRITICAL-A】THIS_TURN 护甲+X 不生效（014/020/038/062/080/104）
+   MechState.get_armor() 末尾遍历 statuses 累加 ARMOR_MODIFIER delta（排除 THIS_ATTACK
+   避免与 attack record temporary_armor_bonus 双计）。回末 _clean_this_turn_durations
+   移除 THIS_TURN 状态后自动还原。测试：test_armor_this_turn_fix.gd（2 例）。
+
+✅【CRITICAL-B】狙击装头部远程范围+X 不生效（031/073/103，effect_022/055）
+   effect_022/055 改派生占位（MODE_DIRECT，不注册 listener）；新增
+   get_passive_weapon_range_bonus(mech, weapon_kind)；_get_weapon_range（预检查）与
+   attack_action._step_select_weapon（存 record["weapon_range"]）调用之；_step_select_target
+   input_params 的 weapon_range 加 extra_range（高亮与校验一致）。测试：test_sniper_range_fix.gd（2 例）。
+
+✅【MAJOR-1/2】056 赤枭躯干 + 098 雄鹰躯干：金币->弃行动牌
+   effect_040/041/071/072 改 CHOOSE_INTEGER + EXECUTE_DISCARD(count_expr=$choice.n,
+   executor=人类玩家->选牌UI) + STAT_MODIFY(power+2n) / EXECUTE_SINGLE_MOVE(max_cells=n)。
+   条件 GOLD_ABOVE->OWNER_ACTION_HAND_ABOVE threshold=1；max_value_expr=owner_action_hand_count。
+   新增 _eval_expr 支持 $binding_context.owner_action_hand_count。
+   引擎：CHOOSE_INTEGER 内嵌动作改串行（_seq_effect_actions，仿顶层），choose_integer
+   resume 设 waiting_effect_action 等选牌子动作完成（修 effect_071 移动子动作孤立隐患）。
+   人类选牌走 discard_card 选牌UI；AI 由 ActionUIBridge._auto_discard_cards 自动弃。
+   once_per_turn_key 改名 red_owl_torso_card_power / eagle_torso_card_move。
+   测试：test_red_owl_torso_card_for_power、test_eagle_torso_card_for_move。
+
+✅【MEDIUM-3】125/126 神莺腿 effect_091 缺回复2动力
+   effect_091 option.actions 在 EXECUTE_SINGLE_MOVE 前加 RESTORE_POWER amount=2。
+   测试：test_lark_suite21_structure 加 RESTORE_POWER amount=2 断言。
+
+✅【MEDIUM-4】119 一角兽右腿 effect_084「可继续发动」循环
+   REPEAT_SELF_DAMAGE_AND_FREE_MOVE 每轮（自损2+移动2）后由 __REPEAT_LOOP_CHECK__
+   检查：来源牌仍在槽 + 此牌损伤<stop_damage_threshold(5) -> 弹"是否继续发动？"窗
+   （choose_one_effect），确认再排一轮，取消/不满足则结束。AI 自动停。
+   新增 _repeat_iteration_actions / _resolve_repeat_params / _handle_repeat_loop /
+   _source_card_left_slot；_continue_seq 识别 __REPEAT_LOOP_CHECK__；resume_pending_effect
+   加 repeat_continue phase。
+   附修 3 个响应路径运行期 bug（审查漏报）：①非迎击牌响应 payload 无 binding_context
+   致 effect 条件误绑攻击方 ②payload 无 target_id 致 SELF_MECH_IS_ATTACK_TARGET 失败
+   ③_execute_effect_by_id 的 want_card_id 过滤只查 bind_ctx.card_instance_id，漏 AVAILABILITY
+   顶层 card_instance_id（effect_084 等装备 AVAILABILITY 响应从不执行）。
+   测试：test_unicorn_repeat_loop.gd。
+
+✅【MINOR-7】113 极电装右腿 effect_079 exclude_slot_id 未消费
+   _extract_damage_change_params 读 exclude_slot_id（$binding_context.slot_id 解析）；
+   _create_action record_keys 加 exclude_slot_id；damage_change_action decrease 路径透传到
+   place_damage_tokens input_params；damage_placement_panel.configure_removal 接受
+   exclude_slot_id，valid_slots 跳过来源槽。
+   附修：TARGET_HAS_DAMAGE 回退 binding_context.mech_id（DISCARD_AFTER payload 无 target_id）；
+   发现并修复 4 个 DISCARD_AFTER 效果（effect_056/079/meleesp_rleg/ace_arm_damage_draw）
+   listen_action_type=&"discard" 与动作类型 &"discard_card" 不匹配致从不触发->改 &"discard_card"。
+   测试：test_polar_rleg_exclude_slot_on_leave。
+
+✅【cosmetic】effect_004 注释「名称带联邦」->「其他装备牌」
+
+──────────────────────────────────────────────────
+⏸【MEDIUM-5】122 神莺躯干 effect_087/088 虚拟武器未接入 -- 延后（F3 实机）
+   get_virtual_weapon_from_equipment 已定义但无调用方。需 weapon_picker_panel 列虚拟武器 +
+   attack 动作解析虚拟武器 source（might/range 取虚拟条目，source_card_id=装备牌）+
+   ConditionChecker.ATTACK_SOURCE_IS_SELF 识别虚拟武器。属 UI+动作接线工程，建议配 F3 实机验证。
+
+⏸【PARTIAL-6】110 极电躯干 effect_077 抽到迎击即时响应 -- 延后（F3 实机）
+   需 DRAW_ACTION bind_result_to 暴露抽到的牌 + CHOOSE_ONE + OPEN_OR_USE_RESPONSE。
+   注：抽到的迎击牌经 register_hand_card_availability 已在 ATTACK_AT 响应窗口可用，
+   玩家已可于 ATTACK_AT 用其响应本次攻击；"立即响应"弹窗仅为 ATTACK_PRE 提前响应的 UX 增益。
+================================================================================
+

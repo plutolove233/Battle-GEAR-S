@@ -86,6 +86,12 @@ var card_set_service = null
 ## 是否已初始化
 var _initialized: bool = false
 
+## 逐格移动动画开关：仅 UI 模式（app_root _connect_action_signals）置 true。
+## single_move 逐格 basic_move 完成后每格暂停 50ms 让棋盘逐格重绘（避免瞬移）。
+## 测试模式不置位 -> 保持同步执行（不暂停），测试断言移动结果不受动画影响。
+## PvP 双端都置位，双端各自按相同延迟 resume，不改状态、无锁步发散风险。
+var move_animation_enabled: bool = false
+
 
 ## 初始化所有系统
 func initialize(data_registry) -> void:

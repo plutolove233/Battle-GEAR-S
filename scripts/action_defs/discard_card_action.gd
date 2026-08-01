@@ -199,9 +199,9 @@ func _step_move_to_tmp(action: Action) -> Dictionary:
 		# 行动牌离开手牌时注销其 AVAILABILITY 监听器（迎击牌等），避免弃置后仍作为响应窗口可选项残留
 		if card.def != null and card.def.card_kind == &"action" and context.has_method("unregister_hand_card_availability"):
 			context.unregister_hand_card_availability(card_id)
-		# 若是装备牌，先注销其 permanent listener（装备效果离场）
-		if context.timing_engine != null and card.def != null and card.def.card_kind == &"equipment":
-			context.timing_engine.unregister_permanent_listeners_for_card(card_id)
+		# 注：装备牌的 permanent listener 不在此注销--离场诱发效果（effect_003/005/031）
+		# 监听 DISCARD_AFTER，须在 DISCARD_AFTER fire 时仍处于注册态才能触发。统一改在
+		# _step_settle（DISCARD_AFTER 之后）注销，避免离场效果被提前移除而静默失效。
 		# 移入 tmp_zone
 		card.zone = &"temp_zone"
 	return {}
@@ -253,4 +253,14 @@ func _step_transfer_to_pile(action: Action) -> Dictionary:
 
 
 func _step_settle(action: Action) -> Dictionary:
+	# DISCARD_AFTER 已 fire（离场诱发效果已触发），此处注销被弃装备牌的 permanent listener，
+	# 使其后续不再在未来时点触发（如已离场的联邦右腿 ATTACK_PRE 不再响应该回合后续攻击）。
+	var settle_card_ids: Array = action.record.get("determined_card_ids", [])
+	if context != null and context.timing_engine != null:
+		for card_id: StringName in settle_card_ids:
+			if card_id == &"":
+				continue
+			var s_card = context.game_state.get_card(card_id) if context.game_state != null else null
+			if s_card != null and s_card.def != null and s_card.def.card_kind == &"equipment":
+				context.timing_engine.unregister_permanent_listeners_for_card(card_id)
 	return {}

@@ -15,6 +15,9 @@ signal reserve_set_clicked(slot_id: StringName)
 ## 装备主动效果"发动"按钮被点击（参数：来源牌实例ID, 效果ID）
 signal equipment_active_clicked(card_instance_id: StringName, effect_id: StringName)
 
+## 「详情」按钮被点击（参数：当前机甲 MechState）——打开机甲详细信息框
+signal mech_detail_requested(mech)
+
 ## 当前机甲引用
 var _mech = null  # type: MechState
 
@@ -23,6 +26,11 @@ var _is_enemy: bool = false
 
 ## GameContext 引用（用于扫描装备 DIRECT 主动效果，仅玩家面板注入）
 var _context = null
+
+## 装备悬停效果浮框（鼠标移到框架装备上时显示效果文本/数值/绑定效果）
+var _tooltip_popup: PanelContainer = null
+var _tooltip_rich: RichTextLabel = null
+var _hovered_card_cid: StringName = &""
 
 ## 槽位显示顺序
 const SLOT_ORDER: Array[StringName] = [
@@ -53,19 +61,35 @@ func configure(mech, is_enemy: bool = false, game_context = null) -> void:
 	_refresh()
 
 
+func _ready() -> void:
+	# _process 仅在悬停浮框可见时启用，初始关闭避免每帧空跑
+	set_process(false)
+
+
 ## 刷新装备显示
 func _refresh() -> void:
+	_hide_tooltip()
 	for child in get_children():
 		child.queue_free()
 
 	if not _mech:
 		return
 
-	# 标题
-	var title = Label.new()
+	# 标题 + 详情按钮（仅注入了 context 的面板显示：主面板有，敌方信息弹窗内无）
+	var title_row := HBoxContainer.new()
+	var title := Label.new()
 	title.text = "── 装备面板 ──"
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	add_child(title)
+	title_row.add_child(title)
+	if _mech != null and _context != null:
+		var detail_btn := Button.new()
+		detail_btn.text = "详情"
+		detail_btn.custom_minimum_size = Vector2(46, 24)
+		detail_btn.tooltip_text = "查看机甲动力/护甲来源明细与状态"
+		detail_btn.pressed.connect(func(): mech_detail_requested.emit(_mech))
+		title_row.add_child(detail_btn)
+	add_child(title_row)
 
 	# 生命/动力摘要
 	var summary = Label.new()
@@ -192,7 +216,7 @@ func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}) -
 	# 有效护甲和动力（部件槽位）
 	if slot.slot_kind == &"PART":
 		var armor_label = Label.new()
-		armor_label.text = "甲:%d" % slot.get_effective_armor()
+		armor_label.text = "甲:%d" % slot.get_effective_armor(_mech)
 		armor_label.custom_minimum_size = Vector2(35, 20)
 		hbox.add_child(armor_label)
 
@@ -231,10 +255,184 @@ func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}) -
 				btn.tooltip_text = eff.description
 				# 与备用区「设置」按钮同尺寸，避免撑满屏幕；效果详情靠悬停浮框显示
 				btn.custom_minimum_size = Vector2(40, 20)
-				btn.add_theme_color_override("font_color", Color(0.6, 0.9, 0.7))
+				# 按条件/每回合1次置灰：不满足（如帝国腿未移动8格）或已用满时 disabled，
+				# 避免点了才被 effect_fire 静默跳过（"点了没反应"）。
+				var can_trigger: bool = false
+				if _context != null and _context.get("timing_engine") != null:
+					can_trigger = _context.timing_engine.can_trigger_active_effect(eff, bind_ctx)
+				btn.disabled = not can_trigger
+				btn.add_theme_color_override("font_color", Color(0.6, 0.9, 0.7) if can_trigger else Color(0.5, 0.5, 0.5))
 				var cid: StringName = bind_ctx.get("card_instance_id", &"")
 				var eid: StringName = eff.effect_id
 				btn.pressed.connect(func(): equipment_active_clicked.emit(cid, eid))
 				hbox.add_child(btn)
 
+	# 悬停效果浮框：有装备牌且非「敌方备用区（隐藏信息）」时，整行可悬停查看效果
+	if slot.equipped_card != null and not (_is_enemy and slot.slot_kind == &"RESERVE"):
+		hbox.mouse_filter = Control.MOUSE_FILTER_STOP
+		# Labels 设 IGNORE 让 HBox 成为整行的顶层命中控件，接收 mouse_entered/exited
+		for c in hbox.get_children():
+			if c is Label:
+				c.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var captured_slot = slot
+		var captured_cid: StringName = slot.equipped_card.instance_id
+		hbox.mouse_entered.connect(func(): _on_equipment_hover_entered(captured_slot, captured_cid))
+		hbox.mouse_exited.connect(Callable(self, "_on_equipment_hover_exited"))
+
 	add_child(hbox)
+
+
+# ═══════════════════════════════════════════
+# 装备悬停效果浮框
+# ═══════════════════════════════════════════
+
+
+func _on_equipment_hover_entered(slot, cid: StringName) -> void:
+	if slot == null or slot.equipped_card == null or slot.equipped_card.def == null:
+		return
+	_hovered_card_cid = cid
+	_ensure_tooltip()
+	_tooltip_rich.text = _build_tooltip_bbcode(slot, cid)
+	_tooltip_popup.visible = true
+	_tooltip_popup.reset_size()
+	set_process(true)
+
+
+func _on_equipment_hover_exited() -> void:
+	_hide_tooltip()
+
+
+func _hide_tooltip() -> void:
+	_hovered_card_cid = &""
+	if _tooltip_popup != null and is_instance_valid(_tooltip_popup):
+		_tooltip_popup.visible = false
+	set_process(false)
+
+
+func _process(_delta: float) -> void:
+	if _tooltip_popup == null or not is_instance_valid(_tooltip_popup) or not _tooltip_popup.visible:
+		set_process(false)
+		return
+	var vp_size := get_viewport_rect().size
+	var mouse_pos := get_global_mouse_position()
+	var pos := mouse_pos + Vector2(16, 16)
+	var sz := _tooltip_popup.size
+	if pos.x + sz.x > vp_size.x:
+		pos.x = mouse_pos.x - sz.x - 16
+	if pos.y + sz.y > vp_size.y:
+		pos.y = vp_size.y - sz.y - 4
+	_tooltip_popup.set_position(pos)
+
+
+func _ensure_tooltip() -> void:
+	if _tooltip_popup != null and is_instance_valid(_tooltip_popup):
+		return
+	_tooltip_popup = PanelContainer.new()
+	_tooltip_popup.set_as_top_level(true)
+	_tooltip_popup.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_tooltip_popup.visible = false
+	_tooltip_popup.add_theme_stylebox_override("panel", _make_tooltip_stylebox())
+	_tooltip_rich = RichTextLabel.new()
+	_tooltip_rich.bbcode_enabled = true
+	_tooltip_rich.fit_content = true
+	_tooltip_rich.custom_minimum_size = Vector2(280, 0)
+	_tooltip_rich.add_theme_font_size_override("normal_font_size", 13)
+	_tooltip_rich.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_tooltip_popup.add_child(_tooltip_rich)
+	add_child(_tooltip_popup)
+
+
+func _make_tooltip_stylebox() -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.08, 0.09, 0.12, 0.96)
+	sb.border_color = Color(0.4, 0.5, 0.7, 0.9)
+	sb.set_border_width_all(1)
+	sb.set_content_margin_all(8)
+	return sb
+
+
+func _build_tooltip_bbcode(slot, cid: StringName) -> String:
+	if slot == null or slot.equipped_card == null or slot.equipped_card.def == null:
+		return ""
+	var def = slot.equipped_card.def
+	var lines: Array = []
+	# 标题：牌名 [稀有度]
+	lines.append("[color=#ffd][b]%s[/b][/color] [color=#aaa][%s][/color]" % [def.display_name, String(def.rarity)])
+	# 数值
+	var stats: Array = []
+	if def is _EquipmentCardDef:
+		var eq = def
+		if eq.equipment_kind == &"PART":
+			stats.append("甲%d" % eq.armor)
+			stats.append("动%d" % eq.power)
+			stats.append("耐久%d" % eq.durability)
+			stats.append("部件·%s" % SLOT_NAMES.get(slot.slot_id, String(slot.slot_id)))
+		elif eq.equipment_kind == &"WEAPON":
+			stats.append("威%d" % eq.might)
+			stats.append("射%d" % eq.range_value)
+			if String(eq.weapon_kind) != "":
+				stats.append(String(eq.weapon_kind))
+			stats.append("耐久%d" % eq.durability)
+			stats.append("武器")
+	if not stats.is_empty():
+		lines.append("[color=#9cf]%s[/color]" % " ".join(stats))
+	# 损伤/耐久
+	if def is _EquipmentCardDef:
+		var dur: int = def.durability
+		if slot.slot_kind == &"RESERVE":
+			dur = 1
+		var dmg: int = slot.equipped_card.damage_tokens
+		var dmg_color := "#9a9" if dmg == 0 else ("yellow" if dmg < dur else "red")
+		lines.append("[color=%s]损伤 %d/%d[/color]" % [dmg_color, dmg, dur])
+	# 效果文本（牌面印刷）
+	if def.effect_text.strip_edges() != "":
+		lines.append("[color=#ccc]效果：[/color]")
+		lines.append(def.effect_text)
+	# 绑定效果（实现层 ActionEffect）
+	var bound := _collect_bound_effects(cid)
+	if not bound.is_empty():
+		lines.append("[color=#ccc]绑定效果：[/color]")
+		for b in bound:
+			var mode_text := _mode_text(String(b.get("mode", "")))
+			var bdesc: String = String(b.get("description", ""))
+			if bdesc.strip_edges() == "":
+				bdesc = String(b.get("display_name", ""))
+			lines.append("• [color=#bdf]%s[/color]: %s [color=#888](%s)[/color]" % [String(b.get("effect_id", "")), bdesc, mode_text])
+	return "\n".join(lines)
+
+
+## 扫描 timing_engine.permanent_listeners，收集该装备牌绑定的所有 ActionEffect（DIRECT/LISTEN/AVAILABILITY）
+func _collect_bound_effects(cid: StringName) -> Array:
+	var result: Array = []
+	if _context == null or _context.get("timing_engine") == null:
+		return result
+	var seen: Dictionary = {}
+	for timing: StringName in _context.timing_engine.permanent_listeners:
+		var entries: Array = _context.timing_engine.permanent_listeners[timing]
+		for entry in entries:
+			if entry == null or not (entry is Dictionary):
+				continue
+			var bc: Dictionary = entry.get("binding_context", {})
+			if String(bc.get("card_instance_id", &"")) != String(cid):
+				continue
+			var eff = entry.get("effect")
+			if eff == null:
+				continue
+			if seen.has(eff.effect_id):
+				continue
+			seen[eff.effect_id] = true
+			result.append({
+				"effect_id": eff.effect_id,
+				"display_name": eff.display_name,
+				"description": eff.description,
+				"mode": eff.mode,
+			})
+	return result
+
+
+func _mode_text(mode: String) -> String:
+	match mode:
+		"DIRECT": return "主动"
+		"LISTEN": return "被动"
+		"AVAILABILITY": return "响应"
+	return mode

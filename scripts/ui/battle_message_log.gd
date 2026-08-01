@@ -92,6 +92,14 @@ func on_timing_fired(timing: StringName, payload: Dictionary) -> void:
 		add_message(text)
 
 
+## 装备牌效果发动信号回调（来自 TimingEngine.equipment_effect_fired）
+## 显示「⚙ [装备] 牌名 发动效果: 描述 (机甲)」，供玩家核查每件装备执行情况。
+func on_equipment_effect_fired(card_name: String, _effect_id: StringName, description: String, source_mech_id: StringName) -> void:
+	var mech_name := _mech_display_name(String(source_mech_id))
+	var text := "[color=#b9f]⚙ [装备] %s 发动效果[/color]: %s (%s)" % [card_name, description, mech_name]
+	add_message(text)
+
+
 ## 追加一条消息并自动滚动
 func add_message(text: String) -> void:
 	_messages.append(text)

@@ -362,7 +362,11 @@ func add_region_damage(player_id: StringName, slot_id: StringName, amount: int =
 		return false
 
 	var slot = mech.slots[slot_id]
+	# 双计 region + 装备卡 damage_tokens（与 DamageTokenService 一致），并同步派生动力上限
 	slot.region_damage_tokens += amount
+	if slot.equipped_card != null:
+		slot.equipped_card.damage_tokens += amount
+	mech.recalc_power_limits()
 	return true
 
 
@@ -378,6 +382,9 @@ func remove_region_damage(player_id: StringName, slot_id: StringName, amount: in
 
 	var slot = mech.slots[slot_id]
 	slot.region_damage_tokens = max(0, slot.region_damage_tokens - amount)
+	if slot.equipped_card != null:
+		slot.equipped_card.damage_tokens = max(0, slot.equipped_card.damage_tokens - amount)
+	mech.recalc_power_limits()
 	return true
 
 

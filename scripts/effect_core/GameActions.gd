@@ -417,6 +417,7 @@ func spend_power(params: Dictionary) -> bool:
 		return false
 
 	mech.power -= amount
+	mech.power_spent_this_turn += amount
 
 	context.effect_engine.fire_hook(&"ON_POWER_SPENT", {
 		"mech_id": mech_id,
@@ -448,11 +449,16 @@ func restore_power(params: Dictionary) -> void:
 		return
 
 	var mech = context.game_state.mechs[mech_id]
+	# CANNOT_RESTORE_POWER 状态：拦截回复（仅拦 method=restore，不拦临时+N 走 stat_modify）
+	for _st in mech.statuses:
+		if _st is Dictionary and _st.get("type", &"") == &"CANNOT_RESTORE_POWER":
+			SLog.log_raw("[ACTION] %s 受 CANNOT_RESTORE_POWER 影响，无法回复动力" % String(mech_id))
+			return
 	var max_power := _get_max_power(mech_id)
 	var before: int = mech.power
 
 	var amount_value = params.get("amount", params.get("count", &"full"))
-	if String(amount_value) == "full":
+	if str(amount_value) == "full":
 		mech.power = max_power
 	else:
 		mech.power = clamp(mech.power + int(amount_value), 0, max_power)
@@ -1038,6 +1044,8 @@ func remove_damage_tokens(params: Dictionary) -> void:
 				"slot_id": slot_id,
 				"amount": removed
 			})
+		# 损伤变化后重算动力上限（effect_016/021/048 派生动力随损伤变）
+		mech.recalc_power_limits()
 		return
 
 	# 未指定 slot_id：自动从损伤最多的槽位开始移除
@@ -1076,6 +1084,8 @@ func remove_damage_tokens(params: Dictionary) -> void:
 				"slot_id": sid,
 				"amount": removed
 			})
+	# 损伤变化后重算动力上限（effect_016/021/048 派生动力随损伤变）
+	mech.recalc_power_limits()
 
 
 ## 重定向损伤标记
@@ -2108,10 +2118,10 @@ func place_damage_tokens_on_slot(params: Dictionary) -> void:
 	var slot = mech.slots.get(slot_id)
 	if slot == null:
 		return
-	# 按规范放置：优先装备牌 damage_tokens，否则区域 region_damage_tokens
-	# （与 GameState.place_one_damage_token 一致）。原代码 `slot.damage_tokens` 误访问
-	# MechSlotState 上不存在的属性（MechSlotState 用 region_damage_tokens，装备牌损伤在
-	# equipped_card.damage_tokens），A6 损伤转移路径触发即报错。
+	# 按规范放置：region + card 双计（与 DamageTokenService.place_one_token_at_slot / GameState.place_one_damage_token 一致）。
+	# 损伤真正在区域上（装备弃置后仍保留），装备牌另记一份用于耐久损坏判定。
+	# 原代码 `slot.damage_tokens` 误访问 MechSlotState 上不存在的属性（MechSlotState 用 region_damage_tokens，
+	# 装备牌损伤在 equipped_card.damage_tokens），A6 损伤转移路径触发即报错。
 	# place_one_damage_token 只放置不发 BEFORE hook（外层 _apply_redirect_plan 注释要求
 	# 不走逐点 hook 避免再次触发转移），AFTER hook 在下方统一发一次。
 	for _i in range(amount):
@@ -2285,18 +2295,16 @@ func toggle_effect_on_mech(params: Dictionary) -> void:
 
 ## 使装备效果无效直到回合结束
 func negate_equipment_effect(params: Dictionary) -> void:
-	var target_card_id: StringName = params.get("target_card_id", &"")
+	var target_card_id: StringName = params.get("target_card_id", params.get("card_instance_id", &""))
 	var duration: String = String(params.get("duration", "THIS_TURN"))
 	if target_card_id == &"":
 		push_error("NEGATE_EQUIPMENT_EFFECT 缺少 target_card_id")
 		return
-	# 将目标装备牌标记为效果无效
-	var card = context.game_state.find_card_instance(target_card_id)
+	# 将目标装备牌标记为"效果无效"（保留护甲/动力/耐久等牌面 stats，仅压制效果）
+	var card = context.game_state.get_card(target_card_id)
 	if card == null:
 		return
-	card.disabled = true
-	if duration == "THIS_TURN":
-		card.statuses.append({"type": &"effect_negated", "duration": &"THIS_TURN"})
+	card.effect_negated = true  # TurnService 回合结束统一清除（UNTIL_TURN_END 语义）
 
 
 ## 无视动力移动

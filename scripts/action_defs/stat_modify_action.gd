@@ -66,7 +66,9 @@ func _step_execute_mod(action: Action) -> Dictionary:
 
 func _apply_one_stat(action: Action, stat_type: StringName, value: int, method: StringName) -> void:
 	var is_decrease: bool = method in [&"decrease", &"reduce", &"sub"]
-	var delta: int = -abs(value) if is_decrease else abs(value)
+	# add/increase 路径保留 value 原始符号：effect_009 帝国躯干 armor value=-2 method=add
+	# 需 delta=-2（护甲-2），此前用 abs(value) 丢负号变成 +2。
+	var delta: int = -abs(value) if is_decrease else value
 	var target_id: StringName = action.record.get("target_id", &"")
 	match stat_type:
 		&"armor":

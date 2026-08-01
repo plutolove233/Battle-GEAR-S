@@ -48,6 +48,13 @@ func _on_action_needs_input(action_id: StringName, input_type: StringName, input
 	_current_input_type = input_type
 	_current_input_params = input_params
 
+	# 注入来源标签（"牌名：效果描述"），供弹框顶部显示来源，避免玩家分不清是哪个效果。
+	# 从 TimingEngine 挂起效果取；非效果驱动的弹框（如攻击损伤放置）无标签，用面板自身标题。
+	if not input_params.has("source_label") and context != null and context.timing_engine != null:
+		var _slabel: String = context.timing_engine.get_pending_source_label(action_id)
+		if _slabel != "":
+			input_params["source_label"] = _slabel
+
 	# 根据输入类型分发到不同的 UI 弹窗
 	match input_type:
 		&"select_weapon":
@@ -129,6 +136,9 @@ func _on_action_needs_input(action_id: StringName, input_type: StringName, input
 				_auto_repair_choose_one(action_id, input_params)
 				return
 			request_ui_popup.emit(&"effect_choice", input_params)
+		&"choose_integer":
+			# 金币换动力整数选择（effect_040/041）。AI 已在 TimingEngine 自动选 min，此处仅玩家路径。
+			request_ui_popup.emit(&"integer_select", input_params)
 		&"select_target_mech":
 			# 锁定/联合目标选择：AI 自动选第一个存活敌方
 			if _is_ai_source(input_params):
@@ -160,6 +170,9 @@ func _on_action_needs_input(action_id: StringName, input_type: StringName, input
 				on_ui_confirmed({"chosen_card_def_id": aw_pick})
 				return
 			request_ui_popup.emit(&"awaken_select", input_params)
+		&"immediate_set_equipment":
+			# effect_005 立即设置装备：AI 已在 TimingEngine._execute_actions 自动选首槽，此处仅玩家路径。
+			request_ui_popup.emit(&"immediate_set_equipment", input_params)
 		_:
 			push_warning("ActionUIBridge: 未知输入类型: %s" % String(input_type))
 			request_ui_popup.emit(&"generic_input", input_params)
@@ -626,6 +639,20 @@ func on_ui_cancelled() -> void:
 	_current_input_params = {}
 
 	_apply_action_cancel(action_id)
+
+
+## 损伤放置/移除完成：按记录的 damage_change 动作 ID 精确恢复。
+## 损伤放置期间可能因装备损坏触发离场效果弹窗，覆盖了共享 _waiting_action_id 槽；
+## 此处用面板记录的 action_id 直接恢复 damage_change，使攻击正常结算（攻击牌不卡临时区）。
+## action_id 为空或动作已不存在时退回 on_ui_confirmed 共享槽路径。
+func resolve_damage_placement(action_id: StringName, input_data: Dictionary) -> void:
+	if action_id != &"" and context != null and context.action_registry != null:
+		var action = context.action_registry.get_action(action_id)
+		if action != null:
+			# _resolve_action_input 仅当共享槽仍指向本动作时清槽，否则保留并发效果弹窗的等待槽
+			_resolve_action_input(action_id, input_data)
+			return
+	on_ui_confirmed(input_data)
 
 
 ## 按 action_id 精确回填输入（不走共享 _waiting_action_id 槽）。

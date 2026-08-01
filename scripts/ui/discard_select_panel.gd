@@ -25,6 +25,8 @@ var _face_up: bool = true
 var _card_type_filter: StringName = &""
 ## 动作语义（gain=获取/偷牌，discard=弃置），影响标题/按钮文案
 var _action_verb: StringName = &"discard"
+## 来源标签（"牌名：效果描述"，来自发动效果，可空）
+var _source_text: String = ""
 ## 已选择的牌 ID 列表
 var _selected: Array[StringName] = []
 
@@ -36,16 +38,19 @@ var _scroll: ScrollContainer
 var _confirm_btn: Button
 ## 计数标签
 var _count_label: Label
+## 来源标签
+var _source_label: Label
 
 
 ## 配置面板参数
-func configure(game_context, discard_player_id: StringName, count: int, face_up: bool, card_type_filter: StringName = &"", action_verb: StringName = &"discard") -> void:
+func configure(game_context, discard_player_id: StringName, count: int, face_up: bool, card_type_filter: StringName = &"", action_verb: StringName = &"discard", source_label: String = "") -> void:
 	_context = game_context
 	_discard_player_id = discard_player_id
 	_count = count
 	_face_up = face_up
 	_card_type_filter = card_type_filter
 	_action_verb = action_verb
+	_source_text = source_label
 	_selected.clear()
 
 	# 确保布局已初始化
@@ -68,6 +73,13 @@ func _ensure_layout() -> void:
 	_vbox = VBoxContainer.new()
 	_vbox.add_theme_constant_override("separation", 8)
 	add_child(_vbox)
+
+	# 来源标签（效果牌名+描述，可空）
+	_source_label = Label.new()
+	_source_label.add_theme_color_override("font_color", Color(0.95, 0.82, 0.45))
+	_source_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_source_label.add_theme_font_size_override("font_size", 14)
+	_vbox.add_child(_source_label)
 
 	# 标题
 	_count_label = Label.new()
@@ -111,6 +123,11 @@ func _ensure_layout() -> void:
 func _refresh() -> void:
 	if not _vbox:
 		return
+
+	# 来源标签
+	if _source_label:
+		_source_label.text = _source_text if _source_text != "" else ""
+		_source_label.visible = _source_text != ""
 
 	# 更新标题
 	var verb := _verb_text()

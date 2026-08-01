@@ -75,6 +75,11 @@ func move_mech_to_hex(mech_id: StringName, target: Dictionary, power_budget: int
 	var old_position: Dictionary = mech.position.duplicate()
 	mech.position = {"q": int(target.get("q", 0)), "r": int(target.get("r", 0))}
 
+	# 累计本回合移动格数（effect_012/013 帝国腿主动效果阈值用）。
+	# net_move 路径（PvP 人类移动 / battle.move_unit）不走 basic_move 动作，
+	# 故在此按 hex 距离补计；action 路径（basic_move）逐格 +=1 已自洽，两路径互不重叠。
+	mech.cells_moved_this_turn += distance
+
 	# ── 8. 触发移动钩子 ──
 	_fire_hook(_EffectConst.HOOK_MECH_MOVED, {
 		"mech_id": String(mech_id),
@@ -115,6 +120,32 @@ func find_optimal_path(mech_id: StringName, target: Dictionary, power_budget: in
 		var other: MechState = gs.mechs[other_id]
 		if other_id != mech_id and not other.destroyed:
 			blocked[HexGrid.key(other.position)] = true
+
+	# 优先直线：起点->终点的六边形立方插值直线最符合直觉（不绕远）。
+	# 若该直线全程可通行（未被占/非红区/存在）且耗动力在内，直接返回；否则回退 Dijkstra 绕路。
+	var straight: Array[Dictionary] = HexGrid.line(start, target)
+	if not straight.is_empty():
+		var total_cost := 0
+		var straight_ok := true
+		for cell_hex: Dictionary in straight:
+			var ck: String = HexGrid.key(cell_hex)
+			if blocked.has(ck):
+				straight_ok = false
+				break
+			var sc = gs.map_state.cells.get(ck)
+			if sc == null:
+				straight_ok = false
+				break
+			var sterrain: StringName = _get_cell_terrain(sc)
+			if sterrain == &"RED" or sterrain == &"blocked":
+				straight_ok = false
+				break
+			total_cost += 2 if sterrain == &"GREEN" or sterrain == &"rough" else 1
+			if total_cost > power_budget:
+				straight_ok = false
+				break
+		if straight_ok:
+			return straight
 
 	var frontier: Array[Dictionary] = [{"hex": start, "cost": 0}]
 	var costs: Dictionary = {start_key: 0}

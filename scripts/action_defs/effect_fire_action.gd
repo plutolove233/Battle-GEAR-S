@@ -32,6 +32,11 @@ func _step_extract_info(action: Action) -> Dictionary:
 	var targets: Array = action.record.get("targets", [])
 	action.record["effect_count"] = 1 if effect_id != &"" else 0
 	action.record["target_count"] = targets.size()
+	# 注入来源机甲到 record，供 DIRECT 主动效果的子动作（如 EXECUTE_STAT_MODIFY）经
+	# _extract_stat_mod_params 的 payload.source_mech_id 解析 target。
+	# _create_action record_keys 不含 source_mech_id，effect_fire 主动效果需在此补。
+	if action.source is Dictionary and action.record.get("source_mech_id", &"") == &"":
+		action.record["source_mech_id"] = action.source.get("mech_id", &"")
 	return {}
 
 

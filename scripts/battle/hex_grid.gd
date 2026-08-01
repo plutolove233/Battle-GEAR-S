@@ -118,3 +118,60 @@ static func contains_hex(tiles: Array, hex: Dictionary) -> bool:
 		if key(tile) == target:
 			return true
 	return false
+
+## odd-q offset(q,r) -> cube(x,y,z)，与 distance() 的转换一致。
+static func to_cube(hex: Dictionary) -> Dictionary:
+	var q: int = int(hex.get("q", 0))
+	var r: int = int(hex.get("r", 0))
+	var parity: int = (q % 2 + 2) % 2
+	var row: int = r + (q + parity) / 2
+	var x: int = q
+	var z: int = row - (q - parity) / 2
+	var y: int = -x - z
+	return {"x": x, "y": y, "z": z}
+
+## cube(x,y,z) -> odd-q offset(q,r)
+static func cube_to_axial(cube: Dictionary) -> Dictionary:
+	var x: int = int(cube.get("x", 0))
+	var z: int = int(cube.get("z", 0))
+	var q: int = x
+	var parity: int = (q % 2 + 2) % 2
+	var row: int = z + (q - parity) / 2
+	var r: int = row - (q + parity) / 2
+	return {"q": q, "r": r}
+
+## 立方坐标四舍五入到最近六边形（保持 x+y+z=0）
+static func cube_round(x: float, y: float, z: float) -> Dictionary:
+	var rx: float = round(x)
+	var ry: float = round(y)
+	var rz: float = round(z)
+	var x_diff: float = abs(rx - x)
+	var y_diff: float = abs(ry - y)
+	var z_diff: float = abs(rz - z)
+	if x_diff > y_diff and x_diff > z_diff:
+		rx = -ry - rz
+	elif y_diff > z_diff:
+		ry = -rx - rz
+	else:
+		rz = -rx - ry
+	return {"x": int(rx), "y": int(ry), "z": int(rz)}
+
+## 起点->终点的"直线"六边形序列（立方插值），不含起点、含终点。
+## 这是六边形上最符合直觉的直线路径，每相邻两格互为邻居。
+static func line(start: Dictionary, target: Dictionary) -> Array[Dictionary]:
+	var n: int = distance(start, target)
+	if n <= 0:
+		return []
+	var a: Dictionary = to_cube(start)
+	var b: Dictionary = to_cube(target)
+	var ax: float = float(int(a.get("x", 0)))
+	var ay: float = float(int(a.get("y", 0)))
+	var az: float = float(int(a.get("z", 0)))
+	var bx: float = float(int(b.get("x", 0)))
+	var by: float = float(int(b.get("y", 0)))
+	var bz: float = float(int(b.get("z", 0)))
+	var result: Array[Dictionary] = []
+	for i in range(1, n + 1):
+		var t: float = float(i) / float(n)
+		result.append(cube_to_axial(cube_round(lerpf(ax, bx, t), lerpf(ay, by, t), lerpf(az, bz, t))))
+	return result

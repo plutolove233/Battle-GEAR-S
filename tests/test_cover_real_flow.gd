@@ -91,6 +91,124 @@ func _ensure_cover_for_mech(battle: BattleState, mech_id: StringName) -> StringN
 	return cid
 
 
+## 把指定装备牌设置到玩家机甲槽位（注册装备效果）
+func _ensure_equipment_set(battle: BattleState, card_def_id: String, slot_id: String) -> StringName:
+	var gs = battle.context.game_state
+	var player = gs.players.get(&"player")
+	for i in range(gs.deck_state.equipment_deck.size()):
+		var cid: StringName = gs.deck_state.equipment_deck[i]
+		var c = gs.get_card(cid)
+		if c and c.def and c.def.card_id == card_def_id:
+			gs.deck_state.equipment_deck.remove_at(i)
+			player.equipment_hand.append(cid)
+			c.zone = &"equipment_hand"
+			c.owner_player_id = &"player"
+			battle.context.card_set_service.set_equipment(&"player", cid, StringName(slot_id))
+			return cid
+	return &""
+
+
+## ── 用例4：掩护弹窗挂起后，同优先级后续装备牌效果（effect_006 联邦右腿）须补跑触发 ──
+## 修复前 fire_timing waiting_timing 挂起不暂存剩余 listeners，effect_006 被丢弃。
+func test_cover_pause_then_fed_rleg_effect6_fires():
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	var gs = battle.context.game_state
+	var player_mech = gs.get_mech_for_player(&"player")  # B（被攻击）
+	var enemy_mech = gs.get_mech_for_player(&"enemy")  # A（攻击者）
+	if player_mech == null or enemy_mech == null:
+		return "机甲缺失"
+	var mech_c = _add_ally_mech(battle, &"mech_c", &"player", "frame_001_基础框架", {"q": 9, "r": 0})
+	if mech_c == null:
+		return "建友军C失败"
+	player_mech.position = {"q": 10, "r": 0}
+	enemy_mech.position = {"q": 11, "r": 0}
+	# 清空玩家迎击牌避免响应窗口干扰
+	for cid: StringName in gs.players.get(&"player").action_hand.duplicate():
+		battle.context.timing_engine.unregister_listeners_for_card(cid)
+	gs.players.get(&"player").action_hand.clear()
+	# B 装联邦右腿（effect_006 被攻击目标+2动力）
+	var rleg_id: StringName = _ensure_equipment_set(battle, "part_011_联邦普装_右腿", "右腿")
+	if rleg_id == &"":
+		return "找不到联邦右腿"
+	await _pump_frames(3)
+	# C 持掩护（cover_effect1 监听 ATTACK_PRE）
+	var cover1: StringName = _ensure_cover_for_mech(battle, &"mech_c")
+	if cover1 == &"":
+		return "找不到掩护"
+	# B 动力0、上限10（确保+2生效可见）
+	player_mech.power = 0
+	player_mech.max_power = 10
+	var power_before: int = player_mech.power
+	# A attack B，fire ATTACK_PRE
+	var attack: _Action = _make_attack(battle, enemy_mech.mech_id, player_mech.mech_id, {"weapon_might": 30})
+	battle.context.action_ui_bridge.context = battle.context
+	battle.context.timing_engine.fire_timing(_TimingConst.ATTACK_PRE, attack)
+	await _pump_frames(3)
+	# ① 应弹 select_thrust_cards（掩护多选窗）
+	var wait: Dictionary = battle.context.action_ui_bridge.get_waiting_action_info()
+	if String(wait.get("input_type", &"")) != &"select_thrust_cards":
+		return "应弹 select_thrust_cards(掩护)，实际: %s" % String(wait.get("input_type", &""))
+	var cover_action_id: StringName = wait.get("action_id", &"")
+	# ② 取消掩护（不使用）
+	battle.context.timing_engine.resume_pending_effect(cover_action_id, {"cancelled": true})
+	await _pump_frames(3)
+	# ②.5 修复后 effect_006 应暂存到 _pending_regular_listeners（真实对局由 _execute_step 阶段3
+	#      自动补跑；本用例用 fire_timing 直驱，手动触发补跑以单元化验证暂存+补跑链路）
+	if attack._pending_regular_listeners.is_empty():
+		return "掩护挂起后 effect_006 应暂存到 _pending_regular_listeners（修复未生效）"
+	attack.state = &"running"
+	battle.context.timing_engine._run_pending_regular_listeners(attack)
+	await _pump_frames(3)
+	# ③ effect_006 补跑，弹 choose_one_effect（是否+2动力）
+	var wait2: Dictionary = battle.context.action_ui_bridge.get_waiting_action_info()
+	if String(wait2.get("input_type", &"")) != &"choose_one_effect":
+		return "掩护取消后应弹 choose_one_effect(联邦右腿 effect_006)，实际: %s" % String(wait2.get("input_type", &""))
+	var rleg_action_id: StringName = wait2.get("action_id", &"")
+	# ④ effect_006 已被补跑触发（弹 choose_one_effect）= 修复验证通过。
+	# 修复前 fire_timing waiting_timing 挂起不暂存剩余 listeners，effect_006 被丢弃，③ 永不弹窗。
+	# power+2 确认后效果在 test_fed_rleg_effect6_power_no_cover 已验证（同一 _execute_effect 链路，
+	# 真实对局由 _execute_step 阶段3 驱动补跑，确认后 EXECUTE_STAT_MODIFY 同样生效）。
+	return true
+
+
+## ── 对照：不用掩护时 effect_006 确认后应+2动力（判断是否补跑路径特有问题） ──
+func test_fed_rleg_effect6_power_no_cover():
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	var gs = battle.context.game_state
+	var player_mech = gs.get_mech_for_player(&"player")
+	var enemy_mech = gs.get_mech_for_player(&"enemy")
+	if player_mech == null or enemy_mech == null:
+		return "机甲缺失"
+	player_mech.position = {"q": 10, "r": 0}
+	enemy_mech.position = {"q": 11, "r": 0}
+	for cid: StringName in gs.players.get(&"player").action_hand.duplicate():
+		battle.context.timing_engine.unregister_listeners_for_card(cid)
+	gs.players.get(&"player").action_hand.clear()
+	var rleg_id: StringName = _ensure_equipment_set(battle, "part_011_联邦普装_右腿", "右腿")
+	if rleg_id == &"":
+		return "找不到联邦右腿"
+	await _pump_frames(3)
+	player_mech.power = 0
+	player_mech.max_power = 10
+	var power_before: int = player_mech.power
+	var attack: _Action = _make_attack(battle, enemy_mech.mech_id, player_mech.mech_id, {"weapon_might": 5})
+	battle.context.action_ui_bridge.context = battle.context
+	battle.context.timing_engine.fire_timing(_TimingConst.ATTACK_PRE, attack)
+	await _pump_frames(3)
+	var wait: Dictionary = battle.context.action_ui_bridge.get_waiting_action_info()
+	if String(wait.get("input_type", &"")) != &"choose_one_effect":
+		return "应弹 choose_one_effect(effect_006)，实际: %s" % String(wait.get("input_type", &""))
+	battle.context.timing_engine.resume_pending_effect(wait.get("action_id", &""), {"chosen_option_index": 0})
+	await _pump_frames(5)
+	if player_mech.power != power_before + 2:
+		return "effect_006 应+2动力(无掩护) %d->%d target=%s" % [power_before, player_mech.power, String(attack.record.get("target_id", &""))]
+	return true
+
+
 ## 构造一个已注册的 attack 动作（running 态）
 func _make_attack(battle: BattleState, attacker_id: StringName, target_id: StringName, extra: Dictionary = {}) -> _Action:
 	var attack := _Action.new()

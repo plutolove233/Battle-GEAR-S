@@ -63,7 +63,7 @@
     "type": "攻击",
     "rarity": "SR",
     "count": 6,
-    "effect_text": "选择1把武器对1台范围内的机甲发动攻击；该攻击结算后，可以弃置1张行动牌，选择相同的武器对相同的目标再次发动攻击。",
+    "effect_text": "选择1把武器对1台范围内的机甲发动攻击；该攻击结算后，可以弃置1张行动牌，选择相同的武器对1台范围内的机甲发动攻击。",
     "effect_ids": [
       "basic_attack_single",
       "discard_action_repeat_same_attack"
@@ -89,7 +89,7 @@
     "type": "迎击",
     "rarity": "N",
     "count": 12,
-    "effect_text": "响应对我方的攻击，可以用当前1/2的动力（向下取整）进行移动。",
+    "effect_text": "响应对我方的攻击，可以用当前一半的动力（向下取整）进行移动。",
     "effect_ids": [
       "evade_half_power"
     ]
@@ -112,7 +112,7 @@
     "type": "迎击",
     "rarity": "R",
     "count": 6,
-    "effect_text": "响应攻击，可以用当前1/2的动力（向下取整）进行移动；该攻击结算后，可以选择1把武器对1台攻击范围内的机甲发动攻击。",
+    "effect_text": "响应攻击，可以用当前一半的动力（向下取整）进行移动；该攻击结算后，可以选择1把武器对1台攻击范围内的机甲发动攻击。",
     "effect_ids": [
       "evade_half_power",
       "counterattack_after_resolution"
@@ -149,7 +149,7 @@
     "type": "辅助",
     "rarity": "N",
     "count": 12,
-    "effect_text": "回复机甲2点生命或移除2枚损伤（也可对1格范围内的其他机甲使用)。",
+    "effect_text": "回复机甲4点生命或移除2枚损伤（也可对1格范围内的其他机甲使用)。",
     "effect_ids": [
       "repair_choose_one",
       "can_target_adjacent_mecha"
@@ -161,7 +161,7 @@
     "type": "辅助",
     "rarity": "N",
     "count": 8,
-    "effect_text": "本回合内选择我方1把武器使其下次发动的攻击威力+4。",
+    "effect_text": "选择我方1把武器，本回合内使其下次发动的攻击威力+4。",
     "effect_ids": [
       "next_attack_power_plus_4_selected_weapon"
     ]
@@ -172,7 +172,7 @@
     "type": "辅助",
     "rarity": "N",
     "count": 6,
-    "effect_text": "本回合使机甲动力+5；此牌也可以与迎击牌一同打出。",
+    "effect_text": "本回合使机甲动力+4；此牌也可以与迎击牌一同打出。",
     "effect_ids": [
       "gain_power_5_this_turn",
       "can_play_with_reaction_card"
@@ -263,7 +263,7 @@
     "type": "辅助",
     "rarity": "SR",
     "count": 4,
-    "effect_text": "指定其他1台机甲，本回合其不能响应你发动的攻击(该目标机甲被攻击命中后结束以上效果)。",
+    "effect_text": "指定1台其他机甲为目标，本回合我方对该目标发动的攻击不能被目标及其相邻机甲响应（识破除外），该目标机甲被攻击命中后结束以上效果。",
     "effect_ids": [
       "target_cannot_react_to_your_attacks"
     ]
@@ -274,7 +274,7 @@
     "type": "辅助",
     "rarity": "SSR",
     "count": 1,
-    "effect_text": "从行动弃牌堆里获得预判与识破各1张，弃牌堆每缺少以上记述的1种行动牌，则可以从弃牌堆里指定获得1张行动牌，并抽1张行动牌。",
+    "effect_text": "从行动弃牌堆里随机获得SSR品质的攻击牌和迎击牌各1张。若弃牌堆缺少以上任意类型的SSR行动牌，则改为从弃牌堆里指定获得1张行动牌，并抽1张行动牌。",
     "effect_ids": [
       "gain_prediction_and_insight_from_action_discard",
       "replace_missing_named_action_and_draw"

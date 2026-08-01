@@ -20,6 +20,7 @@ const BattleState = preload("res://scripts/battle/battle_state.gd")
 const _TimingConst = preload("res://scripts/action_core/TimingConst.gd")
 const _Action = preload("res://scripts/action_core/Action.gd")
 const _ThrustHelper = preload("res://tests/thrust_test_helper.gd")
+const _GeneratedActionEffects = preload("res://scripts/action_core/GeneratedActionEffects.gd")
 
 
 func _new_battle() -> BattleState:
@@ -272,4 +273,134 @@ func test_expose_bypasses_lock():
 		{"attack_source": {"player_id": &"player"}})
 	if not _is_available(battle, attack, expose_cid):
 		return "识破（availability_priority=30）应不受锁定封锁，仍可响应"
+	return true
+
+
+## 建第2台机甲（指定归属玩家），用于多目标(双连)攻击测试
+func _add_ally_mech(battle, mech_id: StringName, owner: StringName, frame_id: String, pos: Dictionary) -> Variant:
+	var registry2 := DataRegistry.new()
+	var lr = registry2.load_all()
+	if not lr.ok:
+		return null
+	var mech = battle.context.game_setup_service._create_mech_from_frame(mech_id, StringName(owner), frame_id, registry2)
+	if mech == null:
+		return null
+	mech.position = pos
+	battle.context.game_state.mechs[mech.mech_id] = mech
+	return mech
+
+
+## 把一张迎击牌照常塞入 player_id 手牌，但绑定到指定 mech_id（手动注册 AVAILABILITY）。
+## register_hand_card_availability 会把 mech_id 覆盖为玩家第一台机甲，故对第2台机甲需手动注册。
+func _ensure_counter_for_mech(battle, player_id: StringName, card_def_id: String, mech_id: StringName) -> StringName:
+	var gs = battle.context.game_state
+	var player = gs.players.get(player_id)
+	if player == null:
+		return &""
+	for cid: StringName in player.action_hand:
+		var c = gs.get_card(cid)
+		if c and c.def and c.def.card_id == card_def_id and String(c.mech_id) == String(mech_id):
+			return cid
+	var cid: StringName = &""
+	for i in range(gs.deck_state.action_deck.size()):
+		var d_cid: StringName = gs.deck_state.action_deck[i]
+		var c = gs.get_card(d_cid)
+		if c and c.def and c.def.card_id == card_def_id:
+			gs.deck_state.action_deck.remove_at(i)
+			cid = d_cid
+			break
+	if cid == &"":
+		for i in range(gs.deck_state.action_discard_pile.size()):
+			var d_cid: StringName = gs.deck_state.action_discard_pile[i]
+			var c = gs.get_card(d_cid)
+			if c and c.def and c.def.card_id == card_def_id:
+				gs.deck_state.action_discard_pile.remove_at(i)
+				cid = d_cid
+				break
+	if cid == &"":
+		return &""
+	player.action_hand.append(cid)
+	var card = gs.get_card(cid)
+	card.zone = &"action_hand"
+	card.owner_player_id = player_id
+	card.mech_id = mech_id
+	# 手动注册 AVAILABILITY 监听器到该机甲
+	var mappings: Array = _GeneratedActionEffects.get_effects_for_card(card_def_id)
+	var all_effects: Dictionary = _GeneratedActionEffects.build_all_effects()
+	for mapping in mappings:
+		var effect_id: StringName = mapping.get("effect_id", &"") if mapping is Dictionary else &""
+		var effect = all_effects.get(effect_id)
+		if effect != null and effect.mode == "AVAILABILITY":
+			var timing: StringName = effect.listen_timing if effect.listen_timing != &"" else _TimingConst.ATTACK_AT
+			battle.context.timing_engine.register_availability_listener(timing, &"", effect, cid)
+	return cid
+
+
+## ── 测试8：多目标(双连)攻击 - 被锁目标及其相邻共目标的迎击都被封锁 ──
+## A(player)锁B(enemy)，A发动双连攻击目标[B,C]，C与B相邻。
+## B是被锁目标、C是B的相邻机甲 -> B、C的普通迎击牌都被封锁，识破仍可响应。
+func test_lock_suppresses_adjacent_cotarget():
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	var gs = battle.context.game_state
+	var player_mech = gs.get_mech_for_player(&"player")   # A
+	var enemy_mech = gs.get_mech_for_player(&"enemy")     # B
+	var mech_c = _add_ally_mech(battle, &"mech_c", &"enemy", "frame_001_基础框架", {"q": 9, "r": 0})
+	if mech_c == null:
+		return "建机甲C失败"
+	player_mech.position = {"q": 11, "r": 0}
+	enemy_mech.position = {"q": 10, "r": 0}   # B={10,0}, C={9,0} 相邻
+	# 清空敌方手牌
+	for cid: StringName in gs.players.get(&"enemy").action_hand.duplicate():
+		battle.context.timing_engine.unregister_listeners_for_card(cid)
+	gs.players.get(&"enemy").action_hand.clear()
+	# B 持回避+识破，C 持回避
+	var evade_b := _ensure_card_in_player_hand(battle, &"enemy", "action_008_回避")
+	var expose_b := _ensure_card_in_player_hand(battle, &"enemy", "action_012_识破")
+	var evade_c := _ensure_counter_for_mech(battle, &"enemy", "action_008_回避", mech_c.mech_id)
+	if evade_b == &"" or expose_b == &"" or evade_c == &"":
+		return "塞入迎击牌失败"
+	# A 锁 B
+	_apply_lock(battle, enemy_mech.mech_id, &"player")
+	# A 发动双连攻击目标 [B, C]
+	var attack := _make_attack(battle, player_mech.mech_id, enemy_mech.mech_id,
+		{"attack_source": {"player_id": &"player"}, "target_ids": [mech_c.mech_id]})
+	if _is_available(battle, attack, evade_b):
+		return "锁定下，B(被锁目标)的回避应被封锁"
+	if not _is_available(battle, attack, expose_b):
+		return "识破应仍可响应"
+	if _is_available(battle, attack, evade_c):
+		return "锁定下，C(与被锁目标B相邻的共目标)的回避应被封锁"
+	return true
+
+
+## ── 测试9：多目标攻击 - 非相邻共目标的迎击不被封锁（对照）──
+## A锁B，A双连攻击[B,C]，但C与B不相邻 -> C的回避仍可用（仅B被封锁）。
+func test_lock_not_suppress_nonadjacent_cotarget():
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	var gs = battle.context.game_state
+	var player_mech = gs.get_mech_for_player(&"player")   # A
+	var enemy_mech = gs.get_mech_for_player(&"enemy")     # B
+	var mech_c = _add_ally_mech(battle, &"mech_c", &"enemy", "frame_001_基础框架", {"q": 5, "r": 0})
+	if mech_c == null:
+		return "建机甲C失败"
+	player_mech.position = {"q": 11, "r": 0}
+	enemy_mech.position = {"q": 10, "r": 0}   # B={10,0}, C={5,0} 不相邻
+	for cid: StringName in gs.players.get(&"enemy").action_hand.duplicate():
+		battle.context.timing_engine.unregister_listeners_for_card(cid)
+	gs.players.get(&"enemy").action_hand.clear()
+	var evade_b := _ensure_card_in_player_hand(battle, &"enemy", "action_008_回避")
+	var evade_c := _ensure_counter_for_mech(battle, &"enemy", "action_008_回避", mech_c.mech_id)
+	if evade_b == &"" or evade_c == &"":
+		return "塞入迎击牌失败"
+	_apply_lock(battle, enemy_mech.mech_id, &"player")
+	var attack := _make_attack(battle, player_mech.mech_id, enemy_mech.mech_id,
+		{"attack_source": {"player_id": &"player"}, "target_ids": [mech_c.mech_id]})
+	if _is_available(battle, attack, evade_b):
+		return "B(被锁目标)的回避应被封锁"
+	if not _is_available(battle, attack, evade_c):
+		return "C与被锁目标B不相邻，回避应可用（仅被锁目标及其相邻机甲被封锁）"
 	return true

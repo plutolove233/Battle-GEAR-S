@@ -583,6 +583,57 @@ func test_repair_damage_removal_popup_routed_to_user() -> Variant:
 
 
 # ═══════════════════════════════════════════
+# 装备效果选项弹窗路由：设置在玩家A机甲上的装备牌，其 CHOOSE_ONE/CHOOSE_INTEGER
+# 选项弹窗只给玩家A弹（拥有者）。
+# 修复前：① CHOOSE_ONE/CHOOSE_INTEGER emit 不传 player_id；② set_equipment 动作 player_id
+#   只在 action.source 不在 record -> _popup_owner 兜底 _waiting_action_owner 读 record.player_id
+#   落空返回空；③ integer_select 甚至不在 _popup_owner match 列表 -> 三者叠加致 PvP 两端都弹。
+# 修复后：emit 显式带 player_id=装备拥有者；integer_select 加入 _popup_owner match。
+# ═══════════════════════════════════════════
+func test_equipment_choice_popup_routed_to_owner() -> Variant:
+	var host = await _build_pvp_app_root(888, &"player")
+	var client = await _build_pvp_app_root(888, &"enemy")
+	if host == null or client == null:
+		await _free_app_root(host); await _free_app_root(client)
+		return "建局失败"
+	# effect_033 设置抽1 的 choose_one_effect input_params（修复后带 player_id=装备拥有者 player）
+	var choice_params := {
+		"action_id": &"test_equip_choice",
+		"effect_id": &"equipment_effect_033",
+		"options": [{"label": "抽1张行动牌", "effect_id": &"option_0", "option_index": 0}],
+		"optional": true,
+		"player_id": &"player",
+	}
+	# effect_040 弃牌换动力 的 choose_integer input_params（修复后带 player_id）
+	var int_params := {
+		"action_id": &"test_equip_int",
+		"effect_id": &"equipment_effect_040",
+		"label": "选择n",
+		"min_value": 1,
+		"max_value": 3,
+		"bind_as": "n",
+		"optional": true,
+		"player_id": &"player",
+	}
+	# host(local=player): owner=player==local -> 本端弹（拥有者操作）
+	# client(local=enemy): owner=player!=local -> 本端不弹（拦截，等对方 ui_confirmed）
+	var host_choice: StringName = host._popup_owner(&"effect_choice", choice_params)
+	var client_choice: StringName = client._popup_owner(&"effect_choice", choice_params)
+	var host_int: StringName = host._popup_owner(&"integer_select", int_params)
+	var client_int: StringName = client._popup_owner(&"integer_select", int_params)
+	await _free_app_root(host); await _free_app_root(client)
+	if host_choice != &"player":
+		return "host 端装备二选一弹窗归属错误：期望 player 本端弹，实际 %s" % String(host_choice)
+	if client_choice != &"player":
+		return "client 端装备二选一弹窗归属错误：期望 player(本端不弹)，实际 %s" % String(client_choice)
+	if host_int != &"player":
+		return "host 端装备整数选择弹窗归属错误：期望 player 本端弹，实际 %s" % String(host_int)
+	if client_int != &"player":
+		return "client 端装备整数选择弹窗归属错误：期望 player(本端不弹)，实际 %s" % String(client_int)
+	return true
+
+
+# ═══════════════════════════════════════════
 # 维修可用条件：自身与1格内机甲均满状态（满血+0损伤）时无可维修目标，
 # 点击维修无反应；存在非满状态机甲时才可使用，且只能选非满状态者为对象。
 # ═══════════════════════════════════════════

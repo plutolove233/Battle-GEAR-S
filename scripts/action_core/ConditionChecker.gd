@@ -62,6 +62,15 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 			var phase: StringName = payload.get("phase", &"")
 			return phase == &"MAIN"
 
+		&"IS_OWNER_TURN":
+			# 装备所属玩家 == 当前回合玩家（持有者回合内可主动触发，DIRECT 主动按钮用）。
+			# 不依赖 payload.phase（主动触发 payload 无 phase），从 binding.context 查 active_player_id。
+			var iot_owner: StringName = binding.get_owner_player_id()
+			var iot_ctx = binding.context if binding != null else null
+			if iot_owner == &"" or iot_ctx == null or iot_ctx.get("game_state") == null:
+				return false
+			return iot_ctx.game_state.active_player_id == iot_owner
+
 		&"PAYLOAD_WEAPON_HAS_TAG":
 			var weapon_id: StringName = payload.get("weapon_id", &"")
 			var tag: StringName = condition.get("tag", &"")
@@ -119,6 +128,16 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 			# 强袭在 ATTACK_AT 响应效果全部结算后补跑监听器，此时读取最新 responded。
 			return payload.get("responded", false) == true
 
+		&"ATTACK_CAN_BE_NEGATED":
+			# 攻击未带"不可无效"标记（effect_081 一角兽躯干置4损伤无效攻击前置条件）
+			var acn_attack_id: StringName = payload.get("action_id", payload.get("attack_action_id", &""))
+			var acn_ctx = binding.context if binding != null else null
+			if acn_attack_id != &"" and acn_ctx != null and acn_ctx.get("action_registry") != null:
+				var acn_action = acn_ctx.action_registry.get_action(acn_attack_id)
+				if acn_action != null:
+					return not bool(acn_action.unnegatable)
+			return true  # 无攻击上下文时默认可无效
+
 		&"ATTACK_TARGET_ALIVE":
 			# 攻击目标机甲仍存活（未被摧毁）。binding.context 由 TimingEngine 注入。
 			var alive_target_id: StringName = payload.get("target_id", &"")
@@ -131,23 +150,19 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 			return alive_mech != null and not alive_mech.destroyed
 
 		&"WEAPON_CAN_ATTACK_AGAIN":
-			# 闪击再攻前置：攻击者存活、武器仍在攻击者武器列表中、目标仍在射程内。
+			# 闪击再攻前置：攻击者存活、武器仍在攻击者武器列表中（目标是否在射程内由
+			# WEAPON_HAS_ATTACKABLE_TARGET_IN_RANGE 单独检查：再攻可在武器范围内另选目标）。
 			# 第一版不检查 mech.can_attack()——效果产生的攻击不消耗回合攻击数
 			# （use_action_card 对攻击牌 +1 attack_count 是另一处已知 bug，不在本次范围）。
 			var wc_attacker_id: StringName = payload.get("attacker_id", &"")
-			var wc_target_id: StringName = payload.get("target_id", &"")
 			var wc_weapon_id: StringName = payload.get("weapon_id", &"")
-			var wc_range: int = int(payload.get("weapon_range", 1))
-			if wc_attacker_id == &"" or wc_target_id == &"" or wc_weapon_id == &"":
+			if wc_attacker_id == &"" or wc_weapon_id == &"":
 				return false
 			var wc_ctx = binding.context if binding != null else null
 			if wc_ctx == null or wc_ctx.get("game_state") == null:
 				return false
 			var wc_attacker = wc_ctx.game_state.mechs.get(wc_attacker_id)
-			var wc_target = wc_ctx.game_state.mechs.get(wc_target_id)
-			if wc_attacker == null or wc_target == null:
-				return false
-			if wc_attacker.destroyed or wc_target.destroyed:
+			if wc_attacker == null or wc_attacker.destroyed:
 				return false
 			# 武器仍属于攻击者（未被破坏/替换）
 			var weapon_still_equipped: bool = false
@@ -155,10 +170,34 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 				if wid == wc_weapon_id:
 					weapon_still_equipped = true
 					break
-			if not weapon_still_equipped:
+			return weapon_still_equipped
+
+		&"WEAPON_HAS_ATTACKABLE_TARGET_IN_RANGE":
+			# 闪击再攻：攻击A的武器攻击范围内存在可攻击的机甲（存活且在范围内）。
+			# 再攻不锁定攻击A的目标，玩家可在武器范围内任选，故只须保证范围内有任意可攻击目标。
+			# 有效范围 = 武器基础范围 + extra_range（与 attack_action._step_select_target 一致）。
+			# payload = 攻击A 的 record（含 attacker_id / weapon_id / weapon_range / extra_range）。
+			var wt_attacker_id: StringName = payload.get("attacker_id", &"")
+			var wt_weapon_id: StringName = payload.get("weapon_id", &"")
+			if wt_attacker_id == &"" or wt_weapon_id == &"":
 				return false
-			var wc_cells: Dictionary = wc_ctx.game_state.map_state.cells if wc_ctx.game_state.map_state else {}
-			return _RangeCalculator.is_in_weapon_range(wc_attacker.position, wc_target.position, wc_range, wc_cells)
+			var wt_ctx = binding.context if binding != null else null
+			if wt_ctx == null or wt_ctx.get("game_state") == null:
+				return false
+			var wt_attacker = wt_ctx.game_state.mechs.get(wt_attacker_id)
+			if wt_attacker == null or wt_attacker.destroyed:
+				return false
+			var wt_range: int = max(1, int(payload.get("weapon_range", 1)) + int(payload.get("extra_range", 0)))
+			var wt_cells: Dictionary = wt_ctx.game_state.map_state.cells if wt_ctx.game_state.map_state else {}
+			for mech_id_wt: StringName in wt_ctx.game_state.mechs:
+				if mech_id_wt == wt_attacker_id:
+					continue
+				var m_wt = wt_ctx.game_state.mechs[mech_id_wt]
+				if m_wt == null or m_wt.destroyed:
+					continue
+				if _RangeCalculator.is_in_weapon_range(wt_attacker.position, m_wt.position, wt_range, wt_cells):
+					return true
+			return false
 
 
 		&"TARGET_HAS_STATUS":
@@ -186,7 +225,17 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 
 		&"GOLD_ABOVE":
 			var threshold: int = int(condition.get("threshold", 0))
-			var gold: int = payload.get("owner_gold", 0)
+			var gold: int = int(payload.get("owner_gold", -1))
+			if gold < 0:
+				# 装备 DIRECT/LISTEN 效果：从 binding_context.player_id 查玩家金币
+				var ga_bind: Dictionary = payload.get("binding_context", {})
+				var ga_pid: StringName = ga_bind.get("player_id", &"")
+				var ga_ctx = binding.context if binding != null else null
+				if ga_pid != &"" and ga_ctx != null and ga_ctx.get("game_state") != null:
+					var ga_player = ga_ctx.game_state.players.get(ga_pid)
+					gold = ga_player.gold if ga_player != null else 0
+				else:
+					gold = 0
 			return gold > threshold
 
 		&"HAS_EQUIPMENT_IN_SLOT":
@@ -214,7 +263,10 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 
 		&"TARGET_HAS_DAMAGE":
 			# 维修 CHOOSE_ONE：目标有损伤（区域或装备牌）才可选"移除损伤"。
+			# effect_079 离场移除损伤：DISCARD_AFTER payload 无 target_id，回退 binding_context.mech_id（来源装备所属机甲）
 			var thd_target_id: StringName = payload.get("target_id", payload.get("target_mech_id", &""))
+			if thd_target_id == &"":
+				thd_target_id = payload.get("binding_context", {}).get("mech_id", &"")
 			var thd_ctx = binding.context if binding != null else null
 			if thd_target_id == &"" or thd_ctx == null or thd_ctx.get("game_state") == null:
 				return false
@@ -246,7 +298,7 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 		&"SELF_DAMAGE_TOKENS_ABOVE":
 			# 此牌(源卡)上设置的损伤 >= threshold（slot 级别，非机甲级别）
 			var threshold: int = int(condition.get("threshold", 1))
-			var self_tokens: int = payload.get("source_card_damage_tokens", 0)
+			var self_tokens: int = _source_card_damage_tokens(binding, payload)
 			return self_tokens >= threshold
 
 		&"WEAPON_NAME_CONTAINS":
@@ -274,15 +326,26 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 
 		&"MOVED_DISTANCE_THIS_TURN_ABOVE":
 			# 本回合累积移动距离 >= threshold
-			var threshold: int = int(condition.get("threshold", 8))
-			var moved_cells: int = payload.get("moved_cells_this_turn", 0)
-			return moved_cells >= threshold
+			# 被动监听时从 payload 取；主动触发（DIRECT 按钮）时 payload 无此字段，
+			# 从机甲状态 cells_moved_this_turn 查（effect_012/013 改主动后走此路径）
+			var md_threshold: int = int(condition.get("threshold", 8))
+			var moved_cells: int = 0
+			if payload != null and payload.has("moved_cells_this_turn"):
+				moved_cells = int(payload.get("moved_cells_this_turn"))
+			else:
+				moved_cells = _mech_cells_moved(binding, payload)
+			return moved_cells >= md_threshold
 
 		&"POWER_SPENT_THIS_TURN_ABOVE":
 			# 本回合消耗动力 >= threshold
-			var threshold: int = int(condition.get("threshold", 8))
-			var power_spent: int = payload.get("power_spent_this_turn", 0)
-			return power_spent >= threshold
+			# 被动监听时从 payload 取；主动触发时从机甲状态 power_spent_this_turn 查
+			var ps_threshold: int = int(condition.get("threshold", 8))
+			var power_spent: int = 0
+			if payload != null and payload.has("power_spent_this_turn"):
+				power_spent = int(payload.get("power_spent_this_turn"))
+			else:
+				power_spent = _mech_power_spent(binding, payload)
+			return power_spent >= ps_threshold
 
 		&"ATTACK_DEALT_NO_HP_DAMAGE":
 			# 攻击未造成 HP 伤害（命中但伤害被护甲完全吸收）
@@ -322,13 +385,13 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 		&"SELF_DAMAGE_TOKENS_BELOW":
 			# 此牌(源卡)上设置的损伤 < threshold（slot 级别）
 			var threshold: int = int(condition.get("threshold", 1))
-			var self_tokens: int = payload.get("source_card_damage_tokens", 0)
+			var self_tokens: int = _source_card_damage_tokens(binding, payload)
 			return self_tokens < threshold
 
 		&"SELF_DAMAGE_TOKENS_EQUALS":
 			# 此牌(源卡)上设置的损伤 == threshold（slot 级别）
 			var threshold: int = int(condition.get("threshold", 1))
-			var self_tokens: int = payload.get("source_card_damage_tokens", 0)
+			var self_tokens: int = _source_card_damage_tokens(binding, payload)
 			return self_tokens == threshold
 
 		&"VARIABLE_ABOVE":
@@ -494,6 +557,19 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 				return false
 			return op_mech.power >= op_threshold
 
+		&"OWNER_POWER_EQUALS":
+			# 装备牌所属机甲当前动力 == value（机动装·头部 effect_017：消耗动力后动力恰为0）
+			# 兼容 value / threshold 两种参数名。BASIC_MOVE_AFTER fire 时动力已扣除，读 mech.power。
+			var ope_value: int = int(condition.get("value", condition.get("threshold", 0)))
+			var ope_mech_id: StringName = _equip_mech_id(binding, payload)
+			var ope_ctx = binding.context if binding != null else null
+			if ope_mech_id == &"" or ope_ctx == null or ope_ctx.get("game_state") == null:
+				return false
+			var ope_mech = ope_ctx.game_state.mechs.get(ope_mech_id)
+			if ope_mech == null:
+				return false
+			return ope_mech.power == ope_value
+
 		&"DISCARD_IS_SELF_FROM_SLOT":
 			# 弃置的牌是本牌（来源装备），且从设置区域弃置（from_slot_id 非空，非手牌/临时区）
 			var dis_card_id: StringName = _equip_card_instance_id(binding, payload)
@@ -508,6 +584,13 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 					if from_slot != &"" and (from_zone == &"equipment_slot" or from_zone == &"weapon_slot" or from_zone == &"reserve_slot" or from_zone == &"equipped"):
 						return true
 			return false
+
+		&"SET_EQUIP_IS_SELF":
+			# 本次正式设置的牌实例是本牌（精英装·头部/腿 effect_033：设置时抽1行动牌）
+			# set_equipment record.card_id = 设置牌 instance_id；binding_context.card_instance_id = 本牌
+			var ses_card_id: StringName = payload.get("card_id", payload.get("card_instance_id", &""))
+			var ses_self_id: StringName = _equip_card_instance_id(binding, payload)
+			return ses_card_id != &"" and String(ses_card_id) == String(ses_self_id)
 
 		&"DISCARD_REASON_IS":
 			# 弃置原因 == condition.reason（近战右腿只接受 damage_durability）
@@ -551,6 +634,43 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 					var rth_name: String = String(rth_card.def.display_name) if "display_name" in rth_card.def else ""
 					if rth_name.find(rth_substring) >= 0:
 						return true
+			return false
+
+		&"REDIRECT_TARGET_HAS_ANY_EQUIP":
+			# 损伤转移：原攻击目标 slot 有任意装备牌（联邦右臂新文本：不限联邦，任意装备即将设置损伤即可转）
+			var rta_ctx = binding.context if binding != null else null
+			if rta_ctx == null or rta_ctx.get("game_state") == null:
+				return false
+			var rta_target_id: StringName = payload.get("target_id", &"")
+			if rta_target_id == &"":
+				return false
+			var rta_mech_ids: Array = payload.get("mech_ids", [rta_target_id])
+			for mid: StringName in rta_mech_ids:
+				var rta_mech = rta_ctx.game_state.mechs.get(mid)
+				if rta_mech == null:
+					continue
+				for sid in rta_mech.slots:
+					var rta_slot = rta_mech.slots[sid]
+					if rta_slot == null:
+						continue
+					var rta_card = rta_slot.get("equipped_card")
+					if rta_card != null and rta_card.def != null:
+						return true
+			return false
+
+		&"TARGET_IS_OWN_MECH":
+			# 损伤转移：目标机甲包含本牌所在机甲（我方机甲）。effect_004 联邦右臂用。
+			var tom_mech_id: StringName = _equip_mech_id(binding, payload)
+			if tom_mech_id == &"":
+				return false
+			var tom_mech_ids: Array = payload.get("mech_ids", [])
+			if tom_mech_ids.is_empty():
+				var tom_t: StringName = payload.get("target_id", payload.get("target_mech_id", &""))
+				if tom_t != &"":
+					tom_mech_ids = [tom_t]
+			for mid in tom_mech_ids:
+				if String(mid) == String(tom_mech_id):
+					return true
 			return false
 
 		&"REDIRECT_HAS_DESTROYABLE_EQUIP":
@@ -640,6 +760,12 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 			if uco_self_mech != &"":
 				return uco_card.mech_id == uco_self_mech
 			return false
+
+		&"USED_ACTION_HAS_LINKED_ATTACK":
+			# use_action_card（迎击牌响应攻击）绑定的原攻击仍有效：record.attack_action_id 非空
+			# （TimingEngine.handle_response_selection 发起 use_action_card 时注入）。
+			# effect_035 用：确保迎击牌确实绑定了原 attack 才触发"置损伤减威力"。
+			return payload.get("attack_action_id", &"") != &""
 
 		&"TARGET_IN_COVER_RANGE":
 			# 掩护 effect1：文档"以机甲1与机甲1最大攻击范围内的其他机甲为攻击目标"--
@@ -733,3 +859,46 @@ static func _equip_player_id(binding, payload: Dictionary) -> StringName:
 	if binding != null:
 		return binding.get_owner_player_id()
 	return &""
+
+
+## 取装备牌来源机甲的本回合累计移动格数
+## DIRECT 主动效果触发时 payload 无 move 数据，从机甲状态 cells_moved_this_turn 查
+static func _mech_cells_moved(binding, payload: Dictionary) -> int:
+	var mid: StringName = _equip_mech_id(binding, payload)
+	if mid == &"" or binding == null or binding.context == null:
+		return 0
+	var gs = binding.context.get("game_state")
+	if gs == null or not gs.mechs.has(mid):
+		return 0
+	return int(gs.mechs[mid].cells_moved_this_turn)
+
+
+## 取装备牌来源机甲的本回合累计消耗动力（DIRECT 主动效果触发时用）
+static func _mech_power_spent(binding, payload: Dictionary) -> int:
+	var mid: StringName = _equip_mech_id(binding, payload)
+	if mid == &"" or binding == null or binding.context == null:
+		return 0
+	var gs = binding.context.get("game_state")
+	if gs == null or not gs.mechs.has(mid):
+		return 0
+	return int(gs.mechs[mid].power_spent_this_turn)
+
+
+## 取源卡(装备牌)上设置的损伤数（用于 SELF_DAMAGE_TOKENS_ABOVE/BELOW/EQUALS 条件）
+## 优先用 payload.source_card_damage_tokens（若调用方预填）；否则从 binding_context 反查
+## 源卡 instance_id -> game_state.get_card -> card.damage_tokens（装备牌损伤挂在卡实例上）。
+## 装备设置在区域中时损伤在 equipped_card.damage_tokens；离场 DISCARD_AFTER 时牌在 tmp_zone
+## 仍保留 damage_tokens，故两类时点均可正确读取。
+static func _source_card_damage_tokens(binding, payload: Dictionary) -> int:
+	if payload != null and payload.has("source_card_damage_tokens"):
+		return int(payload.get("source_card_damage_tokens", 0))
+	var card_id: StringName = _equip_card_instance_id(binding, payload)
+	if card_id == &"" or binding == null or binding.context == null:
+		return 0
+	var gs = binding.context.get("game_state")
+	if gs == null:
+		return 0
+	var card = gs.get_card(card_id)
+	if card == null:
+		return 0
+	return int(card.damage_tokens) if card.get("damage_tokens") else 0

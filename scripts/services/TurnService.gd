@@ -45,6 +45,8 @@ func start_turn(player_id: StringName) -> Dictionary:
 	var mech: MechState = gs.get_mech_for_player(player_id)
 	if mech:
 		mech.attack_count_this_turn = 0
+		mech.power_spent_this_turn = 0
+		mech.cells_moved_this_turn = 0
 
 	# ── 3. 发出 ROUND_START 时点（位次1玩家回合开始前，优先于回合开始前） ──
 	# 文档第143-145行：新轮次开始时点优先于回合开始前。1v1下player为位次1，首轮也发。
@@ -61,6 +63,13 @@ func start_turn(player_id: StringName) -> Dictionary:
 		"player_id": String(player_id),
 		"turn_number": gs.turn_number,
 	})
+
+	# 移除本机甲 CANNOT_RESTORE_POWER（effect_088"直到下个我方回合开始无法回复"：
+	# 下个我方回合开始前移除，故 TURN_START 回复正常）
+	if mech and not mech.statuses.is_empty():
+		mech.statuses = mech.statuses.filter(func(s: Dictionary) -> bool:
+			return s.get("type", &"") != &"CANNOT_RESTORE_POWER"
+		)
 
 	# ── 4. 发出 TURN_START 时点（回复动力） ──
 	_fire_timing(_TimingConst.TURN_START, {
@@ -229,6 +238,13 @@ func _clean_this_turn_durations() -> void:
 		mech.statuses = mech.statuses.filter(func(s: Dictionary) -> bool:
 			return not _is_this_turn_duration(s.get("duration", &""))
 		)
+	# 清理装备牌 effect_negated（THIS_TURN/UNTIL_TURN_END）：恢复被压制的效果
+	for card_id: StringName in gs.cards:
+		var card = gs.cards[card_id]
+		if card == null:
+			continue
+		if card.effect_negated:
+			card.effect_negated = false
 
 
 ## duration 字段类型不统一：StringName(&"THIS_TURN") / int(锁定 duration=1) / 缺省(&"")，

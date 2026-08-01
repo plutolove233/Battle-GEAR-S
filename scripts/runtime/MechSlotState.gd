@@ -41,8 +41,10 @@ var power_modifier: int = 0
 
 ## 获取实际护甲值
 ## 规则：有装备时只算装备的护甲，无装备时算框架基础护甲 + 修正 - 区域损伤
-## 重甲装（effect_014）：损伤不影响此牌所在区域提供的护甲（不减 region_damage_tokens）
-func get_effective_armor() -> int:
+## effect_014（重甲左臂/右腿/左腿）：损伤不影响此牌所在区域提供的护甲（不减 region_damage_tokens）
+## effect_089（重甲头部）：机甲部件总损伤<3 时免疫，≥3 时正常减（需传 mech 判总损伤）
+## mech 参数：MechState.get_armor 传 self；UI/测试若不传，总损伤阈值类保守按正常扣减
+func get_effective_armor(mech = null) -> int:
 	var total: int = armor_modifier
 	if _is_equipment_active() and equipped_card.def is _EquipmentCardDef:
 		var eq_def = equipped_card.def
@@ -52,9 +54,11 @@ func get_effective_armor() -> int:
 		# 无装备时使用框架基础护甲
 		total += base_armor
 	# 损伤降低护甲（规则书：每损伤使区域护甲 -1）
-	# 重甲装 effect_014：本区域装备正面设置时，损伤不影响护甲
-	if not _GenEquipEffects.card_has_damage_immune_armor(equipped_card):
-		total -= region_damage_tokens
+	# effect_014 无条件免疫 / effect_089 重甲头部总损伤<3免疫：helper 返回应扣减量（0=免疫）
+	total -= _GenEquipEffects.card_damage_immune_armor_amount(equipped_card, mech, region_damage_tokens)
+	# effect_080 联邦的一角兽·头部全场光环：名称含联邦的装备额外+1护甲/来源
+	if _is_equipment_active():
+		total += _GenEquipEffects.get_global_faction_equipment_aura_bonus(equipped_card, "联邦")
 	return total
 
 
@@ -69,6 +73,9 @@ func get_effective_power() -> int:
 	else:
 		# 无装备时使用框架基础动力
 		total += base_power
+	# effect_086 帝国的神莺·头部全场光环：名称含帝国的装备额外+1动力/来源
+	if _is_equipment_active():
+		total += _GenEquipEffects.get_global_faction_equipment_aura_bonus(equipped_card, "帝国")
 	return total
 
 

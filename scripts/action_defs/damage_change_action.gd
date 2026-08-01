@@ -35,6 +35,12 @@ func _step_extract_info(action: Action) -> Dictionary:
 	# 暴露 total_points（= value）供 DAMAGE_REDIRECT_WINDOW 的转移效果读取
 	var value: int = action.record.get("value", 0)
 	action.record["total_points"] = value
+	# fixed_slot：直接置X点到指定 slot（规则2），不开损伤转移窗（050歧义2 fixed_slot 不可转移）。
+	# 把 offer_redirect step 的 timing_point 置空，_execute_step 阶段3 不 fire DAMAGE_REDIRECT_WINDOW。
+	if bool(action.record.get("fixed_slot", false)):
+		for s in action.steps:
+			if s.get("timing_point", &"") == _TimingConst.DAMAGE_REDIRECT_WINDOW:
+				s["timing_point"] = &""
 	return {}
 
 
@@ -53,6 +59,20 @@ func _step_set_damage(action: Action) -> Dictionary:
 	var redirect_plan: Array = action.record.get("redirect_plan", [])
 
 	if value == 0:
+		return result
+
+	# fixed_slot：直接置X点到指定 slot（规则2"设置X损伤到此牌/区域上"），不弹逐点UI、不开转移窗。
+	# place_damage_tokens_on_slot 逐点放置（优先装备牌，再 region），之后检查耐久弃置（规则1）。
+	# effect_035（置1损伤减威力4）/ effect_039（置2损伤减3攻击损伤）用。
+	if bool(action.record.get("fixed_slot", false)) and method == &"increase":
+		var fs_mech_raw = action.record.get("target_mech_id", &"")
+		var fs_slot_raw = action.record.get("target_slot_id", &"")
+		var fs_mech: StringName = StringName(fs_mech_raw) if fs_mech_raw != null else &""
+		var fs_slot: StringName = StringName(fs_slot_raw) if fs_slot_raw != null else &""
+		if fs_mech != &"" and fs_slot != &"" and context != null and context.game_actions != null:
+			context.game_actions.place_damage_tokens_on_slot({"mech_id": fs_mech, "slot_id": fs_slot, "amount": value})
+			if context.game_actions.has_method("_check_equipment_broken_after_damage"):
+				context.game_actions._check_equipment_broken_after_damage(fs_mech, fs_slot)
 		return result
 
 	# executor：record.executor 为空时从 action.source 推导（_create_action 把 source
@@ -89,15 +109,19 @@ func _step_set_damage(action: Action) -> Dictionary:
 		# 已回填 placed（玩家手动完成）/auto_placed（AI）则跳过，进入结算。
 		var already_removed: bool = bool(action.record.get("placed", false)) or bool(action.record.get("auto_placed", false))
 		if value > 0 and not already_removed:
+			var dec_exclude: StringName = StringName(action.record.get("exclude_slot_id", &""))
+			var dec_input: Dictionary = {
+				"mech_ids": mech_ids,
+				"amount": value,
+				"executor": executor,
+				"removal_mode": true,
+			}
+			if dec_exclude != &"":
+				dec_input["exclude_slot_id"] = dec_exclude
 			return {
 				"need_input": true,
 				"input_type": &"place_damage_tokens",
-				"input_params": {
-					"mech_ids": mech_ids,
-					"amount": value,
-					"executor": executor,
-					"removal_mode": true,
-				},
+				"input_params": dec_input,
 			}
 		# 已移除完毕（placed/auto_placed），fall through 进入结算
 

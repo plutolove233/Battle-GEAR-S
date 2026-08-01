@@ -155,7 +155,38 @@ func test_service_init_factories():
 	return true
 
 
-func test_service_flash_use_previous_weapon_and_target():
+func test_service_flash_choose_new_target():
+	var service = _ActionService.new()
+	service.init_factories()
+
+	# 闪击再攻：用攻击A的武器（自动确认），目标在武器范围内由玩家重选（不锁定攻击A的目标）
+	var action_def = {
+		"type": &"EXECUTE_ATTACK",
+		"params": {
+			"target_count": 1,
+			"use_previous_weapon": true,
+			"skip_weapon_select": true,
+			"choose_new_target": true,
+		},
+	}
+	var payload = {"weapon_id": &"weapon_last", "target_id": &"target_last", "source_mech_id": &"mech_1"}
+	var parent_action = _Action.new()
+
+	var params = service._extract_attack_params(action_def, payload, parent_action)
+
+	if params.get("weapon_id") != &"weapon_last":
+		return "闪击再攻应使用上一次武器"
+	if params.get("target_id") != &"":
+		return "闪击再攻应清空目标（由玩家在武器范围内重选），实际=%s" % String(params.get("target_id", &""))
+	if params.get("skip_weapon_select") != true:
+		return "应跳过武器选择"
+	if params.get("skip_target_select") != false:
+		return "不应跳过目标选择（玩家需在武器范围内选目标）"
+	return true
+
+
+## use_previous_target 机制（锁定上一次目标）：保留覆盖，供未来再攻型效果复用
+func test_service_extract_use_previous_target():
 	var service = _ActionService.new()
 	service.init_factories()
 
@@ -175,9 +206,9 @@ func test_service_flash_use_previous_weapon_and_target():
 	var params = service._extract_attack_params(action_def, payload, parent_action)
 
 	if params.get("weapon_id") != &"weapon_last":
-		return "闪击再攻应使用上一次武器"
+		return "再攻应使用上一次武器"
 	if params.get("target_id") != &"target_last":
-		return "闪击再攻应使用上一次目标"
+		return "use_previous_target 应锁定上一次目标"
 	if params.get("skip_weapon_select") != true:
 		return "应跳过武器选择"
 	if params.get("skip_target_select") != true:

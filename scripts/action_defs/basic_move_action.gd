@@ -56,9 +56,12 @@ func _step_extract_target(action: Action) -> Dictionary:
 		if other_id != mech_id and not other.destroyed and _HexGrid.key(other.position) == _HexGrid.key(target):
 			return {"error": "目标格已被占据"}
 	var cost: int = 2 if terrain == &"GREEN" else 1
-	var available_power: int = int(action.record.get("available_power", mech.power))
-	if cost > mech.power or cost > available_power:
-		return {"error": "动力不足"}
+	var free_move: bool = bool(action.record.get("free_move", false))
+	# 免费移动（狙击腿）不检查动力
+	if not free_move:
+		var available_power: int = int(action.record.get("available_power", mech.power))
+		if cost > mech.power or cost > available_power:
+			return {"error": "动力不足"}
 	return {"power_cost": cost}
 
 
@@ -79,11 +82,14 @@ func _step_consume_power(action: Action) -> Dictionary:
 	if cost <= 0:
 		return {"error": "无效的移动消耗"}
 
-	# 消耗动力
-	if context.game_actions != null:
+	# 消耗动力（免费移动跳过，仍走完 BASIC_MOVE_AT 时点）
+	var free_move: bool = bool(action.record.get("free_move", false))
+	if not free_move and context.game_actions != null:
 		context.game_actions.spend_power({"mech_id": mech_id, "amount": cost})
 
 	result["power_cost"] = cost
+	# 注入本回合累计消耗动力，供 POWER_SPENT_THIS_TURN_ABOVE 条件（effect_044/045）在 BASIC_MOVE_AFTER 读
+	result["power_spent_this_turn"] = mech.power_spent_this_turn
 	return result
 
 
@@ -105,6 +111,10 @@ func _step_move_position(action: Action) -> Dictionary:
 		if not move_result.get("ok", false):
 			return {"error": move_result.get("message", "移动失败")}
 		result["moved_to"] = target_cell
+		# 累计本回合移动格数（effect_012/013 帝国腿主动效果阈值用）
+		var _mv_mech = context.game_state.mechs.get(mech_id)
+		if _mv_mech != null:
+			_mv_mech.cells_moved_this_turn += 1
 
 	return result
 

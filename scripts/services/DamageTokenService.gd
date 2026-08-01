@@ -49,6 +49,8 @@ func place_one_token_at_slot(mech_id: StringName, slot_id: StringName) -> void:
 	# ── 检查装备是否损坏 ──
 	if slot.equipped_card != null:
 		context.equipment_break_service.check_equipment_broken(mech_id, slot_id)
+	# 损伤变化后重算动力上限（effect_016/021/048 派生动力随损伤变，max_power 需同步）
+	mech.recalc_power_limits()
 
 
 ## 放置多个损伤标记（AI自动放置模式）
@@ -96,6 +98,8 @@ func place_damage_tokens(params: Dictionary) -> void:
 		if slot.equipped_card != null:
 			context.equipment_break_service.check_equipment_broken(mech_id, target_slot_id)
 
+	# 损伤变化后重算动力上限（effect_016/021/048 派生动力随损伤变，max_power 需同步）
+	mech.recalc_power_limits()
 	gs.write_log(&"damage_tokens_placed", {
 		"mech_id": String(mech_id),
 		"count": count,

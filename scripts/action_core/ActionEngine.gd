@@ -24,6 +24,11 @@ const SLog = preload("res://scripts/services/slog.gd")
 
 const _TimingConst = preload("res://scripts/action_core/TimingConst.gd")
 
+## 逐格移动动画每格延迟（秒）。仅 UI 模式（context.move_animation_enabled）生效：
+## single_move 每格 basic_move 完成后 yield_frame 让出，由定时器在此延迟后 resume 父动作，
+## 让棋盘逐格重绘机甲位置。测试模式不开启动画，不经过此路径。
+const _MOVE_FRAME_DELAY := 0.05
+
 ## 诊断开关（bug3b 攻击二次结算排查遗留）。
 ## 默认关闭：这些诊断块每个都在动作驱动热路径上调 get_stack() 拼调用栈再落盘，
 ## 一旦动作被反复驱动（敌方回合卡死/二次结算余波），会写入 GB 级日志。
@@ -345,6 +350,19 @@ func _execute_step(action: Action, i: int) -> StringName:
 			cancel_action(action.action_id)
 			return &"ok"
 
+		# yield_frame：handler 请求本步完成后让出一帧（逐格移动动画用，仅 UI 模式）。
+		# 标记本步已完成（phase=timing_done，恢复时 continue_action 进下一步而非重跑 handler），
+		# 置 waiting_timing 暂停，由 _schedule_move_frame_resume 的 50ms 定时器恢复。
+		# 用 waiting_timing 而非 waiting_effect_action：basic_move 子动作同步完成时 _complete_action
+		# 已 call_deferred 排入 _notify_parent_deferred，它会检查 state==waiting_effect_action 才恢复--
+		# 若用 waiting_effect_action，该贪心 deferred 会在同帧提前恢复（瞬移）。waiting_timing 不被该路径恢复，
+		# 仅由定时器恢复，保证每格跨帧可见。
+		if not result.is_empty() and result.get("yield_frame", false):
+			action.current_step_phase = &"timing_done"
+			action.state = &"waiting_timing"
+			_schedule_move_frame_resume(action)
+			return &"ok"
+
 		# 合并 result 到 record
 		if not result.is_empty():
 			action.record.merge(result, true)
@@ -490,6 +508,22 @@ func _after_sub_action_finished(parent_action) -> void:
 			return
 	# 无可续跑，恢复父动作继续执行
 	continue_action(parent_action.action_id, {})
+
+
+## 逐格移动动画：yield_frame 后调度一个定时器在 _MOVE_FRAME_DELAY 后恢复父动作。
+## ActionEngine 是 RefCounted（无 Node），借 Engine.get_main_loop() 取 SceneTree 创建定时器。
+## 定时器到期 -> continue_action 恢复（父动作处于 waiting_timing，phase=timing_done，进下一步）。
+## 若动作已被取消/清理，continue_action 会因找不到动作或状态不符安全返回。
+func _schedule_move_frame_resume(action) -> void:
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null:
+		# 无 SceneTree（异常环境）直接延迟恢复，避免永久卡死
+		continue_action.call_deferred(action.action_id, {})
+		return
+	var aid: StringName = action.action_id
+	var timer = tree.create_timer(_MOVE_FRAME_DELAY)
+	timer.timeout.connect(func() -> void:
+		continue_action(aid, {}))
 
 
 ## 完成动作（设置状态、发信号、清理）

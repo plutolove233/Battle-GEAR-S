@@ -48,6 +48,12 @@ var statuses: Array[Dictionary] = []
 ## 本回合已攻击次数
 var attack_count_this_turn: int = 0
 
+## 本回合累计消耗动力（effect_044/045 帝国赤枭腿用）
+var power_spent_this_turn: int = 0
+
+## 本回合累计移动格数（effect_012/013 帝国腿主动效果阈值用）
+var cells_moved_this_turn: int = 0
+
 ## 每回合最大攻击次数（由机师牌决定）
 var max_attacks_per_turn: int = 1
 
@@ -69,11 +75,22 @@ func get_armor() -> int:
 	var total: int = 0
 	for slot_id: StringName in [&"头部", &"躯干", &"右臂", &"左臂", &"右腿", &"左腿"]:
 		if slots.has(slot_id):
-			total += slots[slot_id].get_effective_armor()
-	# 联邦普装·头部动态护甲：该机甲头部若有 effect_002，加 其他区域联邦装备数
-	total += _GenEquipEffects.compute_faction_armor_bonus(self, &"头部")
+			total += slots[slot_id].get_effective_armor(self)
+	# 联邦头部动态护甲（门控 by effect_002/effect_066）：联邦普装=其他区域，联邦圣牛=含自身
+	total += _GenEquipEffects.compute_head_faction_armor_bonus(self)
 	# 临时护甲加成（防御牌等，本次攻击结算后恢复）
 	total += temp_armor_bonus
+	# 「当前回合护甲+X」类效果（effect_015/029/047/062/075/009 等）经
+	# GameActions.modify_armor 写入 ARMOR_MODIFIER 状态（duration=THIS_TURN）。
+	# 排除 THIS_ATTACK：该 duration 路由由 attack record temporary_armor_bonus
+	# 处理（attack_action._step_calculate_damage 单独读取），避免双计。
+	# 回合结束 _clean_this_turn_durations 移除 THIS_TURN 的 ARMOR_MODIFIER 后自动不再计入。
+	var am_bonus := 0
+	for st: Dictionary in statuses:
+		if st.get("type", &"") == &"ARMOR_MODIFIER" \
+				and String(st.get("duration", &"")) != "THIS_ATTACK":
+			am_bonus += int(st.get("delta", 0))
+	total += am_bonus
 	return total
 
 
@@ -84,12 +101,122 @@ func get_total_power() -> int:
 	for slot_id: StringName in [&"头部", &"躯干", &"右臂", &"左臂", &"右腿", &"左腿"]:
 		if slots.has(slot_id):
 			total += slots[slot_id].get_effective_power()
-	# 帝国普装·头部动态动力上限：头部若有 effect_008，加 其他区域帝国装备数
-	total += _GenEquipEffects.compute_faction_power_bonus(self, &"头部")
+	# 帝国头部动态动力上限（门控 by effect_008/effect_070）：帝国普装=其他区域，帝国雄鹰=含自身
+	total += _GenEquipEffects.compute_head_faction_power_bonus(self)
 	# 各 slot 损伤阈值动力加成（重甲右臂/机动右腿 effect_016 阈值1，机动左腿 effect_021 阈值2）
 	for slot_id: StringName in [&"头部", &"躯干", &"右臂", &"左臂", &"右腿", &"左腿"]:
 		total += _GenEquipEffects.slot_damage_threshold_power_bonus(self, slot_id)
 	return total
+
+
+## 损伤/装备变化后重算动力上限并同步当前动力。
+## effect_016/021/048 等派生动力随损伤实时变，但 max_power 是存储字段，仅在装备
+## 设置/损坏时重算 -> 损伤变化时上限不更新（详情 get_power_breakdown 实时算故可见，
+## 但实际 max_power 未变）。在损伤增减点调用此方法同步：上限变多少，当前动力补/减多少。
+func recalc_power_limits() -> void:
+	var new_max: int = get_total_power()
+	var delta: int = new_max - max_power
+	if delta == 0:
+		return
+	max_power = new_max
+	power = clampi(power + delta, 0, max_power)
+
+
+## 护甲来源明细（供机甲详情框展示）。各项 amount 之和 == get_armor()。
+## temporary=true 表示本回合临时（防御牌/THIS_TURN 状态），回合结束/攻击结算后消失。
+func get_armor_breakdown(context = null) -> Array:
+	var result: Array = []
+	var part_slots: Array[StringName] = [&"头部", &"躯干", &"右臂", &"左臂", &"右腿", &"左腿"]
+	for slot_id: StringName in part_slots:
+		if not slots.has(slot_id):
+			continue
+		var slot: MechSlotState = slots[slot_id]
+		var slot_name := String(slot_id)
+		var active := slot.equipped_card != null and not bool(slot.equipped_card.counters.get("_pending_equipment_activation", false))
+		# 装备护甲 / 框架基础护甲
+		if active and slot.equipped_card.def is EquipmentCardDef and slot.equipped_card.def.equipment_kind == &"PART":
+			result.append({"label": "装备·%s(%s)" % [slot_name, slot.equipped_card.def.display_name], "amount": int(slot.equipped_card.def.armor), "temporary": false})
+		elif not active:
+			result.append({"label": "基础框架·%s" % slot_name, "amount": int(slot.base_armor), "temporary": false})
+		# 槽位护甲修正
+		if int(slot.armor_modifier) != 0:
+			result.append({"label": "护甲修正·%s" % slot_name, "amount": int(slot.armor_modifier), "temporary": false})
+		# 损伤扣减（effect_014/089 免疫时为0）
+		var dmg := _GenEquipEffects.card_damage_immune_armor_amount(slot.equipped_card, self, slot.region_damage_tokens)
+		if dmg != 0:
+			result.append({"label": "损伤·%s" % slot_name, "amount": -dmg, "temporary": false})
+		# 联邦光环（per-slot，effect_080）
+		if active:
+			var aura := _GenEquipEffects.get_global_faction_equipment_aura_bonus(slot.equipped_card, "联邦")
+			if aura != 0:
+				result.append({"label": "联邦光环·%s" % slot_name, "amount": aura, "temporary": false})
+	# 联邦头部派生护甲（effect_002/066）
+	var head_bonus := _GenEquipEffects.compute_head_faction_armor_bonus(self)
+	if head_bonus != 0:
+		result.append({"label": "派生·联邦头部", "amount": head_bonus, "temporary": false})
+	# 临时护甲（防御牌等，本次攻击结算后恢复）
+	if temp_armor_bonus != 0:
+		result.append({"label": "临时·防御牌", "amount": temp_armor_bonus, "temporary": true})
+	# ARMOR_MODIFIER 状态（THIS_TURN 本回合临时；排除 THIS_ATTACK 由 attack record 处理）
+	for st: Dictionary in statuses:
+		if st.get("type", &"") == &"ARMOR_MODIFIER" and String(st.get("duration", &"")) != "THIS_ATTACK":
+			var delta := int(st.get("delta", 0))
+			if delta == 0:
+				continue
+			var label := "状态·护甲修正"
+			var src := _resolve_source_name(context, st.get("source_card_id", &""))
+			if src != "":
+				label += "（%s）" % src
+			result.append({"label": label, "amount": delta, "temporary": true})
+	return result
+
+
+## 动力上限来源明细（供机甲详情框展示）。各项 amount 之和 == get_total_power() == max_power。
+## 注意：当前可花动力 = 上限 - 本回合已消耗（临时动力加成如推进直接改 power，未单独追踪来源）。
+func get_power_breakdown(_context = null) -> Array:
+	var result: Array = []
+	var part_slots: Array[StringName] = [&"头部", &"躯干", &"右臂", &"左臂", &"右腿", &"左腿"]
+	for slot_id: StringName in part_slots:
+		if not slots.has(slot_id):
+			continue
+		var slot: MechSlotState = slots[slot_id]
+		var slot_name := String(slot_id)
+		var active := slot.equipped_card != null and not bool(slot.equipped_card.counters.get("_pending_equipment_activation", false))
+		if active and slot.equipped_card.def is EquipmentCardDef and slot.equipped_card.def.equipment_kind == &"PART":
+			result.append({"label": "装备·%s(%s)" % [slot_name, slot.equipped_card.def.display_name], "amount": int(slot.equipped_card.def.power), "temporary": false})
+		elif not active:
+			result.append({"label": "基础框架·%s" % slot_name, "amount": int(slot.base_power), "temporary": false})
+		if int(slot.power_modifier) != 0:
+			result.append({"label": "动力修正·%s" % slot_name, "amount": int(slot.power_modifier), "temporary": false})
+		if active:
+			var aura := _GenEquipEffects.get_global_faction_equipment_aura_bonus(slot.equipped_card, "帝国")
+			if aura != 0:
+				result.append({"label": "帝国光环·%s" % slot_name, "amount": aura, "temporary": false})
+	# 帝国头部派生动力（effect_008/070）
+	var head_p := _GenEquipEffects.compute_head_faction_power_bonus(self)
+	if head_p != 0:
+		result.append({"label": "派生·帝国头部", "amount": head_p, "temporary": false})
+	# 各 slot 损伤阈值动力加成（effect_016/021）
+	for slot_id: StringName in part_slots:
+		if not slots.has(slot_id):
+			continue
+		var thr := _GenEquipEffects.slot_damage_threshold_power_bonus(self, slot_id)
+		if thr != 0:
+			result.append({"label": "派生·损伤阈值·%s" % String(slot_id), "amount": thr, "temporary": false})
+	return result
+
+
+## 解析状态来源牌实例ID为显示名（无 context 时返回空）
+func _resolve_source_name(context, card_id) -> String:
+	if context == null or context.get("game_state") == null:
+		return ""
+	var cid_str := String(card_id)
+	if cid_str == "":
+		return ""
+	var card = context.game_state.get_card(StringName(cid_str))
+	if card != null and card.def != null:
+		return card.def.display_name
+	return ""
 
 
 ## 获取武器槽位中的装备 instance_id 列表

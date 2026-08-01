@@ -1,0 +1,4597 @@
+Battle-GEAR-S（机斗战甲）
+装备牌效果文本 → Action Engine 开发就绪拆解
+处理范围：装备牌 001～066（11套装）
+生成依据：
+1. 装备牌部件_全部装备牌信息(1).txt
+2. 行动牌的效果与逻辑(1).txt
+3. 各动作的生命周期与时点(1).txt
+4. 机斗战甲规则书(1).txt
+
+范围裁定：
+- 本次遵照提示词开头的明确限定“先做前1～66张”；后文“126张全部产出”视为完整任务模板的总目标，不在本文件展开。
+- effect_id 001～031 与 089 按既有清单优先复用；新机制从 equipment_effect_032 起顺序提出至 049。
+- 本文件不写完整代码文件，只给可直接落地的 ActionEffect / helper / UI / 测试规格。
+- 所有玩家输入窗口在完成确认或取消前，父动作、所在时点及后续监听器保持挂起。
+- 装备离场统一走 discard action，禁止直接清槽；损伤固定到“此牌上”的效果仍走 damage_change 生命周期，但 fixed_slot=true。
+- StringName 均使用 &"..."；字典/数组按 GDScript 字面量书写。
+
+新增/重构总览：
+- 重构：equipment_effect_003（“可”改为optional）、017（耗尽动力回复并移动）、019（机动右臂主动弃置加动力）、028（转换改为可选）。
+- 新建：equipment_effect_032～049。
+- 新增通用条件建议：SET_EQUIP_IS_SELF、SELF_MECH_IS_STAT_TARGET、PAYLOAD_STAT_TYPE_IS、PAYLOAD_STAT_METHOD_IS、OWNER_POWER_EQUALS、USED_ACTION_LINKED_ATTACK_EXISTS。
+- 新增复杂交互建议：CHOOSE_INTEGER（整数n选择，支持绑定值与嵌套actions）。
+- 扩展建议：MODIFY_ATTACK_MIGHT 支持显式 attack_id；EXECUTE_DAMAGE_CHANGE 支持 fixed_slot 与 SYSTEM_DEFAULT。
+
+
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+套装1：量产装（装备牌 001～006）
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+
+═══════════════════════════════════════════════════════════
+[装备牌 001] 量产装·头部  （部位:头部  护甲:2 动力:0 耐久:2 金币:2）
+═══════════════════════════════════════════════════════════
+效果文本：此牌设置在区域中依然可以卖出。
+effect_ids：["equipment_effect_001"]
+
+──────────── 效果拆解（equipment_effect_001）────────────
+优先级：10
+模式：权限型
+植入：权限型，不注册监听器。装备设置在部件区域后，sell_equipment_panel / shop sell 流程读取牌定义中的 effect_ids，识别本权限。
+权限型：不写 conditions / target_rules / costs / actions，不注册 timing listener。
+
+依赖/限次：无；卖出次数仍受玩家每回合最多卖出2张装备牌的全局规则限制。
+值解析/公式：识别来源：$binding_context.card_instance_id / card_def_id；卖出价取该牌金币字段，不因已设置而改变。
+执行顺序：卖出确认后必须走标准 discard_card(reason=&"sell_set_equipment")，再 GAIN_GOLD；不能直接清槽，否则离场诱发与监听器注销会漏掉。
+人类 UI：装备详情/商店卖出面板在该牌已设置时仍显示“卖出”按钮；确认窗显示卖价与将清空的部位。
+
+──────────── 实现预告 ────────────
+- 复用：equipment_effect_001（既有权限型）。
+- 权限检查：sell 面板允许 zone==equipped 且牌含本 effect_id；仍检查当前回合卖出计数、牌所有权与动作空闲。
+- JSON effect_ids：001～006 均为 ["equipment_effect_001"]；无需新增 ActionEffect。
+
+──────────── 顺序与坑 ────────────
+- 卖出已设置牌会让该区域保留原损伤，除非其他离场效果另行移除；规则仅规定设置新牌时移除新牌耐久数量损伤。
+- 卖出原因应与普通未设置装备卖出区分为 sell_set_equipment，便于离场效果按 reason 过滤。
+
+──────────── 测试场景 ────────────
+场景a：已设置装备正常卖出
+  前置：P装备量产装·头部于头部；本回合卖出计数0；牌面金币=2；涉及选择的玩家均is_human=true。
+  操作：打开装备详情→点击卖出→确认。
+  断言：头部.equipped_card==null；卡实例zone=="equipment_discard"；discard.reason==&"sell_set_equipment"；P.gold增加2；本回合卖出计数+1。
+场景b：卖出确认窗取消
+  前置：量产装·头部已设置于头部；涉及选择的玩家均is_human=true。
+  操作：点击卖出→取消。
+  断言：牌仍在头部；金币不变；无discard/GAIN_GOLD动作。
+场景c：全局卖出次数已满
+  前置：P本回合已经卖出2张装备牌；涉及选择的玩家均is_human=true。
+  操作：查看量产装·头部。
+  断言：卖出按钮禁用或权限检查失败；牌与金币不变。
+
+歧义点：
+[歧义1] 已设置牌卖价是否仍取牌面金币全额。智能体选择：取牌面金币全额（理由：文本只扩展可卖权限，未修改卖价；商店规则的卖出价即牌面金币）。候选：按损伤/耐久折价。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 002] 量产装·躯干  （部位:躯干  护甲:3 动力:2 耐久:4 金币:4）
+═══════════════════════════════════════════════════════════
+效果文本：此牌设置在区域中依然可以卖出。
+effect_ids：["equipment_effect_001"]
+
+──────────── 效果拆解（equipment_effect_001）────────────
+拆解同 [装备牌 001] 的 equipment_effect_001。
+本牌实例差异：binding_context.card_instance_id 指向 量产装·躯干 实例；slot_id=&"躯干"；牌面耐久=4、金币=4。
+模式/入口：权限型；由卖出/权限面板识别；不注册监听器。
+JSON effect_ids：["equipment_effect_001"]。
+
+──────────── 实现预告 ────────────
+- 复用 equipment_effect_001，不新增条件 op、动作或UI；仅由本牌JSON绑定同一effect_id。
+- 回归测试必须使用本牌自己的card_instance_id与躯干槽，不能只覆盖首张牌。
+
+──────────── 顺序与坑 ────────────
+- 卖出已设置牌会让该区域保留原损伤，除非其他离场效果另行移除；规则仅规定设置新牌时移除新牌耐久数量损伤。
+- 卖出原因应与普通未设置装备卖出区分为 sell_set_equipment，便于离场效果按 reason 过滤。
+
+──────────── 测试场景 ────────────
+场景a：已设置装备正常卖出
+  前置：P装备量产装·躯干于躯干；本回合卖出计数0；牌面金币=4；涉及选择的玩家均is_human=true。
+  操作：打开装备详情→点击卖出→确认。
+  断言：躯干.equipped_card==null；卡实例zone=="equipment_discard"；discard.reason==&"sell_set_equipment"；P.gold增加4；本回合卖出计数+1。
+场景b：卖出确认窗取消
+  前置：量产装·躯干已设置于躯干；涉及选择的玩家均is_human=true。
+  操作：点击卖出→取消。
+  断言：牌仍在躯干；金币不变；无discard/GAIN_GOLD动作。
+场景c：全局卖出次数已满
+  前置：P本回合已经卖出2张装备牌；涉及选择的玩家均is_human=true。
+  操作：查看量产装·躯干。
+  断言：卖出按钮禁用或权限检查失败；牌与金币不变。
+
+歧义点：
+[歧义1] 已设置牌卖价是否仍取牌面金币全额。智能体选择：取牌面金币全额（理由：文本只扩展可卖权限，未修改卖价；商店规则的卖出价即牌面金币）。候选：按损伤/耐久折价。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 003] 量产装·右臂  （部位:右臂  护甲:2 动力:1 耐久:3 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：此牌设置在区域中依然可以卖出。
+effect_ids：["equipment_effect_001"]
+
+──────────── 效果拆解（equipment_effect_001）────────────
+拆解同 [装备牌 001] 的 equipment_effect_001。
+本牌实例差异：binding_context.card_instance_id 指向 量产装·右臂 实例；slot_id=&"右臂"；牌面耐久=3、金币=3。
+模式/入口：权限型；由卖出/权限面板识别；不注册监听器。
+JSON effect_ids：["equipment_effect_001"]。
+
+──────────── 实现预告 ────────────
+- 复用 equipment_effect_001，不新增条件 op、动作或UI；仅由本牌JSON绑定同一effect_id。
+- 回归测试必须使用本牌自己的card_instance_id与右臂槽，不能只覆盖首张牌。
+
+──────────── 顺序与坑 ────────────
+- 卖出已设置牌会让该区域保留原损伤，除非其他离场效果另行移除；规则仅规定设置新牌时移除新牌耐久数量损伤。
+- 卖出原因应与普通未设置装备卖出区分为 sell_set_equipment，便于离场效果按 reason 过滤。
+
+──────────── 测试场景 ────────────
+场景a：已设置装备正常卖出
+  前置：P装备量产装·右臂于右臂；本回合卖出计数0；牌面金币=3；涉及选择的玩家均is_human=true。
+  操作：打开装备详情→点击卖出→确认。
+  断言：右臂.equipped_card==null；卡实例zone=="equipment_discard"；discard.reason==&"sell_set_equipment"；P.gold增加3；本回合卖出计数+1。
+场景b：卖出确认窗取消
+  前置：量产装·右臂已设置于右臂；涉及选择的玩家均is_human=true。
+  操作：点击卖出→取消。
+  断言：牌仍在右臂；金币不变；无discard/GAIN_GOLD动作。
+场景c：全局卖出次数已满
+  前置：P本回合已经卖出2张装备牌；涉及选择的玩家均is_human=true。
+  操作：查看量产装·右臂。
+  断言：卖出按钮禁用或权限检查失败；牌与金币不变。
+
+歧义点：
+[歧义1] 已设置牌卖价是否仍取牌面金币全额。智能体选择：取牌面金币全额（理由：文本只扩展可卖权限，未修改卖价；商店规则的卖出价即牌面金币）。候选：按损伤/耐久折价。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 004] 量产装·左臂  （部位:左臂  护甲:2 动力:1 耐久:3 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：此牌设置在区域中依然可以卖出。
+effect_ids：["equipment_effect_001"]
+
+──────────── 效果拆解（equipment_effect_001）────────────
+拆解同 [装备牌 001] 的 equipment_effect_001。
+本牌实例差异：binding_context.card_instance_id 指向 量产装·左臂 实例；slot_id=&"左臂"；牌面耐久=3、金币=3。
+模式/入口：权限型；由卖出/权限面板识别；不注册监听器。
+JSON effect_ids：["equipment_effect_001"]。
+
+──────────── 实现预告 ────────────
+- 复用 equipment_effect_001，不新增条件 op、动作或UI；仅由本牌JSON绑定同一effect_id。
+- 回归测试必须使用本牌自己的card_instance_id与左臂槽，不能只覆盖首张牌。
+
+──────────── 顺序与坑 ────────────
+- 卖出已设置牌会让该区域保留原损伤，除非其他离场效果另行移除；规则仅规定设置新牌时移除新牌耐久数量损伤。
+- 卖出原因应与普通未设置装备卖出区分为 sell_set_equipment，便于离场效果按 reason 过滤。
+
+──────────── 测试场景 ────────────
+场景a：已设置装备正常卖出
+  前置：P装备量产装·左臂于左臂；本回合卖出计数0；牌面金币=3；涉及选择的玩家均is_human=true。
+  操作：打开装备详情→点击卖出→确认。
+  断言：左臂.equipped_card==null；卡实例zone=="equipment_discard"；discard.reason==&"sell_set_equipment"；P.gold增加3；本回合卖出计数+1。
+场景b：卖出确认窗取消
+  前置：量产装·左臂已设置于左臂；涉及选择的玩家均is_human=true。
+  操作：点击卖出→取消。
+  断言：牌仍在左臂；金币不变；无discard/GAIN_GOLD动作。
+场景c：全局卖出次数已满
+  前置：P本回合已经卖出2张装备牌；涉及选择的玩家均is_human=true。
+  操作：查看量产装·左臂。
+  断言：卖出按钮禁用或权限检查失败；牌与金币不变。
+
+歧义点：
+[歧义1] 已设置牌卖价是否仍取牌面金币全额。智能体选择：取牌面金币全额（理由：文本只扩展可卖权限，未修改卖价；商店规则的卖出价即牌面金币）。候选：按损伤/耐久折价。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 005] 量产装·右腿  （部位:右腿  护甲:1 动力:2 耐久:2 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：此牌设置在区域中依然可以卖出。
+effect_ids：["equipment_effect_001"]
+
+──────────── 效果拆解（equipment_effect_001）────────────
+拆解同 [装备牌 001] 的 equipment_effect_001。
+本牌实例差异：binding_context.card_instance_id 指向 量产装·右腿 实例；slot_id=&"右腿"；牌面耐久=2、金币=3。
+模式/入口：权限型；由卖出/权限面板识别；不注册监听器。
+JSON effect_ids：["equipment_effect_001"]。
+
+──────────── 实现预告 ────────────
+- 复用 equipment_effect_001，不新增条件 op、动作或UI；仅由本牌JSON绑定同一effect_id。
+- 回归测试必须使用本牌自己的card_instance_id与右腿槽，不能只覆盖首张牌。
+
+──────────── 顺序与坑 ────────────
+- 卖出已设置牌会让该区域保留原损伤，除非其他离场效果另行移除；规则仅规定设置新牌时移除新牌耐久数量损伤。
+- 卖出原因应与普通未设置装备卖出区分为 sell_set_equipment，便于离场效果按 reason 过滤。
+
+──────────── 测试场景 ────────────
+场景a：已设置装备正常卖出
+  前置：P装备量产装·右腿于右腿；本回合卖出计数0；牌面金币=3；涉及选择的玩家均is_human=true。
+  操作：打开装备详情→点击卖出→确认。
+  断言：右腿.equipped_card==null；卡实例zone=="equipment_discard"；discard.reason==&"sell_set_equipment"；P.gold增加3；本回合卖出计数+1。
+场景b：卖出确认窗取消
+  前置：量产装·右腿已设置于右腿；涉及选择的玩家均is_human=true。
+  操作：点击卖出→取消。
+  断言：牌仍在右腿；金币不变；无discard/GAIN_GOLD动作。
+场景c：全局卖出次数已满
+  前置：P本回合已经卖出2张装备牌；涉及选择的玩家均is_human=true。
+  操作：查看量产装·右腿。
+  断言：卖出按钮禁用或权限检查失败；牌与金币不变。
+
+歧义点：
+[歧义1] 已设置牌卖价是否仍取牌面金币全额。智能体选择：取牌面金币全额（理由：文本只扩展可卖权限，未修改卖价；商店规则的卖出价即牌面金币）。候选：按损伤/耐久折价。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 006] 量产装·左腿  （部位:左腿  护甲:1 动力:2 耐久:2 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：此牌设置在区域中依然可以卖出。
+effect_ids：["equipment_effect_001"]
+
+──────────── 效果拆解（equipment_effect_001）────────────
+拆解同 [装备牌 001] 的 equipment_effect_001。
+本牌实例差异：binding_context.card_instance_id 指向 量产装·左腿 实例；slot_id=&"左腿"；牌面耐久=2、金币=3。
+模式/入口：权限型；由卖出/权限面板识别；不注册监听器。
+JSON effect_ids：["equipment_effect_001"]。
+
+──────────── 实现预告 ────────────
+- 复用 equipment_effect_001，不新增条件 op、动作或UI；仅由本牌JSON绑定同一effect_id。
+- 回归测试必须使用本牌自己的card_instance_id与左腿槽，不能只覆盖首张牌。
+
+──────────── 顺序与坑 ────────────
+- 卖出已设置牌会让该区域保留原损伤，除非其他离场效果另行移除；规则仅规定设置新牌时移除新牌耐久数量损伤。
+- 卖出原因应与普通未设置装备卖出区分为 sell_set_equipment，便于离场效果按 reason 过滤。
+
+──────────── 测试场景 ────────────
+场景a：已设置装备正常卖出
+  前置：P装备量产装·左腿于左腿；本回合卖出计数0；牌面金币=3；涉及选择的玩家均is_human=true。
+  操作：打开装备详情→点击卖出→确认。
+  断言：左腿.equipped_card==null；卡实例zone=="equipment_discard"；discard.reason==&"sell_set_equipment"；P.gold增加3；本回合卖出计数+1。
+场景b：卖出确认窗取消
+  前置：量产装·左腿已设置于左腿；涉及选择的玩家均is_human=true。
+  操作：点击卖出→取消。
+  断言：牌仍在左腿；金币不变；无discard/GAIN_GOLD动作。
+场景c：全局卖出次数已满
+  前置：P本回合已经卖出2张装备牌；涉及选择的玩家均is_human=true。
+  操作：查看量产装·左腿。
+  断言：卖出按钮禁用或权限检查失败；牌与金币不变。
+
+歧义点：
+[歧义1] 已设置牌卖价是否仍取牌面金币全额。智能体选择：取牌面金币全额（理由：文本只扩展可卖权限，未修改卖价；商店规则的卖出价即牌面金币）。候选：按损伤/耐久折价。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+套装2：联邦普装（装备牌 007～012）
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+
+═══════════════════════════════════════════════════════════
+[装备牌 007] 联邦普装·头部  （部位:头部  护甲:0 动力:1 耐久:2 金币:2）
+═══════════════════════════════════════════════════════════
+效果文本：其他区域每设置有1张名称带有联邦的装备牌则此牌护甲+1。
+effect_ids：["equipment_effect_002"]
+
+──────────── 效果拆解（equipment_effect_002）────────────
+优先级：10
+模式：派生值
+植入：派生值型，不注册监听器。MechSlotState.get_effective_armor(mech) 查询本头部区域时实时统计。
+派生值型：不写 conditions / target_rules / costs / actions，不注册 timing listener。
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：helper：GeneratedEquipmentEffects.get_federal_other_slot_armor_bonus(mech, source_slot_id, source_card_instance_id) -> int。
+公式：bonus = count(face_up_equipment in mech.equipment_slots, slot_id != source_slot_id, card.name.contains("联邦"))；本牌区域基础护甲 + bonus 后，再按当前生效的损伤规则扣减。
+执行顺序：先计算牌面/区域基础护甲与名称计数加成，再应用损伤扣甲；若有全局“损伤不影响护甲”类派生值，则由统一 armor pipeline 决定是否跳过损伤扣减。
+人类 UI：部位护甲明细显示“联邦装备联动 +X”，装备替换、弃置、翻面或名称变化后立即刷新。
+
+──────────── 实现预告 ────────────
+- 复用：equipment_effect_002（既有派生值 helper）。
+- 接入点：MechSlotState.get_effective_armor(mech)；不得缓存为永久 stat modifier。
+- JSON effect_ids：联邦普装·头部与联邦的白马·头部均复用 ["equipment_effect_002"]。
+
+──────────── 顺序与坑 ────────────
+- 必须排除来源牌自身，按卡实例/slot_id 双重排除，防止换槽或脏数据时自计数。
+- 备用区背面牌是否计数须统一；本拆解默认只计入正面、效果有效的装备区域。
+
+──────────── 测试场景 ────────────
+场景a：统计其他联邦装备
+  前置：M装备联邦普装·头部于头部；另有2张正面名称含“联邦”的装备，另有1张非联邦装备；头部损伤=0；涉及选择的玩家均is_human=true。
+  操作：调用M.get_armor()与该槽get_effective_armor(M)。
+  断言：helper计数=2；头部有效护甲=牌面/区域基础护甲+2；UI明细含“联邦装备联动 +2”。
+场景b：移除一张联邦装备后实时重算
+  前置：承接a；涉及选择的玩家均is_human=true。
+  操作：将其中1张联邦装备标准弃置。
+  断言：下一次查询bonus从2降为1；不存在残留stat modifier或重复累计。
+场景c：不计自身与背面备用牌
+  前置：仅联邦普装·头部自身名称含联邦，备用区另有1张背面联邦装备；涉及选择的玩家均is_human=true。
+  操作：查询护甲。
+  断言：bonus==0；不弹任何选择UI；本牌自身与背面备用牌均不计。
+
+歧义点：
+[歧义1] “其他区域”是否包含武器区与备用区。智能体选择：包含正面武器区，排除背面备用区（理由：武器也是已设置装备；背面备用牌通常不提供信息/效果）。候选：仅其他5个部件区；或连备用区也计数。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 008] 联邦普装·躯干  （部位:躯干  护甲:3 动力:2 耐久:3 金币:4）
+═══════════════════════════════════════════════════════════
+效果文本：此牌从区域中弃置时可移除此牌原先所在区域内的所有损伤。
+effect_ids：["equipment_effect_003"]
+
+──────────── 效果拆解（equipment_effect_003）────────────
+优先级：10
+模式：LISTEN（永久监听）
+植入：设置到躯干后由 set_equipment 注册永久监听器，binding_context={card_instance_id, mech_id, player_id, slot_id="躯干", card_def_id}；监听 discard 的 DISCARD_AFTER（牌位于 tmp_zone，原槽信息仍在 discard record）。
+监听/入口：动作类型 &"discard"；时点 DISCARD_AFTER。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 本次弃置的卡实例就是本牌，且弃置前位于其设置区域
+    "op": &"DISCARD_IS_SELF_FROM_SLOT"
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 固定作用于 $binding_context.slot_id
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 可取消；确认后从 discard.record.origin_slot_id 移除全部损伤
+    "type": &"CHOOSE_ONE",  # 弹出可取消/不可取消选择窗；窗口完成前父动作挂起
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "移除原区域全部损伤",
+          "actions": [
+            {
+              "type": &"REMOVE_DAMAGE_TOKENS_FROM_DISCARD_ORIGIN_SLOT",  # 执行该动作
+              "params": {
+                "amount": -1
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$payload.card_instance_id / origin_slot_id / discard_reason；$binding_context.mech_id 作为所属机甲。
+执行顺序：DISCARD_AFTER 时牌已离开槽但尚在 tmp_zone；先读取 origin_slot_id，再执行移除损伤。移除完成后 discard 才能进入 SETTLE。
+人类 UI：弹“移除原区域全部损伤 / 取消”。
+
+──────────── 实现预告 ────────────
+- 复用主体：equipment_effect_003。
+- 核对既有实现：权威文本含“可”，应当使用 optional CHOOSE_ONE；若当前实现自动移除，需重构 effect_003。
+- 原子动作复用 REMOVE_DAMAGE_TOKENS_FROM_DISCARD_ORIGIN_SLOT(amount=-1)。
+
+──────────── 顺序与坑 ────────────
+- 不能监听 DISCARD_SETTLE，届时原槽上下文可能已清理。
+- 由本效果移除损伤不能再次触发本牌离场循环，因为本牌已不在槽内。
+
+──────────── 测试场景 ────────────
+场景a：离场后选择移除全部损伤
+  前置：联邦普装·躯干装备于躯干，该槽有3损伤；以equipment_replace或sell等标准原因弃置；涉及选择的玩家均is_human=true。
+  操作：DISCARD_AFTER触发→选择“移除原区域全部损伤”。
+  断言：discard.record.origin_slot_id=="躯干"；该槽damage_tokens从3变0；牌最终进入equipment_discard；监听器注销。
+场景b：选择取消
+  前置：躯干有3损伤并弃置联邦普装·躯干；涉及选择的玩家均is_human=true。
+  操作：CHOOSE_ONE取消。
+  断言：躯干.damage_tokens仍为3；牌正常完成弃置。
+场景c：弃置的不是本牌
+  前置：联邦普装·躯干仍装备；同机甲其他槽装备被弃置；涉及选择的玩家均is_human=true。
+  操作：发出其他卡的DISCARD_AFTER。
+  断言：DISCARD_IS_SELF_FROM_SLOT=false；不弹窗；躯干损伤不变。
+
+歧义点：
+[歧义1] “可移除”是否必须弹取消。智能体选择：弹 optional 选择（理由：明确使用“可”）。候选：自动移除全部。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 009] 联邦普装·右臂  （部位:右臂  护甲:3 动力:0 耐久:2 金币:2）
+═══════════════════════════════════════════════════════════
+效果文本：其他装备牌即将设置损伤时，可以将损伤移至此牌所在区域。
+effect_ids：["equipment_effect_004"]
+
+──────────── 效果拆解（equipment_effect_004）────────────
+优先级：10
+模式：LISTEN（永久监听）
+植入：设置到右臂后注册永久监听器，监听 damage_change 的 DAMAGE_REDIRECT_WINDOW；binding_context.slot_id="右臂"。
+监听/入口：动作类型 &"damage_change"；时点 DAMAGE_REDIRECT_WINDOW。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 本次增加损伤的目标机甲有装备可承受损伤
+    "op": &"REDIRECT_TARGET_HAS_ANY_EQUIP"
+  },
+  {  # 本牌未达到耐久，仍在区域内且可接收至少1点
+    "op": &"SELF_DAMAGE_TOKENS_BELOW",
+    "threshold": 2
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 转移目的固定为本牌所在区域
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 在一次性汇总窗中选择将原计划分配给“其他装备牌”的0～全部损伤改至本区域，并写入 redirect_plan
+    "type": &"OFFER_DAMAGE_REDIRECT",  # 打开一次性损伤转移汇总窗并写 redirect_plan
+    "params": {
+      "max_points": -1,
+      "destination_mech_id": "$binding_context.mech_id",
+      "destination_slot_id": "$binding_context.slot_id",
+      "exclude_destination_from_origin": true
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$payload.redirect_plan / pending_points / original_slot_candidates；$binding_context.slot_id 为目的区域。
+执行顺序：只修改 damage_change 的 redirect_plan，不立即逐点放损伤；窗口确认后，原 damage_change 按最终计划逐点设置。
+人类 UI：损伤转移汇总窗显示可转移点数、右臂当前损伤/耐久与可能因转移弃置的预览；可取消。
+
+──────────── 实现预告 ────────────
+- 复用：equipment_effect_004 与 OFFER_DAMAGE_REDIRECT。
+- 需核对条件语义：“其他装备牌”排除本牌本区域；redirect plan 不应把原本已在本区域的点重复计入可转移量。
+
+──────────── 顺序与坑 ────────────
+- 转移后的损伤仍由原 damage_change 的执行者/优先放置规则结算。
+- 本牌在转移中达到耐久并弃置后，后续点必须重新落到其他有装备区域。
+
+──────────── 测试场景 ────────────
+场景a：将其他区域损伤转移至本牌区域
+  前置：M装备联邦普装·右臂于右臂，本槽0损伤；一次damage_change计划给其他装备区设置2损伤；涉及选择的玩家均is_human=true。
+  操作：DAMAGE_REDIRECT_WINDOW弹汇总窗→选择转移2点到本槽→确认。
+  断言：redirect_plan中2点目的slot_id改为"右臂"；正式逐点设置后本槽达到耐久2并按规则弃置；未直接绕过damage_change。
+场景b：取消转移
+  前置：同a；涉及选择的玩家均is_human=true。
+  操作：转移窗取消。
+  断言：redirect_plan保持原样；损伤仍落到原选择区域；本牌损伤不变。
+场景c：损伤本来就指定本牌区域
+  前置：damage_change的全部待设置点原本已指向右臂；涉及选择的玩家均is_human=true。
+  操作：进入DAMAGE_REDIRECT_WINDOW。
+  断言：exclude_destination_from_origin后可转移点数=0；不重复计算或复制损伤。
+
+歧义点：
+[歧义1] 可转移数量是否无限直到本牌被弃置。智能体选择：玩家可选择0～全部待设置点，但逐点结算受耐久与“有装备优先”约束（理由：文本未写上限）。候选：最多转移至不使本牌弃置。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 010] 联邦普装·左臂  （部位:左臂  护甲:2 动力:1 耐久:2 金币:2）
+═══════════════════════════════════════════════════════════
+效果文本：此牌从区域中弃置时可立即抽1张装备牌并设置到区域上(若不立即设置则需要直接弃置)。
+effect_ids：["equipment_effect_005"]
+
+──────────── 效果拆解（equipment_effect_005）────────────
+优先级：10
+模式：LISTEN（永久监听）
+植入：设置到对应区域后注册永久监听器，监听 discard 的 DISCARD_AFTER；牌位于 tmp_zone，可读取原槽。
+监听/入口：动作类型 &"discard"；时点 DISCARD_AFTER。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 弃置对象为本牌且来自已设置区域
+    "op": &"DISCARD_IS_SELF_FROM_SLOT"
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 抽到的装备由持有者在其合法区域中选择设置
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 抽1张普通装备牌，挂起当前 discard；进入 set_equipment 选择，若取消/无合法区域则以 reason=&"effect_unset_discard" 直接弃置
+    "type": &"DRAW_EQUIPMENT_AND_IMMEDIATELY_SET",  # 抽装备并串行进入立即设置流程
+    "params": {
+      "count": 1,
+      "if_not_set": &"DISCARD",
+      "draw_from": &"equipment_deck"
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$binding_context.mech_id/player_id；$payload.origin_slot_id；抽牌来源默认装备牌堆而非高级装备牌堆。
+执行顺序：原牌 DISCARD_AFTER → 获取牌动作 → 设置装备动作（可能替换旧牌）→ 若未设置则弃置新牌 → 原牌 discard 继续 SETTLE。
+人类 UI：展示抽到的牌并打开“立即设置”面板；玩家可取消，但取消即显示确认后直接弃置。
+
+──────────── 实现预告 ────────────
+- 复用：equipment_effect_005 + DRAW_EQUIPMENT_AND_IMMEDIATELY_SET。
+- JSON 复用牌：联邦普装·左臂、近战装·左腿。
+
+──────────── 顺序与坑 ────────────
+- 新牌设置到原槽时，设置动作会按新牌耐久移除该槽损伤；不能在抽牌时提前清损伤。
+- 若牌堆为空，应按牌堆补充/空抽规则结束，不生成虚拟卡。
+
+──────────── 测试场景 ────────────
+场景a：离场抽装备并立即设置
+  前置：联邦普装·左臂装备于左臂；装备牌堆顶为合法装备E；本牌被标准弃置；涉及选择的玩家均is_human=true。
+  操作：DISCARD_AFTER触发→确认抽牌→GAIN_CARD得到E→在set_equipment面板选择合法区域并确认。
+  断言：E.zone=="equipped"；目标槽equipped_card==E；原牌进入equipment_discard；父discard在所有子动作完成后SETTLE。
+场景b：抽到后取消设置
+  前置：同a；涉及选择的玩家均is_human=true。
+  操作：获得E后在立即设置面板取消并确认弃置。
+  断言：E.zone=="equipment_discard"；E未留在手牌/备用区；原牌弃置正常完成。
+场景c：其他牌离场
+  前置：联邦普装·左臂仍装备；弃置另一装备牌；涉及选择的玩家均is_human=true。
+  操作：触发另一牌的DISCARD_AFTER。
+  断言：本效果条件失败；不抽装备。
+
+歧义点：
+[歧义1] 玩家是否可以主动选择“不立即设置”。智能体选择：可以取消设置，但抽到的牌随即直接弃置（理由：括号明确规定未立即设置的后果）。候选：必须选择一个合法区域。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 011] 联邦普装·右腿  （部位:右腿  护甲:2 动力:2 耐久:2 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：机甲被指定为攻击目标时，可在当前回合动力+2。
+effect_ids：["equipment_effect_006"]
+
+──────────── 效果拆解（equipment_effect_006）────────────
+优先级：10
+模式：LISTEN（永久监听）
+植入：设置到右腿后注册永久监听器，监听 attack 的 ATTACK_PRE（目标已选、响应窗口前）。
+监听/入口：动作类型 &"attack"；时点 ATTACK_PRE。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 本牌机甲包含在 $payload.target_ids
+    "op": &"SELF_MECH_IS_ATTACK_TARGET"
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 固定修正本牌机甲
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 弹可取消选择；确认后创建数值修正子动作并挂起 attack timing
+    "type": &"CHOOSE_ONE",  # 弹出可取消/不可取消选择窗；窗口完成前父动作挂起
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "本回合动力+2",
+          "actions": [
+            {
+              "type": &"EXECUTE_STAT_MODIFY",  # 创建数值修正子动作，完整发出 STAT_MOD 生命周期
+              "params": {
+                "target_id": "$binding_context.mech_id",
+                "stat_type": &"power",
+                "value": 2,
+                "method": &"add",
+                "duration": &"THIS_TURN"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$binding_context.mech_id；$payload.target_ids。
+执行顺序：确认后执行 stat_modify，完成后恢复 ATTACK_PRE 的后续监听器；增加不是回复，可超过常规动力上限。
+人类 UI：ATTACK_PRE 弹“本回合动力+2 / 取消”。
+
+──────────── 实现预告 ────────────
+- 复用：equipment_effect_006。
+- 确认 existing action 使用 method=&"add"、duration=&"THIS_TURN"，不是 RESTORE_POWER。
+
+──────────── 顺序与坑 ────────────
+- 多目标攻击只要本机甲是其中一个目标就触发一次。
+- 同回合被多次指定可多次叠加，文本未限制次数。
+
+──────────── 测试场景 ────────────
+场景a：被指定目标后选择动力+2
+  前置：M装备联邦普装·右腿于右腿；敌方选择M为攻击目标；M当前动力=1；涉及选择的玩家均is_human=true。
+  操作：ATTACK_PRE触发→确认“本回合动力+2”。
+  断言：M的本回合power stat modifier增加2；当前可用动力同步增加2；attack继续到ATTACK_AT。
+场景b：取消
+  前置：同a；涉及选择的玩家均is_human=true。
+  操作：CHOOSE_ONE取消。
+  断言：动力与临时修正均不变；攻击继续。
+场景c：攻击目标不是本机甲
+  前置：敌方选择另一机甲为目标，M仍装备联邦普装·右腿；涉及选择的玩家均is_human=true。
+  操作：进入ATTACK_PRE。
+  断言：SELF_MECH_IS_ATTACK_TARGET=false；不弹窗。
+
+歧义点：
+[歧义1] “可在当前回合动力+2”能否超过动力上限。智能体选择：可以（理由：规则区分“增加”与“回复”，只有回复受上限）。候选：只回复至上限。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 012] 联邦普装·左腿  （部位:左腿  护甲:1 动力:2 耐久:2 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：机甲被攻击命中时，可以弃置此牌，之后可最多减少此次攻击产生的2损伤。
+effect_ids：["equipment_effect_007"]
+
+──────────── 效果拆解（equipment_effect_007）────────────
+优先级：10
+模式：LISTEN（永久监听）
+植入：设置到左腿后注册永久监听器，监听 attack 的 ATTACK_AFTER（命中与损伤数已计算，尚未执行 damage_change）。
+监听/入口：动作类型 &"attack"；时点 ATTACK_AFTER。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 本牌机甲是目标
+    "op": &"SELF_MECH_IS_ATTACK_TARGET"
+  },
+  {  # 攻击命中
+    "op": &"ATTACK_HIT"
+  },
+  {  # 当前攻击产生损伤至少1
+    "op": &"ATTACK_MARKERS_ABOVE",
+    "threshold": 1
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 作用于当前 attack record
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 确认后标准弃置自身并将 attack.record["damage_markers"] 减 min(2,当前值)
+    "type": &"CHOOSE_ONE",  # 弹出可取消/不可取消选择窗；窗口完成前父动作挂起
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "弃置此牌，最多减少2损伤",
+          "actions": [
+            {
+              "type": &"DISCARD_SELF_AND_REDUCE_ATTACK_MARKERS",  # 标准弃置来源装备并减少当前攻击损伤数
+              "params": {
+                "max_reduce": 2
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$payload.hit / damage_markers；$binding_context.card_instance_id。
+执行顺序：组合动作必须保证弃置与减损伤作为同一已承诺效果继续完成；即使弃置诱发其他动作，返回后仍减损伤。
+人类 UI：显示将弃置的左腿牌与预计损伤从N降至max(0,N-2)；可取消。
+
+──────────── 实现预告 ────────────
+- 复用：equipment_effect_007 与 DISCARD_SELF_AND_REDUCE_ATTACK_MARKERS。
+
+──────────── 顺序与坑 ────────────
+- 弃置自身不会清除原区域损伤；之后本次攻击剩余损伤按规则放置。
+- 攻击未命中或损伤数0不弹窗。
+
+──────────── 测试场景 ────────────
+场景a：命中后弃牌并减2损伤
+  前置：M装备联邦普装·左腿于左腿；攻击命中M并计算damage_markers=3；涉及选择的玩家均is_human=true。
+  操作：ATTACK_AFTER触发→确认弃置。
+  断言：attack.record["damage_markers"]从3变1；左腿.equipped_card==null；牌zone==equipment_discard。
+场景b：取消
+  前置：同a；涉及选择的玩家均is_human=true。
+  操作：弹窗取消。
+  断言：damage_markers仍为3；牌仍装备。
+场景c：未命中或0损伤
+  前置：攻击未命中，或命中但damage_markers=0；涉及选择的玩家均is_human=true。
+  操作：进入ATTACK_AFTER。
+  断言：条件失败；不弹窗、不弃牌。
+
+歧义点：
+[歧义1] “最多减少2”是否允许只减1。智能体选择：自动减少 min(2,当前损伤)（理由：无收益去选择更少，既有组合动作即此语义）。候选：弹0～2数值选择。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+套装3：帝国普装（装备牌 013～018）
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+
+═══════════════════════════════════════════════════════════
+[装备牌 013] 帝国普装·头部  （部位:头部  护甲:1 动力:0 耐久:2 金币:2）
+═══════════════════════════════════════════════════════════
+效果文本：其他区域每设置有1张名称带有帝国的装备牌则此牌动力+1。
+effect_ids：["equipment_effect_008"]
+
+──────────── 效果拆解（equipment_effect_008）────────────
+优先级：10
+模式：派生值
+植入：派生值型，不注册监听器。MechState.get_total_power() 查询时实时统计。
+派生值型：不写 conditions / target_rules / costs / actions，不注册 timing listener。
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：helper：GeneratedEquipmentEffects.get_empire_other_slot_power_bonus(mech, source_slot_id, source_card_instance_id) -> int。
+公式：bonus=count(face_up_equipment in mech.equipment_slots, slot_id != source_slot_id, card.name.contains("帝国"))；机甲总动力上限增加 bonus。
+执行顺序：装备变化后重算总动力上限；当前动力的处理遵循全局“上限变化”规则，不应每次查询都额外恢复当前动力。
+人类 UI：动力明细显示“帝国装备联动 +X”。
+
+──────────── 实现预告 ────────────
+- 复用：equipment_effect_008。
+- 接入 MechState.get_total_power；不要在 set_equipment 时永久加 current_power。
+
+──────────── 顺序与坑 ────────────
+- 当前动力与动力上限必须分离，避免每次刷新UI重复加动力。
+- 排除本牌自身。
+
+──────────── 测试场景 ────────────
+场景a：其他帝国装备提供动力
+  前置：M装备帝国普装·头部于头部；其他正面槽有3张名称含帝国装备；涉及选择的玩家均is_human=true。
+  操作：调用M.get_total_power()。
+  断言：bonus==3；总动力上限增加3；同一帧重复查询结果稳定，不重复叠加当前动力。
+场景b：一张帝国装备离场
+  前置：承接a；涉及选择的玩家均is_human=true。
+  操作：标准弃置其中1张。
+  断言：下一次get_total_power bonus==2；UI实时刷新。
+场景c：无其他帝国装备
+  前置：只有帝国普装·头部自身，或仅备用区背面有帝国牌；涉及选择的玩家均is_human=true。
+  操作：查询动力。
+  断言：bonus==0；无弹窗。
+
+歧义点：
+[歧义1] “动力+1”指动力上限还是当前动力同步增加。智能体选择：作为装备派生动力，提升总动力上限；当前值如何钳制按全局规则（理由：装备动力属于机甲总动力构成）。候选：同时即时增加当前动力。▶ 回答：____+1是可以超过上限的，但是不会增加上限，比如5/5变成6/5________________
+[歧义2] 计数范围同联邦头部。智能体选择：正面其他部件与武器区，排除背面备用区。候选：仅部件区/包含备用区。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 014] 帝国普装·躯干  （部位:躯干  护甲:2 动力:2 耐久:3 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：机甲被指定为攻击目标时，可在当前回合动力+3，之后护甲-2。
+effect_ids：["equipment_effect_009"]
+
+──────────── 效果拆解（equipment_effect_009）────────────
+优先级：10
+模式：LISTEN（永久监听）
+植入：设置到躯干后注册永久监听器，监听 attack.ATTACK_PRE。
+监听/入口：动作类型 &"attack"；时点 ATTACK_PRE。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 本牌机甲是攻击目标
+    "op": &"SELF_MECH_IS_ATTACK_TARGET"
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 固定修正本牌机甲
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 确认后串行执行动力+3，再护甲-2；两个 stat_modify 子动作分别挂起并返回
+    "type": &"CHOOSE_ONE",  # 弹出可取消/不可取消选择窗；窗口完成前父动作挂起
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "本回合动力+3，之后护甲-2",
+          "actions": [
+            {
+              "type": &"EXECUTE_STAT_MODIFY",  # 创建数值修正子动作，完整发出 STAT_MOD 生命周期
+              "params": {
+                "target_id": "$binding_context.mech_id",
+                "stat_type": &"power",
+                "value": 3,
+                "method": &"add",
+                "duration": &"THIS_TURN"
+              }
+            },
+            {
+              "type": &"EXECUTE_STAT_MODIFY",  # 创建数值修正子动作，完整发出 STAT_MOD 生命周期
+              "params": {
+                "target_id": "$binding_context.mech_id",
+                "stat_type": &"armor",
+                "value": -2,
+                "method": &"add",
+                "duration": &"THIS_TURN"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$binding_context.mech_id；$payload.target_ids。
+执行顺序：严格先动力+3，待其 STAT_MOD_SETTLE 后再护甲-2；两者均持续至本回合结束。
+人类 UI：一个确认窗展示完整代价与收益，不拆成两个可取消步骤。
+
+──────────── 实现预告 ────────────
+- 复用 effect_009 的触发与数值修正框架；需核对新权威文本中的“可”已实现为 optional CHOOSE_ONE。
+
+──────────── 顺序与坑 ────────────
+- 护甲可降为负数。
+- 多次被指定可叠加。
+
+──────────── 测试场景 ────────────
+场景a：确认复合加减
+  前置：M装备帝国普装·躯干；被指定为攻击目标；初始动力2、护甲8；涉及选择的玩家均is_human=true。
+  操作：ATTACK_PRE确认发动。
+  断言：先记录power临时+3，再armor临时-2；最终当前动力5、护甲6；两个modifier duration==THIS_TURN。
+场景b：取消
+  前置：同a；涉及选择的玩家均is_human=true。
+  操作：取消CHOOSE_ONE。
+  断言：动力与护甲均不变。
+场景c：不是攻击目标
+  前置：攻击目标为其他机甲；涉及选择的玩家均is_human=true。
+  操作：ATTACK_PRE。
+  断言：不触发。
+
+歧义点：
+[歧义1] 护甲-2持续时间。智能体选择：同“当前回合动力+3”的整个复合效果，均至当前回合结束（理由：句式“之后”未另给期限）。候选：护甲永久-2或仅此次攻击。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 015] 帝国普装·右臂  （部位:右臂  护甲:2 动力:1 耐久:2 金币:2）
+═══════════════════════════════════════════════════════════
+效果文本：机甲发动攻击结算后，回复2动力。
+effect_ids：["equipment_effect_010"]
+
+──────────── 效果拆解（equipment_effect_010）────────────
+优先级：10
+模式：LISTEN（永久监听）
+植入：设置到手臂后注册永久监听器，监听 attack.ATTACK_SETTLE。
+监听/入口：动作类型 &"attack"；时点 ATTACK_SETTLE。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 本牌机甲是本次攻击发动者
+    "op": &"SELF_MECH_IS_ATTACKER"
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 固定回复本牌机甲
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 回复2动力，受动力上限限制
+    "type": &"RESTORE_POWER",  # 回复动力，不超过当前总动力上限
+    "params": {
+      "amount": 2,
+      "target_id": "$binding_context.mech_id"
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$binding_context.mech_id；$payload.attacker_ids。
+执行顺序：在攻击结算时点执行，回复完成后才允许 attack 清理 record。
+人类 UI：无需选择，日志显示回复。
+
+──────────── 实现预告 ────────────
+- 复用：equipment_effect_010。
+
+──────────── 顺序与坑 ────────────
+- 攻击即使未命中仍属于“发动攻击结算后”，照常回复。
+- 若攻击在选武器/目标阶段被取消而未进入 ATTACK_SETTLE，不触发。
+
+──────────── 测试场景 ────────────
+场景a：攻击结算后回复2
+  前置：M装备帝国普装·右臂；当前动力比上限至少低2；M发动一次攻击；涉及选择的玩家均is_human=true。
+  操作：攻击无论命中与否进入ATTACK_SETTLE。
+  断言：M.current_power增加2且不超过get_total_power()；监听执行后attack才清理record。
+场景b：动力已满
+  前置：M当前动力等于上限；涉及选择的玩家均is_human=true。
+  操作：完成攻击结算。
+  断言：RESTORE_POWER实际恢复0；无选择窗；不超过上限。
+场景c：他人发动攻击
+  前置：M装备帝国普装·右臂但攻击者是敌方；涉及选择的玩家均is_human=true。
+  操作：敌方攻击进入ATTACK_SETTLE。
+  断言：SELF_MECH_IS_ATTACKER=false；M不回复。
+
+歧义点：
+[歧义1] 攻击被识破直接进入结算是否触发。智能体选择：触发（理由：仍发出 ATTACK_SETTLE，文本不要求命中）。候选：无效攻击不触发。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 016] 帝国普装·左臂  （部位:左臂  护甲:2 动力:2 耐久:2 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：机甲发动攻击结算后，回复1动力。
+effect_ids：["equipment_effect_011"]
+
+──────────── 效果拆解（equipment_effect_011）────────────
+优先级：10
+模式：LISTEN（永久监听）
+植入：设置到手臂后注册永久监听器，监听 attack.ATTACK_SETTLE。
+监听/入口：动作类型 &"attack"；时点 ATTACK_SETTLE。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 本牌机甲是本次攻击发动者
+    "op": &"SELF_MECH_IS_ATTACKER"
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 固定回复本牌机甲
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 回复1动力，受动力上限限制
+    "type": &"RESTORE_POWER",  # 回复动力，不超过当前总动力上限
+    "params": {
+      "amount": 1,
+      "target_id": "$binding_context.mech_id"
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$binding_context.mech_id；$payload.attacker_ids。
+执行顺序：在攻击结算时点执行，回复完成后才允许 attack 清理 record。
+人类 UI：无需选择，日志显示回复。
+
+──────────── 实现预告 ────────────
+- 复用：equipment_effect_011。
+
+──────────── 顺序与坑 ────────────
+- 攻击即使未命中仍属于“发动攻击结算后”，照常回复。
+- 若攻击在选武器/目标阶段被取消而未进入 ATTACK_SETTLE，不触发。
+
+──────────── 测试场景 ────────────
+场景a：攻击结算后回复1
+  前置：M装备帝国普装·左臂；当前动力比上限至少低1；M发动一次攻击；涉及选择的玩家均is_human=true。
+  操作：攻击无论命中与否进入ATTACK_SETTLE。
+  断言：M.current_power增加1且不超过get_total_power()；监听执行后attack才清理record。
+场景b：动力已满
+  前置：M当前动力等于上限；涉及选择的玩家均is_human=true。
+  操作：完成攻击结算。
+  断言：RESTORE_POWER实际恢复0；无选择窗；不超过上限。
+场景c：他人发动攻击
+  前置：M装备帝国普装·左臂但攻击者是敌方；涉及选择的玩家均is_human=true。
+  操作：敌方攻击进入ATTACK_SETTLE。
+  断言：SELF_MECH_IS_ATTACKER=false；M不回复。
+
+歧义点：
+[歧义1] 攻击被识破直接进入结算是否触发。智能体选择：触发（理由：仍发出 ATTACK_SETTLE，文本不要求命中）。候选：无效攻击不触发。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 017] 帝国普装·右腿  （部位:右腿  护甲:1 动力:1 耐久:2 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：每回合1次，机甲在当前回合内累积移动过8个格子，可回复2动力。
+effect_ids：["equipment_effect_012"]
+
+──────────── 效果拆解（equipment_effect_012）────────────
+优先级：10
+模式：LISTEN（永久监听）
+植入：设置到腿部后注册永久监听器，监听 basic_move.BASIC_MOVE_AFTER；每走完1个相邻格更新本回合累计移动格数后检查。
+监听/入口：动作类型 &"basic_move"；时点 BASIC_MOVE_AFTER。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 本牌机甲是移动主体
+    "op": &"SELF_MECH_IS_MOVE_SUBJECT"
+  },
+  {  # 本回合累计移动格数达到8
+    "op": &"MOVED_DISTANCE_THIS_TURN_ABOVE",
+    "threshold": 8
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 回复本牌机甲
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 达到阈值后可取消；确认后回复动力
+    "type": &"CHOOSE_ONE",  # 弹出可取消/不可取消选择窗；窗口完成前父动作挂起
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "回复2动力",
+          "actions": [
+            {
+              "type": &"RESTORE_POWER",  # 回复动力，不超过当前总动力上限
+              "params": {
+                "amount": 2,
+                "target_id": "$binding_context.mech_id"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；once_per_turn_key=&"equipment_effect_012_$binding_context.card_instance_id"，once_per_turn_max=1；仅在实际确认并执行回复后消耗次数。
+值解析/公式：$payload.mech_id；mech.turn_counters.moved_cells。
+执行顺序：第8格 BASIC_MOVE_AFTER 更新计数→弹窗→回复→恢复父 single_move；若回复后仍可继续移动，当前单次移动是否重算可用动力按父动作输入，不自动扩容。
+人类 UI：达到第8格时弹“回复2动力 / 取消”。
+
+──────────── 实现预告 ────────────
+- 复用：equipment_effect_012。
+- 核对 MOVED_DISTANCE_THIS_TURN_ABOVE 实际比较应为 >= threshold；若实现为严格 >，应改名或传 threshold=7。
+
+──────────── 顺序与坑 ────────────
+- 传送/不逐格的 MOVE_MECH 不计入，除非其明确累加 moved_cells。
+- 取消后本回合后续每次移动可再次询问，直到成功发动才消耗次数。
+
+──────────── 测试场景 ────────────
+场景a：累计第8格后回复2
+  前置：M装备帝国普装·右腿；本回合已累计移动7格；当前动力低于上限；涉及选择的玩家均is_human=true。
+  操作：再完成1次BASIC_MOVE_AFTER→确认回复。
+  断言：moved_cells==8；current_power增加2且不超上限；once key计数=1。
+场景b：达标时取消，稍后可再问
+  前置：M累计到8格时取消；涉及选择的玩家均is_human=true。
+  操作：之后同回合再移动1格。
+  断言：首次取消不占once；第9格后再次弹窗；若再取消仍不回复。
+场景c：未达阈值或已发动
+  前置：分支1累计7格；分支2已成功发动一次；涉及选择的玩家均is_human=true。
+  操作：完成一次移动。
+  断言：分支1不弹；分支2即使累计继续增加也不再弹。
+
+歧义点：
+[歧义1] “移动过8个格子”是达到8还是超过8。智能体选择：累计≥8即满足（理由：常用表述意为已移动8格）。候选：严格>8。▶ 回答：____________________
+[歧义2] 达标时取消后是否可在本回合稍后再次选择。智能体选择：可以，限次只在效果实际发动后计数。候选：首次询问即消耗机会。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 018] 帝国普装·左腿  （部位:左腿  护甲:1 动力:2 耐久:2 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：每回合1次，机甲在当前回合内累积移动过8个格子，可回复1动力。
+effect_ids：["equipment_effect_013"]
+
+──────────── 效果拆解（equipment_effect_013）────────────
+优先级：10
+模式：LISTEN（永久监听）
+植入：设置到腿部后注册永久监听器，监听 basic_move.BASIC_MOVE_AFTER；每走完1个相邻格更新本回合累计移动格数后检查。
+监听/入口：动作类型 &"basic_move"；时点 BASIC_MOVE_AFTER。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 本牌机甲是移动主体
+    "op": &"SELF_MECH_IS_MOVE_SUBJECT"
+  },
+  {  # 本回合累计移动格数达到8
+    "op": &"MOVED_DISTANCE_THIS_TURN_ABOVE",
+    "threshold": 8
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 回复本牌机甲
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 达到阈值后可取消；确认后回复动力
+    "type": &"CHOOSE_ONE",  # 弹出可取消/不可取消选择窗；窗口完成前父动作挂起
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "回复1动力",
+          "actions": [
+            {
+              "type": &"RESTORE_POWER",  # 回复动力，不超过当前总动力上限
+              "params": {
+                "amount": 1,
+                "target_id": "$binding_context.mech_id"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；once_per_turn_key=&"equipment_effect_013_$binding_context.card_instance_id"，once_per_turn_max=1；仅在实际确认并执行回复后消耗次数。
+值解析/公式：$payload.mech_id；mech.turn_counters.moved_cells。
+执行顺序：第8格 BASIC_MOVE_AFTER 更新计数→弹窗→回复→恢复父 single_move；若回复后仍可继续移动，当前单次移动是否重算可用动力按父动作输入，不自动扩容。
+人类 UI：达到第8格时弹“回复1动力 / 取消”。
+
+──────────── 实现预告 ────────────
+- 复用：equipment_effect_013。
+- 核对 MOVED_DISTANCE_THIS_TURN_ABOVE 实际比较应为 >= threshold；若实现为严格 >，应改名或传 threshold=7。
+
+──────────── 顺序与坑 ────────────
+- 传送/不逐格的 MOVE_MECH 不计入，除非其明确累加 moved_cells。
+- 取消后本回合后续每次移动可再次询问，直到成功发动才消耗次数。
+
+──────────── 测试场景 ────────────
+场景a：累计第8格后回复1
+  前置：M装备帝国普装·左腿；本回合已累计移动7格；当前动力低于上限；涉及选择的玩家均is_human=true。
+  操作：再完成1次BASIC_MOVE_AFTER→确认回复。
+  断言：moved_cells==8；current_power增加1且不超上限；once key计数=1。
+场景b：达标时取消，稍后可再问
+  前置：M累计到8格时取消；涉及选择的玩家均is_human=true。
+  操作：之后同回合再移动1格。
+  断言：首次取消不占once；第9格后再次弹窗；若再取消仍不回复。
+场景c：未达阈值或已发动
+  前置：分支1累计7格；分支2已成功发动一次；涉及选择的玩家均is_human=true。
+  操作：完成一次移动。
+  断言：分支1不弹；分支2即使累计继续增加也不再弹。
+
+歧义点：
+[歧义1] “移动过8个格子”是达到8还是超过8。智能体选择：累计≥8即满足（理由：常用表述意为已移动8格）。候选：严格>8。▶ 回答：____________________
+[歧义2] 达标时取消后是否可在本回合稍后再次选择。智能体选择：可以，限次只在效果实际发动后计数。候选：首次询问即消耗机会。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+套装4：重甲装（装备牌 019～024）
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+
+═══════════════════════════════════════════════════════════
+[装备牌 019] 重甲装·头部  （部位:头部  护甲:1 动力:1 耐久:2 金币:2）
+═══════════════════════════════════════════════════════════
+效果文本：损伤不会影响机甲区域提供的护甲，除非机甲部件装备区域总损伤数≥3。
+effect_ids：["equipment_effect_089"]
+
+──────────── 效果拆解（equipment_effect_089）────────────
+优先级：10
+模式：派生值
+植入：派生值型，不注册监听器。每个部件区域计算有效护甲时读取装备本头部与机甲六个部件区域总损伤。
+派生值型：不写 conditions / target_rules / costs / actions，不注册 timing listener。
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：helper：GeneratedEquipmentEffects.should_ignore_all_component_damage_for_armor(mech) -> bool。
+公式：total_damage=sum(mech.component_slots[*].damage_tokens)；若装备本牌且效果未被无效，total_damage < 3 时所有部件槽 effective_armor 不扣本槽损伤；total_damage >=3 时所有部件槽恢复正常“基础护甲-本槽损伤”计算。
+执行顺序：阈值判断使用本次查询时的最终损伤数；达到3的那个损伤放置完成后，整台机甲护甲即时跳变为正常扣损伤值。
+人类 UI：护甲明细显示“重甲头部保护：总损伤 X/3，损伤扣甲已忽略/已失效”。
+
+──────────── 实现预告 ────────────
+- 复用：equipment_effect_089（既有派生值）。
+- 接入所有六个 MechSlotState.get_effective_armor(mech)，不是仅头部。
+
+──────────── 顺序与坑 ────────────
+- 总损伤统计包括无装备区域残留损伤。
+- 阈值失效时应一次性计入各槽全部已有损伤。
+
+──────────── 测试场景 ────────────
+场景a：总损伤<3时全区域不扣甲
+  前置：M装备重甲装·头部；六部件区域总损伤=2，分布在两个槽；涉及选择的玩家均is_human=true。
+  操作：查询每槽effective_armor与M.get_armor()。
+  断言：所有部件槽均跳过damage_tokens扣减；总护甲等于无损伤时护甲。
+场景b：达到3后保护整体失效
+  前置：承接a，再设置1损伤使总数=3；涉及选择的玩家均is_human=true。
+  操作：damage_change完成后查询护甲。
+  断言：所有槽恢复正常扣除各自全部损伤；不是只扣第3点。
+场景c：头部牌离场
+  前置：保护生效时将本牌弃置；涉及选择的玩家均is_human=true。
+  操作：查询护甲。
+  断言：helper返回false；所有残留损伤正常扣甲。
+
+歧义点：
+[歧义1] “机甲部件装备区域总损伤”是否含空槽残留损伤。智能体选择：包含六个部件区域全部损伤（理由：损伤属于区域且装备弃置会保留）。候选：只统计当前有装备的区域。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 020] 重甲装·躯干  （部位:躯干  护甲:4 动力:1 耐久:3 金币:4）
+═══════════════════════════════════════════════════════════
+效果文本：机甲被指定为攻击目标时，可弃置2张行动牌，当前回合护甲+4。
+effect_ids：["equipment_effect_015"]
+
+──────────── 效果拆解（equipment_effect_015）────────────
+优先级：10
+模式：LISTEN（永久监听）
+植入：设置到躯干后注册，监听 attack.ATTACK_PRE。
+监听/入口：动作类型 &"attack"；时点 ATTACK_PRE。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 本牌机甲是目标
+    "op": &"SELF_MECH_IS_ATTACK_TARGET"
+  },
+  {  # 持有至少2张可弃行动牌
+    "op": &"OWNER_ACTION_HAND_ABOVE",
+    "threshold": 2
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 固定修正本牌机甲
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[
+  {  # 支付2张行动牌；optional=true 表示可放弃发动
+    "cost_type": &"DISCARD_ACTION_CARD",
+    "count": 2,
+    "optional": true
+  },
+]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 弃牌动作结算成功后，本回合护甲+4
+    "type": &"EXECUTE_STAT_MODIFY",  # 创建数值修正子动作，完整发出 STAT_MOD 生命周期
+    "params": {
+      "target_id": "$binding_context.mech_id",
+      "stat_type": &"armor",
+      "value": 4,
+      "method": &"add",
+      "duration": &"THIS_TURN"
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$binding_context.player_id/mech_id；$payload.target_ids。
+执行顺序：ATTACK_PRE 条件检查→弃牌UI（可取消）→2张牌移入弃牌堆并 SETTLE→护甲+4→恢复攻击。
+人类 UI：弃牌窗要求恰好2张，显示发动后护甲变化；取消不消耗。
+
+──────────── 实现预告 ────────────
+- 复用：equipment_effect_015。
+- 确保 cost 的 optional 取消不会执行 actions。
+
+──────────── 顺序与坑 ────────────
+- 手牌恰好2张时可全弃。
+- 多次被攻击可重复发动，只要仍能支付。
+
+──────────── 测试场景 ────────────
+场景a：弃2行动牌后护甲+4
+  前置：M装备重甲装·躯干；被指定为目标；手牌至少2张行动牌；涉及选择的玩家均is_human=true。
+  操作：ATTACK_PRE选择并确认弃置2张。
+  断言：两张牌zone==action_discard；M armor临时modifier+4，duration==THIS_TURN。
+场景b：弃牌窗取消
+  前置：同a；涉及选择的玩家均is_human=true。
+  操作：取消支付。
+  断言：没有牌被弃置；护甲不变；攻击继续。
+场景c：手牌不足2张
+  前置：M只有1张行动牌；涉及选择的玩家均is_human=true。
+  操作：被指定为目标。
+  断言：OWNER_ACTION_HAND_ABOVE条件失败；不弹支付窗。
+
+歧义点：
+[歧义1] 护甲+4是否只针对该攻击。智能体选择：持续至当前回合结束（理由：文本明确“当前回合”）。候选：仅此次攻击。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 021] 重甲装·右臂  （部位:右臂  护甲:4 动力:-1 耐久:2 金币:2）
+═══════════════════════════════════════════════════════════
+效果文本：此牌上设置的损伤≥1时，动力+1。
+effect_ids：["equipment_effect_016"]
+
+──────────── 效果拆解（equipment_effect_016）────────────
+优先级：10
+模式：派生值
+植入：派生值型，不注册监听器。MechState.get_total_power 查询时读取本牌所在槽损伤。
+派生值型：不写 conditions / target_rules / costs / actions，不注册 timing listener。
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：helper：get_power_bonus_if_source_damage_at_least(mech, card_instance_id, threshold=1, bonus=1)。本牌仍装备且 slot.damage_tokens>=1 时总动力+1，否则+0。
+执行顺序：本牌因达到耐久被弃置后，下一次查询立即失去+1。
+人类 UI：动力明细显示“重甲右臂受损驱动 +1”。
+
+──────────── 实现预告 ────────────
+- 复用：equipment_effect_016。
+
+──────────── 顺序与坑 ────────────
+- 损伤属于区域；更换新牌后同一区域残留损伤也会使新设置的本牌满足阈值，直到设置动作按新牌耐久移除损伤。
+
+──────────── 测试场景 ────────────
+场景a：本槽损伤达到1时动力+1
+  前置：M装备重甲装·右臂于右臂；该槽damage_tokens=1；涉及选择的玩家均is_human=true。
+  操作：调用M.get_total_power()。
+  断言：helper返回1；总动力上限比无该效果高1。
+场景b：损伤低于阈值
+  前置：该槽damage_tokens=0；涉及选择的玩家均is_human=true。
+  操作：查询动力。
+  断言：bonus==0；无UI弹窗。
+场景c：本牌弃置后
+  前置：该槽损伤达到耐久2导致重甲装·右臂弃置；涉及选择的玩家均is_human=true。
+  操作：弃置结算后查询动力。
+  断言：牌不在槽内，bonus==0；旧modifier未残留。
+
+歧义点：
+[歧义1] 阈值读取区域损伤还是卡实例携带损伤。智能体选择：读取所在区域损伤（理由：规则定义损伤留在区域，文本“此牌上”是UI表达）。候选：卡实例独立存损伤。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 022] 重甲装·左臂  （部位:左臂  护甲:1 动力:1 耐久:2 金币:2）
+═══════════════════════════════════════════════════════════
+效果文本：损伤不会影响此牌所在区域提供的护甲。
+effect_ids：["equipment_effect_014"]
+
+──────────── 效果拆解（equipment_effect_014）────────────
+优先级：10
+模式：派生值
+植入：派生值型，不注册监听器。仅在来源牌所在槽的 MechSlotState.get_effective_armor(mech) 查询时生效。
+派生值型：不写 conditions / target_rules / costs / actions，不注册 timing listener。
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：helper：should_ignore_source_slot_damage_for_armor(mech, card_instance_id)；若本牌仍在其合法槽且效果有效，则 effective_armor=区域基础护甲+装备护甲+其他加成，不减 slot.damage_tokens。
+执行顺序：其他全局护甲加减仍照常；只跳过“本区域损伤扣甲”步骤。
+人类 UI：区域护甲明细显示“损伤扣甲：已免疫”。
+
+──────────── 实现预告 ────────────
+- 复用：equipment_effect_014。
+
+──────────── 顺序与坑 ────────────
+- 不免疫损伤设置与耐久弃置；损伤达到耐久仍弃牌。
+- 牌离场后该槽残留损伤立即恢复扣甲。
+
+──────────── 测试场景 ────────────
+场景a：本区域损伤不扣护甲
+  前置：M装备重甲装·左臂于左臂；该槽有1损伤；涉及选择的玩家均is_human=true。
+  操作：调用该槽get_effective_armor(M)。
+  断言：有效护甲不减damage_tokens；但damage_tokens值本身保持不变。
+场景b：达到耐久仍弃置
+  前置：继续向左臂设置损伤至耐久2；涉及选择的玩家均is_human=true。
+  操作：执行damage_change。
+  断言：重甲装·左臂因damage_durability弃置；效果未阻止损伤或弃牌。
+场景c：牌离场后残留损伤重新扣甲
+  前置：承接b，区域保留损伤；涉及选择的玩家均is_human=true。
+  操作：查询空槽/新装备的有效护甲。
+  断言：equipment_effect_014不再生效；残留损伤按正常规则扣甲。
+
+歧义点：
+[歧义1] 免疫是否也阻止损伤导致弃牌。智能体选择：否，只不影响护甲（理由：文本未改变耐久规则）。候选：损伤完全无效。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 023] 重甲装·右腿  （部位:右腿  护甲:2 动力:2 耐久:2 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：损伤不会影响此牌所在区域提供的护甲。
+effect_ids：["equipment_effect_014"]
+
+──────────── 效果拆解（equipment_effect_014）────────────
+拆解同 [装备牌 022] 的 equipment_effect_014。
+本牌实例差异：binding_context.card_instance_id 指向 重甲装·右腿 实例；slot_id=&"右腿"；牌面耐久=2、金币=3。
+模式/查询：派生值；查询时实时重算；不注册监听器。
+JSON effect_ids：["equipment_effect_014"]。
+
+──────────── 实现预告 ────────────
+- 复用 equipment_effect_014，不新增条件 op、动作或UI；仅由本牌JSON绑定同一effect_id。
+- 回归测试必须使用本牌自己的card_instance_id与右腿槽，不能只覆盖首张牌。
+
+──────────── 顺序与坑 ────────────
+- 不免疫损伤设置与耐久弃置；损伤达到耐久仍弃牌。
+- 牌离场后该槽残留损伤立即恢复扣甲。
+
+──────────── 测试场景 ────────────
+场景a：本区域损伤不扣护甲
+  前置：M装备重甲装·右腿于右腿；该槽有1损伤；涉及选择的玩家均is_human=true。
+  操作：调用该槽get_effective_armor(M)。
+  断言：有效护甲不减damage_tokens；但damage_tokens值本身保持不变。
+场景b：达到耐久仍弃置
+  前置：继续向右腿设置损伤至耐久2；涉及选择的玩家均is_human=true。
+  操作：执行damage_change。
+  断言：重甲装·右腿因damage_durability弃置；效果未阻止损伤或弃牌。
+场景c：牌离场后残留损伤重新扣甲
+  前置：承接b，区域保留损伤；涉及选择的玩家均is_human=true。
+  操作：查询空槽/新装备的有效护甲。
+  断言：equipment_effect_014不再生效；残留损伤按正常规则扣甲。
+
+歧义点：
+[歧义1] 免疫是否也阻止损伤导致弃牌。智能体选择：否，只不影响护甲（理由：文本未改变耐久规则）。候选：损伤完全无效。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 024] 重甲装·左腿  （部位:左腿  护甲:1 动力:2 耐久:2 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：损伤不会影响此牌所在区域提供的护甲。
+effect_ids：["equipment_effect_014"]
+
+──────────── 效果拆解（equipment_effect_014）────────────
+拆解同 [装备牌 022] 的 equipment_effect_014。
+本牌实例差异：binding_context.card_instance_id 指向 重甲装·左腿 实例；slot_id=&"左腿"；牌面耐久=2、金币=3。
+模式/查询：派生值；查询时实时重算；不注册监听器。
+JSON effect_ids：["equipment_effect_014"]。
+
+──────────── 实现预告 ────────────
+- 复用 equipment_effect_014，不新增条件 op、动作或UI；仅由本牌JSON绑定同一effect_id。
+- 回归测试必须使用本牌自己的card_instance_id与左腿槽，不能只覆盖首张牌。
+
+──────────── 顺序与坑 ────────────
+- 不免疫损伤设置与耐久弃置；损伤达到耐久仍弃牌。
+- 牌离场后该槽残留损伤立即恢复扣甲。
+
+──────────── 测试场景 ────────────
+场景a：本区域损伤不扣护甲
+  前置：M装备重甲装·左腿于左腿；该槽有1损伤；涉及选择的玩家均is_human=true。
+  操作：调用该槽get_effective_armor(M)。
+  断言：有效护甲不减damage_tokens；但damage_tokens值本身保持不变。
+场景b：达到耐久仍弃置
+  前置：继续向左腿设置损伤至耐久2；涉及选择的玩家均is_human=true。
+  操作：执行damage_change。
+  断言：重甲装·左腿因damage_durability弃置；效果未阻止损伤或弃牌。
+场景c：牌离场后残留损伤重新扣甲
+  前置：承接b，区域保留损伤；涉及选择的玩家均is_human=true。
+  操作：查询空槽/新装备的有效护甲。
+  断言：equipment_effect_014不再生效；残留损伤按正常规则扣甲。
+
+歧义点：
+[歧义1] 免疫是否也阻止损伤导致弃牌。智能体选择：否，只不影响护甲（理由：文本未改变耐久规则）。候选：损伤完全无效。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+套装5：机动装（装备牌 025～030）
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+
+═══════════════════════════════════════════════════════════
+[装备牌 025] 机动装·头部  （部位:头部  护甲:1 动力:1 耐久:2 金币:2）
+═══════════════════════════════════════════════════════════
+效果文本：每回合1次，消耗动力后，若没有动力剩余，则可以回复2动力并用当前动力移动。
+effect_ids：["equipment_effect_017"]
+
+──────────── 效果拆解（equipment_effect_017）────────────
+优先级：10
+模式：LISTEN（永久监听，需重构）
+植入：设置到头部后注册永久监听器，监听 stat_modify.STAT_MOD_SETTLE；仅捕获本牌机甲刚完成的动力减少/消耗。
+监听/入口：动作类型 &"stat_modify"；时点 STAT_MOD_SETTLE。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 数值修正对象是本牌机甲
+    "op": &"SELF_MECH_IS_STAT_TARGET"
+  },
+  {  # 修正类型为动力
+    "op": &"PAYLOAD_STAT_TYPE_IS",
+    "stat_type": &"power"
+  },
+  {  # 修正方式为减少/消耗
+    "op": &"PAYLOAD_STAT_METHOD_IS",
+    "method": &"spend"
+  },
+  {  # 结算后当前动力恰为0
+    "op": &"OWNER_POWER_EQUALS",
+    "value": 0
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 固定回复并移动本牌机甲
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 确认后先回复2，再以当时当前动力作为预算循环移动；移动UI可取消
+    "type": &"CHOOSE_ONE",  # 弹出可取消/不可取消选择窗；窗口完成前父动作挂起
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "回复2动力并用当前动力移动",
+          "actions": [
+            {
+              "type": &"RESTORE_POWER",  # 回复动力，不超过当前总动力上限
+              "params": {
+                "amount": 2,
+                "target_id": "$binding_context.mech_id"
+              }
+            },
+            {
+              "type": &"EXECUTE_SINGLE_MOVE",  # 创建单次移动子动作并等待玩家完成/取消
+              "params": {
+                "mech_id": "$binding_context.mech_id",
+                "use_current_power": true,
+                "loop_until_cancel": true
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；once_per_turn_key=&"equipment_effect_017_$binding_context.card_instance_id"，once_per_turn_max=1；确认发动后消耗。
+值解析/公式：$payload.target_id/stat_type/method/value_after；$binding_context.mech_id。
+执行顺序：动力消耗动作 SETTLE→可选窗→RESTORE_POWER完成→SINGLE_MOVE挂起并逐格移动→返回原父动作。若触发消耗来自基础移动，原基础移动尚未完成位置更新，见歧义。
+人类 UI：耗尽动力后弹“回复2动力并移动 / 取消”；确认后打开移动路径面板。
+
+──────────── 实现预告 ────────────
+- 需重构 equipment_effect_017：既有“消耗4动力抽1行动牌”已不符合权威文本。
+- 需新增条件 op：SELF_MECH_IS_STAT_TARGET、PAYLOAD_STAT_TYPE_IS、PAYLOAD_STAT_METHOD_IS、OWNER_POWER_EQUALS；登记 ConditionChecker.gd。
+- 动作复用 RESTORE_POWER、EXECUTE_SINGLE_MOVE、CHOOSE_ONE。
+- JSON effect_ids 保持 ["equipment_effect_017"]，只替换定义。
+
+──────────── 顺序与坑 ────────────
+- 监听所有动力消耗来源，不能仅监听移动。
+- 回复是 restore，不能超过动力上限。
+- 递归保护：本效果自己的移动再次耗尽动力时 once_per_turn 已占用，不得重入。
+
+──────────── 测试场景 ────────────
+场景a：动力消耗后恰为0，确认回复并移动
+  前置：M装备机动装·头部；本回合未发动；一次SPEND_POWER使current_power从2变0；涉及选择的玩家均is_human=true。
+  操作：STAT_MOD_SETTLE触发→确认→RESTORE_POWER 2→在移动面板走1个基础格后取消。
+  断言：once key=1；回复后动力2，再移动消耗1后为1；父动力消耗动作在整个输入完成后恢复。
+场景b：选择取消
+  前置：动力刚好耗尽到0；涉及选择的玩家均is_human=true。
+  操作：CHOOSE_ONE取消。
+  断言：动力仍0；once key未占用；不打开移动面板。
+场景c：未耗尽或非消耗修正
+  前置：分支1动力从3消耗1后为2；分支2通过RESTORE_POWER变为0不成立；涉及选择的玩家均is_human=true。
+  操作：进入STAT_MOD_SETTLE。
+  断言：OWNER_POWER_EQUALS或method条件失败；不触发。
+场景d：递归保护
+  前置：本效果成功发动后，用回复的动力移动直至再次归0；涉及选择的玩家均is_human=true。
+  操作：移动中的动力消耗再次发出STAT_MOD_SETTLE。
+  断言：once key已占用，不再次回复/弹窗。
+
+歧义点：
+[歧义1] 由基础移动的动力消耗触发时，额外移动是在原基础移动落位前还是落位后。智能体选择：按现有生命周期在 STAT_MOD_SETTLE 立即触发，因此原基础移动尚未落位；建议引擎增加 deferred_after_parent_step 使其延后至 BASIC_MOVE_AFTER（理由：玩家直觉为“消耗后完成该次移动再发动”）。候选：严格即时插入。▶ 回答：____________________
+[歧义2] “用当前动力移动”是否必须花完。智能体选择：循环移动直到玩家取消或无动力（理由：行动牌回避/疾行同型）。候选：只能执行一次 single_move。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 026] 机动装·躯干  （部位:躯干  护甲:2 动力:2 耐久:3 金币:4）
+═══════════════════════════════════════════════════════════
+效果文本：机甲被指定为攻击目标时，可弃置2张行动牌，当前回合动力+5。
+effect_ids：["equipment_effect_018"]
+
+──────────── 效果拆解（equipment_effect_018）────────────
+优先级：10
+模式：LISTEN（永久监听）
+植入：设置到躯干后注册，监听 attack.ATTACK_PRE。
+监听/入口：动作类型 &"attack"；时点 ATTACK_PRE。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 本牌机甲是目标
+    "op": &"SELF_MECH_IS_ATTACK_TARGET"
+  },
+  {  # 至少2张行动牌
+    "op": &"OWNER_ACTION_HAND_ABOVE",
+    "threshold": 2
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 固定本牌机甲
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[
+  {  # 支付2张，可取消
+    "cost_type": &"DISCARD_ACTION_CARD",
+    "count": 2,
+    "optional": true
+  },
+]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 支付后本回合动力+5，可超过上限
+    "type": &"EXECUTE_STAT_MODIFY",  # 创建数值修正子动作，完整发出 STAT_MOD 生命周期
+    "params": {
+      "target_id": "$binding_context.mech_id",
+      "stat_type": &"power",
+      "value": 5,
+      "method": &"add",
+      "duration": &"THIS_TURN"
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$binding_context.mech_id/player_id；$payload.target_ids。
+执行顺序：弃牌完成后才加动力。
+人类 UI：弃2牌选择窗；取消不发动。
+
+──────────── 实现预告 ────────────
+- 复用：equipment_effect_018。
+
+──────────── 顺序与坑 ────────────
+- 增加动力而非回复。
+- 多次攻击可重复叠加。
+
+──────────── 测试场景 ────────────
+场景a：弃2牌动力+5
+  前置：M装备机动装·躯干；被指定目标；至少2张行动牌；涉及选择的玩家均is_human=true。
+  操作：支付2牌。
+  断言：两牌弃置；power临时+5至本回合结束。
+场景b：取消支付
+  前置：同a；涉及选择的玩家均is_human=true。
+  操作：弃牌UI取消。
+  断言：牌与动力不变。
+场景c：不是目标或手牌不足
+  前置：攻击目标为他人，或M仅1张牌；涉及选择的玩家均is_human=true。
+  操作：ATTACK_PRE。
+  断言：不弹窗。
+
+歧义点：
+[歧义1] 动力+5是当前值与上限一起加，还是仅当前可用动力。智能体选择：临时 stat modifier 增加机甲动力派生值，并同步增加可用动力5；回合末撤销上限，当前值按全局钳制（理由：与装备/行动牌“动力+”一致）。候选：仅当前动力。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 027] 机动装·右臂  （部位:右臂  护甲:1 动力:1 耐久:2 金币:2）
+═══════════════════════════════════════════════════════════
+效果文本：我方回合或使用迎击牌时，可以弃置此牌，使机甲本回合动力+4。
+effect_ids：["equipment_effect_019", "equipment_effect_032"]
+
+──────────── 效果拆解（equipment_effect_019）────────────
+优先级：10
+模式：DIRECT（需重构）
+植入：DIRECT，由装备面板发动按钮/skill_bar 触发 effect_fire；仅本牌持有者的主阶段可点。
+监听/入口：动作类型 &"effect_fire"；时点 EFFECT_FIRE。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 当前正在本牌机甲自己的主阶段
+    "op": &"IS_OWNER_MAIN_PHASE"
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 固定本牌机甲
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 确认后先标准弃置自身，再本回合动力+4
+    "type": &"CHOOSE_ONE",  # 弹出可取消/不可取消选择窗；窗口完成前父动作挂起
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "弃置此牌，本回合动力+4",
+          "actions": [
+            {
+              "type": &"DISCARD_SELF_FROM_SLOT",  # 从来源槽标准弃置本牌并注销永久监听器
+              "params": {
+                "reason": &"effect_self_discard"
+              }
+            },
+            {
+              "type": &"EXECUTE_STAT_MODIFY",  # 创建数值修正子动作，完整发出 STAT_MOD 生命周期
+              "params": {
+                "target_id": "$binding_context.mech_id",
+                "stat_type": &"power",
+                "value": 4,
+                "method": &"add",
+                "duration": &"THIS_TURN"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$binding_context.card_instance_id/mech_id。
+执行顺序：先弃置确保不能重复点击；弃置诱发完成后仍继续加动力。
+人类 UI：装备按钮“弃置：动力+4”，点击后可取消。
+
+──────────── 实现预告 ────────────
+- 需重构 equipment_effect_019：既有“损伤转移最多2点”已被新文本淘汰。
+- 复用 DISCARD_SELF_FROM_SLOT、EXECUTE_STAT_MODIFY、CHOOSE_ONE。
+- 本牌另需 equipment_effect_032 处理“使用迎击牌时”的触发路径，二者共享同一牌实例但无每回合限次。
+- JSON effect_ids：part_027 从 ["equipment_effect_019"] 改为 ["equipment_effect_019","equipment_effect_032"]。
+
+──────────── 顺序与坑 ────────────
+- 弃牌后 listener 032 注销；已挂起的当前效果继续完成。
+- 动力+4不是回复。
+
+──────────── 效果拆解（equipment_effect_032）────────────
+优先级：10
+模式：LISTEN（永久监听，新建）
+植入：设置到右臂后注册永久监听器，监听 use_action_card.USE_ACTION_AT；迎击牌已进入临时区并绑定当前攻击。
+监听/入口：动作类型 &"use_action_card"；时点 USE_ACTION_AT。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 使用牌者是本牌机甲
+    "op": &"USED_CARD_OWNER_IS_SELF"
+  },
+  {  # 本次使用的是迎击牌
+    "op": &"USED_COUNTER_CARD"
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 固定本牌机甲
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 迎击使用时可取消；确认后弃自身并加动力
+    "type": &"CHOOSE_ONE",  # 弹出可取消/不可取消选择窗；窗口完成前父动作挂起
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "弃置机动装·右臂，本回合动力+4",
+          "actions": [
+            {
+              "type": &"DISCARD_SELF_FROM_SLOT",  # 从来源槽标准弃置本牌并注销永久监听器
+              "params": {
+                "reason": &"effect_self_discard"
+              }
+            },
+            {
+              "type": &"EXECUTE_STAT_MODIFY",  # 创建数值修正子动作，完整发出 STAT_MOD 生命周期
+              "params": {
+                "target_id": "$binding_context.mech_id",
+                "stat_type": &"power",
+                "value": 4,
+                "method": &"add",
+                "duration": &"THIS_TURN"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$payload.card_type/action_type/owner_id；$binding_context.card_instance_id。
+执行顺序：USE_ACTION_AT 内挂起迎击牌使用动作，装备效果完成后再继续迎击牌自身效果。
+人类 UI：迎击牌确认使用后弹装备诱发窗。
+
+──────────── 实现预告 ────────────
+- 需新增 equipment_effect_032，仿近战躯干 equipment_effect_029 的 USE_ACTION_AT 监听。
+- 无需新 op/动作，复用 USED_CARD_OWNER_IS_SELF、USED_COUNTER_CARD、DISCARD_SELF_FROM_SLOT、EXECUTE_STAT_MODIFY。
+
+──────────── 顺序与坑 ────────────
+- 若多张同类效果并存，按装备座次依次弹窗；本牌一旦被前一个效果弃置，后续来源有效性须复核。
+
+──────────── 测试场景 ────────────
+场景a：我方主阶段主动弃置并获得动力+4
+  前置：玩家P的机甲M在己方主阶段装备机动装·右臂于右臂；M当前动力=1；动作队列空闲；涉及选择的玩家均is_human=true。
+  操作：从装备面板点击发动→确认“弃置此牌，本回合动力+4”→discard(reason=effect_self_discard)结算。
+  断言：M.右臂.equipped_card==null；卡实例zone=="equipment_discard"；M本回合power临时修正+4；equipment_effect_019与032监听均已注销。
+场景b：主阶段取消
+  前置：同a，但在CHOOSE_ONE选择取消；涉及选择的玩家均is_human=true。
+  操作：点击发动→取消。
+  断言：机动装·右臂仍在右臂；动力不变；无discard action；effect_fire正常SETTLE。
+场景c：使用迎击牌时发动监听路径
+  前置：敌方攻击M；M装备机动装·右臂且持有迎击牌；当前不是M主阶段；涉及选择的玩家均is_human=true。
+  操作：响应窗口选择迎击牌→USE_ACTION_AT触发equipment_effect_032→确认弃置。
+  断言：迎击牌仍继续执行；M本回合动力+4；装备弃置；原攻击record不被本装备直接响应或改威力。
+场景d：非我方主阶段且未使用迎击牌
+  前置：M装备机动装·右臂；当前敌方回合，无攻击响应；涉及选择的玩家均is_human=true。
+  操作：尝试点击装备发动按钮。
+  断言：IS_OWNER_MAIN_PHASE=false；按钮不可用/点击无动作；牌与动力均不变。
+
+歧义点：
+[歧义1] 我方回合内是否仅主阶段可发动。智能体选择：是（理由：DIRECT 无可用条件效果按规则只可在己方主阶段主动使用）。候选：己方回合任意时点，包括其他动作处理中。▶ 回答：____________________
+[歧义2] 加动力发生在迎击牌效果前还是后。智能体选择：USE_ACTION_AT 装备监听执行后，才继续行动牌效果，故在迎击移动等效果前获得动力（理由：明确“使用迎击牌时”且该时点牌刚进入临时区）。候选：迎击牌效果全部结算后。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 028] 机动装·左臂  （部位:左臂  护甲:2 动力:1 耐久:2 金币:2）
+═══════════════════════════════════════════════════════════
+效果文本：机甲发动的攻击命中后，回复3动力。
+effect_ids：["equipment_effect_020"]
+
+──────────── 效果拆解（equipment_effect_020）────────────
+优先级：10
+模式：LISTEN（永久监听）
+植入：设置到左臂后注册，监听 attack.ATTACK_AFTER。
+监听/入口：动作类型 &"attack"；时点 ATTACK_AFTER。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 本牌机甲是攻击方
+    "op": &"SELF_MECH_IS_ATTACKER"
+  },
+  {  # 至少一个目标命中
+    "op": &"ATTACK_HIT"
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 回复本牌机甲
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 回复3动力，受上限限制
+    "type": &"RESTORE_POWER",  # 回复动力，不超过当前总动力上限
+    "params": {
+      "amount": 3,
+      "target_id": "$binding_context.mech_id"
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$payload.hit / hit_target_ids。
+执行顺序：伤害/损伤已计算但尚未放置，先回复动力再继续 HP/DAMAGE_CHANGE。
+人类 UI：自动发动，日志显示回复值。
+
+──────────── 实现预告 ────────────
+- 复用：equipment_effect_020。
+
+──────────── 顺序与坑 ────────────
+- 多目标攻击中只触发一次，不按命中目标数重复。
+- 未命中不触发。
+
+──────────── 测试场景 ────────────
+场景a：攻击命中回复3
+  前置：M装备机动装·左臂；当前动力比上限低3；M发动攻击并命中；涉及选择的玩家均is_human=true。
+  操作：ATTACK_AFTER。
+  断言：current_power增加3且不超上限；只触发一次。
+场景b：未命中
+  前置：目标在伤害计算前离开范围；涉及选择的玩家均is_human=true。
+  操作：ATTACK_AFTER hit=false。
+  断言：不回复。
+场景c：多目标部分命中
+  前置：一次攻击有2目标，仅1个命中；涉及选择的玩家均is_human=true。
+  操作：ATTACK_AFTER。
+  断言：按至少一个命中触发一次，恢复3而非6。
+
+歧义点：
+[歧义1] 多目标攻击部分命中是否触发。智能体选择：只要至少1个目标命中即触发一次。候选：必须全部命中。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 029] 机动装·右腿  （部位:右腿  护甲:0 动力:4 耐久:2 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：此牌上每设置有1损伤，动力+1。
+effect_ids：["equipment_effect_021"]
+
+──────────── 效果拆解（equipment_effect_021）────────────
+优先级：10
+模式：派生值
+植入：派生值型，不注册监听器。MechState.get_total_power 查询时读取来源槽损伤。
+派生值型：不写 conditions / target_rules / costs / actions，不注册 timing listener。
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：helper：get_power_bonus_per_source_slot_damage(mech, card_instance_id, per_point=1)；bonus=source_slot.damage_tokens*1，只在本牌仍装备且效果有效时计入。
+执行顺序：损伤逐点设置后即时重算；若达到耐久使牌弃置，则本牌所有加成立即消失。
+人类 UI：动力明细显示“受损增幅 +X”。
+
+──────────── 实现预告 ────────────
+- 复用：equipment_effect_021。
+
+──────────── 顺序与坑 ────────────
+- 区域可能已有超过牌耐久的脏数据；正常流程本牌应在达到耐久时弃置，因此不应继续提供加成。
+
+──────────── 测试场景 ────────────
+场景a：每点损伤提供等量动力
+  前置：M装备机动装·右腿于右腿；该槽1损伤；涉及选择的玩家均is_human=true。
+  操作：查询总动力。
+  断言：bonus==1；再加1损伤但尚未完成弃置时应按流程最终状态结算。
+场景b：0损伤
+  前置：右腿.damage_tokens=0；涉及选择的玩家均is_human=true。
+  操作：查询动力。
+  断言：bonus==0。
+场景c：达到耐久弃置后失去加成
+  前置：向右腿设置到耐久2；涉及选择的玩家均is_human=true。
+  操作：damage_change与discard完成。
+  断言：牌离场；bonus==0；当前动力若高于新上限按全局规则处理。
+
+歧义点：
+[歧义1] 导致本牌弃置的最后1点损伤是否短暂提供动力。智能体选择：在同一损伤动作中无需暴露中间可操作窗口；弃置完成后不提供（理由：牌已离场）。候选：离场诱发前短暂计入。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 030] 机动装·左腿  （部位:左腿  护甲:0 动力:4 耐久:2 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：此牌上每设置有1损伤，动力+1。
+effect_ids：["equipment_effect_021"]
+
+──────────── 效果拆解（equipment_effect_021）────────────
+拆解同 [装备牌 029] 的 equipment_effect_021。
+本牌实例差异：binding_context.card_instance_id 指向 机动装·左腿 实例；slot_id=&"左腿"；牌面耐久=2、金币=3。
+模式/查询：派生值；查询时实时重算；不注册监听器。
+JSON effect_ids：["equipment_effect_021"]。
+
+──────────── 实现预告 ────────────
+- 复用 equipment_effect_021，不新增条件 op、动作或UI；仅由本牌JSON绑定同一effect_id。
+- 回归测试必须使用本牌自己的card_instance_id与左腿槽，不能只覆盖首张牌。
+
+──────────── 顺序与坑 ────────────
+- 区域可能已有超过牌耐久的脏数据；正常流程本牌应在达到耐久时弃置，因此不应继续提供加成。
+
+──────────── 测试场景 ────────────
+场景a：每点损伤提供等量动力
+  前置：M装备机动装·左腿于左腿；该槽1损伤；涉及选择的玩家均is_human=true。
+  操作：查询总动力。
+  断言：bonus==1；再加1损伤但尚未完成弃置时应按流程最终状态结算。
+场景b：0损伤
+  前置：左腿.damage_tokens=0；涉及选择的玩家均is_human=true。
+  操作：查询动力。
+  断言：bonus==0。
+场景c：达到耐久弃置后失去加成
+  前置：向左腿设置到耐久2；涉及选择的玩家均is_human=true。
+  操作：damage_change与discard完成。
+  断言：牌离场；bonus==0；当前动力若高于新上限按全局规则处理。
+
+歧义点：
+[歧义1] 导致本牌弃置的最后1点损伤是否短暂提供动力。智能体选择：在同一损伤动作中无需暴露中间可操作窗口；弃置完成后不提供（理由：牌已离场）。候选：离场诱发前短暂计入。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+套装6：狙击装（装备牌 031～036）
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+
+═══════════════════════════════════════════════════════════
+[装备牌 031] 狙击装·头部  （部位:头部  护甲:3 动力:0 耐久:3 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：我方远程武器范围+1。
+effect_ids：["equipment_effect_022"]
+
+──────────── 效果拆解（equipment_effect_022）────────────
+优先级：10
+模式：LISTEN（永久监听）
+植入：设置到头部后注册，监听 attack.ATTACK_BEFORE（武器已选、基础威力范围已提取）。
+监听/入口：动作类型 &"attack"；时点 ATTACK_BEFORE。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 本牌机甲是攻击方
+    "op": &"SELF_MECH_IS_ATTACKER"
+  },
+  {  # 有效武器类型为远程
+    "op": &"ATTACK_EFFECTIVE_WEAPON_KIND",
+    "weapon_kind": &"远程"
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 修正当前 attack record
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # attack.record["extra_range"] +=1；最终范围最低1
+    "type": &"MODIFY_ATTACK_RANGE",  # 修改当前/指定攻击 record 的额外范围
+    "params": {
+      "delta": 1,
+      "min_value": 1
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$payload.effective_weapon_type/weapon_kind。
+执行顺序：priority10；若近战头 priority20 将原远程武器转为近战，本效果后检查 effective type 后不触发。
+人类 UI：自动发动，攻击范围预览应在可用性预计算阶段也调用同一 helper，避免点牌时错误判定无目标。
+
+──────────── 实现预告 ────────────
+- 复用：equipment_effect_022。
+- 攻击牌可用性最大范围预计算必须纳入该装备修正。
+
+──────────── 顺序与坑 ────────────
+- 正式 ATTACK_BEFORE 与使用攻击牌前的最大范围预检查要一致。
+
+──────────── 测试场景 ────────────
+场景a：远程攻击范围+1
+  前置：M装备狙击装·头部并选择基础范围4的远程武器；涉及选择的玩家均is_human=true。
+  操作：ATTACK_BEFORE。
+  断言：attack.record["extra_range"]==1；最终范围5；目标可用性预计算也视为5。
+场景b：近战攻击
+  前置：选择近战武器；涉及选择的玩家均is_human=true。
+  操作：ATTACK_BEFORE。
+  断言：条件失败，extra_range==0。
+场景c：近战头先转换
+  前置：同时装备近战头，选择远程武器并确认转换；涉及选择的玩家均is_human=true。
+  操作：priority20后effective_weapon_type==近战，再到本效果。
+  断言：本效果不加范围。
+
+歧义点：
+[歧义1] 与近战头部同时装备时是否加范围后再转近战。智能体选择：近战头优先级20先转换，随后本效果因有效类型非远程而不加范围。候选：按原始武器类型仍+1。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 032] 狙击装·躯干  （部位:躯干  护甲:3 动力:1 耐久:2 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：被远程武器攻击时，可以弃置此牌，使此次攻击威力-4。
+effect_ids：["equipment_effect_023"]
+
+──────────── 效果拆解（equipment_effect_023）────────────
+优先级：10
+模式：LISTEN（永久监听）
+植入：设置到躯干后注册，监听 attack.ATTACK_PRE。
+监听/入口：动作类型 &"attack"；时点 ATTACK_PRE。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 本牌机甲是攻击目标
+    "op": &"SELF_MECH_IS_ATTACK_TARGET"
+  },
+  {  # 有效武器类型为远程
+    "op": &"ATTACK_EFFECTIVE_WEAPON_KIND",
+    "weapon_kind": &"远程"
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 当前攻击
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 先写 attack extra_might=-4，再弃自身；取消则均不执行
+    "type": &"CHOOSE_ONE",  # 弹出可取消/不可取消选择窗；窗口完成前父动作挂起
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "弃此牌，攻击威力-4",
+          "actions": [
+            {
+              "type": &"MODIFY_ATTACK_MIGHT",  # 修改当前/指定攻击 record 的额外威力
+              "params": {
+                "delta": -4
+              }
+            },
+            {
+              "type": &"DISCARD_SELF_FROM_SLOT",  # 从来源槽标准弃置本牌并注销永久监听器
+              "params": {
+                "reason": &"effect_self_discard"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$payload.target_ids/effective_weapon_type；$binding_context.card_instance_id。
+执行顺序：先减威力再弃置，保证离场副作用不阻断修正；弃置动作挂起 attack。
+人类 UI：ATTACK_PRE 弹可取消确认窗。
+
+──────────── 实现预告 ────────────
+- 复用：equipment_effect_023。
+
+──────────── 顺序与坑 ────────────
+- 近战头转换后的远程原卡按 effective type=近战，不触发。
+- 弃置后监听器注销。
+
+──────────── 测试场景 ────────────
+场景a：远程攻击时弃牌减威力
+  前置：M装备狙击装·躯干；敌方用远程武器攻击M；涉及选择的玩家均is_human=true。
+  操作：ATTACK_PRE确认。
+  断言：attack.record["extra_might"]==-4；牌进入equipment_discard；槽清空且监听注销。
+场景b：取消
+  前置：同a；涉及选择的玩家均is_human=true。
+  操作：取消。
+  断言：extra_might==0；牌仍装备。
+场景c：有效类型非远程
+  前置：敌方用近战武器，或远程武器被转换成近战；涉及选择的玩家均is_human=true。
+  操作：ATTACK_PRE。
+  断言：不弹窗。
+
+歧义点：
+[歧义1] 触发时点。智能体选择：ATTACK_PRE（理由：目标与有效类型已确定且在响应窗口前）。候选：ATTACK_AT 响应窗口。▶ 回答：____________________
+[歧义2] “可以弃置”语义。智能体选择：optional CHOOSE_ONE。候选：强制或 optional cost。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 033] 狙击装·右臂  （部位:右臂  护甲:1 动力:1 耐久:2 金币:2）
+═══════════════════════════════════════════════════════════
+效果文本：每我方回合1次，可以弃置1张行动牌，回复1动力。
+effect_ids：["equipment_effect_024"]
+
+──────────── 效果拆解（equipment_effect_024）────────────
+优先级：10
+模式：DIRECT
+植入：DIRECT，由装备面板发动按钮/skill_bar -> effect_fire。
+监听/入口：动作类型 &"effect_fire"；时点 EFFECT_FIRE。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 本牌机甲自己的主阶段
+    "op": &"IS_OWNER_MAIN_PHASE"
+  },
+  {  # 至少1张行动牌
+    "op": &"HAS_ACTION_CARD_IN_HAND"
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 本牌机甲
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[
+  {  # 必须弃1张；弃牌UI可取消整个发动
+    "cost_type": &"DISCARD_ACTION_CARD",
+    "count": 1,
+    "optional": false
+  },
+]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 弃牌成功后回复1动力
+    "type": &"RESTORE_POWER",  # 回复动力，不超过当前总动力上限
+    "params": {
+      "amount": 1,
+      "target_id": "$binding_context.mech_id"
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；once_per_turn_key=&"equipment_effect_024_$binding_context.card_instance_id"，once_per_turn_max=1；仅成功回复后占用。
+值解析/公式：$binding_context.player_id/mech_id。
+执行顺序：effect_fire→弃牌选择→discard settle→回复→effect_fire settle。
+人类 UI：技能按钮显示本回合是否已用；动力已满仍可否发动见歧义。
+
+──────────── 实现预告 ────────────
+- 复用：equipment_effect_024。
+
+──────────── 顺序与坑 ────────────
+- 若弃牌窗口取消，不消耗每回合次数。
+- 装备中途换上后，本回合是否可用由 card_instance once key 决定。
+
+──────────── 测试场景 ────────────
+场景a：弃1行动牌回复1
+  前置：M装备狙击装·右臂；己方主阶段；current_power低于上限；手牌≥1；涉及选择的玩家均is_human=true。
+  操作：点击发动→选择1张行动牌弃置。
+  断言：该牌进入action_discard；current_power+1；once key=1。
+场景b：弃牌UI取消
+  前置：同a；涉及选择的玩家均is_human=true。
+  操作：取消弃牌。
+  断言：不回复；once key仍0。
+场景c：非主阶段或已用
+  前置：敌方回合，或本回合已成功发动；涉及选择的玩家均is_human=true。
+  操作：尝试点击。
+  断言：按钮不可用；无动作。
+
+歧义点：
+[歧义1] 动力已满时能否弃牌发动。智能体选择：允许但回复0（文本未要求未满）；UI应提示无实际回复。候选：不可用，增加 TARGET_POWER_NOT_FULL 条件。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 034] 狙击装·左臂  （部位:左臂  护甲:1 动力:1 耐久:2 金币:2）
+═══════════════════════════════════════════════════════════
+效果文本：使用远程武器发动攻击时，可以弃置1张行动牌，使威力+2。
+effect_ids：["equipment_effect_025"]
+
+──────────── 效果拆解（equipment_effect_025）────────────
+优先级：10
+模式：LISTEN（永久监听）
+植入：设置到左臂后注册，监听 attack.ATTACK_BEFORE。
+监听/入口：动作类型 &"attack"；时点 ATTACK_BEFORE。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 本牌机甲是攻击方
+    "op": &"SELF_MECH_IS_ATTACKER"
+  },
+  {  # 有效类型为远程
+    "op": &"ATTACK_EFFECTIVE_WEAPON_KIND",
+    "weapon_kind": &"远程"
+  },
+  {  # 至少1张行动牌
+    "op": &"HAS_ACTION_CARD_IN_HAND"
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 当前攻击
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[
+  {  # 可弃1张；取消则不加威力
+    "cost_type": &"DISCARD_ACTION_CARD",
+    "count": 1,
+    "optional": true
+  },
+]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # attack.record["extra_might"] +=2
+    "type": &"MODIFY_ATTACK_MIGHT",  # 修改当前/指定攻击 record 的额外威力
+    "params": {
+      "delta": 2
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$payload.effective_weapon_type；$binding_context.player_id。
+执行顺序：弃牌子动作完成后才写威力+2；攻击时点暂停。
+人类 UI：弃1牌选择窗，显示威力变化。
+
+──────────── 实现预告 ────────────
+- 复用：equipment_effect_025；核对条件读取 effective_weapon_type。
+
+──────────── 顺序与坑 ────────────
+- 若近战头先转换为近战则不触发。
+
+──────────── 测试场景 ────────────
+场景a：远程攻击弃牌加威力
+  前置：M装备狙击装·左臂；使用有效类型为远程的武器；手牌≥1；涉及选择的玩家均is_human=true。
+  操作：ATTACK_BEFORE选择弃1张行动牌。
+  断言：弃牌结算后attack.record["extra_might"]增加2。
+场景b：取消弃牌
+  前置：同a；涉及选择的玩家均is_human=true。
+  操作：支付窗取消。
+  断言：extra_might不变；手牌不变。
+场景c：有效类型不匹配
+  前置：使用有效类型非远程的武器；涉及选择的玩家均is_human=true。
+  操作：ATTACK_BEFORE。
+  断言：条件失败，不弹窗。
+
+歧义点：
+[歧义1] “使用远程武器发动攻击时”按原始还是有效类型。智能体选择：有效类型（理由：关键坑明确要求）。候选：武器卡原始类型。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 035] 狙击装·右腿  （部位:右腿  护甲:2 动力:2 耐久:2 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：使用攻击牌时，可立即移动到相邻的1个格子上。
+effect_ids：["equipment_effect_026"]
+
+──────────── 效果拆解（equipment_effect_026）────────────
+优先级：10
+模式：LISTEN（永久监听）
+植入：设置到腿部后注册，监听 use_action_card.USE_ACTION_AT（牌已进入临时区）。
+监听/入口：动作类型 &"use_action_card"；时点 USE_ACTION_AT。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 使用牌者为本牌机甲
+    "op": &"USED_CARD_OWNER_IS_SELF"
+  },
+  {  # 使用的行动牌类型为攻击
+    "op": &"USED_CARD_TYPE_IS",
+    "card_type": &"攻击"
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 移动本牌机甲
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 打开相邻格选择；可取消；确认后无动力消耗移动1格
+    "type": &"EXECUTE_SINGLE_MOVE",  # 创建单次移动子动作并等待玩家完成/取消
+    "params": {
+      "mech_id": "$binding_context.mech_id",
+      "max_cells": 1,
+      "use_current_power": false,
+      "power_fraction": 0,
+      "loop_until_cancel": false,
+      "adjacent_only": true,
+      "free_move": true
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$payload.used_card_type/owner_id。
+执行顺序：USE_ACTION_AT 中挂起行动牌；移动完成或取消后继续该牌效果。若为攻击牌，移动发生在其 EXECUTE_ATTACK 前。
+人类 UI：弹相邻可达格选择；不可达/红格置灰；含取消。
+
+──────────── 实现预告 ────────────
+- 复用：equipment_effect_026。
+- 确认 EXECUTE_SINGLE_MOVE 支持 free_move/max_cells=1；若无则需在动作参数中补充，不要用 MOVE_MECH 绕过生命周期。
+
+──────────── 顺序与坑 ────────────
+- “立即移动”未写消耗动力，本拆解按免费1格；仍需遵守不可进入红格/占用等地图合法性。
+- 取消移动不取消行动牌使用。
+
+──────────── 测试场景 ────────────
+场景a：使用攻击牌免费移动相邻1格
+  前置：M装备狙击装·右腿；相邻有1个合法空格；M使用攻击牌；涉及选择的玩家均is_human=true。
+  操作：USE_ACTION_AT弹格子选择→选相邻格确认。
+  断言：M位置更新1格；未消耗动力；移动动作完整发出相应生命周期；随后行动牌继续。
+场景b：取消移动
+  前置：同a；涉及选择的玩家均is_human=true。
+  操作：移动面板取消。
+  断言：M位置与动力不变；行动牌仍继续执行。
+场景c：使用其他类型行动牌
+  前置：M使用非攻击牌；涉及选择的玩家均is_human=true。
+  操作：USE_ACTION_AT。
+  断言：USED_CARD_TYPE_IS=false；不弹移动面板。
+
+歧义点：
+[歧义1] 该1格移动是否消耗动力。智能体选择：不消耗（理由：文本未写消耗，且写“立即移动到相邻1格”）。候选：按基础移动支付格子动力。▶ 回答：____________________
+[歧义2] 移动发生在攻击牌效果前还是后。智能体选择：USE_ACTION_AT 装备监听先完成，再执行行动牌效果。候选：行动牌效果后。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 036] 狙击装·左腿  （部位:左腿  护甲:2 动力:2 耐久:2 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：使用迎击牌时，可立即移动到相邻的1个格子上。
+effect_ids：["equipment_effect_027"]
+
+──────────── 效果拆解（equipment_effect_027）────────────
+优先级：10
+模式：LISTEN（永久监听）
+植入：设置到腿部后注册，监听 use_action_card.USE_ACTION_AT（牌已进入临时区）。
+监听/入口：动作类型 &"use_action_card"；时点 USE_ACTION_AT。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 使用牌者为本牌机甲
+    "op": &"USED_CARD_OWNER_IS_SELF"
+  },
+  {  # 使用的行动牌类型为迎击
+    "op": &"USED_CARD_TYPE_IS",
+    "card_type": &"迎击"
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 移动本牌机甲
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 打开相邻格选择；可取消；确认后无动力消耗移动1格
+    "type": &"EXECUTE_SINGLE_MOVE",  # 创建单次移动子动作并等待玩家完成/取消
+    "params": {
+      "mech_id": "$binding_context.mech_id",
+      "max_cells": 1,
+      "use_current_power": false,
+      "power_fraction": 0,
+      "loop_until_cancel": false,
+      "adjacent_only": true,
+      "free_move": true
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$payload.used_card_type/owner_id。
+执行顺序：USE_ACTION_AT 中挂起行动牌；移动完成或取消后继续该牌效果。若为攻击牌，移动发生在其 EXECUTE_ATTACK 前。
+人类 UI：弹相邻可达格选择；不可达/红格置灰；含取消。
+
+──────────── 实现预告 ────────────
+- 复用：equipment_effect_027。
+- 确认 EXECUTE_SINGLE_MOVE 支持 free_move/max_cells=1；若无则需在动作参数中补充，不要用 MOVE_MECH 绕过生命周期。
+
+──────────── 顺序与坑 ────────────
+- “立即移动”未写消耗动力，本拆解按免费1格；仍需遵守不可进入红格/占用等地图合法性。
+- 取消移动不取消行动牌使用。
+
+──────────── 测试场景 ────────────
+场景a：使用迎击牌免费移动相邻1格
+  前置：M装备狙击装·左腿；相邻有1个合法空格；M使用迎击牌；涉及选择的玩家均is_human=true。
+  操作：USE_ACTION_AT弹格子选择→选相邻格确认。
+  断言：M位置更新1格；未消耗动力；移动动作完整发出相应生命周期；随后行动牌继续。
+场景b：取消移动
+  前置：同a；涉及选择的玩家均is_human=true。
+  操作：移动面板取消。
+  断言：M位置与动力不变；行动牌仍继续执行。
+场景c：使用其他类型行动牌
+  前置：M使用非迎击牌；涉及选择的玩家均is_human=true。
+  操作：USE_ACTION_AT。
+  断言：USED_CARD_TYPE_IS=false；不弹移动面板。
+
+歧义点：
+[歧义1] 该1格移动是否消耗动力。智能体选择：不消耗（理由：文本未写消耗，且写“立即移动到相邻1格”）。候选：按基础移动支付格子动力。▶ 回答：____________________
+[歧义2] 移动发生在迎击牌效果前还是后。智能体选择：USE_ACTION_AT 装备监听先完成，再执行行动牌效果。候选：行动牌效果后。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+套装7：近战装（装备牌 037～042）
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+
+═══════════════════════════════════════════════════════════
+[装备牌 037] 近战装·头部  （部位:头部  护甲:0 动力:2 耐久:2 金币:2）
+═══════════════════════════════════════════════════════════
+效果文本：可以将发动攻击武器的范围-2(不会低于1)，然后威力+3，类型变为近战武器(以上效果不适用于近战武器)。
+effect_ids：["equipment_effect_028"]
+
+──────────── 效果拆解（equipment_effect_028）────────────
+优先级：20
+模式：LISTEN（永久监听，需核对可选性）
+植入：设置到头部后注册，监听 attack.ATTACK_BEFORE；priority20 保证先于priority10的近战武器联动。
+监听/入口：动作类型 &"attack"；时点 ATTACK_BEFORE。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 本牌机甲是攻击方
+    "op": &"SELF_MECH_IS_ATTACKER"
+  },
+  {  # 当前有效武器类型不是近战
+    "op": &"ATTACK_EFFECTIVE_WEAPON_KIND_NOT",
+    "weapon_kind": &"近战"
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 当前攻击
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 可取消；确认后依次改范围、威力、有效类型
+    "type": &"CHOOSE_ONE",  # 弹出可取消/不可取消选择窗；窗口完成前父动作挂起
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "范围-2、威力+3并视为近战武器",
+          "actions": [
+            {
+              "type": &"MODIFY_ATTACK_RANGE",  # 修改当前/指定攻击 record 的额外范围
+              "params": {
+                "delta": -2,
+                "min_value": 1
+              }
+            },
+            {
+              "type": &"MODIFY_ATTACK_MIGHT",  # 修改当前/指定攻击 record 的额外威力
+              "params": {
+                "delta": 3
+              }
+            },
+            {
+              "type": &"SET_ATTACK_EFFECTIVE_WEAPON_KIND",  # 写入攻击的 effective_weapon_type
+              "params": {
+                "weapon_kind": &"近战"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$payload.effective_weapon_type/extra_range/extra_might。
+执行顺序：priority20；内部顺序范围→威力→类型。完成后同一 ATTACK_BEFORE 的priority10效果看到effective type=近战。
+人类 UI：显示转换前后威力/范围/类型；可取消。
+
+──────────── 实现预告 ────────────
+- 复用 equipment_effect_028 的主体；若现实现强制转换，需重构为 optional CHOOSE_ONE。
+
+──────────── 顺序与坑 ────────────
+- 范围最低1。
+- 不适用于已是近战的有效类型。
+
+──────────── 测试场景 ────────────
+场景a：转换远程武器
+  前置：M装备近战装·头部；选择基础范围2、威力6的远程武器；涉及选择的玩家均is_human=true。
+  操作：ATTACK_BEFORE priority20确认转换。
+  断言：最终range=max(1,2-2)=1；extra_might=+3；effective_weapon_type==&"近战"。
+场景b：取消转换
+  前置：同a；涉及选择的玩家均is_human=true。
+  操作：CHOOSE_ONE取消。
+  断言：范围、威力、有效类型保持原值。
+场景c：原本就是近战武器
+  前置：选择近战武器；涉及选择的玩家均is_human=true。
+  操作：ATTACK_BEFORE。
+  断言：ATTACK_EFFECTIVE_WEAPON_KIND_NOT=false；不弹窗。
+
+歧义点：
+[歧义1] “可以将”是否每次询问。智能体选择：是，optional。候选：装备后自动转换所有非近战攻击。▶ 回答：____________________
+[歧义2] 特殊武器也可转换吗。智能体选择：可，只要有效类型不为近战（理由：括号只排除近战武器）。候选：仅远程武器。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 038] 近战装·躯干  （部位:躯干  护甲:2 动力:1 耐久:2 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：使用迎击牌时，当前回合护甲+2，动力+2。
+effect_ids：["equipment_effect_029"]
+
+──────────── 效果拆解（equipment_effect_029）────────────
+优先级：10
+模式：LISTEN（永久监听）
+植入：设置到躯干后注册，监听 use_action_card.USE_ACTION_AT。
+监听/入口：动作类型 &"use_action_card"；时点 USE_ACTION_AT。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 使用者是本牌机甲
+    "op": &"USED_CARD_OWNER_IS_SELF"
+  },
+  {  # 使用迎击牌
+    "op": &"USED_COUNTER_CARD"
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 本牌机甲
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 本回合护甲+2
+    "type": &"EXECUTE_STAT_MODIFY",  # 创建数值修正子动作，完整发出 STAT_MOD 生命周期
+    "params": {
+      "target_id": "$binding_context.mech_id",
+      "stat_type": &"armor",
+      "value": 2,
+      "method": &"add",
+      "duration": &"THIS_TURN"
+    }
+  },
+  {  # 随后本回合动力+2
+    "type": &"EXECUTE_STAT_MODIFY",  # 创建数值修正子动作，完整发出 STAT_MOD 生命周期
+    "params": {
+      "target_id": "$binding_context.mech_id",
+      "stat_type": &"power",
+      "value": 2,
+      "method": &"add",
+      "duration": &"THIS_TURN"
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$payload.used_card_type/owner_id。
+执行顺序：护甲+2 stat_modify settle 后，再动力+2；二者完成后继续迎击牌效果。
+人类 UI：自动发动，可用日志/浮字展示两项加成。
+
+──────────── 实现预告 ────────────
+- 复用：equipment_effect_029。
+
+──────────── 顺序与坑 ────────────
+- 每使用1张迎击牌触发1次；响应窗口最多1张迎击牌。
+
+──────────── 测试场景 ────────────
+场景a：使用迎击牌自动双加成
+  前置：M装备近战装·躯干；M在响应窗口使用迎击牌；涉及选择的玩家均is_human=true。
+  操作：USE_ACTION_AT。
+  断言：先armor临时+2，再power临时+2；两者duration THIS_TURN；迎击牌随后继续。
+场景b：无取消分支
+  前置：同a；涉及选择的玩家均is_human=true。
+  操作：观察UI与日志。
+  断言：不弹可选确认；效果自动执行一次。
+场景c：使用攻击/辅助牌
+  前置：M使用非迎击行动牌；涉及选择的玩家均is_human=true。
+  操作：USE_ACTION_AT。
+  断言：不触发。
+
+歧义点：
+[歧义1] 是否可选择不发动。智能体选择：不可，文本无“可以/可”，自动发动。候选：每次弹窗。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 039] 近战装·右臂  （部位:右臂  护甲:2 动力:2 耐久:3 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：使用近战武器发动攻击时，可以弃置1张行动牌，使威力+2。
+effect_ids：["equipment_effect_030"]
+
+──────────── 效果拆解（equipment_effect_030）────────────
+优先级：10
+模式：LISTEN（永久监听）
+植入：设置到手臂后注册，监听 attack.ATTACK_BEFORE。
+监听/入口：动作类型 &"attack"；时点 ATTACK_BEFORE。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 本牌机甲是攻击方
+    "op": &"SELF_MECH_IS_ATTACKER"
+  },
+  {  # 有效类型为近战
+    "op": &"ATTACK_EFFECTIVE_WEAPON_KIND",
+    "weapon_kind": &"近战"
+  },
+  {  # 至少1张行动牌
+    "op": &"HAS_ACTION_CARD_IN_HAND"
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 当前攻击
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[
+  {  # 可弃1张，取消不发动
+    "cost_type": &"DISCARD_ACTION_CARD",
+    "count": 1,
+    "optional": true
+  },
+]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 威力+2
+    "type": &"MODIFY_ATTACK_MIGHT",  # 修改当前/指定攻击 record 的额外威力
+    "params": {
+      "delta": 2
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$payload.effective_weapon_type。
+执行顺序：近战头priority20先转换；本效果priority10随后可触发。
+人类 UI：弃牌选择窗。
+
+──────────── 实现预告 ────────────
+- 复用：equipment_effect_030。
+
+──────────── 顺序与坑 ────────────
+- 左右臂若都具备同效果，会分别询问，可各弃1张叠加+4。
+
+──────────── 测试场景 ────────────
+场景a：近战攻击弃牌加威力
+  前置：M装备近战装·右臂；使用有效类型为近战的武器；手牌≥1；涉及选择的玩家均is_human=true。
+  操作：ATTACK_BEFORE选择弃1张行动牌。
+  断言：弃牌结算后attack.record["extra_might"]增加2。
+场景b：取消弃牌
+  前置：同a；涉及选择的玩家均is_human=true。
+  操作：支付窗取消。
+  断言：extra_might不变；手牌不变。
+场景c：有效类型不匹配
+  前置：使用有效类型非近战的武器；涉及选择的玩家均is_human=true。
+  操作：ATTACK_BEFORE。
+  断言：条件失败，不弹窗。
+
+歧义点：
+[歧义1] 双臂同时装备时是否都可发动。智能体选择：可以，各自独立监听与支付。候选：同名效果每次攻击限1次。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 040] 近战装·左臂  （部位:左臂  护甲:2 动力:2 耐久:3 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：使用近战武器发动攻击时，可以弃置1张行动牌，使威力+2。
+effect_ids：["equipment_effect_030"]
+
+──────────── 效果拆解（equipment_effect_030）────────────
+拆解同 [装备牌 039] 的 equipment_effect_030。
+本牌实例差异：binding_context.card_instance_id 指向 近战装·左臂 实例；slot_id=&"左臂"；牌面耐久=3、金币=3。
+模式/时点：LISTEN（永久监听）；&"attack".ATTACK_BEFORE。
+JSON effect_ids：["equipment_effect_030"]。
+
+──────────── 实现预告 ────────────
+- 复用 equipment_effect_030，不新增条件 op、动作或UI；仅由本牌JSON绑定同一effect_id。
+- 回归测试必须使用本牌自己的card_instance_id与左臂槽，不能只覆盖首张牌。
+
+──────────── 顺序与坑 ────────────
+- 左右臂若都具备同效果，会分别询问，可各弃1张叠加+4。
+
+──────────── 测试场景 ────────────
+场景a：近战攻击弃牌加威力
+  前置：M装备近战装·左臂；使用有效类型为近战的武器；手牌≥1；涉及选择的玩家均is_human=true。
+  操作：ATTACK_BEFORE选择弃1张行动牌。
+  断言：弃牌结算后attack.record["extra_might"]增加2。
+场景b：取消弃牌
+  前置：同a；涉及选择的玩家均is_human=true。
+  操作：支付窗取消。
+  断言：extra_might不变；手牌不变。
+场景c：有效类型不匹配
+  前置：使用有效类型非近战的武器；涉及选择的玩家均is_human=true。
+  操作：ATTACK_BEFORE。
+  断言：条件失败，不弹窗。
+
+歧义点：
+[歧义1] 双臂同时装备时是否都可发动。智能体选择：可以，各自独立监听与支付。候选：同名效果每次攻击限1次。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 041] 近战装·右腿  （部位:右腿  护甲:1 动力:2 耐久:2 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：此牌因损伤而从区域中弃置时可移除机甲其他区域内最多2损伤。
+effect_ids：["equipment_effect_031"]
+
+──────────── 效果拆解（equipment_effect_031）────────────
+优先级：10
+模式：LISTEN（永久监听）
+植入：设置到右腿后注册，监听 discard.DISCARD_AFTER。
+监听/入口：动作类型 &"discard"；时点 DISCARD_AFTER。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 弃的是本牌且来自区域
+    "op": &"DISCARD_IS_SELF_FROM_SLOT"
+  },
+  {  # 仅因耐久损伤弃置
+    "op": &"DISCARD_REASON_IS",
+    "reason": &"damage_durability"
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 由损伤移除UI在本机甲其他五个部件区域选择
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 可取消；确认后打开逐点移除UI，最多2点，排除原右腿区域
+    "type": &"CHOOSE_ONE",  # 弹出可取消/不可取消选择窗；窗口完成前父动作挂起
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "移除其他区域最多2损伤",
+          "actions": [
+            {
+              "type": &"REMOVE_DAMAGE_TOKENS_OTHER_SLOTS",  # 打开/执行其他区域损伤移除
+              "params": {
+                "amount": 2,
+                "exclude_slot_id": "$payload.origin_slot_id",
+                "executor_id": "$binding_context.mech_id"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$payload.origin_slot_id/discard_reason；$binding_context.mech_id。
+执行顺序：牌在tmp_zone时诱发；移除损伤动作挂起弃置，完成后原弃置settle。
+人类 UI：显示其他区域可移除损伤；若不足2点可移除全部并确认。
+
+──────────── 实现预告 ────────────
+- 复用：equipment_effect_031。
+
+──────────── 顺序与坑 ────────────
+- 装备替换、卖出、效果自弃均不触发。
+- 不能移除原区域损伤。
+
+──────────── 测试场景 ────────────
+场景a：因损伤弃置后移除其他区域2损伤
+  前置：M装备近战装·右腿于右腿；其他区域共3损伤；本牌因达到耐久弃置；涉及选择的玩家均is_human=true。
+  操作：DISCARD_AFTER确认→在移除UI选择其他区域2点。
+  断言：其他区域总损伤减少2；原右腿区域不在候选；本牌正常弃置。
+场景b：取消
+  前置：同a；涉及选择的玩家均is_human=true。
+  操作：CHOOSE_ONE取消。
+  断言：其他区域损伤不变。
+场景c：非损伤原因弃置
+  前置：以equipment_replace或sell弃置本牌；涉及选择的玩家均is_human=true。
+  操作：DISCARD_AFTER。
+  断言：DISCARD_REASON_IS失败；不弹窗。
+
+歧义点：
+[歧义1] “最多2”是否允许确认0。智能体选择：弹窗可取消；一旦确认至少移除1，最多2。候选：强制尽量移除2。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 042] 近战装·左腿  （部位:左腿  护甲:1 动力:2 耐久:1 金币:2）
+═══════════════════════════════════════════════════════════
+效果文本：此牌从区域中弃置时可立即抽1张装备牌并设置到区域上(若不立即设置则需要直接弃置)。
+effect_ids：["equipment_effect_005"]
+
+──────────── 效果拆解（equipment_effect_005）────────────
+拆解同 [装备牌 010] 的 equipment_effect_005。
+本牌实例差异：binding_context.card_instance_id 指向 近战装·左腿 实例；slot_id=&"左腿"；牌面耐久=1、金币=2。
+模式/时点：LISTEN（永久监听）；&"discard".DISCARD_AFTER。
+JSON effect_ids：["equipment_effect_005"]。
+
+──────────── 实现预告 ────────────
+- 复用 equipment_effect_005，不新增条件 op、动作或UI；仅由本牌JSON绑定同一effect_id。
+- 回归测试必须使用本牌自己的card_instance_id与左腿槽，不能只覆盖首张牌。
+
+──────────── 顺序与坑 ────────────
+- 新牌设置到原槽时，设置动作会按新牌耐久移除该槽损伤；不能在抽牌时提前清损伤。
+- 若牌堆为空，应按牌堆补充/空抽规则结束，不生成虚拟卡。
+
+──────────── 测试场景 ────────────
+场景a：离场抽装备并立即设置
+  前置：近战装·左腿装备于左腿；装备牌堆顶为合法装备E；本牌被标准弃置；涉及选择的玩家均is_human=true。
+  操作：DISCARD_AFTER触发→确认抽牌→GAIN_CARD得到E→在set_equipment面板选择合法区域并确认。
+  断言：E.zone=="equipped"；目标槽equipped_card==E；原牌进入equipment_discard；父discard在所有子动作完成后SETTLE。
+场景b：抽到后取消设置
+  前置：同a；涉及选择的玩家均is_human=true。
+  操作：获得E后在立即设置面板取消并确认弃置。
+  断言：E.zone=="equipment_discard"；E未留在手牌/备用区；原牌弃置正常完成。
+场景c：其他牌离场
+  前置：近战装·左腿仍装备；弃置另一装备牌；涉及选择的玩家均is_human=true。
+  操作：触发另一牌的DISCARD_AFTER。
+  断言：本效果条件失败；不抽装备。
+
+歧义点：
+[歧义1] 玩家是否可以主动选择“不立即设置”。智能体选择：可以取消设置，但抽到的牌随即直接弃置（理由：括号明确规定未立即设置的后果）。候选：必须选择一个合法区域。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+套装8：精英装（装备牌 043～048）
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+
+═══════════════════════════════════════════════════════════
+[装备牌 043] 精英装·头部  （部位:头部  护甲:2 动力:1 耐久:3 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：此牌设置到区域中时可以抽1张行动牌。
+effect_ids：["equipment_effect_033"]
+
+──────────── 效果拆解（equipment_effect_033）────────────
+优先级：10
+模式：LISTEN（永久监听，新建）
+植入：本牌在 SET_EQUIP_AT 后已临时放入槽；监听 set_equipment.SET_EQUIP_AFTER（正式参与数值后）并由本次设置动作临时注册/静态定义匹配自身。
+监听/入口：动作类型 &"set_equipment"；时点 SET_EQUIP_AFTER。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 本次正式设置的卡实例是本牌
+    "op": &"SET_EQUIP_IS_SELF"
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 抽牌给设置本牌的机甲
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 可取消；确认后执行获取牌动作抽1行动牌
+    "type": &"CHOOSE_ONE",  # 弹出可取消/不可取消选择窗；窗口完成前父动作挂起
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "抽1张行动牌",
+          "actions": [
+            {
+              "type": &"DRAW_ACTION",  # 通过获取牌动作抽取行动牌
+              "params": {
+                "count": 1,
+                "target_id": "$binding_context.mech_id"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$payload.card_instance_id/target_slot_id/executor_mech_id。
+执行顺序：SET_EQUIP_AFTER→抽牌子动作→返回SET_EQUIP_SETTLE；确保本牌已正式设置并已注册后续永久效果。
+人类 UI：设置成功后弹“抽1行动牌 / 取消”。
+
+──────────── 实现预告 ────────────
+- 需新增 equipment_effect_033，仿离场监听 effect_003 但时点为 SET_EQUIP_AFTER。
+- 需新增条件 op SET_EQUIP_IS_SELF（比较 $payload.card_instance_id 与 $binding_context.card_instance_id），登记 ConditionChecker.gd。
+- 动作复用 DRAW_ACTION/CHOOSE_ONE。
+
+──────────── 顺序与坑 ────────────
+- 初始游戏设置装备是否发出完整 SET_EQUIP_AFTER 决定是否触发；需统一走设置装备动作。
+- 替换同名卡是新卡实例，分别触发。
+
+──────────── 测试场景 ────────────
+场景a：设置成功后抽1行动牌
+  前置：P通过标准set_equipment将精英装·头部设到头部；涉及选择的玩家均is_human=true。
+  操作：SET_EQUIP_AFTER确认抽牌。
+  断言：行动牌堆顶1张转移给P；gain_card完整结算；本牌仍在槽且已正式提供stats。
+场景b：取消抽牌
+  前置：同a；涉及选择的玩家均is_human=true。
+  操作：CHOOSE_ONE取消。
+  断言：不抽牌；设置装备动作仍正常SETTLE。
+场景c：其他装备被设置
+  前置：精英装·头部已在槽；再设置另一牌到其他槽；涉及选择的玩家均is_human=true。
+  操作：SET_EQUIP_AFTER。
+  断言：SET_EQUIP_IS_SELF=false；不触发本牌抽牌。
+
+歧义点：
+[歧义1] 游戏开始前初始设置是否触发。智能体选择：触发，只要走标准 set_equipment 生命周期（理由：文本无“游戏中”限制）。候选：仅正式回合内设置触发。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 044] 精英装·躯干  （部位:躯干  护甲:2 动力:3 耐久:5 金币:5）
+═══════════════════════════════════════════════════════════
+效果文本：此牌因损伤而从区域中弃置时可以抽2张行动牌。
+effect_ids：["equipment_effect_034"]
+
+──────────── 效果拆解（equipment_effect_034）────────────
+优先级：10
+模式：LISTEN（永久监听，新建）
+植入：设置后注册，监听 discard.DISCARD_AFTER。
+监听/入口：动作类型 &"discard"；时点 DISCARD_AFTER。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 本牌从设置区域弃置
+    "op": &"DISCARD_IS_SELF_FROM_SLOT"
+  },
+  {  # 原因是damage_durability
+    "op": &"DISCARD_REASON_IS",
+    "reason": &"damage_durability"
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 抽牌给本牌机甲
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 可取消；确认后抽2行动牌
+    "type": &"CHOOSE_ONE",  # 弹出可取消/不可取消选择窗；窗口完成前父动作挂起
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "抽2张行动牌",
+          "actions": [
+            {
+              "type": &"DRAW_ACTION",  # 通过获取牌动作抽取行动牌
+              "params": {
+                "count": 2,
+                "target_id": "$binding_context.mech_id"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$payload.discard_reason/card_instance_id。
+执行顺序：牌位于tmp_zone时抽牌；获取动作完成后原弃置结算。
+人类 UI：离场后弹可选抽牌窗。
+
+──────────── 实现预告 ────────────
+- 需新增 equipment_effect_034，仿 effect_031 的 reason 过滤与 DRAW_ACTION。
+
+──────────── 顺序与坑 ────────────
+- 仅因损伤耐久弃置触发；装备替换与卖出不触发。
+- 抽牌可能超过手牌上限，直到回合结束清理。
+
+──────────── 测试场景 ────────────
+场景a：因损伤弃置抽2行动牌
+  前置：M装备精英装·躯干；因损伤达到耐久5；涉及选择的玩家均is_human=true。
+  操作：DISCARD_AFTER确认抽牌。
+  断言：行动牌堆顶2张进入M手牌；本牌进入equipment_discard。
+场景b：取消抽牌
+  前置：同a；涉及选择的玩家均is_human=true。
+  操作：取消。
+  断言：不抽牌；本牌仍完成弃置。
+场景c：替换/卖出弃置
+  前置：以equipment_replace或sell弃置；涉及选择的玩家均is_human=true。
+  操作：DISCARD_AFTER。
+  断言：reason不匹配，不弹窗。
+
+歧义点：
+[歧义1] “可以抽2张”是否允许只抽1。智能体选择：选择发动时固定抽2，或取消。候选：选择0～2。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 045] 精英装·右臂  （部位:右臂  护甲:3 动力:1 耐久:4 金币:4）
+═══════════════════════════════════════════════════════════
+效果文本：此牌因损伤而从区域中弃置时可以抽2张行动牌。
+effect_ids：["equipment_effect_034"]
+
+──────────── 效果拆解（equipment_effect_034）────────────
+拆解同 [装备牌 044] 的 equipment_effect_034。
+本牌实例差异：binding_context.card_instance_id 指向 精英装·右臂 实例；slot_id=&"右臂"；牌面耐久=4、金币=4。
+模式/时点：LISTEN（永久监听，新建）；&"discard".DISCARD_AFTER。
+JSON effect_ids：["equipment_effect_034"]。
+
+──────────── 实现预告 ────────────
+- 复用 equipment_effect_034，不新增条件 op、动作或UI；仅由本牌JSON绑定同一effect_id。
+- 回归测试必须使用本牌自己的card_instance_id与右臂槽，不能只覆盖首张牌。
+
+──────────── 顺序与坑 ────────────
+- 仅因损伤耐久弃置触发；装备替换与卖出不触发。
+- 抽牌可能超过手牌上限，直到回合结束清理。
+
+──────────── 测试场景 ────────────
+场景a：因损伤弃置抽2行动牌
+  前置：M装备精英装·右臂；因损伤达到耐久4；涉及选择的玩家均is_human=true。
+  操作：DISCARD_AFTER确认抽牌。
+  断言：行动牌堆顶2张进入M手牌；本牌进入equipment_discard。
+场景b：取消抽牌
+  前置：同a；涉及选择的玩家均is_human=true。
+  操作：取消。
+  断言：不抽牌；本牌仍完成弃置。
+场景c：替换/卖出弃置
+  前置：以equipment_replace或sell弃置；涉及选择的玩家均is_human=true。
+  操作：DISCARD_AFTER。
+  断言：reason不匹配，不弹窗。
+
+歧义点：
+[歧义1] “可以抽2张”是否允许只抽1。智能体选择：选择发动时固定抽2，或取消。候选：选择0～2。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 046] 精英装·左臂  （部位:左臂  护甲:3 动力:1 耐久:4 金币:4）
+═══════════════════════════════════════════════════════════
+效果文本：此牌因损伤而从区域中弃置时可以抽2张行动牌。
+effect_ids：["equipment_effect_034"]
+
+──────────── 效果拆解（equipment_effect_034）────────────
+拆解同 [装备牌 044] 的 equipment_effect_034。
+本牌实例差异：binding_context.card_instance_id 指向 精英装·左臂 实例；slot_id=&"左臂"；牌面耐久=4、金币=4。
+模式/时点：LISTEN（永久监听，新建）；&"discard".DISCARD_AFTER。
+JSON effect_ids：["equipment_effect_034"]。
+
+──────────── 实现预告 ────────────
+- 复用 equipment_effect_034，不新增条件 op、动作或UI；仅由本牌JSON绑定同一effect_id。
+- 回归测试必须使用本牌自己的card_instance_id与左臂槽，不能只覆盖首张牌。
+
+──────────── 顺序与坑 ────────────
+- 仅因损伤耐久弃置触发；装备替换与卖出不触发。
+- 抽牌可能超过手牌上限，直到回合结束清理。
+
+──────────── 测试场景 ────────────
+场景a：因损伤弃置抽2行动牌
+  前置：M装备精英装·左臂；因损伤达到耐久4；涉及选择的玩家均is_human=true。
+  操作：DISCARD_AFTER确认抽牌。
+  断言：行动牌堆顶2张进入M手牌；本牌进入equipment_discard。
+场景b：取消抽牌
+  前置：同a；涉及选择的玩家均is_human=true。
+  操作：取消。
+  断言：不抽牌；本牌仍完成弃置。
+场景c：替换/卖出弃置
+  前置：以equipment_replace或sell弃置；涉及选择的玩家均is_human=true。
+  操作：DISCARD_AFTER。
+  断言：reason不匹配，不弹窗。
+
+歧义点：
+[歧义1] “可以抽2张”是否允许只抽1。智能体选择：选择发动时固定抽2，或取消。候选：选择0～2。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 047] 精英装·右腿  （部位:右腿  护甲:2 动力:2 耐久:3 金币:4）
+═══════════════════════════════════════════════════════════
+效果文本：此牌设置到区域中时可以抽1张行动牌。
+effect_ids：["equipment_effect_033"]
+
+──────────── 效果拆解（equipment_effect_033）────────────
+拆解同 [装备牌 043] 的 equipment_effect_033。
+本牌实例差异：binding_context.card_instance_id 指向 精英装·右腿 实例；slot_id=&"右腿"；牌面耐久=3、金币=4。
+模式/时点：LISTEN（永久监听，新建）；&"set_equipment".SET_EQUIP_AFTER。
+JSON effect_ids：["equipment_effect_033"]。
+
+──────────── 实现预告 ────────────
+- 复用 equipment_effect_033，不新增条件 op、动作或UI；仅由本牌JSON绑定同一effect_id。
+- 回归测试必须使用本牌自己的card_instance_id与右腿槽，不能只覆盖首张牌。
+
+──────────── 顺序与坑 ────────────
+- 初始游戏设置装备是否发出完整 SET_EQUIP_AFTER 决定是否触发；需统一走设置装备动作。
+- 替换同名卡是新卡实例，分别触发。
+
+──────────── 测试场景 ────────────
+场景a：设置成功后抽1行动牌
+  前置：P通过标准set_equipment将精英装·右腿设到右腿；涉及选择的玩家均is_human=true。
+  操作：SET_EQUIP_AFTER确认抽牌。
+  断言：行动牌堆顶1张转移给P；gain_card完整结算；本牌仍在槽且已正式提供stats。
+场景b：取消抽牌
+  前置：同a；涉及选择的玩家均is_human=true。
+  操作：CHOOSE_ONE取消。
+  断言：不抽牌；设置装备动作仍正常SETTLE。
+场景c：其他装备被设置
+  前置：精英装·右腿已在槽；再设置另一牌到其他槽；涉及选择的玩家均is_human=true。
+  操作：SET_EQUIP_AFTER。
+  断言：SET_EQUIP_IS_SELF=false；不触发本牌抽牌。
+
+歧义点：
+[歧义1] 游戏开始前初始设置是否触发。智能体选择：触发，只要走标准 set_equipment 生命周期（理由：文本无“游戏中”限制）。候选：仅正式回合内设置触发。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 048] 精英装·左腿  （部位:左腿  护甲:2 动力:2 耐久:3 金币:4）
+═══════════════════════════════════════════════════════════
+效果文本：此牌设置到区域中时可以抽1张行动牌。
+effect_ids：["equipment_effect_033"]
+
+──────────── 效果拆解（equipment_effect_033）────────────
+拆解同 [装备牌 043] 的 equipment_effect_033。
+本牌实例差异：binding_context.card_instance_id 指向 精英装·左腿 实例；slot_id=&"左腿"；牌面耐久=3、金币=4。
+模式/时点：LISTEN（永久监听，新建）；&"set_equipment".SET_EQUIP_AFTER。
+JSON effect_ids：["equipment_effect_033"]。
+
+──────────── 实现预告 ────────────
+- 复用 equipment_effect_033，不新增条件 op、动作或UI；仅由本牌JSON绑定同一effect_id。
+- 回归测试必须使用本牌自己的card_instance_id与左腿槽，不能只覆盖首张牌。
+
+──────────── 顺序与坑 ────────────
+- 初始游戏设置装备是否发出完整 SET_EQUIP_AFTER 决定是否触发；需统一走设置装备动作。
+- 替换同名卡是新卡实例，分别触发。
+
+──────────── 测试场景 ────────────
+场景a：设置成功后抽1行动牌
+  前置：P通过标准set_equipment将精英装·左腿设到左腿；涉及选择的玩家均is_human=true。
+  操作：SET_EQUIP_AFTER确认抽牌。
+  断言：行动牌堆顶1张转移给P；gain_card完整结算；本牌仍在槽且已正式提供stats。
+场景b：取消抽牌
+  前置：同a；涉及选择的玩家均is_human=true。
+  操作：CHOOSE_ONE取消。
+  断言：不抽牌；设置装备动作仍正常SETTLE。
+场景c：其他装备被设置
+  前置：精英装·左腿已在槽；再设置另一牌到其他槽；涉及选择的玩家均is_human=true。
+  操作：SET_EQUIP_AFTER。
+  断言：SET_EQUIP_IS_SELF=false；不触发本牌抽牌。
+
+歧义点：
+[歧义1] 游戏开始前初始设置是否触发。智能体选择：触发，只要走标准 set_equipment 生命周期（理由：文本无“游戏中”限制）。候选：仅正式回合内设置触发。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+套装9：联邦的白马（装备牌 049～054）
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+
+═══════════════════════════════════════════════════════════
+[装备牌 049] 联邦的白马·头部  （部位:头部  护甲:1 动力:1 耐久:3 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：其他区域每设置有1张名称带有联邦的装备牌则此牌护甲+1。
+effect_ids：["equipment_effect_002"]
+
+──────────── 效果拆解（equipment_effect_002）────────────
+拆解同 [装备牌 007] 的 equipment_effect_002。
+本牌实例差异：binding_context.card_instance_id 指向 联邦的白马·头部 实例；slot_id=&"头部"；牌面耐久=3、金币=3。
+模式/查询：派生值；查询时实时重算；不注册监听器。
+JSON effect_ids：["equipment_effect_002"]。
+
+──────────── 实现预告 ────────────
+- 复用 equipment_effect_002，不新增条件 op、动作或UI；仅由本牌JSON绑定同一effect_id。
+- 回归测试必须使用本牌自己的card_instance_id与头部槽，不能只覆盖首张牌。
+
+──────────── 顺序与坑 ────────────
+- 必须排除来源牌自身，按卡实例/slot_id 双重排除，防止换槽或脏数据时自计数。
+- 备用区背面牌是否计数须统一；本拆解默认只计入正面、效果有效的装备区域。
+
+──────────── 测试场景 ────────────
+场景a：统计其他联邦装备
+  前置：M装备联邦的白马·头部于头部；另有2张正面名称含“联邦”的装备，另有1张非联邦装备；头部损伤=0；涉及选择的玩家均is_human=true。
+  操作：调用M.get_armor()与该槽get_effective_armor(M)。
+  断言：helper计数=2；头部有效护甲=牌面/区域基础护甲+2；UI明细含“联邦装备联动 +2”。
+场景b：移除一张联邦装备后实时重算
+  前置：承接a；涉及选择的玩家均is_human=true。
+  操作：将其中1张联邦装备标准弃置。
+  断言：下一次查询bonus从2降为1；不存在残留stat modifier或重复累计。
+场景c：不计自身与背面备用牌
+  前置：仅联邦的白马·头部自身名称含联邦，备用区另有1张背面联邦装备；涉及选择的玩家均is_human=true。
+  操作：查询护甲。
+  断言：bonus==0；不弹任何选择UI；本牌自身与背面备用牌均不计。
+
+歧义点：
+[歧义1] “其他区域”是否包含武器区与备用区。智能体选择：包含正面武器区，排除背面备用区（理由：武器也是已设置装备；背面备用牌通常不提供信息/效果）。候选：仅其他5个部件区；或连备用区也计数。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 050] 联邦的白马·躯干  （部位:躯干  护甲:4 动力:2 耐久:4 金币:5）
+═══════════════════════════════════════════════════════════
+效果文本：使用迎击牌响应攻击时，可以设置1损伤在此牌上，之后使该攻击威力-4。
+effect_ids：["equipment_effect_035"]
+
+──────────── 效果拆解（equipment_effect_035）────────────
+优先级：10
+模式：LISTEN（永久监听，新建）
+植入：设置到躯干后注册，监听 use_action_card.USE_ACTION_AT；仅迎击牌已被响应窗口选中并进入临时区时。
+监听/入口：动作类型 &"use_action_card"；时点 USE_ACTION_AT。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 迎击牌使用者为本牌机甲
+    "op": &"USED_CARD_OWNER_IS_SELF"
+  },
+  {  # 使用的是迎击牌
+    "op": &"USED_COUNTER_CARD"
+  },
+  {  # 使用动作绑定的原攻击仍有效
+    "op": &"USED_ACTION_LINKED_ATTACK_EXISTS"
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 固定损伤本牌所在躯干并修正绑定攻击
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 确认后先走损伤变动动作固定在本牌槽，再修改原攻击extra_might=-4
+    "type": &"CHOOSE_ONE",  # 弹出可取消/不可取消选择窗；窗口完成前父动作挂起
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "在此牌上设置1损伤，攻击威力-4",
+          "actions": [
+            {
+              "type": &"EXECUTE_DAMAGE_CHANGE",  # 创建损伤变动子动作并完整发出 DAMAGE_CHANGE 生命周期
+              "params": {
+                "target_mech_id": "$binding_context.mech_id",
+                "target_slot_id": "$binding_context.slot_id",
+                "value": 1,
+                "method": &"increase",
+                "executor": &"SYSTEM_DEFAULT",
+                "reason": &"equipment_effect_cost",
+                "fixed_slot": true
+              }
+            },
+            {
+              "type": &"MODIFY_ATTACK_MIGHT",  # 修改当前/指定攻击 record 的额外威力
+              "params": {
+                "attack_id": "$payload.linked_attack_id",
+                "delta": -4
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$payload.linked_attack_id/used_card_type；$binding_context.slot_id/card_instance_id。
+执行顺序：损伤动作可能使本牌达到耐久并弃置；弃置及其诱发结算后，已承诺的第二步仍必须对 linked attack 威力-4。
+人类 UI：迎击使用时弹窗，显示躯干当前损伤/耐久与可能弃置预警；可取消。
+
+──────────── 实现预告 ────────────
+- 需新增 equipment_effect_035。
+- 需新增条件 op USED_ACTION_LINKED_ATTACK_EXISTS，或确保 USE_ACTION_AT payload 标准含 linked_attack_id。
+- MODIFY_ATTACK_MIGHT 需支持 params.attack_id 显式修正父/绑定攻击；若现实现只改当前payload，需扩展。
+- EXECUTE_DAMAGE_CHANGE 复用，但需支持 fixed_slot + SYSTEM_DEFAULT 以免弹全区域损伤分配UI。
+- JSON effect_ids：part_050=["equipment_effect_035"]。
+
+──────────── 顺序与坑 ────────────
+- 效果不是一张额外迎击牌，不占“最多1张迎击牌”名额；它由已使用迎击牌诱发。
+- 威力修正在 ATTACK_AT 响应窗口内部发生，窗口关闭后常规监听继续。
+
+──────────── 测试场景 ────────────
+场景a：迎击响应时置1损伤并减威力4
+  前置：M装备联邦的白马·躯干于躯干且该槽0损伤；敌方攻击M；M使用迎击牌；涉及选择的玩家均is_human=true。
+  操作：USE_ACTION_AT确认装备效果。
+  断言：躯干.damage_tokens从0变1；linked attack.record["extra_might"]减少4；迎击牌继续。
+场景b：取消
+  前置：同a；涉及选择的玩家均is_human=true。
+  操作：装备CHOOSE_ONE取消。
+  断言：本槽损伤不变；攻击威力不变。
+场景c：使用非迎击牌或无绑定攻击
+  前置：M使用攻击/辅助牌，或测试构造USE_ACTION_AT无linked_attack_id；涉及选择的玩家均is_human=true。
+  操作：进入时点。
+  断言：条件失败，不弹窗。
+场景d：置损伤导致本牌离场
+  前置：本槽已有3损伤；涉及选择的玩家均is_human=true。
+  操作：迎击时确认。
+  断言：损伤使牌弃置并注销监听；已承诺的linked attack extra_might仍-4。
+
+歧义点：
+[歧义1] 置1损伤是否视为成本，若本牌因该损伤弃置是否仍减威力。智能体选择：仍减（理由：“之后”表示先付出再结算后续；效果已承诺）。候选：牌离场导致后半段失效。▶ 回答：____________________
+[歧义2] 该损伤是否可被联邦右臂转移。智能体选择：不可，fixed_slot 明确“在此牌上”；候选：仍开启通用损伤转移窗口。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 051] 联邦的白马·右臂  （部位:右臂  护甲:3 动力:1 耐久:3 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：使用名称带有光束的近战武器攻击时，威力+3。
+effect_ids：["equipment_effect_036"]
+
+──────────── 效果拆解（equipment_effect_036）────────────
+优先级：10
+模式：LISTEN（永久监听，新建）
+植入：设置到手臂后注册，监听 attack.ATTACK_BEFORE。
+监听/入口：动作类型 &"attack"；时点 ATTACK_BEFORE。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 本牌机甲是攻击方
+    "op": &"SELF_MECH_IS_ATTACKER"
+  },
+  {  # 有效类型为近战
+    "op": &"ATTACK_EFFECTIVE_WEAPON_KIND",
+    "weapon_kind": &"近战"
+  },
+  {  # 所选武器名称含“光束”
+    "op": &"WEAPON_NAME_CONTAINS",
+    "substring": "光束"
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 当前攻击
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 威力自动+3
+    "type": &"MODIFY_ATTACK_MIGHT",  # 修改当前/指定攻击 record 的额外威力
+    "params": {
+      "delta": 3
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$payload.weapon_card_def_id/effective_weapon_type。
+执行顺序：近战头转换先改变有效类型，但武器名称仍取原武器卡；名称含光束且有效类型匹配即触发。
+人类 UI：自动显示威力加成来源。
+
+──────────── 实现预告 ────────────
+- 需新增 equipment_effect_036，仿 equipment_effect_025/030，复用 WEAPON_NAME_CONTAINS 与 ATTACK_EFFECTIVE_WEAPON_KIND。
+
+──────────── 顺序与坑 ────────────
+- 名称匹配是子串，不按标签；本地化名称变化需保持权威中文名或改为标签。
+
+──────────── 测试场景 ────────────
+场景a：光束近战武器威力+3
+  前置：M装备联邦的白马·右臂；选择名称含“光束”且有效类型为近战的武器；涉及选择的玩家均is_human=true。
+  操作：ATTACK_BEFORE。
+  断言：attack.record["extra_might"]增加3。
+场景b：名称不匹配
+  前置：选择有效类型为近战但名称不含“光束”的武器；涉及选择的玩家均is_human=true。
+  操作：ATTACK_BEFORE。
+  断言：不加威力。
+场景c：有效类型不匹配
+  前置：选择名称含“光束”但有效类型非近战的武器；涉及选择的玩家均is_human=true。
+  操作：ATTACK_BEFORE。
+  断言：不加威力。
+
+歧义点：
+[歧义1] 光束远程武器经近战头转换后由哪只手臂加成。智能体选择：若名称含光束且有效类型变为近战，则触发近战右臂，不触发远程左臂（理由：类型判定读effective）。候选：按原始类型触发左臂。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 052] 联邦的白马·左臂  （部位:左臂  护甲:3 动力:1 耐久:3 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：使用名称带有光束的远程武器攻击时，威力+3。
+effect_ids：["equipment_effect_037"]
+
+──────────── 效果拆解（equipment_effect_037）────────────
+优先级：10
+模式：LISTEN（永久监听，新建）
+植入：设置到手臂后注册，监听 attack.ATTACK_BEFORE。
+监听/入口：动作类型 &"attack"；时点 ATTACK_BEFORE。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 本牌机甲是攻击方
+    "op": &"SELF_MECH_IS_ATTACKER"
+  },
+  {  # 有效类型为远程
+    "op": &"ATTACK_EFFECTIVE_WEAPON_KIND",
+    "weapon_kind": &"远程"
+  },
+  {  # 所选武器名称含“光束”
+    "op": &"WEAPON_NAME_CONTAINS",
+    "substring": "光束"
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 当前攻击
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 威力自动+3
+    "type": &"MODIFY_ATTACK_MIGHT",  # 修改当前/指定攻击 record 的额外威力
+    "params": {
+      "delta": 3
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$payload.weapon_card_def_id/effective_weapon_type。
+执行顺序：近战头转换先改变有效类型，但武器名称仍取原武器卡；名称含光束且有效类型匹配即触发。
+人类 UI：自动显示威力加成来源。
+
+──────────── 实现预告 ────────────
+- 需新增 equipment_effect_037，仿 equipment_effect_025/030，复用 WEAPON_NAME_CONTAINS 与 ATTACK_EFFECTIVE_WEAPON_KIND。
+
+──────────── 顺序与坑 ────────────
+- 名称匹配是子串，不按标签；本地化名称变化需保持权威中文名或改为标签。
+
+──────────── 测试场景 ────────────
+场景a：光束远程武器威力+3
+  前置：M装备联邦的白马·左臂；选择名称含“光束”且有效类型为远程的武器；涉及选择的玩家均is_human=true。
+  操作：ATTACK_BEFORE。
+  断言：attack.record["extra_might"]增加3。
+场景b：名称不匹配
+  前置：选择有效类型为远程但名称不含“光束”的武器；涉及选择的玩家均is_human=true。
+  操作：ATTACK_BEFORE。
+  断言：不加威力。
+场景c：有效类型不匹配
+  前置：选择名称含“光束”但有效类型非远程的武器；涉及选择的玩家均is_human=true。
+  操作：ATTACK_BEFORE。
+  断言：不加威力。
+
+歧义点：
+[歧义1] 光束远程武器经近战头转换后由哪只手臂加成。智能体选择：若名称含光束且有效类型变为近战，则触发近战右臂，不触发远程左臂（理由：类型判定读effective）。候选：按原始类型触发左臂。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 053] 联邦的白马·右腿  （部位:右腿  护甲:2 动力:2 耐久:3 金币:4）
+═══════════════════════════════════════════════════════════
+效果文本：机甲被指定为攻击目标时，可在当前回合动力+3。
+effect_ids：["equipment_effect_038"]
+
+──────────── 效果拆解（equipment_effect_038）────────────
+优先级：10
+模式：LISTEN（永久监听，新建）
+植入：设置到右腿后注册，监听 attack.ATTACK_PRE。
+监听/入口：动作类型 &"attack"；时点 ATTACK_PRE。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 本牌机甲是攻击目标
+    "op": &"SELF_MECH_IS_ATTACK_TARGET"
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 本牌机甲
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 可取消；确认后动力+3
+    "type": &"CHOOSE_ONE",  # 弹出可取消/不可取消选择窗；窗口完成前父动作挂起
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "本回合动力+3",
+          "actions": [
+            {
+              "type": &"EXECUTE_STAT_MODIFY",  # 创建数值修正子动作，完整发出 STAT_MOD 生命周期
+              "params": {
+                "target_id": "$binding_context.mech_id",
+                "stat_type": &"power",
+                "value": 3,
+                "method": &"add",
+                "duration": &"THIS_TURN"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$payload.target_ids。
+执行顺序：ATTACK_PRE执行，增加可用于随后迎击牌的动力。
+人类 UI：弹可选确认。
+
+──────────── 实现预告 ────────────
+- 需新增 equipment_effect_038，仿 equipment_effect_006，将数值2改为3。
+- 不复用 effect_006，因参数固定定义不同且逐效果独立更便于测试。
+
+──────────── 顺序与坑 ────────────
+- 多次被指定可叠加。
+
+──────────── 测试场景 ────────────
+场景a：被指定目标后选择动力+3
+  前置：M装备联邦的白马·右腿于右腿；敌方选择M为攻击目标；M当前动力=1；涉及选择的玩家均is_human=true。
+  操作：ATTACK_PRE触发→确认“本回合动力+3”。
+  断言：M的本回合power stat modifier增加3；当前可用动力同步增加3；attack继续到ATTACK_AT。
+场景b：取消
+  前置：同a；涉及选择的玩家均is_human=true。
+  操作：CHOOSE_ONE取消。
+  断言：动力与临时修正均不变；攻击继续。
+场景c：攻击目标不是本机甲
+  前置：敌方选择另一机甲为目标，M仍装备联邦的白马·右腿；涉及选择的玩家均is_human=true。
+  操作：进入ATTACK_PRE。
+  断言：SELF_MECH_IS_ATTACK_TARGET=false；不弹窗。
+
+歧义点：
+[歧义1] 是否直接复用 effect_006 参数化定义。智能体选择：新建effect_038（理由：既有effect_id固定语义为+2，逐效果独立更便于测试与数据审计）。候选：effect_006增加value参数。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 054] 联邦的白马·左腿  （部位:左腿  护甲:2 动力:2 耐久:3 金币:4）
+═══════════════════════════════════════════════════════════
+效果文本：机甲被攻击命中时，可以设置2损伤在此牌上，之后可最多减少此次攻击产生的3损伤。
+effect_ids：["equipment_effect_039"]
+
+──────────── 效果拆解（equipment_effect_039）────────────
+优先级：10
+模式：LISTEN（永久监听，新建）
+植入：设置到左腿后注册，监听 attack.ATTACK_AFTER。
+监听/入口：动作类型 &"attack"；时点 ATTACK_AFTER。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 本牌机甲是目标
+    "op": &"SELF_MECH_IS_ATTACK_TARGET"
+  },
+  {  # 攻击命中
+    "op": &"ATTACK_HIT"
+  },
+  {  # 攻击损伤至少1
+    "op": &"ATTACK_MARKERS_ABOVE",
+    "threshold": 1
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 固定给本牌槽置损伤并修正当前attack
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 确认后固定置2损伤，再将attack.damage_markers减少至多3（最低0）
+    "type": &"CHOOSE_ONE",  # 弹出可取消/不可取消选择窗；窗口完成前父动作挂起
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "在此牌上设置2损伤，最多减少3攻击损伤",
+          "actions": [
+            {
+              "type": &"EXECUTE_DAMAGE_CHANGE",  # 创建损伤变动子动作并完整发出 DAMAGE_CHANGE 生命周期
+              "params": {
+                "target_mech_id": "$binding_context.mech_id",
+                "target_slot_id": "$binding_context.slot_id",
+                "value": 2,
+                "method": &"increase",
+                "executor": &"SYSTEM_DEFAULT",
+                "reason": &"equipment_effect_cost",
+                "fixed_slot": true
+              }
+            },
+            {
+              "type": &"MODIFY_ATTACK_MARKERS",  # 修改攻击 record 的 damage_markers，最终最低0
+              "params": {
+                "delta": -3
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$payload.damage_markers/hit；$binding_context.slot_id。
+执行顺序：置2损伤及可能离场完全结算后，再修改攻击损伤；父attack保持等待。
+人类 UI：显示本牌损伤/耐久与预计减少值；可取消。
+
+──────────── 实现预告 ────────────
+- 需新增 equipment_effect_039，仿 effect_007，但支付方式由弃自身改为固定置2损伤。
+- EXECUTE_DAMAGE_CHANGE fixed_slot 需求同 effect_035。
+
+──────────── 顺序与坑 ────────────
+- 本牌耐久3，当前损伤≥1时再置2会因耐久弃置；后续减损伤仍执行。
+- 固定置损伤不允许转移。
+
+──────────── 测试场景 ────────────
+场景a：置2损伤并减3攻击损伤
+  前置：M装备联邦的白马·左腿于左腿，本槽0损伤；攻击命中且damage_markers=4；涉及选择的玩家均is_human=true。
+  操作：ATTACK_AFTER确认。
+  断言：本槽damage_tokens=2；attack.record["damage_markers"]从4变1。
+场景b：取消
+  前置：同a；涉及选择的玩家均is_human=true。
+  操作：取消。
+  断言：本槽损伤与attack markers均不变。
+场景c：未命中/0损伤
+  前置：hit=false或damage_markers=0；涉及选择的玩家均is_human=true。
+  操作：ATTACK_AFTER。
+  断言：不弹窗。
+场景d：本槽已有1损伤的可支付边界
+  前置：本槽已有1损伤，耐久3；涉及选择的玩家均is_human=true。
+  操作：尝试发动并按歧义裁定执行。
+  断言：若采用本拆解预检查，则因无法让同一牌承受完整2点而不可发动；测试锁定该裁定。
+
+歧义点：
+[歧义1] “最多减少3”是否自动取min(3,攻击损伤)。智能体选择：是。候选：玩家选择0～3。▶ 回答：____________________
+[歧义2] 当前区域无法合法再放满2点（例如第一点即弃牌）如何处理第二点。智能体选择：因文本要求“在此牌上设置2损伤”，必须在效果发动前检查本牌可承受/流程允许连续在原区域放置；若牌第一点即离场则第二点无法放在“此牌上”，效果不可发动。候选：第二点继续留在空区域。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+套装10：帝国的赤枭（装备牌 055～060）
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+
+═══════════════════════════════════════════════════════════
+[装备牌 055] 帝国的赤枭·头部  （部位:头部  护甲:1 动力:1 耐久:3 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：其他区域每设置有1张名称带有帝国的装备牌则此牌动力+1。
+effect_ids：["equipment_effect_008"]
+
+──────────── 效果拆解（equipment_effect_008）────────────
+拆解同 [装备牌 013] 的 equipment_effect_008。
+本牌实例差异：binding_context.card_instance_id 指向 帝国的赤枭·头部 实例；slot_id=&"头部"；牌面耐久=3、金币=3。
+模式/查询：派生值；查询时实时重算；不注册监听器。
+JSON effect_ids：["equipment_effect_008"]。
+
+──────────── 实现预告 ────────────
+- 复用 equipment_effect_008，不新增条件 op、动作或UI；仅由本牌JSON绑定同一effect_id。
+- 回归测试必须使用本牌自己的card_instance_id与头部槽，不能只覆盖首张牌。
+
+──────────── 顺序与坑 ────────────
+- 当前动力与动力上限必须分离，避免每次刷新UI重复加动力。
+- 排除本牌自身。
+
+──────────── 测试场景 ────────────
+场景a：其他帝国装备提供动力
+  前置：M装备帝国的赤枭·头部于头部；其他正面槽有3张名称含帝国装备；涉及选择的玩家均is_human=true。
+  操作：调用M.get_total_power()。
+  断言：bonus==3；总动力上限增加3；同一帧重复查询结果稳定，不重复叠加当前动力。
+场景b：一张帝国装备离场
+  前置：承接a；涉及选择的玩家均is_human=true。
+  操作：标准弃置其中1张。
+  断言：下一次get_total_power bonus==2；UI实时刷新。
+场景c：无其他帝国装备
+  前置：只有帝国的赤枭·头部自身，或仅备用区背面有帝国牌；涉及选择的玩家均is_human=true。
+  操作：查询动力。
+  断言：bonus==0；无弹窗。
+
+歧义点：
+[歧义1] “动力+1”指动力上限还是当前动力同步增加。智能体选择：作为装备派生动力，提升总动力上限；当前值如何钳制按全局规则（理由：装备动力属于机甲总动力构成）。候选：同时即时增加当前动力。▶ 回答：____________________
+[歧义2] 计数范围同联邦头部。智能体选择：正面其他部件与武器区，排除背面备用区。候选：仅部件区/包含备用区。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 056] 帝国的赤枭·躯干  （部位:躯干  护甲:3 动力:2 耐久:4 金币:4）
+═══════════════════════════════════════════════════════════
+效果文本：每回合1次，可以消耗2*n数量的金币(n为整数)，当前回合动力+n，此效果可以在使用迎击牌时使用。
+effect_ids：["equipment_effect_040", "equipment_effect_041"]
+
+──────────── 效果拆解（equipment_effect_040）────────────
+优先级：10
+模式：DIRECT（新建）
+植入：DIRECT，由装备面板发动按钮/skill_bar触发。
+监听/入口：动作类型 &"effect_fire"；时点 EFFECT_FIRE。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 本牌机甲自己的主阶段
+    "op": &"IS_OWNER_MAIN_PHASE"
+  },
+  {  # 至少2金币
+    "op": &"GOLD_ABOVE",
+    "threshold": 2
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 本牌机甲
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 整数选择窗；确认后花2n金币，再动力+n
+    "type": &"CHOOSE_INTEGER",  # 打开整数选择面板，绑定选择值后执行嵌套动作
+    "params": {
+      "optional": true,
+      "label": "选择n：花费2×n金币，本回合动力+n",
+      "min_value": 1,
+      "max_value_expr": "floor($binding_context.owner_gold / 2)",
+      "bind_as": &"n",
+      "actions": [
+        {
+          "type": &"SPEND_GOLD",  # 扣除金币并写入数值/日志记录
+          "params": {
+            "amount_expr": "2 * $choice.n",
+            "target_id": "$binding_context.mech_id"
+          }
+        },
+        {
+          "type": &"EXECUTE_STAT_MODIFY",  # 创建数值修正子动作，完整发出 STAT_MOD 生命周期
+          "params": {
+            "target_id": "$binding_context.mech_id",
+            "stat_type": &"power",
+            "value_expr": "$choice.n",
+            "method": &"add",
+            "duration": &"THIS_TURN"
+          }
+        }
+      ]
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；once_per_turn_key=&"red_owl_torso_gold_power_$binding_context.card_instance_id"，once_per_turn_max=1；与effect_041共享。
+值解析/公式：$binding_context.owner_gold；$choice.n。
+执行顺序：选择n→再次校验金币→SPEND_GOLD→动力stat_modify；金币变化失败则取消后续且不占次数。
+人类 UI：滑条/步进器列出n=1..floor(金币/2)，实时显示花费与动力收益。
+
+──────────── 实现预告 ────────────
+- 需新增 equipment_effect_040。
+- 需新增复杂交互动作 CHOOSE_INTEGER：支持min/max表达式、bind_as、嵌套actions；仿CHOOSE_ONE的挂起/恢复范式，登记TimingEngine._execute_actions。
+- SPEND_GOLD/EXECUTE_STAT_MODIFY需支持 *_expr 解析 $choice.n；或由CHOOSE_INTEGER展开成实际常量动作。
+- 共享 once key 与 equipment_effect_041。
+
+──────────── 顺序与坑 ────────────
+- n必须为正整数；n=0等同取消，不应消耗每回合次数。
+- 选择窗打开期间金币可能被其他同级效果改变，确认时需重新校验。
+
+──────────── 效果拆解（equipment_effect_041）────────────
+优先级：10
+模式：LISTEN（永久监听，新建）
+植入：设置到躯干后注册，监听 use_action_card.USE_ACTION_AT。
+监听/入口：动作类型 &"use_action_card"；时点 USE_ACTION_AT。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 使用者为本牌机甲
+    "op": &"USED_CARD_OWNER_IS_SELF"
+  },
+  {  # 使用迎击牌
+    "op": &"USED_COUNTER_CARD"
+  },
+  {  # 至少2金币
+    "op": &"GOLD_ABOVE",
+    "threshold": 2
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 本牌机甲
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 迎击牌USE_ACTION_AT中可选择n或取消
+    "type": &"CHOOSE_INTEGER",  # 打开整数选择面板，绑定选择值后执行嵌套动作
+    "params": {
+      "optional": true,
+      "label": "花费2×n金币，本回合动力+n",
+      "min_value": 1,
+      "max_value_expr": "floor($binding_context.owner_gold / 2)",
+      "bind_as": &"n",
+      "actions": [
+        {
+          "type": &"SPEND_GOLD",  # 扣除金币并写入数值/日志记录
+          "params": {
+            "amount_expr": "2 * $choice.n",
+            "target_id": "$binding_context.mech_id"
+          }
+        },
+        {
+          "type": &"EXECUTE_STAT_MODIFY",  # 创建数值修正子动作，完整发出 STAT_MOD 生命周期
+          "params": {
+            "target_id": "$binding_context.mech_id",
+            "stat_type": &"power",
+            "value_expr": "$choice.n",
+            "method": &"add",
+            "duration": &"THIS_TURN"
+          }
+        }
+      ]
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；once_per_turn_key=&"red_owl_torso_gold_power_$binding_context.card_instance_id"，once_per_turn_max=1；与effect_040共享。
+值解析/公式：$payload.used_card_type；$binding_context.owner_gold。
+执行顺序：在迎击牌自身效果前支付并获得动力，随后继续迎击。
+人类 UI：复用CHOOSE_INTEGER面板。
+
+──────────── 实现预告 ────────────
+- 需新增 equipment_effect_041，仿equipment_effect_029的迎击监听；复用新CHOOSE_INTEGER。
+
+──────────── 顺序与坑 ────────────
+- 若本回合已通过主阶段effect_040使用，迎击时不再弹窗，反之亦然。
+
+──────────── 测试场景 ────────────
+场景a：主阶段选择n=3
+  前置：P装备帝国的赤枭·躯干于躯干；P金币=8；己方主阶段；本回合未使用共享once key；涉及选择的玩家均is_human=true。
+  操作：点击装备发动→CHOOSE_INTEGER选n=3→确认。
+  断言：P金币从8变2；M本回合动力临时修正+3；shared once key计数=1；effect_041本回合不再可用。
+场景b：迎击时选择n=2
+  前置：P金币=5；敌方攻击M；M使用迎击牌；本回合未用该效果；涉及选择的玩家均is_human=true。
+  操作：USE_ACTION_AT触发equipment_effect_041→选n=2。
+  断言：金币从5变1；动力+2；迎击牌随后继续执行；共享once key=1。
+场景c：取消或金币不足
+  前置：分支1金币=6并在CHOOSE_INTEGER取消；分支2金币=1；涉及选择的玩家均is_human=true。
+  操作：分别尝试主阶段发动/迎击诱发。
+  断言：取消分支金币与动力不变且once未占用；金币不足分支条件失败，不显示选择窗。
+场景d：共享限次
+  前置：先在主阶段成功选择n=1，之后同回合再使用迎击牌；涉及选择的玩家均is_human=true。
+  操作：完成两次触发机会。
+  断言：第二次不弹CHOOSE_INTEGER；本回合总共只支付2金币并只获得+1动力。
+
+歧义点：
+[歧义1] n是否允许0。智能体选择：不允许，取消承担n=0语义（理由：发动效果应有实际支付与收益）。候选：允许n=0并消耗次数。▶ 回答：____________________
+[歧义2] 动力+n是否可超过上限。智能体选择：作为本回合增加，可超过基础上限。候选：回复型受上限。▶ 回答：____________________
+[歧义3] “每回合1次”是两个入口共享还是各1次。智能体选择：共享1次（理由：同一张牌同一效果的两个发动时机）。候选：主阶段与迎击各1次。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 057] 帝国的赤枭·右臂  （部位:右臂  护甲:3 动力:1 耐久:3 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：使用名称带有热能的远程武器攻击时，威力+3。
+effect_ids：["equipment_effect_042"]
+
+──────────── 效果拆解（equipment_effect_042）────────────
+优先级：10
+模式：LISTEN（永久监听，新建）
+植入：设置到手臂后注册，监听 attack.ATTACK_BEFORE。
+监听/入口：动作类型 &"attack"；时点 ATTACK_BEFORE。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 本牌机甲是攻击方
+    "op": &"SELF_MECH_IS_ATTACKER"
+  },
+  {  # 有效类型为远程
+    "op": &"ATTACK_EFFECTIVE_WEAPON_KIND",
+    "weapon_kind": &"远程"
+  },
+  {  # 武器名含热能
+    "op": &"WEAPON_NAME_CONTAINS",
+    "substring": "热能"
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 当前攻击
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 威力+3
+    "type": &"MODIFY_ATTACK_MIGHT",  # 修改当前/指定攻击 record 的额外威力
+    "params": {
+      "delta": 3
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$payload.weapon_card_def_id/effective_weapon_type。
+执行顺序：按effective type判断，名称取武器牌定义。
+人类 UI：自动加成。
+
+──────────── 实现预告 ────────────
+- 需新增 equipment_effect_042，仿白马光束手臂effect_036/037。
+
+──────────── 顺序与坑 ────────────
+- 名称子串需与本地化一致。
+
+──────────── 测试场景 ────────────
+场景a：热能远程武器威力+3
+  前置：M装备帝国的赤枭·右臂；选择名称含“热能”且有效类型为远程的武器；涉及选择的玩家均is_human=true。
+  操作：ATTACK_BEFORE。
+  断言：attack.record["extra_might"]增加3。
+场景b：名称不匹配
+  前置：选择有效类型为远程但名称不含“热能”的武器；涉及选择的玩家均is_human=true。
+  操作：ATTACK_BEFORE。
+  断言：不加威力。
+场景c：有效类型不匹配
+  前置：选择名称含“热能”但有效类型非远程的武器；涉及选择的玩家均is_human=true。
+  操作：ATTACK_BEFORE。
+  断言：不加威力。
+
+歧义点：
+[歧义1] 热能远程经近战头转换后的归属。智能体选择：触发近战左臂，不触发远程右臂。候选：按原始类型。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 058] 帝国的赤枭·左臂  （部位:左臂  护甲:2 动力:2 耐久:3 金币:4）
+═══════════════════════════════════════════════════════════
+效果文本：使用名称带有热能的近战武器攻击时，威力+3。
+effect_ids：["equipment_effect_043"]
+
+──────────── 效果拆解（equipment_effect_043）────────────
+优先级：10
+模式：LISTEN（永久监听，新建）
+植入：设置到手臂后注册，监听 attack.ATTACK_BEFORE。
+监听/入口：动作类型 &"attack"；时点 ATTACK_BEFORE。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 本牌机甲是攻击方
+    "op": &"SELF_MECH_IS_ATTACKER"
+  },
+  {  # 有效类型为近战
+    "op": &"ATTACK_EFFECTIVE_WEAPON_KIND",
+    "weapon_kind": &"近战"
+  },
+  {  # 武器名含热能
+    "op": &"WEAPON_NAME_CONTAINS",
+    "substring": "热能"
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 当前攻击
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 威力+3
+    "type": &"MODIFY_ATTACK_MIGHT",  # 修改当前/指定攻击 record 的额外威力
+    "params": {
+      "delta": 3
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$payload.weapon_card_def_id/effective_weapon_type。
+执行顺序：按effective type判断，名称取武器牌定义。
+人类 UI：自动加成。
+
+──────────── 实现预告 ────────────
+- 需新增 equipment_effect_043，仿白马光束手臂effect_036/037。
+
+──────────── 顺序与坑 ────────────
+- 名称子串需与本地化一致。
+
+──────────── 测试场景 ────────────
+场景a：热能近战武器威力+3
+  前置：M装备帝国的赤枭·左臂；选择名称含“热能”且有效类型为近战的武器；涉及选择的玩家均is_human=true。
+  操作：ATTACK_BEFORE。
+  断言：attack.record["extra_might"]增加3。
+场景b：名称不匹配
+  前置：选择有效类型为近战但名称不含“热能”的武器；涉及选择的玩家均is_human=true。
+  操作：ATTACK_BEFORE。
+  断言：不加威力。
+场景c：有效类型不匹配
+  前置：选择名称含“热能”但有效类型非近战的武器；涉及选择的玩家均is_human=true。
+  操作：ATTACK_BEFORE。
+  断言：不加威力。
+
+歧义点：
+[歧义1] 热能远程经近战头转换后的归属。智能体选择：触发近战左臂，不触发远程右臂。候选：按原始类型。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 059] 帝国的赤枭·右腿  （部位:右腿  护甲:1 动力:3 耐久:3 金币:4）
+═══════════════════════════════════════════════════════════
+效果文本：每回合1次，机甲在当前回合内消耗了8动力，可回复2动力。
+effect_ids：["equipment_effect_044"]
+
+──────────── 效果拆解（equipment_effect_044）────────────
+优先级：10
+模式：LISTEN（永久监听，新建）
+植入：设置到腿部后注册，监听 stat_modify.STAT_MOD_SETTLE；每次本机甲动力消耗结算并更新power_spent_this_turn后检查。
+监听/入口：动作类型 &"stat_modify"；时点 STAT_MOD_SETTLE。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 数值修正对象为本牌机甲
+    "op": &"SELF_MECH_IS_STAT_TARGET"
+  },
+  {  # 类型为动力
+    "op": &"PAYLOAD_STAT_TYPE_IS",
+    "stat_type": &"power"
+  },
+  {  # 方式为spend/减少
+    "op": &"PAYLOAD_STAT_METHOD_IS",
+    "method": &"spend"
+  },
+  {  # 累计消耗达到8
+    "op": &"POWER_SPENT_THIS_TURN_ABOVE",
+    "threshold": 8
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 回复本牌机甲
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 达标后可取消，确认回复
+    "type": &"CHOOSE_ONE",  # 弹出可取消/不可取消选择窗；窗口完成前父动作挂起
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "回复2动力",
+          "actions": [
+            {
+              "type": &"RESTORE_POWER",  # 回复动力，不超过当前总动力上限
+              "params": {
+                "amount": 2,
+                "target_id": "$binding_context.mech_id"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；once_per_turn_key=&"equipment_effect_044_$binding_context.card_instance_id"，once_per_turn_max=1；成功发动后消耗。
+值解析/公式：$payload.value_after；mech.turn_counters.power_spent。
+执行顺序：第8点累计消耗的stat_modify settle→弹窗→回复→返回父动作。
+人类 UI：达标弹“回复2动力/取消”。
+
+──────────── 实现预告 ────────────
+- 需新增 equipment_effect_044，仿帝国普装腿effect_012/013；复用POWER_SPENT_THIS_TURN_ABOVE。
+- 同时需SELF_MECH_IS_STAT_TARGET/PAYLOAD_STAT_*新op（可与effect_017共用）。
+
+──────────── 顺序与坑 ────────────
+- 只累计实际扣除的动力；试图消耗但因不足失败的值不计。
+- 回复的动力若之后再次消耗，不减少累计已消耗计数。
+
+──────────── 测试场景 ────────────
+场景a：累计消耗第8动力后回复2
+  前置：M装备帝国的赤枭·右腿；power_spent_this_turn=7；当前动力低于上限；涉及选择的玩家均is_human=true。
+  操作：再实际消耗1动力→STAT_MOD_SETTLE→确认。
+  断言：power_spent_this_turn==8；current_power回复2且不超上限；once=1。
+场景b：达标取消
+  前置：同a；涉及选择的玩家均is_human=true。
+  操作：取消。
+  断言：不回复且once未占用；之后再消耗动力可再次提示。
+场景c：非动力消耗或已用
+  前置：分支1为动力回复/增加；分支2本回合已成功发动；涉及选择的玩家均is_human=true。
+  操作：进入STAT_MOD_SETTLE。
+  断言：不触发。
+
+歧义点：
+[歧义1] “消耗了8动力”达到8还是超过8。智能体选择：累计≥8。候选：严格>8。▶ 回答：____________________
+[歧义2] 取消后是否稍后再提示。智能体选择：是，直到成功使用。候选：第一次达标即消耗机会。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 060] 帝国的赤枭·左腿  （部位:左腿  护甲:2 动力:3 耐久:3 金币:4）
+═══════════════════════════════════════════════════════════
+效果文本：每回合1次，机甲在当前回合内消耗了8动力，可回复1动力。
+effect_ids：["equipment_effect_045"]
+
+──────────── 效果拆解（equipment_effect_045）────────────
+优先级：10
+模式：LISTEN（永久监听，新建）
+植入：设置到腿部后注册，监听 stat_modify.STAT_MOD_SETTLE；每次本机甲动力消耗结算并更新power_spent_this_turn后检查。
+监听/入口：动作类型 &"stat_modify"；时点 STAT_MOD_SETTLE。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 数值修正对象为本牌机甲
+    "op": &"SELF_MECH_IS_STAT_TARGET"
+  },
+  {  # 类型为动力
+    "op": &"PAYLOAD_STAT_TYPE_IS",
+    "stat_type": &"power"
+  },
+  {  # 方式为spend/减少
+    "op": &"PAYLOAD_STAT_METHOD_IS",
+    "method": &"spend"
+  },
+  {  # 累计消耗达到8
+    "op": &"POWER_SPENT_THIS_TURN_ABOVE",
+    "threshold": 8
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 回复本牌机甲
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 达标后可取消，确认回复
+    "type": &"CHOOSE_ONE",  # 弹出可取消/不可取消选择窗；窗口完成前父动作挂起
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "回复1动力",
+          "actions": [
+            {
+              "type": &"RESTORE_POWER",  # 回复动力，不超过当前总动力上限
+              "params": {
+                "amount": 1,
+                "target_id": "$binding_context.mech_id"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；once_per_turn_key=&"equipment_effect_045_$binding_context.card_instance_id"，once_per_turn_max=1；成功发动后消耗。
+值解析/公式：$payload.value_after；mech.turn_counters.power_spent。
+执行顺序：第8点累计消耗的stat_modify settle→弹窗→回复→返回父动作。
+人类 UI：达标弹“回复1动力/取消”。
+
+──────────── 实现预告 ────────────
+- 需新增 equipment_effect_045，仿帝国普装腿effect_012/013；复用POWER_SPENT_THIS_TURN_ABOVE。
+- 同时需SELF_MECH_IS_STAT_TARGET/PAYLOAD_STAT_*新op（可与effect_017共用）。
+
+──────────── 顺序与坑 ────────────
+- 只累计实际扣除的动力；试图消耗但因不足失败的值不计。
+- 回复的动力若之后再次消耗，不减少累计已消耗计数。
+
+──────────── 测试场景 ────────────
+场景a：累计消耗第8动力后回复1
+  前置：M装备帝国的赤枭·左腿；power_spent_this_turn=7；当前动力低于上限；涉及选择的玩家均is_human=true。
+  操作：再实际消耗1动力→STAT_MOD_SETTLE→确认。
+  断言：power_spent_this_turn==8；current_power回复1且不超上限；once=1。
+场景b：达标取消
+  前置：同a；涉及选择的玩家均is_human=true。
+  操作：取消。
+  断言：不回复且once未占用；之后再消耗动力可再次提示。
+场景c：非动力消耗或已用
+  前置：分支1为动力回复/增加；分支2本回合已成功发动；涉及选择的玩家均is_human=true。
+  操作：进入STAT_MOD_SETTLE。
+  断言：不触发。
+
+歧义点：
+[歧义1] “消耗了8动力”达到8还是超过8。智能体选择：累计≥8。候选：严格>8。▶ 回答：____________________
+[歧义2] 取消后是否稍后再提示。智能体选择：是，直到成功使用。候选：第一次达标即消耗机会。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+套装11：超重甲装（装备牌 061～066）
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+
+═══════════════════════════════════════════════════════════
+[装备牌 061] 超重甲装·头部  （部位:头部  护甲:2 动力:1 耐久:3 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：损伤不会影响机甲区域提供的护甲，除非机甲部件装备区域总损伤数≥4。
+effect_ids：["equipment_effect_046"]
+
+──────────── 效果拆解（equipment_effect_046）────────────
+优先级：10
+模式：派生值
+植入：派生值型，不注册监听器。所有部件有效护甲查询时实时统计总损伤。
+派生值型：不写 conditions / target_rules / costs / actions，不注册 timing listener。
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：helper：should_ignore_all_component_damage_for_armor(mech, source_card_instance_id, threshold=4)。总损伤<4时六部件槽不扣损伤；总损伤≥4时恢复全量正常扣减。
+执行顺序：第4点损伤落下后立即失效并一次性计入全部已有损伤。
+人类 UI：显示总损伤 X/4。
+
+──────────── 实现预告 ────────────
+- 需新增 equipment_effect_046，仿equipment_effect_089，仅阈值由3改4。
+
+──────────── 顺序与坑 ────────────
+- 统计空槽残留损伤。
+
+──────────── 测试场景 ────────────
+场景a：总损伤<4时全区域不扣甲
+  前置：M装备超重甲装·头部；六部件区域总损伤=3，分布在两个槽；涉及选择的玩家均is_human=true。
+  操作：查询每槽effective_armor与M.get_armor()。
+  断言：所有部件槽均跳过damage_tokens扣减；总护甲等于无损伤时护甲。
+场景b：达到4后保护整体失效
+  前置：承接a，再设置1损伤使总数=4；涉及选择的玩家均is_human=true。
+  操作：damage_change完成后查询护甲。
+  断言：所有槽恢复正常扣除各自全部损伤；不是只扣第4点。
+场景c：头部牌离场
+  前置：保护生效时将本牌弃置；涉及选择的玩家均is_human=true。
+  操作：查询护甲。
+  断言：helper返回false；所有残留损伤正常扣甲。
+
+歧义点：
+[歧义1] 是否可参数化复用effect_089。智能体选择：新effect_id但共用同一helper参数化实现。候选：JSON直接复用089并从卡牌参数取阈值。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 062] 超重甲装·躯干  （部位:躯干  护甲:4 动力:2 耐久:4 金币:5）
+═══════════════════════════════════════════════════════════
+效果文本：机甲被指定为攻击目标时，可弃置2张行动牌，使当前回合护甲+5。
+effect_ids：["equipment_effect_047"]
+
+──────────── 效果拆解（equipment_effect_047）────────────
+优先级：10
+模式：LISTEN（永久监听，新建）
+植入：设置到躯干后注册，监听 attack.ATTACK_PRE。
+监听/入口：动作类型 &"attack"；时点 ATTACK_PRE。
+
+触发条件 conditions（GDScript 字面量 + 解释）：
+[
+  {  # 本牌机甲是目标
+    "op": &"SELF_MECH_IS_ATTACK_TARGET"
+  },
+  {  # 至少2张行动牌
+    "op": &"OWNER_ACTION_HAND_ABOVE",
+    "threshold": 2
+  },
+]
+
+目标规则 target_rules：
+[
+  {  # 本牌机甲
+    "rule": &"NO_TARGET"
+  },
+]
+
+成本 costs：
+[
+  {  # 可支付2张
+    "cost_type": &"DISCARD_ACTION_CARD",
+    "count": 2,
+    "optional": true
+  },
+]
+
+动作 actions（GDScript 字面量；内层 actions 已展开）：
+[
+  {  # 本回合护甲+5
+    "type": &"EXECUTE_STAT_MODIFY",  # 创建数值修正子动作，完整发出 STAT_MOD 生命周期
+    "params": {
+      "target_id": "$binding_context.mech_id",
+      "stat_type": &"armor",
+      "value": 5,
+      "method": &"add",
+      "duration": &"THIS_TURN"
+    }
+  },
+]
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：$payload.target_ids。
+执行顺序：弃牌结算后加护甲。
+人类 UI：弃2牌窗。
+
+──────────── 实现预告 ────────────
+- 需新增 equipment_effect_047，仿effect_015，数值改为5。
+
+──────────── 顺序与坑 ────────────
+- 可多次叠加，无牌时不弹。
+
+──────────── 测试场景 ────────────
+场景a：弃2行动牌后护甲+5
+  前置：M装备超重甲装·躯干；被指定为目标；手牌至少2张行动牌；涉及选择的玩家均is_human=true。
+  操作：ATTACK_PRE选择并确认弃置2张。
+  断言：两张牌zone==action_discard；M armor临时modifier+5，duration==THIS_TURN。
+场景b：弃牌窗取消
+  前置：同a；涉及选择的玩家均is_human=true。
+  操作：取消支付。
+  断言：没有牌被弃置；护甲不变；攻击继续。
+场景c：手牌不足2张
+  前置：M只有1张行动牌；涉及选择的玩家均is_human=true。
+  操作：被指定为目标。
+  断言：OWNER_ACTION_HAND_ABOVE条件失败；不弹支付窗。
+
+歧义点：
+[歧义1] 是否复用effect_015参数化。智能体选择：新effect_id，共用实现helper。候选：直接复用015。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 063] 超重甲装·右臂  （部位:右臂  护甲:5 动力:-1 耐久:3 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：此牌上设置有损伤≥2时，动力+2。
+effect_ids：["equipment_effect_048"]
+
+──────────── 效果拆解（equipment_effect_048）────────────
+优先级：10
+模式：派生值
+植入：派生值型，不注册监听器。MechState.get_total_power查询来源槽。
+派生值型：不写 conditions / target_rules / costs / actions，不注册 timing listener。
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：helper：get_power_bonus_if_source_damage_at_least(mech, card_instance_id, threshold=2, bonus=2)。source_slot.damage_tokens>=2且牌仍装备时+2。
+执行顺序：达到2点后即时生效；达到耐久3并弃置后失效。
+人类 UI：显示“受损驱动 +2（需2损伤）”。
+
+──────────── 实现预告 ────────────
+- 需新增 equipment_effect_048，仿effect_016参数化。
+
+──────────── 顺序与坑 ────────────
+- 若设置时区域已有2损伤，但设置动作会先按新牌耐久3移除3点损伤，通常设置后变0。
+
+──────────── 测试场景 ────────────
+场景a：本槽损伤达到2时动力+2
+  前置：M装备超重甲装·右臂于右臂；该槽damage_tokens=2；涉及选择的玩家均is_human=true。
+  操作：调用M.get_total_power()。
+  断言：helper返回2；总动力上限比无该效果高2。
+场景b：损伤低于阈值
+  前置：该槽damage_tokens=1；涉及选择的玩家均is_human=true。
+  操作：查询动力。
+  断言：bonus==0；无UI弹窗。
+场景c：本牌弃置后
+  前置：该槽损伤达到耐久3导致超重甲装·右臂弃置；涉及选择的玩家均is_human=true。
+  操作：弃置结算后查询动力。
+  断言：牌不在槽内，bonus==0；旧modifier未残留。
+
+歧义点：
+[歧义1] “设置有损伤≥2”是否按区域残留。智能体选择：是。候选：卡实例私有损伤。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 064] 超重甲装·左臂  （部位:左臂  护甲:2 动力:1 耐久:3 金币:3）
+═══════════════════════════════════════════════════════════
+效果文本：损伤不会影响此牌所在区域提供的护甲，除非此牌上设置的损伤≥2。
+effect_ids：["equipment_effect_049"]
+
+──────────── 效果拆解（equipment_effect_049）────────────
+优先级：10
+模式：派生值
+植入：派生值型，不注册监听器。仅来源槽有效护甲查询时读取该槽损伤。
+派生值型：不写 conditions / target_rules / costs / actions，不注册 timing listener。
+
+依赖/限次：无（requires_effect=&""）；无（once_per_turn_key=&""、once_per_turn_max=0）
+值解析/公式：helper：ignore_source_slot_damage_below_threshold(mech, card_instance_id, threshold=2)。若slot.damage_tokens<2，不扣任何损伤；若>=2，恢复正常并扣除该槽全部damage_tokens。
+执行顺序：第2点损伤落下后从“扣0”跳为“扣2”；不是只扣超过阈值的部分。
+人类 UI：显示“装甲保护 X/2”。
+
+──────────── 实现预告 ────────────
+- 需新增 equipment_effect_049，仿effect_014并增加阈值参数。
+
+──────────── 顺序与坑 ────────────
+- 仍按耐久3弃置；免疫只作用于护甲扣减。
+
+──────────── 测试场景 ────────────
+场景a：本槽1损伤时不扣护甲
+  前置：M装备超重甲装·左臂于左臂；slot.damage_tokens=1；涉及选择的玩家均is_human=true。
+  操作：查询get_effective_armor。
+  断言：damage penalty==0；有效护甲等于无损伤值。
+场景b：达到2损伤后扣全部2
+  前置：向左臂再设置1损伤，使damage_tokens=2；涉及选择的玩家均is_human=true。
+  操作：damage_change完成后查询。
+  断言：保护失效；damage penalty==2，而不是1。
+场景c：达到耐久弃置
+  前置：继续设置到耐久3；涉及选择的玩家均is_human=true。
+  操作：damage_change与discard。
+  断言：牌弃置；效果注销/查询不再命中；区域残留损伤正常扣甲。
+
+歧义点：
+[歧义1] 阈值达到2时扣全部2点还是仅扣超过阈值的点。智能体选择：扣全部2点（理由：“除非…≥2”表示保护整体失效）。候选：只扣第2点及之后。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 065] 超重甲装·右腿  （部位:右腿  护甲:3 动力:2 耐久:3 金币:4）
+═══════════════════════════════════════════════════════════
+效果文本：损伤不会影响此牌所在区域提供的护甲，除非此牌上设置的损伤≥2。
+effect_ids：["equipment_effect_049"]
+
+──────────── 效果拆解（equipment_effect_049）────────────
+拆解同 [装备牌 064] 的 equipment_effect_049。
+本牌实例差异：binding_context.card_instance_id 指向 超重甲装·右腿 实例；slot_id=&"右腿"；牌面耐久=3、金币=4。
+模式/查询：派生值；查询时实时重算；不注册监听器。
+JSON effect_ids：["equipment_effect_049"]。
+
+──────────── 实现预告 ────────────
+- 复用 equipment_effect_049，不新增条件 op、动作或UI；仅由本牌JSON绑定同一effect_id。
+- 回归测试必须使用本牌自己的card_instance_id与右腿槽，不能只覆盖首张牌。
+
+──────────── 顺序与坑 ────────────
+- 仍按耐久3弃置；免疫只作用于护甲扣减。
+
+──────────── 测试场景 ────────────
+场景a：本槽1损伤时不扣护甲
+  前置：M装备超重甲装·右腿于右腿；slot.damage_tokens=1；涉及选择的玩家均is_human=true。
+  操作：查询get_effective_armor。
+  断言：damage penalty==0；有效护甲等于无损伤值。
+场景b：达到2损伤后扣全部2
+  前置：向右腿再设置1损伤，使damage_tokens=2；涉及选择的玩家均is_human=true。
+  操作：damage_change完成后查询。
+  断言：保护失效；damage penalty==2，而不是1。
+场景c：达到耐久弃置
+  前置：继续设置到耐久3；涉及选择的玩家均is_human=true。
+  操作：damage_change与discard。
+  断言：牌弃置；效果注销/查询不再命中；区域残留损伤正常扣甲。
+
+歧义点：
+[歧义1] 阈值达到2时扣全部2点还是仅扣超过阈值的点。智能体选择：扣全部2点（理由：“除非…≥2”表示保护整体失效）。候选：只扣第2点及之后。▶ 回答：____________________
+═══════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════
+[装备牌 066] 超重甲装·左腿  （部位:左腿  护甲:1 动力:3 耐久:3 金币:4）
+═══════════════════════════════════════════════════════════
+效果文本：损伤不会影响此牌所在区域提供的护甲，除非此牌上设置的损伤≥2。
+effect_ids：["equipment_effect_049"]
+
+──────────── 效果拆解（equipment_effect_049）────────────
+拆解同 [装备牌 064] 的 equipment_effect_049。
+本牌实例差异：binding_context.card_instance_id 指向 超重甲装·左腿 实例；slot_id=&"左腿"；牌面耐久=3、金币=4。
+模式/查询：派生值；查询时实时重算；不注册监听器。
+JSON effect_ids：["equipment_effect_049"]。
+
+──────────── 实现预告 ────────────
+- 复用 equipment_effect_049，不新增条件 op、动作或UI；仅由本牌JSON绑定同一effect_id。
+- 回归测试必须使用本牌自己的card_instance_id与左腿槽，不能只覆盖首张牌。
+
+──────────── 顺序与坑 ────────────
+- 仍按耐久3弃置；免疫只作用于护甲扣减。
+
+──────────── 测试场景 ────────────
+场景a：本槽1损伤时不扣护甲
+  前置：M装备超重甲装·左腿于左腿；slot.damage_tokens=1；涉及选择的玩家均is_human=true。
+  操作：查询get_effective_armor。
+  断言：damage penalty==0；有效护甲等于无损伤值。
+场景b：达到2损伤后扣全部2
+  前置：向左腿再设置1损伤，使damage_tokens=2；涉及选择的玩家均is_human=true。
+  操作：damage_change完成后查询。
+  断言：保护失效；damage penalty==2，而不是1。
+场景c：达到耐久弃置
+  前置：继续设置到耐久3；涉及选择的玩家均is_human=true。
+  操作：damage_change与discard。
+  断言：牌弃置；效果注销/查询不再命中；区域残留损伤正常扣甲。
+
+歧义点：
+[歧义1] 阈值达到2时扣全部2点还是仅扣超过阈值的点。智能体选择：扣全部2点（理由：“除非…≥2”表示保护整体失效）。候选：只扣第2点及之后。▶ 回答：____________________
+═══════════════════════════════════════════════════════════

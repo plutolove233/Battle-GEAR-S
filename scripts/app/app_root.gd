@@ -5,9 +5,11 @@ const _DataRegistry = preload("res://scripts/data/data_registry.gd")
 const _CampaignState = preload("res://scripts/campaign/campaign_state.gd")
 const _BattleState = preload("res://scripts/battle/battle_state.gd")
 const _RangeCalculator = preload("res://scripts/battle/RangeCalculator.gd")
+const _GenEquipEffects = preload("res://scripts/generated_database/GeneratedEquipmentEffects.gd")
 const _HexGrid = preload("res://scripts/battle/hex_grid.gd")
 const _BattleMessageLog = preload("res://scripts/ui/battle_message_log.gd")
 const _EnemyInfoPopup = preload("res://scripts/ui/enemy_info_popup.gd")
+const _MechDetailPanel = preload("res://scripts/ui/mech_detail_panel.gd")
 const _StatusPanel = preload("res://scripts/ui/status_panel.gd")
 const _AttackFlowController = preload("res://scripts/ui/attack_flow_controller.gd")
 const _WeaponPickerPanel = preload("res://scripts/ui/weapon_picker_panel.gd")
@@ -17,6 +19,7 @@ const _DiscardSelectPanel = preload("res://scripts/ui/discard_select_panel.gd")
 const _ThrustSelectPanel = preload("res://scripts/ui/thrust_select_panel.gd")
 const _UniteAttackSelectPanel = preload("res://scripts/ui/unite_attack_select_panel.gd")
 const _AwakenSelectPanel = preload("res://scripts/ui/awaken_select_panel.gd")
+const _ImmediateSetEquipmentPanel = preload("res://scripts/ui/immediate_set_equipment_panel.gd")
 const _DeckInfoPopup = preload("res://scripts/ui/deck_info_popup.gd")
 const _ShopPanel = preload("res://scripts/ui/shop_panel.gd")
 const _SellEquipmentPanel = preload("res://scripts/ui/sell_equipment_panel.gd")
@@ -57,6 +60,7 @@ var skill_bar = null  # type: SkillBar
 var response_panel = null  # type: ResponsePanel
 var message_log = null  # type: BattleMessageLog
 var enemy_info_popup = null  # type: EnemyInfoPopup
+var mech_detail_panel = null  # type: MechDetailPanel
 ## 机甲状态列表面板（集中显示所有机甲的联合/锁定等状态）
 var status_panel = null  # type: StatusPanel
 
@@ -72,6 +76,9 @@ var choice_panel = null  # type: ChoicePanel
 ## 使其脱离 _begin_screen 的 VBox 流式布局——否则内容总高超出窗口时，
 ## 排在 child index 后段的弹窗的确认/取消按钮会被挤到窗口外裁切。
 var popup_overlay = null  # type: CenterContainer
+## 逐格移动模态遮罩：移动中拦截全屏点击（点任意位置停止移动，且不触发按钮/功能）。
+## 仅 pacing 阶段（waiting_timing 50ms/格暂停）启用；弹窗显示时关闭让玩家交互。
+var _move_overlay: Control = null
 ## 取消攻击按钮
 var cancel_attack_button = null  # type: Button
 ## 辅助牌目标选择状态：正在选择目标的辅助牌ID
@@ -86,6 +93,9 @@ var _shop_buy_pending: Dictionary = {}
 var _redirect_context: Dictionary = {}
 ## 锁步损伤放置：当前放置目标机甲 ID（_show_popup damage_token_placement 时记录，逐点 _net_exec 带上）
 var _damage_placement_target_mech_id: StringName = &""
+## 锁步损伤放置：当前面板对应的 damage_change 动作 ID（完成时直接恢复该动作，避免被并发的
+## 装备离场效果弹窗覆盖 ActionUIBridge 单一等待动作槽，导致攻击牌卡在临时区）
+var _damage_placement_action_id: StringName = &""
 ## 弃牌选择面板
 var discard_select_panel = null  # type: DiscardSelectPanel
 ## 推进多选面板（推进 effect2：使用迎击牌时选若干推进一起打出）
@@ -94,6 +104,9 @@ var _thrust_select_action_id: StringName = &""
 ## 联合攻击单选面板（联合状态效果1：unite机甲攻击结算后 Target 选1张攻击牌联合攻击）
 var unite_attack_select_panel = null  # type: UniteAttackSelectPanel
 var _unite_attack_action_id: StringName = &""
+## 立即设置装备面板（effect_005：弃置抽1装备立即设置，不设置则弃置抽到的牌）
+var immediate_set_equipment_panel = null  # type: ImmediateSetEquipmentPanel
+var _immediate_set_action_id: StringName = &""
 ## 觉醒种类单选面板（觉醒效果：弃牌堆无预判/识破时选1种行动牌）
 var awaken_select_panel = null  # type: AwakenSelectPanel
 var _awaken_select_action_id: StringName = &""
@@ -540,15 +553,30 @@ func _apply_dev_edit(op: StringName, params: Dictionary) -> void:
 		&"add_region_damage":
 			var ard_sid: StringName = params.get("slot_id", &"")
 			if mech and mech.slots.has(ard_sid):
-				mech.slots[ard_sid].region_damage_tokens += 1
+				# 双计：region + 装备卡 damage_tokens，与正常 DamageTokenService 一致，
+				# 使装备面板在有装备卡时也能显示损伤（直接改数字，不触发损坏/时点——额外权限）
+				var ard_slot = mech.slots[ard_sid]
+				ard_slot.region_damage_tokens += 1
+				if ard_slot.equipped_card != null:
+					ard_slot.equipped_card.damage_tokens += 1
+				mech.recalc_power_limits()  # 派生动力(016/021/048)随损伤变，同步max_power/power
 		&"remove_region_damage":
 			var rrd_sid: StringName = params.get("slot_id", &"")
-			if mech and mech.slots.has(rrd_sid) and mech.slots[rrd_sid].region_damage_tokens > 0:
-				mech.slots[rrd_sid].region_damage_tokens -= 1
+			if mech and mech.slots.has(rrd_sid):
+				var rrd_slot = mech.slots[rrd_sid]
+				if rrd_slot.region_damage_tokens > 0:
+					rrd_slot.region_damage_tokens -= 1
+					if rrd_slot.equipped_card != null and rrd_slot.equipped_card.damage_tokens > 0:
+						rrd_slot.equipped_card.damage_tokens -= 1
+					mech.recalc_power_limits()  # 派生动力(016/021/048)随损伤变，同步max_power/power
 		&"clear_all_region_damage":
 			if mech:
 				for sid: StringName in mech.slots:
-					mech.slots[sid].region_damage_tokens = 0
+					var cad_slot = mech.slots[sid]
+					cad_slot.region_damage_tokens = 0
+					if cad_slot.equipped_card != null:
+						cad_slot.equipped_card.damage_tokens = 0
+				mech.recalc_power_limits()  # 清空损伤后派生动力归零，同步max_power/power
 		&"modify_hp":
 			if mech:
 				mech.current_hp = clampi(mech.current_hp + int(params.get("amount", 0)), 0, mech.max_hp)
@@ -640,11 +668,40 @@ func _dispatch_input(op: String, data: Dictionary) -> Variant:
 		"move":
 			var mv_pid: StringName = data.get("player_id", &"")
 			var mv_hex := {"q": int(data.get("q", 0)), "r": int(data.get("r", 0))}
+			# 移动方本窗口：先记录终点 + 规划原定路线（起点+各格），供移动中画"剩余尾巴"。
+			# 移动中只显示原路线的剩余部分（不重新寻路），路线始终是同一条、越来越短。
+			if battle_board and String(mv_pid) == String(local_player_id) and battle.context and battle.context.map_service:
+				battle_board._move_destination = mv_hex.duplicate()
+				var _mv_mech = battle.context.game_state.get_mech_for_player(local_player_id) if battle.context.game_state else null
+				if _mv_mech != null:
+					battle_board._local_mech_pos = _mv_mech.position.duplicate()
+					var _planned: Array = battle.context.map_service.find_optimal_path(_mv_mech.mech_id, mv_hex, _mv_mech.power)
+					var _cells: Array = [_mv_mech.position.duplicate()]
+					for _pc in _planned:
+						_cells.append({"q": int(_pc.get("q", 0)), "r": int(_pc.get("r", 0))})
+					battle_board.set_planned_path(_cells)
 			var mv_result = battle.move_unit(String(mv_pid), mv_hex)
 			SLog.log_call("app_root", "net_move", {"actor": String(mv_pid), "hex": mv_hex}, mv_result)
 			if not _status_ok(mv_result):
 				battle.log.append({"message": "移动失败: %s" % _status_message(mv_result), "details": {}})
-			_refresh_battle()
+			# 移动仍在进行（逐格 pacing）：全量刷新作 move-start（显示第一格+面板）。
+			# 移动已同步完成（1格/无动画）：用轻量 _refresh_after_move_end，避免全量
+			# _refresh_battle 的 board.configure 重算缩放致 move-end 屏闪。
+			if _status_ok(mv_result) and _has_active_single_move():
+				_refresh_battle()
+			elif _status_ok(mv_result):
+				_refresh_after_move_end()
+			else:
+				_refresh_battle()
+			# 移动方逐格移动中：启用模态遮罩（点任意位置停止，不触发按钮/功能）。
+			# 不再用取消按钮--移动中点击 UI 任意位置即停在当前已完成格。
+			if String(mv_pid) == String(local_player_id):
+				_update_move_overlay()
+			# 移动失败/未启动：清终点与原定路线，避免残留连线
+			if battle_board and not (_status_ok(mv_result) and _has_active_single_move()):
+				battle_board._move_destination = {}
+				battle_board._planned_path_cells = []
+				battle_board._move_path_centers = []
 			return mv_result
 		"play_action_card":
 			var pc_pid: StringName = data.get("player_id", &"")
@@ -761,12 +818,35 @@ func _dispatch_input(op: String, data: Dictionary) -> Variant:
 		"ui_confirmed":
 			if ctx.action_ui_bridge:
 				ctx.action_ui_bridge.on_ui_confirmed(data.get("data", {}))
-			_refresh_battle()
+			# 选择后刷新：棋盘相关选择（选目标/选移动格/选机甲）需全量刷新以更新高亮；
+			# 效果/弃牌/二选一/损伤等非棋盘选择用轻量 _refresh_panels_only 跳过 192 格重绘减卡顿。
+			# on_ui_confirmed -> _apply_action_input 还会 emit action_input_resolved（已改 _request_refresh
+			# 延迟合并），此处按数据特征二选一同步刷新，避免双全量刷新卡顿。
+			var _uc_data = data.get("data", {})
+			if _uc_data is Dictionary and (_uc_data.has("target_cell") or _uc_data.has("target_id") or _uc_data.has("target_mech_id")):
+				_refresh_battle()
+			else:
+				_refresh_panels_only()
+			return {}
+		"damage_placement_done":
+			# 损伤放置/移除完成：按记录的 damage_change 动作 ID 精确恢复（不依赖共享等待槽）
+			if ctx.action_ui_bridge:
+				ctx.action_ui_bridge.resolve_damage_placement(StringName(data.get("action_id", &"")), {"placed": true})
+			# 损伤放置不改变棋盘可视状态，轻量刷新面板即可（棋盘由后续时点 _request_refresh 补齐）
+			_refresh_panels_only()
 			return {}
 		"ui_cancelled":
 			if ctx.action_ui_bridge:
 				ctx.action_ui_bridge.on_ui_cancelled()
 			_refresh_battle()
+			return {}
+		"cancel_move":
+			# 取消进行中的单次移动动作（逐格 basic_move 中断，机甲停在当前已完成格）
+			var cm_aid: StringName = data.get("action_id", &"")
+			if cm_aid != &"" and ctx.action_service:
+				ctx.action_service.cancel_action(cm_aid)
+			# 轻量刷新（清移动连线+面板），避免全量 _refresh_battle 致界面抖动
+			_refresh_after_move_end()
 			return {}
 		"respond_attack":
 			var ra_action_id: StringName = data.get("action_id", &"")
@@ -791,7 +871,7 @@ func _dispatch_input(op: String, data: Dictionary) -> Variant:
 			if dp_mech != &"" and dp_slot != &"":
 				ctx.damage_token_service.place_one_damage_token(dp_mech, dp_slot)
 				ctx.damage_token_service.check_and_handle_equipment_break(dp_mech, dp_slot)
-			_refresh_battle()
+			_refresh_damage_ui()
 			return {}
 		"damage_remove":
 			# 锁步损伤移除（维修等 decrease 效果）：每点一个槽位移除1损伤，双端应用
@@ -799,7 +879,7 @@ func _dispatch_input(op: String, data: Dictionary) -> Variant:
 			var dr_mech: StringName = data.get("target_mech_id", &"")
 			if dr_mech != &"" and dr_slot != &"":
 				ctx.game_actions.remove_damage_tokens({"mech_id": dr_mech, "slot_id": dr_slot, "amount": 1})
-			_refresh_battle()
+			_refresh_damage_ui()
 			return {}
 		"discard_cards":
 			# 攻击结算后触发的弃牌（非 action 引擎 need_input 路径）：双端直接弃牌
@@ -990,7 +1070,7 @@ func _popup_owner(popup_type: StringName, params: Dictionary) -> StringName:
 			return _owner_of_mech_id(params.get("target_mech_id", &""))
 		&"use_card_confirm", &"choice_select", &"effect_choice", &"mech_target_select", \
 		&"weapon_charge_select", &"repair_target_select", &"redirect_select", &"thrust_select", \
-		&"awaken_select":
+		&"awaken_select", &"immediate_set_equipment", &"integer_select":
 			var pid: StringName = params.get("player_id", &"")
 			if pid != &"" and gs.players.has(pid):
 				return pid
@@ -1028,6 +1108,11 @@ func _waiting_action_owner() -> StringName:
 	if action == null:
 		return &""
 	var pid: StringName = action.record.get("player_id", &"")
+	# set_equipment 等动作的 player_id 只注入到 action.source（非 record 顶层），
+	# 故 record 取空时回退 action.source.player_id，否则其触发的弹窗 _popup_owner 兜底返回空、
+	# PvP 下两端都弹（设置装备时 effect_033 等选项弹窗给所有玩家弹的根因）。
+	if pid == &"" and action.source is Dictionary:
+		pid = action.source.get("player_id", &"")
 	if pid != &"" and battle.context.game_state.players.has(pid):
 		return pid
 	return &""
@@ -1042,6 +1127,8 @@ func _connect_action_signals() -> void:
 	if battle == null or battle.context == null:
 		return
 	var ctx = battle.context
+	# UI 模式开启逐格移动动画（测试模式不走此入口，保持同步执行）
+	ctx.move_animation_enabled = true
 	if ctx.action_ui_bridge:
 		var pu := Callable(self, "_on_action_ui_popup_requested")
 		if not ctx.action_ui_bridge.request_ui_popup.is_connected(pu):
@@ -1053,6 +1140,9 @@ func _connect_action_signals() -> void:
 		var tf := Callable(self, "_on_timing_fired")
 		if not ctx.timing_engine.timing_fired.is_connected(tf):
 			ctx.timing_engine.timing_fired.connect(tf)
+		var eef := Callable(self, "_on_equipment_effect_fired")
+		if not ctx.timing_engine.equipment_effect_fired.is_connected(eef):
+			ctx.timing_engine.equipment_effect_fired.connect(eef)
 		var ts := Callable(self, "_on_target_selection_requested")
 		if not ctx.timing_engine.request_target_selection.is_connected(ts):
 			ctx.timing_engine.request_target_selection.connect(ts)
@@ -1100,6 +1190,7 @@ func _show_battle() -> void:
 	equipment_panel.custom_minimum_size = Vector2(0, 200)
 	equipment_panel.reserve_set_clicked.connect(Callable(self, "_on_reserve_set_clicked"))
 	equipment_panel.equipment_active_clicked.connect(Callable(self, "_on_equipment_active_clicked"))
+	equipment_panel.mech_detail_requested.connect(Callable(self, "_on_mech_detail_requested"))
 	right_panel.add_child(equipment_panel)
 
 	skill_bar = SkillBar.new()
@@ -1149,9 +1240,21 @@ func _show_battle() -> void:
 	popup_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(popup_overlay)
 
+	# 逐格移动模态遮罩（在 popup_overlay 之上）：移动中拦截全屏点击，点任意位置停止移动。
+	# 透明不遮挡画面；mouse_filter IGNORE 时不拦截（非移动阶段），STOP 时拦截（移动阶段）。
+	_move_overlay = Control.new()
+	_move_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_move_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_move_overlay.gui_input.connect(Callable(self, "_on_move_overlay_input"))
+	add_child(_move_overlay)
+
 	# ── 敌方信息弹窗（初始隐藏）──
 	enemy_info_popup = _EnemyInfoPopup.new()
 	add_child(enemy_info_popup)
+
+	# ── 机甲详细信息弹窗（初始隐藏）──
+	mech_detail_panel = _MechDetailPanel.new()
+	add_child(mech_detail_panel)
 
 	# ── 机甲状态列表面板（初始隐藏）──
 	status_panel = _StatusPanel.new()
@@ -1227,6 +1330,14 @@ func _show_battle() -> void:
 	thrust_select_panel.visible = false
 	popup_overlay.add_child(thrust_select_panel)
 
+	# ── 立即设置装备面板（初始隐藏）──
+	immediate_set_equipment_panel = _ImmediateSetEquipmentPanel.new()
+	immediate_set_equipment_panel.slot_selected.connect(Callable(self, "_on_immediate_set_slot_selected"))
+	immediate_set_equipment_panel.sell_selected.connect(Callable(self, "_on_immediate_set_sell"))
+	immediate_set_equipment_panel.cancelled.connect(Callable(self, "_on_immediate_set_cancelled"))
+	immediate_set_equipment_panel.visible = false
+	popup_overlay.add_child(immediate_set_equipment_panel)
+
 	# ── 联合攻击单选面板（初始隐藏）──
 	unite_attack_select_panel = _UniteAttackSelectPanel.new()
 	unite_attack_select_panel.selection_completed.connect(Callable(self, "_on_unite_attack_selection_completed"))
@@ -1249,6 +1360,9 @@ func _show_battle() -> void:
 	if game_mode == &"PVP":
 		dev_panel.network_mode = true
 		dev_panel.dev_edit_requested.connect(_on_dev_edit_requested)
+	else:
+		# 本地模式：dev 直接改 state 后 emit edit_applied，刷新主战斗 UI（PvP 走 _net_exec 已刷新，不会 emit 本信号）
+		dev_panel.edit_applied.connect(_refresh_battle)
 	dev_panel.visible = false
 	add_child(dev_panel)
 	# 置于最上层，避免被后续 UI 遮挡
@@ -1378,6 +1492,10 @@ func _on_battle_hex_clicked(hex: Dictionary) -> void:
 	# waiting input 分支处理并 return，不会走到这里。
 	# active_player_id 为空（战斗尚未开始回合）时不拦截，兼容初始化。
 	if not _is_my_turn():
+		return
+	# 逐格移动动画进行中（single_move 处于 waiting_timing 50ms/格暂停）：忽略新的移动点击，
+	# 否则会与进行中的 single_move 并发（旧动作尚未完成又起新动作）。玩家应等待动画结束或点取消。
+	if _has_active_single_move():
 		return
 	var mv_q := int(hex.get("q", 0))
 	var mv_r := int(hex.get("r", 0))
@@ -2010,10 +2128,29 @@ func _maybe_trigger_ai_counterattack(resolve_result: Dictionary) -> void:
 		# 直接结算（理论上不会走到，防守方为玩家必进入响应窗口）
 		_handle_ai_counterattack_resolved(result)
 
-## 新动作系统：TimingEngine 时点信号回调（用于消息日志/调试）
+## 新动作系统：TimingEngine 时点信号回调（用于消息日志/调试 + 逐格移动轻量刷新）
 func _on_timing_fired(timing: StringName, payload: Dictionary) -> void:
 	if message_log:
 		message_log.on_timing_fired(timing, payload)
+	if battle == null or battle.context == null:
+		return
+	# 逐格移动：每格 BASIC_MOVE_AFTER/SETTLE 后轻量刷新棋盘（仅同步 units + 状态栏 + board），
+	# 让玩家看到机甲逐格移动。配合 single_move 的 yield_frame 50ms/格暂停。
+	# 不走 _request_refresh 全量（避免每格全量重建手牌/装备/技能/消息）；移动期间这些面板不变。
+	# 其它时点仍走 _request_refresh 延迟合并全量刷新。
+	var t := String(timing)
+	if t == "BASIC_MOVE_AFTER" or t == "BASIC_MOVE_SETTLE":
+		_refresh_board_only()
+	else:
+		# 不在此处直接 _refresh_battle--时点链同帧爆发多次会全量重建多次。
+		# 走 _on_equipment_effect_fired 的 _request_refresh 路径即可覆盖（装备效果时点也会触发它）。
+		pass
+
+
+## 装备牌效果发动信号转发给消息框（显示「⚙ [装备] 牌名 发动效果」）
+func _on_equipment_effect_fired(card_name: String, effect_id: StringName, description: String, source_mech_id: StringName) -> void:
+	if message_log:
+		message_log.on_equipment_effect_fired(card_name, effect_id, description, source_mech_id)
 	# 时点结算后同步画面/数值：ATTACK_AFTER(伤害/HP/损伤标记)、TURN_START(抽牌/加金币/回复动力)、
 	# ATTACK_SETTLE 等。此前刷新完全靠 UI 确认回调手动调用，不经过弹窗的时点链结算
 	# （如攻击伤害结算、回合开始资源回复）会导致"实际变了但画面不刷新，得再操作一下才看到"。
@@ -2044,9 +2181,22 @@ func _on_action_completed(_action_id: StringName, _action_type: StringName, _rec
 			if battle_board:
 				battle_board.clear_highlight()
 				battle_board.clear_attack_targets()
-			_show_cancel_button(false)
+			# 仅当没有进行中的单次移动时才隐藏取消按钮--逐格移动中每格 basic_move
+			# 子动作完成都会触发本回调，但父 single_move 仍在进行（waiting_timing 暂停），
+			# 取消按钮应保留到移动真正结束（父动作完成时 _has_active_single_move 为 false）。
+			if not _has_active_single_move():
+				_show_cancel_button(false)
 			# 迎击移动结束（无等待动作），清空攻击范围缓存
 			_clear_evade_range_cache()
+	# 顶层自由移动完成：轻量刷新（清移动连线+面板），避免全量 _refresh_battle 重建手牌 +
+	# board.configure 重算 _grid_scale 在布局抖动时致界面抖动。效果驱动的子动作 single_move
+	#（回避/反击/强袭，parent_action_id 非空）不走此分支，仍由全量刷新覆盖攻击流程。
+	# 仅人类方移动（PvP 任意方 / PvE 玩家方）走轻量刷新；PvE 敌方(AI)移动需走下方
+	# _check_enemy_turn_complete 接续 AI 回合，不能提前 return。
+	if _action_type == &"single_move" and String(_record.get("parent_action_id", &"")) == &"" \
+		and (game_mode == &"PVP" or battle.context.game_state.active_player_id != &"enemy"):
+		_refresh_after_move_end()
+		return
 	# PvP 锁步：无 AI 驱动,双端动作完成后刷新画面。
 	if game_mode == &"PVP":
 		_request_refresh()
@@ -2239,6 +2389,8 @@ func _on_action_ui_popup_requested(popup_type: StringName, params: Dictionary) -
 		var owner_pid: StringName = _popup_owner(popup_type, params)
 		if owner_pid != &"" and owner_pid != local_player_id:
 			return  # 对方弹窗,本端不显示,等对方 input
+	# 弹窗显示：关闭移动模态遮罩，让玩家与弹窗交互（移动 pacing 期间弹出的 effect_017 等）
+	_update_move_overlay()
 	_show_popup(popup_type, params)
 
 
@@ -2338,7 +2490,7 @@ func _show_popup(popup_type: StringName, params: Dictionary) -> void:
 						"count": ds_count,
 						"face_up": ds_face_up,
 					}
-					discard_select_panel.configure(battle.context, ds_player_id, ds_count, ds_face_up, &"", ds_verb)
+					discard_select_panel.configure(battle.context, ds_player_id, ds_count, ds_face_up, &"", ds_verb, String(params.get("source_label", "")))
 					discard_select_panel.visible = true
 					battle.log.append({"message": "选择1张行动牌%s" % ("获取" if ds_verb == &"gain" else "弃置"), "details": {}})
 				else:
@@ -2350,7 +2502,7 @@ func _show_popup(popup_type: StringName, params: Dictionary) -> void:
 						"count": ds_count,
 						"face_up": ds_face_up,
 					}
-					discard_select_panel.configure(battle.context, ds_player_id, ds_count, ds_face_up, &"", ds_verb)
+					discard_select_panel.configure(battle.context, ds_player_id, ds_count, ds_face_up, &"", ds_verb, String(params.get("source_label", "")))
 					discard_select_panel.visible = true
 					battle.log.append({"message": "闪击：弃1张行动牌可再攻1次，或取消", "details": {}})
 				_refresh_battle()
@@ -2363,10 +2515,20 @@ func _show_popup(popup_type: StringName, params: Dictionary) -> void:
 					if not mech_ids.is_empty():
 						target_mech_id = mech_ids[0]
 				_damage_placement_target_mech_id = target_mech_id
+				# 记录本面板对应的 damage_change 动作 ID：完成时直接恢复该动作，避免被并发的装备
+				# 离场效果弹窗覆盖 ActionUIBridge 单一等待动作槽（否则攻击牌会卡在临时区）。
+				if battle.context.action_ui_bridge:
+					_damage_placement_action_id = battle.context.action_ui_bridge.get_waiting_action_info().get("action_id", &"")
 				var dp_amount: int = params.get("amount", 0)
 				if bool(params.get("removal_mode", false)):
-					# 维修移除损伤：弹 removal 模式损伤框，逐一选槽位减少损伤
-					damage_placement_panel.configure_removal(battle.context, target_mech_id, dp_amount)
+					# 维修/装备离场移除损伤：弹 removal 模式损伤框，逐一选槽位减少损伤
+					# exclude_slot_id：排除指定槽（effect_079 移除"其他区域"损伤，排除来源槽）
+					var dp_exclude: StringName = StringName(params.get("exclude_slot_id", &""))
+					# 来源标签：沿父链找 discard_card 取被弃装备牌名（effect_031/079 离场移除损伤）
+					var dp_source: String = ""
+					if _damage_placement_action_id != &"" and battle.context.timing_engine:
+						dp_source = battle.context.timing_engine.get_removal_source_label(_damage_placement_action_id)
+					damage_placement_panel.configure_removal(battle.context, target_mech_id, dp_amount, dp_exclude, dp_source)
 				else:
 					damage_placement_panel.configure(battle.context, target_mech_id, dp_amount)
 				damage_placement_panel.visible = true
@@ -2412,8 +2574,22 @@ func _show_popup(popup_type: StringName, params: Dictionary) -> void:
 				for opt in options:
 					if opt is Dictionary:
 						typed_options.append(opt)
-				choice_panel.configure(typed_options)
+				choice_panel.configure(typed_options, String(params.get("source_label", "")))
 				choice_panel.visible = true
+		&"integer_select":
+			# CHOOSE_INTEGER 金币换动力（effect_040/041）：用 choice_panel 列 n=min..max 选项
+			if choice_panel:
+				var ii_min: int = int(params.get("min_value", 1))
+				var ii_max: int = int(params.get("max_value", ii_min))
+				var ii_label: String = String(params.get("label", "选择n"))
+				var ii_options: Array[Dictionary] = []
+				for n_ii in range(ii_min, ii_max + 1):
+					ii_options.append({"label": "%s（n=%d）" % [ii_label, n_ii], "effect_id": StringName("__int_%d__" % n_ii)})
+				if bool(params.get("optional", false)):
+					ii_options.append({"label": "取消", "effect_id": &"__cancel_int__"})
+				choice_panel.configure(ii_options, String(params.get("source_label", "")))
+				choice_panel.visible = true
+				battle.log.append({"message": ii_label, "details": {}})
 		&"mech_target_select":
 			if battle_board:
 				var highlights: Array[Dictionary] = []
@@ -2433,9 +2609,10 @@ func _show_popup(popup_type: StringName, params: Dictionary) -> void:
 				var cap: int = total
 				if max_pts > 0:
 					cap = mini(cap, max_pts)
-				# 找本牌所在 slot 作为转移目标
-				var to_slot: StringName = &""
-				if redir_mech_id != &"" and battle.context.game_state != null:
+				# 转移目标=本牌所在 slot（TimingEngine 从 binding_context.slot_id 传入，如 effect_004 联邦右臂=右臂）。
+				# 兜底：未传时遍历机甲第一个有装备的槽位（旧逻辑，保兼容）。
+				var to_slot: StringName = StringName(params.get("redirect_slot_id", &""))
+				if to_slot == &"" and redir_mech_id != &"" and battle.context.game_state != null:
 					var redir_mech = battle.context.game_state.mechs.get(redir_mech_id)
 					if redir_mech != null:
 						for sid in redir_mech.slots:
@@ -2448,7 +2625,7 @@ func _show_popup(popup_type: StringName, params: Dictionary) -> void:
 				options.append({"label": "不转移", "effect_id": &"__redirect_0__", "count": 0})
 				for n in range(1, cap + 1):
 					options.append({"label": "转移 %d 点损伤至此牌区域" % n, "effect_id": StringName("__redirect_%d__" % n), "count": n})
-				choice_panel.configure(options)
+				choice_panel.configure(options, String(params.get("source_label", "")))
 				choice_panel.visible = true
 				# 记录转移上下文，供 _on_choice_selected 读取
 				_redirect_context = {"mech_id": redir_mech_id, "to_slot": to_slot, "action_id": params.get("action_id", &"")}
@@ -2458,8 +2635,19 @@ func _show_popup(popup_type: StringName, params: Dictionary) -> void:
 				var ts_card_ids: Array = params.get("card_ids", [])
 				var ts_label: String = params.get("label", "选择要一起打出的牌")
 				_thrust_select_action_id = params.get("action_id", &"")
-				thrust_select_panel.configure(battle.context, ts_card_ids, ts_label, params.get("per_card_suffix", ""), params.get("confirm_verb", "打出"), params.get("cancel_label", "不打出"))
+				thrust_select_panel.configure(battle.context, ts_card_ids, ts_label, params.get("per_card_suffix", ""), params.get("confirm_verb", "打出"), params.get("cancel_label", "不打出"), int(params.get("max_count", 0)))
 				thrust_select_panel.visible = true
+		&"immediate_set_equipment":
+			# effect_005 立即设置装备 / effect_065 抽装备立即设置或卖出：列出抽到的牌与合法空槽
+			if immediate_set_equipment_panel and battle and battle.context:
+				var ise_drawn_id: StringName = params.get("drawn_card_id", &"")
+				var ise_slots: Array = params.get("valid_slots", [])
+				var ise_mech_id: StringName = params.get("mech_id", &"")
+				_immediate_set_action_id = params.get("action_id", &"")
+				var ise_allow_sell: bool = bool(params.get("allow_sell", false))
+				var ise_sell_price: int = int(params.get("sell_price", 0))
+				immediate_set_equipment_panel.configure(battle.context, ise_drawn_id, ise_slots, ise_mech_id, ise_allow_sell, ise_sell_price, String(params.get("source_label", "")))
+				immediate_set_equipment_panel.visible = true
 		&"unite_attack_select":
 			# 联合状态效果1：unite机甲攻击结算后，Target 选1张攻击牌联合攻击。
 			# 弹窗已由 _popup_owner 路由到 Target 玩家窗口（PvP 对方弹窗本端不显示）。
@@ -2488,13 +2676,25 @@ func _show_popup(popup_type: StringName, params: Dictionary) -> void:
 func _on_action_input_resolved(action_id: StringName, input_data: Dictionary) -> void:
 	# 输入已解决后，动作由 ActionUIBridge 内部继续执行
 	battle.log.append({"message": "[新系统] 动作输入已解决: %s" % String(action_id), "details": {}})
-	_refresh_battle()
+	# 此信号在 _apply_action_input 里于 resume/continue（动作链）之前 emit，同步刷新会刷出链前旧状态、
+	# 且与 ui_confirmed 处理器/动作完成的刷新重复（曾致每次选择 2~3 次全量 192 格重绘=卡顿）。
+	# 改为延迟合并：动作链跑完后帧末仅刷新一次（_refresh_battle_coalesced 在有待弹窗时会跳过，
+	# 由该弹窗关闭后再补），显著减少弹窗选择后的卡顿。
+	_request_refresh()
+	# 弹窗关闭后，若移动仍在 pacing（如 effect_017 选移动后继续逐格），重新启用遮罩
+	_update_move_overlay()
 
 ## 敌方信息按钮点击
 func _on_enemy_info_clicked() -> void:
 	if enemy_info_popup and battle and battle.context:
 		enemy_info_popup.configure(battle.context)
 		enemy_info_popup.popup_centered(Vector2i(320, 520))
+
+## 机甲详情按钮点击（来自装备面板）：打开该机甲的动力/护甲来源明细+状态弹窗
+func _on_mech_detail_requested(mech) -> void:
+	if mech_detail_panel and battle and battle.context:
+		mech_detail_panel.configure(mech, battle.context)
+		mech_detail_panel.popup_centered(Vector2i(460, 640))
 
 ## 机甲状态面板按钮点击：集中显示所有机甲的联合/锁定等状态
 func _on_status_panel_clicked() -> void:
@@ -2942,6 +3142,14 @@ func _on_cancel_attack() -> void:
 			return
 
 	# 强袭移动取消 = 原地停留并结算（攻击已声明，不能整体撤销）
+	# ── 单次移动动作进行中（逐格 basic_move，无 wait_info）：取消该动作 ──
+	if battle and battle.context and battle.context.action_registry:
+		for a in battle.context.action_registry.get_actions_by_type(&"single_move"):
+			# waiting_timing = 逐格移动 50ms/格暂停中，同样可中断
+			if a.state == &"running" or a.state == &"waiting_effect_action" or a.state == &"waiting_input" or a.state == &"waiting_timing":
+				_net_exec("cancel_move", {"action_id": a.action_id})
+				_show_cancel_button(false)
+				return
 	if _assault_movement_active:
 		var gs = battle.context.game_state
 		var attack_context: Dictionary = {}  # old attack context removed in new system
@@ -2985,8 +3193,71 @@ func _show_cancel_button(show: bool) -> void:
 	if cancel_attack_button:
 		cancel_attack_button.visible = show
 
+## 是否有进行中的单次移动动作（含逐格暂停的 waiting_timing / 效果挂起的 waiting_effect_action / waiting_input）。
+## 用于：①"move"后仅在移动仍进行时显示取消按钮（同步完成的移动无需取消，否则按钮残留）；
+## ②动作完成回调中仅在无进行中移动时隐藏取消按钮（逐格移动每格 basic_move 子动作完成都会触发回调，
+##   但父 single_move 仍在进行，取消按钮应保留到移动真正结束）。
+func _has_active_single_move() -> bool:
+	if battle == null or battle.context == null or battle.context.action_registry == null:
+		return false
+	for a in battle.context.action_registry.get_actions_by_type(&"single_move"):
+		if a.state == &"running" or a.state == &"waiting_effect_action" or a.state == &"waiting_input" or a.state == &"waiting_timing":
+			return true
+	return false
+
+## 逐格移动是否处于 pacing 阶段（可点击停止）：有进行中的 single_move 且无弹窗等待输入，
+## 且本窗口是移动方（active_player_id == local_player_id）--非移动方/玩家看 AI 移动时不应能停止。
+## 弹窗显示时（如 effect_017 回复动力+移动）返回 false，让玩家与弹窗交互而非停止移动。
+func _move_is_pacing() -> bool:
+	if battle == null or battle.context == null:
+		return false
+	if not _has_active_single_move():
+		return false
+	if battle.context.action_ui_bridge and not battle.context.action_ui_bridge.get_waiting_action_info().is_empty():
+		return false
+	if battle.context.game_state != null and battle.context.game_state.active_player_id != StringName(local_player_id):
+		return false
+	return true
+
+## 更新移动模态遮罩：pacing 时拦截全屏点击（点任意位置停止移动），否则透传。
+func _update_move_overlay() -> void:
+	if _move_overlay == null or not is_instance_valid(_move_overlay):
+		return
+	_move_overlay.mouse_filter = Control.MOUSE_FILTER_STOP if _move_is_pacing() else Control.MOUSE_FILTER_IGNORE
+
+## 移动遮罩点击：停止进行中的移动（取消 single_move，机甲停在当前已完成格）。
+func _on_move_overlay_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+		if battle and battle.context and battle.context.action_registry:
+			for a in battle.context.action_registry.get_actions_by_type(&"single_move"):
+				if a.state == &"running" or a.state == &"waiting_timing" or a.state == &"waiting_effect_action" or a.state == &"waiting_input":
+					_net_exec("cancel_move", {"action_id": a.action_id})
+					break
+		_update_move_overlay()
+
 ## 清除攻击目标选择的双高亮（绿色范围 + 红色闪烁）并隐藏取消按钮
 ## 在目标确认或取消时调用，使地图恢复为正常 UI
+## 顶层自由移动结束后的轻量刷新：清移动连线 + 刷新面板（状态/装备/技能/消息）。
+## 不走全量 _refresh_battle--移动未改变手牌，且 board.configure 会重算 _grid_scale，
+## 在面板重建布局抖动时读到瞬态尺寸致界面抖动。board 位置已由逐格 _refresh_board_only 更新，
+## 此处仅 queue_redraw 清除路径连线。
+func _refresh_after_move_end() -> void:
+	if battle == null or battle.context == null:
+		return
+	# 取消已排队的延迟全量刷新（basic_move 子动作完成时 _request_refresh 排入的）：
+	# 否则帧末 _refresh_battle_coalesced 会因父 single_move 已完成（_has_active_single_move=false）
+	# 跑全量 _refresh_battle -> battle_board.configure -> _update_grid_transform 重算缩放，
+	# 在面板重建布局抖动时读到瞬态尺寸致整片棋盘闪一下（move-end 屏闪根因）。
+	_refresh_pending = false
+	if battle_board:
+		battle_board._move_active = false
+		battle_board._move_destination = {}
+		battle_board._planned_path_cells = []
+		battle_board._move_path_centers = []
+		battle_board.queue_redraw()
+	_refresh_damage_ui()
+	_update_move_overlay()
+
 func _clear_attack_highlights() -> void:
 	if battle_board:
 		battle_board.clear_highlight()      # 清绿色范围 + 连带清红色闪烁层
@@ -3047,13 +3318,20 @@ func _handle_attack_result(result: Dictionary) -> void:
 ## 损伤放置完成回调
 func _on_damage_placement_completed() -> void:
 	damage_placement_panel.visible = false
-	# ── 新动作系统：损伤放置由 ActionUIBridge 驱动，回填后动作继续结算 ──
-	if battle and battle.context and battle.context.action_ui_bridge:
-		var wait_info: Dictionary = battle.context.action_ui_bridge.get_waiting_action_info()
-		if wait_info.get("input_type", &"") == &"place_damage_tokens":
-			_net_exec("ui_confirmed", {"data": {"placed": true}})
+	if battle and battle.context:
+		# 优先用面板记录的 damage_change 动作 ID 直接恢复（避免被并发的装备离场效果弹窗
+		# 覆盖 ActionUIBridge 单一等待动作槽，导致 damage_change 不结算、攻击牌卡临时区）。
+		var dp_action_id: StringName = _damage_placement_action_id
+		_damage_placement_action_id = &""
+		if dp_action_id != &"":
+			_net_exec("damage_placement_done", {"action_id": dp_action_id})
 			return
-
+		# 退路：无记录动作 ID，走原 ui_confirmed 路径（依赖共享等待槽）
+		if battle.context.action_ui_bridge:
+			var wait_info: Dictionary = battle.context.action_ui_bridge.get_waiting_action_info()
+			if wait_info.get("input_type", &"") == &"place_damage_tokens":
+				_net_exec("ui_confirmed", {"data": {"placed": true}})
+				return
 	# 旧链路已废弃：不再走 attack_flow / _last_player_attack_result / _maybe_trigger_ai_counterattack
 	_refresh_battle()
 	_finish_battle_if_needed()
@@ -3099,6 +3377,17 @@ func _on_choice_made(effect_id: StringName) -> void:
 					_net_exec("ui_confirmed", {"data": {"chosen_option_index": idx, "chosen_effect_id": effect_id, "confirmed": true}})
 				else:
 					_net_exec("ui_confirmed", {"data": {"chosen_effect_id": effect_id, "confirmed": true}})
+				return
+			if input_type == &"choose_integer":
+				# 金币换动力整数选择（effect_040/041）：解析 __int_N__ 回填 chosen_value
+				var es_ci := String(effect_id)
+				if choice_panel:
+					choice_panel.visible = false
+				if es_ci.begins_with("__int_") and es_ci.ends_with("__"):
+					var n_ci: int = es_ci.substr(6, es_ci.length() - 8).to_int()
+					_net_exec("ui_confirmed", {"data": {"chosen_value": n_ci, "confirmed": true}})
+				else:
+					_net_exec("ui_confirmed", {"data": {"cancelled": true}})
 				return
 			if input_type == &"redirect_select":
 				# 损伤转移：把选中的档位 effect_id(__redirect_N__) 解析为转移点数，构造 redirect_plan 回填
@@ -3249,6 +3538,19 @@ func _on_choice_cancelled() -> void:
 		if battle and battle.context and battle.context.action_ui_bridge:
 			_net_exec("ui_confirmed", {"data": {"redirect_plan": []}})
 		return
+
+	# 效果二选一/确认/整数选择弹窗取消（如联邦左腿 effect_007「弃牌减损伤」取消）：
+	# 必须回填 cancelled 让 TimingEngine.resume_pending_effect 跳过该效果并恢复父动作（攻击）继续结算，
+	# 否则父动作永远停在 waiting_timing、攻击牌滞留临时区到回合结束（bug1b）。
+	# ui_cancelled 经 _apply_action_cancel -> resume_pending_effect({cancelled:true})，攻击继续到放置损伤。
+	if battle and battle.context and battle.context.action_ui_bridge:
+		var wi: Dictionary = battle.context.action_ui_bridge.get_waiting_action_info()
+		if not wi.is_empty():
+			var it: StringName = wi.get("input_type", &"")
+			if it == &"choose_one_effect" or it == &"effect_choice" or it == &"choose_one" \
+				or it == &"use_card_confirm" or it == &"confirm_use_card" or it == &"choose_integer":
+				_net_exec("ui_cancelled", {})
+				return
 
 	# 卖出模式取消
 	if _sell_mode_active:
@@ -3405,6 +3707,30 @@ func _on_thrust_selection_cancelled() -> void:
 	var action_id: StringName = _thrust_select_action_id
 	_thrust_select_action_id = &""
 	_net_exec("resume_effect", {"action_id": action_id, "data": {"cancelled": true}})
+
+
+## 立即设置装备：玩家选了合法槽 -> set_equipment
+func _on_immediate_set_slot_selected(slot_id: StringName) -> void:
+	immediate_set_equipment_panel.visible = false
+	var action_id: StringName = _immediate_set_action_id
+	_immediate_set_action_id = &""
+	_net_exec("resume_effect", {"action_id": action_id, "data": {"chosen_slot_id": slot_id}})
+
+
+## 立即设置装备取消：不设置，抽到的牌将被弃置
+func _on_immediate_set_cancelled() -> void:
+	immediate_set_equipment_panel.visible = false
+	var action_id: StringName = _immediate_set_action_id
+	_immediate_set_action_id = &""
+	_net_exec("resume_effect", {"action_id": action_id, "data": {"cancelled": true}})
+
+
+## 立即设置装备选择卖出（effect_065）：卖出抽到的装备
+func _on_immediate_set_sell() -> void:
+	immediate_set_equipment_panel.visible = false
+	var action_id: StringName = _immediate_set_action_id
+	_immediate_set_action_id = &""
+	_net_exec("resume_effect", {"action_id": action_id, "data": {"chosen_action": "sell"}})
 
 
 ## 联合攻击单选确认回调：打出选中的攻击牌（结算后由动作系统去除此联合状态）
@@ -3847,6 +4173,12 @@ func _refresh_battle_coalesced() -> void:
 		return
 	if battle.context.action_ui_bridge and not battle.context.action_ui_bridge.get_waiting_action_info().is_empty():
 		return
+	# 逐格移动进行中：跳过全量刷新。_refresh_board_only 已在每格 BASIC_MOVE_AFTER 同步刷新
+	# 棋盘+状态栏；若再全量 _refresh_battle（重建手牌/装备等面板）会引发布局抖动，使
+	# battle_board 的 _grid_scale 读到瞬态 get_rect() -> 棋盘变形放大。移动结束时
+	#（_has_active_single_move 为 false）再全量刷新补齐面板。
+	if _has_active_single_move():
+		return
 	_refresh_battle()
 
 ## 请求帧末刷新（去重）：信号驱动热路径调用此函数而非直接 _refresh_battle。
@@ -3856,13 +4188,135 @@ func _request_refresh() -> void:
 	_refresh_pending = true
 	call_deferred("_refresh_battle_coalesced")
 
+## 逐格移动轻量刷新：仅同步 units + 状态栏 + 棋盘（跳过手牌/装备/技能/消息/卖出/dev）。
+## 在 BASIC_MOVE_AFTER/SETTLE 时点同步调用，让玩家看到机甲逐格移动（配合 single_move
+## 的 yield_frame 50ms/格暂停）。用 battle_board.update_units（不重算 _grid_scale），
+## 避免逐格 _update_grid_transform 在布局抖动时读到瞬态尺寸致棋盘变形放大。
+## 移动期间手牌/装备/技能不变，故跳过；移动结束时 _on_action_completed 的 _request_refresh 全量补齐。
+func _refresh_board_only() -> void:
+	if battle == null or battle.context == null:
+		return
+	battle._sync_compat_fields()
+	# 状态栏（动力/HP 随每格移动变化）
+	if battle_summary_label:
+		var local_unit: Dictionary = battle.units.get(String(local_player_id), {})
+		var opp_unit: Dictionary = battle.units.get(String(_opponent_player_id()), {})
+		battle_summary_label.text = "回合 %d | 行动方: %s | 我方(%s) HP %d/%d 动力 %d/%d 金币 %d | 敌方(%s) HP %d/%d" % [
+			battle.turn_number,
+			battle.active_side,
+			String(local_player_id),
+			int(local_unit.get("life", 0)),
+			int(local_unit.get("max_life", 0)),
+			int(local_unit.get("power", 0)),
+			int(local_unit.get("max_power", 0)),
+			int(local_unit.get("gold", 0)),
+			String(_opponent_player_id()),
+			int(opp_unit.get("life", 0)),
+			int(opp_unit.get("max_life", 0)),
+		]
+	# 棋盘（仅 units 更新，不重算缩放变换）+ 移动标志/当前位置（供"当前位置->目标"实时连线）
+	if battle_board:
+		battle_board.update_units(battle.units)
+		battle_board._context = battle.context
+		battle_board._move_active = _has_active_single_move()
+		var _bb_local_mech = battle.context.game_state.get_mech_for_player(local_player_id) if battle.context.game_state else null
+		if _bb_local_mech != null:
+			battle_board._local_mech_id = _bb_local_mech.mech_id
+			battle_board._local_mech_pos = _bb_local_mech.position.duplicate()
+			# 移动中：沿原定路线取"当前位置->终点"的剩余尾巴（不重新寻路），
+			# 保证路线始终是同一条、越来越短。_local_mech_pos 已设为当前位置。
+			if battle_board._move_active and not battle_board._planned_path_cells.is_empty():
+				battle_board._update_move_path_tail()
+			elif battle_board._move_active:
+				battle_board._move_path_centers = []
+			else:
+				battle_board._move_path_centers = []
+		else:
+			battle_board._local_mech_id = &""
+			battle_board._local_mech_pos = {}
+			battle_board._move_path_centers = []
+	# 同步移动模态遮罩（pacing 时拦截点击停止，弹窗/移动结束时透传）
+	_update_move_overlay()
+
+## 损伤放置/移除后的轻量刷新：只更新损伤相关 UI（状态栏/装备面板/技能栏/消息日志）。
+## 跳过 battle_board（192格重绘）/手牌/临时区--损伤放置期间无移动、无手牌变化，
+## 每点一次 +损伤 都全量 _refresh_battle 会明显卡顿（bug3 优化）。
+func _refresh_damage_ui() -> void:
+	if battle == null or battle.context == null:
+		return
+	battle._sync_compat_fields()
+	# 状态栏
+	if battle_summary_label:
+		var local_unit: Dictionary = battle.units.get(String(local_player_id), {})
+		var opp_unit: Dictionary = battle.units.get(String(_opponent_player_id()), {})
+		battle_summary_label.text = "回合 %d | 行动方: %s | 我方(%s) HP %d/%d 动力 %d/%d 金币 %d | 敌方(%s) HP %d/%d" % [
+			battle.turn_number,
+			battle.active_side,
+			String(local_player_id),
+			int(local_unit.get("life", 0)),
+			int(local_unit.get("max_life", 0)),
+			int(local_unit.get("power", 0)),
+			int(local_unit.get("max_power", 0)),
+			int(local_unit.get("gold", 0)),
+			String(_opponent_player_id()),
+			int(opp_unit.get("life", 0)),
+			int(opp_unit.get("max_life", 0)),
+		]
+	# 装备面板（损伤 token 变化）
+	if equipment_panel and battle.context:
+		var mech = battle.context.game_state.get_mech_for_player(local_player_id)
+		if mech:
+			equipment_panel.configure(mech, false, battle.context)
+	# 技能栏（装备损坏可能移除技能）
+	if skill_bar and battle.context:
+		skill_bar.configure(battle.context)
+	# 消息日志（损坏/效果消息）
+	if message_log and battle.context:
+		message_log.configure(battle.context)
+
+## 效果弹窗/损伤放置等选择后的轻量刷新：只更新面板（状态栏/手牌/临时区/装备/技能/消息/卖出按钮），
+## 跳过 battle_board.configure -> queue_redraw -> _draw 192 格重绘（效果/损伤选择不改变棋盘可视状态，
+## 全量重绘是"弹窗选择后卡顿"的主因）。棋盘在动作完成/时点触发时由 _request_refresh 全量补齐。
+func _refresh_panels_only() -> void:
+	if battle == null or battle.context == null:
+		return
+	battle._sync_compat_fields()
+	var local_unit: Dictionary = battle.units.get(String(local_player_id), {})
+	var opp_unit: Dictionary = battle.units.get(String(_opponent_player_id()), {})
+	if battle_summary_label:
+		battle_summary_label.text = "回合 %d | 行动方: %s | 我方(%s) HP %d/%d 动力 %d/%d 金币 %d | 敌方(%s) HP %d/%d" % [
+			battle.turn_number, battle.active_side, String(local_player_id),
+			int(local_unit.get("life", 0)), int(local_unit.get("max_life", 0)),
+			int(local_unit.get("power", 0)), int(local_unit.get("max_power", 0)), int(local_unit.get("gold", 0)),
+			String(_opponent_player_id()), int(opp_unit.get("life", 0)), int(opp_unit.get("max_life", 0)),
+		]
+	if hand_panel and battle.context:
+		hand_panel.local_player_id = local_player_id
+		hand_panel.configure(battle.context)
+	if tmp_zone_panel and battle.context:
+		tmp_zone_panel.configure(battle.context)
+	if equipment_panel and battle.context:
+		var mech = battle.context.game_state.get_mech_for_player(local_player_id)
+		if mech:
+			equipment_panel.configure(mech, false, battle.context)
+	if skill_bar and battle.context:
+		skill_bar.configure(battle.context)
+	if message_log and battle.context:
+		message_log.configure(battle.context)
+	if _sell_button and battle.context:
+		var gs = battle.context.game_state
+		var player_state = gs.players.get(local_player_id) if gs else null
+		if player_state:
+			var remaining = _GameConfig.SELL_EQUIPMENT_LIMIT_PER_TURN - player_state.sell_equipment_count_this_turn
+			_sell_button.text = "卖出(%d/2)" % remaining
+			_sell_button.disabled = (remaining <= 0)
+
 func _refresh_battle() -> void:
 	if battle == null:
 		return
 
 	# 同步兼容字段
 	battle._sync_compat_fields()
-
 	# 本窗口视角：local = 己方，opponent = 敌方（PvP host=player, client=enemy）
 	var local_unit: Dictionary = battle.units.get(String(local_player_id), {})
 	var opp_unit: Dictionary = battle.units.get(String(_opponent_player_id()), {})
@@ -3886,6 +4340,19 @@ func _refresh_battle() -> void:
 	# 更新地图
 	if battle_board:
 		battle_board.configure(battle.map_tiles, battle.units)
+		# 悬停路径预览需要 context（find_optimal_path）与本地机甲 id（路径起点）
+		battle_board._context = battle.context
+		var _bb_local_mech = battle.context.game_state.get_mech_for_player(local_player_id) if battle.context and battle.context.game_state else null
+		battle_board._local_mech_id = _bb_local_mech.mech_id if _bb_local_mech != null else &""
+		battle_board._local_mech_pos = _bb_local_mech.position.duplicate() if _bb_local_mech != null else {}
+		# 移动标志：移动中 _refresh_battle 不应被调用（被 _refresh_battle_coalesced 跳过），
+		# 但移动结束时此处会跑。移动结束清 _move_destination，避免残留连线。
+		var _move_active_now := _has_active_single_move()
+		battle_board._move_active = _move_active_now
+		if not _move_active_now:
+			battle_board._move_destination = {}
+			battle_board._planned_path_cells = []
+			battle_board._move_path_centers = []
 
 	# 更新手牌面板（按本窗口 local_player_id 显示己方手牌）
 	if hand_panel and battle.context:
@@ -3931,18 +4398,26 @@ func _get_weapon_range(mech, weapon_id: StringName) -> int:
 	if mech == null:
 		return 1
 	var wid_str := String(weapon_id)
+	var base_range: int = 1
+	var weapon_kind: StringName = &""
 	if wid_str.begins_with("frame_base_weapon_"):
 		var slot_index: int = wid_str.trim_prefix("frame_base_weapon_").to_int() - 1
 		var base_weapon: Dictionary = mech.get_base_weapon(slot_index)
 		if base_weapon.is_empty():
 			return 1
-		return int(base_weapon.get("range_value", 1))
-	# 实体武器牌
-	var gs = battle.context.game_state if (battle != null and battle.context != null) else null
-	var weapon_card = gs.get_card(weapon_id) if gs != null else null
-	if weapon_card and weapon_card.def:
-		return int(weapon_card.def.range_value)
-	return 1
+		base_range = int(base_weapon.get("range_value", 1))
+		weapon_kind = base_weapon.get("weapon_kind", &"")
+	else:
+		# 实体武器牌
+		var gs = battle.context.game_state if (battle != null and battle.context != null) else null
+		var weapon_card = gs.get_card(weapon_id) if gs != null else null
+		if weapon_card and weapon_card.def:
+			base_range = int(weapon_card.def.range_value)
+			weapon_kind = weapon_card.def.weapon_kind if "weapon_kind" in weapon_card.def else &""
+		else:
+			return 1
+	# 狙击装·头部被动远程范围加成（effect_022 +1 / effect_055 +2，派生值实时重算）
+	return base_range + _GenEquipEffects.get_passive_weapon_range_bonus(mech, weapon_kind)
 
 
 func _find_mech_at_hex(hex: Dictionary) -> StringName:
@@ -4059,12 +4534,16 @@ func _clear_screen() -> void:
 	if battle and battle.context and battle.context.timing_engine:
 		if battle.context.timing_engine.timing_fired.is_connected(Callable(self, "_on_timing_fired")):
 			battle.context.timing_engine.timing_fired.disconnect(Callable(self, "_on_timing_fired"))
+		if battle.context.timing_engine.equipment_effect_fired.is_connected(Callable(self, "_on_equipment_effect_fired")):
+			battle.context.timing_engine.equipment_effect_fired.disconnect(Callable(self, "_on_equipment_effect_fired"))
 	# 断开 ActionEngine 动作完成信号，防止悬挂引用
 	if battle and battle.context and battle.context.action_engine:
 		if battle.context.action_engine.action_completed.is_connected(Callable(self, "_on_action_completed")):
 			battle.context.action_engine.action_completed.disconnect(Callable(self, "_on_action_completed"))
 	if enemy_info_popup and is_instance_valid(enemy_info_popup):
 		enemy_info_popup.queue_free()
+	if mech_detail_panel and is_instance_valid(mech_detail_panel):
+		mech_detail_panel.queue_free()
 	if status_panel and is_instance_valid(status_panel):
 		status_panel.queue_free()
 	if deck_info_popup and is_instance_valid(deck_info_popup):
@@ -4075,6 +4554,9 @@ func _clear_screen() -> void:
 	# 因它们改挂 popup_overlay（在 self 下），需显式释放。
 	if popup_overlay and is_instance_valid(popup_overlay):
 		popup_overlay.queue_free()
+	if _move_overlay and is_instance_valid(_move_overlay):
+		_move_overlay.queue_free()
+	_move_overlay = null
 	if current_screen != null and is_instance_valid(current_screen):
 		current_screen.queue_free()
 	current_screen = null
@@ -4082,6 +4564,7 @@ func _clear_screen() -> void:
 	battle_summary_label = null
 	message_log = null
 	enemy_info_popup = null
+	mech_detail_panel = null
 	status_panel = null
 	deck_info_popup = null
 	shop_panel = null

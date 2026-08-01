@@ -47,6 +47,10 @@ var _remaining_tokens: int = 0
 ## 损伤放置来源攻击 ID（用于日志）
 var _source_attack_id: StringName = &""
 var _removal_mode: bool = false
+## removal 模式下排除的槽位（effect_079 移除"其他区域"损伤，排除来源槽）
+var _exclude_slot_id: StringName = &""
+## 来源标签（"牌名：效果描述"，可空）
+var _source_text: String = ""
 
 
 ## 配置面板
@@ -56,16 +60,20 @@ func configure(game_context, target_mech_id: StringName, token_count: int, sourc
 	_remaining_tokens = token_count
 	_source_attack_id = source_attack_id
 	_removal_mode = false
+	_exclude_slot_id = &""
+	_source_text = ""
 	_ensure_styled()
 	_refresh()
 
 
-func configure_removal(game_context, target_mech_id: StringName, token_count: int) -> void:
+func configure_removal(game_context, target_mech_id: StringName, token_count: int, exclude_slot_id: StringName = &"", source_label: String = "") -> void:
 	_context = game_context
 	_target_mech_id = target_mech_id
 	_remaining_tokens = token_count
 	_source_attack_id = &""
 	_removal_mode = true
+	_exclude_slot_id = exclude_slot_id
+	_source_text = source_label
 	_ensure_styled()
 	_refresh()
 
@@ -107,6 +115,8 @@ func _refresh() -> void:
 	var valid_slots: Array[StringName] = []
 	if _removal_mode:
 		for slot_id: StringName in mech.slots:
+			if slot_id == _exclude_slot_id:
+				continue  # 排除来源槽（effect_079 移除"其他区域"损伤）
 			var damage_slot: MechSlotState = mech.slots[slot_id]
 			if damage_slot.region_damage_tokens > 0 or (damage_slot.equipped_card != null and damage_slot.equipped_card.damage_tokens > 0):
 				valid_slots.append(slot_id)
@@ -123,6 +133,15 @@ func _refresh() -> void:
 	title.text = ("── 移除损伤标记（剩余: %d）──" if _removal_mode else "── 放置损伤标记（剩余: %d）──") % _remaining_tokens
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(title)
+
+	# 来源标签（装备离场/维修等效果来源，可空）
+	if _source_text != "":
+		var src_label = Label.new()
+		src_label.text = _source_text
+		src_label.add_theme_color_override("font_color", Color(0.95, 0.82, 0.45))
+		src_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		src_label.add_theme_font_size_override("font_size", 14)
+		vbox.add_child(src_label)
 
 	# 目标机甲名称
 	var mech_name = Label.new()

@@ -21,6 +21,7 @@ const _MechSlotState = preload("res://scripts/runtime/MechSlotState.gd")
 const _GameState = preload("res://scripts/runtime/GameState.gd")
 const _RangeCalculator = preload("res://scripts/battle/RangeCalculator.gd")
 const _TimingConst = preload("res://scripts/action_core/TimingConst.gd")
+const _GenEquipEffects = preload("res://scripts/generated_database/GeneratedEquipmentEffects.gd")
 
 ## GameContext：依赖注入容器
 var context = null
@@ -64,6 +65,8 @@ func start_tutorial(data_registry) -> Dictionary:
 	var setup_result: Dictionary = context.game_setup_service.setup_tutorial_battle(data_registry)
 	if not setup_result.get("ok", false):
 		return setup_result
+	# 注入 game_state 供全场光环 helper（effect_080/086）查询所有机甲
+	_GenEquipEffects.set_aura_game_state(context.game_state)
 
 	# 同步兼容字段
 	_sync_compat_fields()
@@ -130,9 +133,31 @@ func move_unit(side: String, target: Dictionary) -> Dictionary:
 	if not mech:
 		return {"ok": false, "message": "mech not found for side: %s" % side}
 
-	var result: Dictionary = context.map_service.move_mech_to_hex(mech.mech_id, target)
+	var target_hex := {"q": int(target.get("q", 0)), "r": int(target.get("r", 0))}
+	# 可达性预检：动力不足/不可通行/被占/点击自身 时不启动 single_move。
+	# 否则 _step_select_target 会因 find_optimal_path 返回空而转入 select_move_target
+	# 需求输入，弹出绿色可达范围（良性 bug，但不可达点击无意义不应出现）。
+	if context.map_service != null:
+		var pre_path: Array = context.map_service.find_optimal_path(mech.mech_id, target_hex, mech.power)
+		if pre_path.is_empty():
+			return {"ok": false, "message": "目标格不可达（动力不足/不可通行/被占据）"}
+
+	# 走单次移动动作：选终点 -> find_optimal_path -> 逐格执行基础移动动作，
+	# 每格发出 BASIC_MOVE_BEFORE/AT/AFTER/SETTLE 时点，effect_017/050 等监听
+	# BASIC_MOVE_AFTER 的装备效果可在逐格移动动力耗尽时触发（文档"消耗动力后若没动力剩余"）。
+	# 旧实现直接 move_mech_to_hex 跳格，绕过动作链致 BASIC_MOVE_AFTER 从不发出。
+	var target_cell_str := "%d,%d" % [int(target.get("q", 0)), int(target.get("r", 0))]
+	var mv_result: Dictionary = context.action_service.execute(&"single_move", {
+		"mech_id": mech.mech_id,
+		"target_cell": target_cell_str,
+		"player_id": StringName(side),
+		"available_power": mech.power,
+	})
 	_sync_compat_fields()
-	return result
+	# single_move 返回 {state:...}（无 ok）；非 error 即视为移动已开始（可能因 effect_017
+	# 挂起 waiting_timing，弹窗后续由 ActionUIBridge 处理）。
+	var mv_ok: bool = String(mv_result.get("state", &"")) != &"error"
+	return {"ok": mv_ok, "state": mv_result.get("state", &""), "message": String(mv_result.get("message", ""))}
 
 
 ## ── 动作系统入口 ──
@@ -411,11 +436,13 @@ func _sync_compat_fields() -> void:
 	active_side = String(gs.active_player_id)
 	log = gs.log.duplicate(true)
 
-	# 同步地图
-	map_tiles.clear()
-	for cell_key: String in gs.map_state.cells:
-		var cell = gs.map_state.cells[cell_key]
-		map_tiles.append({"q": cell.q, "r": cell.r})
+	# 同步地图（地形在一场战斗中不变，仅在格数变化时重建，
+	# 避免每次 _refresh_battle 都 clear+append 192 格字典造成卡顿）
+	if map_tiles.size() != gs.map_state.cells.size():
+		map_tiles.clear()
+		for cell_key: String in gs.map_state.cells:
+			var cell = gs.map_state.cells[cell_key]
+			map_tiles.append({"q": cell.q, "r": cell.r})
 
 	# 从 MechState 构建兼容的 units 字典
 	units.clear()

@@ -16,6 +16,7 @@ class_name AttackAction
 
 const _TimingConst = preload("res://scripts/action_core/TimingConst.gd")
 const _RangeCalculator = preload("res://scripts/battle/RangeCalculator.gd")
+const _GenEquipEffects = preload("res://scripts/generated_database/GeneratedEquipmentEffects.gd")
 const SLog = preload("res://scripts/services/slog.gd")
 
 ## 诊断开关（bug3b 二次结算）。默认关闭：二次驱动哨兵若被反复触发会写爆日志。
@@ -86,7 +87,10 @@ func _step_select_weapon(action: Action) -> Dictionary:
 			var weapon_stats: Dictionary = _get_weapon_stats(attacker, weapon_id)
 			result["weapon_id"] = weapon_id
 			result["weapon_might"] = weapon_stats.get("might", 0)
-			result["weapon_range"] = weapon_stats.get("range_value", 1)
+			# 武器射程 = 基础射程 + 狙击装·头部被动远程范围加成（effect_022/055，派生值实时重算）
+			# 存入 record 后，命中检查(L213)/选目标校验(L117)读 weapon_range+extra_range 自动含之。
+			var w_kind: StringName = weapon_stats.get("weapon_kind", &"")
+			result["weapon_range"] = weapon_stats.get("range_value", 1) + _GenEquipEffects.get_passive_weapon_range_bonus(attacker, w_kind)
 			# effective_weapon_type 默认 = 实体武器 kind（近战/远程/特殊）
 			# 近战装·头部效果（ATTACK_BEFORE priority 20）可改写为"近战"
 			result["effective_weapon_type"] = weapon_stats.get("weapon_kind", &"")
@@ -157,7 +161,9 @@ func _step_select_target(action: Action) -> Dictionary:
 		"input_type": &"select_attack_target",
 		"input_params": {
 			"attacker_id": action.record.get("attacker_id", &""),
-			"weapon_range": action.record.get("weapon_range", 1),
+			# 高亮范围 = record.weapon_range（含狙击头部被动加成）+ extra_range（近战头-2等
+			# ATTACK_BEFORE 修正），与 _step_select_target 目标校验 / _step_check_hit 命中判定一致。
+			"weapon_range": max(1, action.record.get("weapon_range", 1) + int(action.record.get("extra_range", 0))),
 			"target_count": action.record.get("target_count", 1),
 		},
 	}

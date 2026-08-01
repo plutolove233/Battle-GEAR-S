@@ -29,6 +29,14 @@ static var _card_effect_map: Dictionary = {}
 ## 是否已初始化
 static var _initialized: bool = false
 
+## 全场光环查询所需的 game_state（由 BattleState 建局时注入；effect_080/086 全场光环用）
+static var _aura_game_state = null
+
+
+## 注入 game_state 供全场光环 helper 查询所有机甲（建局时调用）
+static func set_aura_game_state(gs) -> void:
+	_aura_game_state = gs
+
 
 ## 初始化 card_def_id → effect_id 列表 映射
 ## 由 set_equipment_action 首次调用时注入 effect_ids_map（来自 CardDatabaseLoader）
@@ -111,32 +119,41 @@ static func build_equipment_effects() -> Dictionary:
 	fed_torso.set_conditions([{"op": &"DISCARD_IS_SELF_FROM_SLOT"}])
 	fed_torso.set_target_rules([{"rule": &"NO_TARGET"}])
 	fed_torso.set_costs([])
-	# 动作：移除原区域全部损伤（数量由执行时读取原区域当前损伤，上限为该损伤数）
+	# 动作：可取消选择；确认后移除原区域全部损伤（"可移除"=optional CHOOSE_ONE）
 	fed_torso.set_actions([{
-		"type": &"REMOVE_DAMAGE_TOKENS_FROM_DISCARD_ORIGIN_SLOT",
-		"params": {"amount": -1}  # -1 = 移除原区域全部损伤
+		"type": &"CHOOSE_ONE",
+		"params": {
+			"optional": true,
+			"options": [{"label": "移除原区域全部损伤", "actions": [
+				{"type": &"REMOVE_DAMAGE_TOKENS_FROM_DISCARD_ORIGIN_SLOT", "params": {"amount": -1}}  # -1 = 全部
+			]}],
+		},
 	}])
 	fed_torso.description = "此牌从区域中弃置时可移除原先所在区域内的所有损伤。"
 	effects[fed_torso.effect_id] = fed_torso
 
 	# ═══════════════════════════════════════════
-	# 004 联邦普装·右臂：将要在其他名称带"联邦"的装备牌上设置损伤时，可转移至此牌区域
-	# 损伤位置替代型 —— 监听 DAMAGE_REDIRECT_WINDOW 时点
+	# 004 联邦普装·右臂：其他装备牌即将设置损伤时，可转移至此牌区域
+	# 损伤位置替代型：监听 DAMAGE_REDIRECT_WINDOW 时点
 	# ═══════════════════════════════════════════
 	var fed_rarm := _ActionEffect.new()
 	fed_rarm.effect_id = &"equipment_effect_004"
-	fed_rarm.display_name = "联邦普装·右臂·损伤转移(联邦装备)"
+	fed_rarm.display_name = "联邦普装·右臂·损伤转移"
 	fed_rarm.mode = _TC.MODE_LISTEN
 	fed_rarm.priority = 20  # 损伤位置替代优先级20
 	fed_rarm.listen_timing = &"DAMAGE_REDIRECT_WINDOW"
-	fed_rarm.set_conditions([{"op": &"REDIRECT_TARGET_HAS_FACTION_EQUIP", "faction_substring": "联邦"}])
+	# 每次即将设置损伤到我方机甲(右臂所在机甲)时，最多2损伤移至此牌区域。
+	# 允许转移致本牌损坏（效果转移，非正常逐点攻击损伤）。fixed_slot 不触发转移窗。
+	fed_rarm.set_conditions([
+		{"op": &"TARGET_IS_OWN_MECH"},  # 损伤目标==本牌所在机甲(我方机甲)
+	])
 	fed_rarm.set_target_rules([{"rule": &"NO_TARGET"}])
 	fed_rarm.set_costs([])
 	fed_rarm.set_actions([{
 		"type": &"OFFER_DAMAGE_REDIRECT",
-		"params": {"max_points": -1}  # -1 = 不限点数（每点原目标含联邦装备即可转）
+		"params": {"max_points": 2}  # 最多转移2点
 	}])
-	fed_rarm.description = "将要在其他名称带有联邦的装备牌上设置损伤时，可将损伤移至此牌所在区域。"
+	fed_rarm.description = "每次即将设置损伤到我方机甲时，可以将最多2损伤移至此牌所在区域。"
 	effects[fed_rarm.effect_id] = fed_rarm
 
 	# ═══════════════════════════════════════════
@@ -204,10 +221,15 @@ static func build_equipment_effects() -> Dictionary:
 	])
 	fed_lleg.set_target_rules([{"rule": &"NO_TARGET"}])
 	fed_lleg.set_costs([])
-	# 弃置自身 + 减少攻击 markers（玩家选减1或2）
+	# 可取消选择；确认后弃置自身 + 自动减少攻击 markers（"可以弃置"=optional CHOOSE_ONE）
 	fed_lleg.set_actions([{
-		"type": &"DISCARD_SELF_AND_REDUCE_ATTACK_MARKERS",
-		"params": {"max_reduce": 2}
+		"type": &"CHOOSE_ONE",
+		"params": {
+			"optional": true,
+			"options": [{"label": "弃置此牌，最多减少2损伤", "actions": [
+				{"type": &"DISCARD_SELF_AND_REDUCE_ATTACK_MARKERS", "params": {"max_reduce": 2}}
+			]}],
+		},
 	}])
 	fed_lleg.description = "机甲被攻击命中时，可以弃置此牌，之后可最多减少此次攻击产生的2损伤。"
 	effects[fed_lleg.effect_id] = fed_lleg
@@ -248,7 +270,7 @@ static func build_equipment_effects() -> Dictionary:
 			"optional": true,
 			"options": [{"label": "获得当前回合动力+3，之后护甲-2", "actions": [
 				{"type": &"EXECUTE_STAT_MODIFY", "params": {"stat_type": &"power", "value": 3, "method": &"add", "duration": &"THIS_TURN"}},
-				{"type": &"MODIFY_ARMOR", "params": {"delta": -2, "duration": &"PERMANENT"}},
+				{"type": &"EXECUTE_STAT_MODIFY", "params": {"stat_type": &"armor", "value": -2, "method": &"add", "duration": &"THIS_TURN"}},
 			]}],
 		},
 	}])
@@ -269,15 +291,9 @@ static func build_equipment_effects() -> Dictionary:
 	imp_rarm.set_conditions([{"op": &"SELF_MECH_IS_ATTACKER"}])
 	imp_rarm.set_target_rules([{"rule": &"NO_TARGET"}])
 	imp_rarm.set_costs([])
-	imp_rarm.set_actions([{
-		"type": &"CHOOSE_ONE",
-		"params": {
-			"optional": true,
-			"options": [{"label": "回复2动力", "actions": [
-				{"type": &"RESTORE_POWER", "params": {"amount": 2}}
-			]}],
-		},
-	}])
+	imp_rarm.set_actions([
+		{"type": &"RESTORE_POWER", "params": {"amount": 2}},
+	])
 	imp_rarm.description = "机甲发动攻击结算后，回复2动力。"
 	effects[imp_rarm.effect_id] = imp_rarm
 
@@ -294,15 +310,9 @@ static func build_equipment_effects() -> Dictionary:
 	imp_larm.set_conditions([{"op": &"SELF_MECH_IS_ATTACKER"}])
 	imp_larm.set_target_rules([{"rule": &"NO_TARGET"}])
 	imp_larm.set_costs([])
-	imp_larm.set_actions([{
-		"type": &"CHOOSE_ONE",
-		"params": {
-			"optional": true,
-			"options": [{"label": "回复1动力", "actions": [
-				{"type": &"RESTORE_POWER", "params": {"amount": 1}}
-			]}],
-		},
-	}])
+	imp_larm.set_actions([
+		{"type": &"RESTORE_POWER", "params": {"amount": 1}},
+	])
 	imp_larm.description = "机甲发动攻击结算后，回复1动力。"
 	effects[imp_larm.effect_id] = imp_larm
 
@@ -313,26 +323,17 @@ static func build_equipment_effects() -> Dictionary:
 	var imp_rleg := _ActionEffect.new()
 	imp_rleg.effect_id = &"equipment_effect_012"
 	imp_rleg.display_name = "帝国普装·右腿·移动8格回复2动力"
-	imp_rleg.mode = _TC.MODE_LISTEN
+	imp_rleg.mode = _TC.MODE_DIRECT
 	imp_rleg.priority = 10
-	imp_rleg.listen_timing = _TC.BASIC_MOVE_AFTER
-	imp_rleg.listen_action_type = &"basic_move"
 	imp_rleg.once_per_turn_key = &"equipment_effect_012"
 	imp_rleg.set_conditions([
 		{"op": &"MOVED_DISTANCE_THIS_TURN_ABOVE", "threshold": 8},
-		{"op": &"SELF_MECH_IS_MOVE_SUBJECT"},
 	])
 	imp_rleg.set_target_rules([{"rule": &"NO_TARGET"}])
 	imp_rleg.set_costs([])
-	imp_rleg.set_actions([{
-		"type": &"CHOOSE_ONE",
-		"params": {
-			"optional": true,
-			"options": [{"label": "回复2动力", "actions": [
-				{"type": &"RESTORE_POWER", "params": {"amount": 2}}
-			]}],
-		},
-	}])
+	imp_rleg.set_actions([
+		{"type": &"RESTORE_POWER", "params": {"amount": 2}},
+	])
 	imp_rleg.description = "每回合1次，机甲在当前回合内累积移动过8个格子，可回复2动力。"
 	effects[imp_rleg.effect_id] = imp_rleg
 
@@ -342,26 +343,17 @@ static func build_equipment_effects() -> Dictionary:
 	var imp_lleg := _ActionEffect.new()
 	imp_lleg.effect_id = &"equipment_effect_013"
 	imp_lleg.display_name = "帝国普装·左腿·移动8格回复1动力"
-	imp_lleg.mode = _TC.MODE_LISTEN
+	imp_lleg.mode = _TC.MODE_DIRECT
 	imp_lleg.priority = 10
-	imp_lleg.listen_timing = _TC.BASIC_MOVE_AFTER
-	imp_lleg.listen_action_type = &"basic_move"
 	imp_lleg.once_per_turn_key = &"equipment_effect_013"
 	imp_lleg.set_conditions([
 		{"op": &"MOVED_DISTANCE_THIS_TURN_ABOVE", "threshold": 8},
-		{"op": &"SELF_MECH_IS_MOVE_SUBJECT"},
 	])
 	imp_lleg.set_target_rules([{"rule": &"NO_TARGET"}])
 	imp_lleg.set_costs([])
-	imp_lleg.set_actions([{
-		"type": &"CHOOSE_ONE",
-		"params": {
-			"optional": true,
-			"options": [{"label": "回复1动力", "actions": [
-				{"type": &"RESTORE_POWER", "params": {"amount": 1}}
-			]}],
-		},
-	}])
+	imp_lleg.set_actions([
+		{"type": &"RESTORE_POWER", "params": {"amount": 1}},
+	])
 	imp_lleg.description = "每回合1次，机甲在当前回合内累积移动过8个格子，可回复1动力。"
 	effects[imp_lleg.effect_id] = imp_lleg
 
@@ -398,21 +390,21 @@ static func build_equipment_effects() -> Dictionary:
 	])
 	heavy_torso.set_target_rules([{"rule": &"NO_TARGET"}])
 	heavy_torso.set_costs([
-		{"cost_type": &"DISCARD_ACTION_CARD", "count": 2},
+		{"cost_type": &"DISCARD_ACTION_CARD", "count": 2, "optional": true},
 	])
-	heavy_torso.set_actions([{
-		"type": &"MODIFY_ATTACK_TEMP_ARMOR", "params": {"delta": 4},
-	}])
+	heavy_torso.set_actions([
+		{"type": &"EXECUTE_STAT_MODIFY", "params": {"stat_type": &"armor", "value": 4, "method": &"add", "duration": &"THIS_TURN"}},
+	])
 	heavy_torso.description = "机甲被指定为攻击目标时，可弃置2张行动牌，当前回合护甲+4。"
 	effects[heavy_torso.effect_id] = heavy_torso
 
 	# ═══════════════════════════════════════════
-	# 016 重甲装·右臂 / 机动装·右腿：此牌上损伤≥1时，动力+1
+	# 016 重甲装·右臂：此牌上损伤≥1时，动力+1（机动腿改 effect_021 逐损伤+1）
 	# 派生值实时重算型 —— 由 MechState.get_total_power 调用 slot_damage_threshold_power_bonus
 	# ═══════════════════════════════════════════
 	var heavy_rarm := _ActionEffect.new()
 	heavy_rarm.effect_id = &"equipment_effect_016"
-	heavy_rarm.display_name = "损伤≥1时动力上限+1"
+	heavy_rarm.display_name = "重甲装·右臂·损伤≥1动力+1"
 	heavy_rarm.mode = _TC.MODE_DIRECT  # 占位，实际实时重算
 	heavy_rarm.priority = 10
 	heavy_rarm.set_conditions([{"op": &"ALWAYS"}])
@@ -423,27 +415,36 @@ static func build_equipment_effects() -> Dictionary:
 	effects[heavy_rarm.effect_id] = heavy_rarm
 
 	# ═══════════════════════════════════════════
-	# 017 机动装·头部：每我方回合1次，可消耗4动力抽1张行动牌
-	# DIRECT 主动效果 —— 由装备面板按钮/skill_bar 触发，每我方回合1次
+	# 017 机动装·头部：每回合1次，消耗动力后若动力为0，可回复2动力并用当前动力移动
+	# 诱发型：监听 basic_move.BASIC_MOVE_AFTER（落位后触发，避免额外移动被原移动落位覆盖）
 	# ═══════════════════════════════════════════
 	var mob_head := _ActionEffect.new()
 	mob_head.effect_id = &"equipment_effect_017"
-	mob_head.display_name = "机动装·头部·消耗4动力抽1行动牌"
-	mob_head.mode = _TC.MODE_DIRECT
+	mob_head.display_name = "机动装·头部·耗尽动力回复并移动"
+	mob_head.mode = _TC.MODE_LISTEN
 	mob_head.priority = 10
+	mob_head.listen_timing = _TC.BASIC_MOVE_AFTER
+	mob_head.listen_action_type = &"basic_move"
 	mob_head.once_per_turn_key = &"equipment_effect_017"
+	mob_head.once_per_turn_max = 1
 	mob_head.set_conditions([
-		{"op": &"IS_OWNER_MAIN_PHASE"},
-		{"op": &"OWNER_POWER_ABOVE_OR_EQUAL", "threshold": 4},
+		{"op": &"SELF_MECH_IS_MOVE_SUBJECT"},
+		{"op": &"OWNER_POWER_EQUALS", "value": 0},
 	])
 	mob_head.set_target_rules([{"rule": &"NO_TARGET"}])
-	mob_head.set_costs([
-		{"cost_type": &"SPEND_POWER", "amount": 4},
-	])
-	mob_head.set_actions([
-		{"type": &"DRAW_ACTION", "params": {"count": 1}},
-	])
-	mob_head.description = "每我方回合1次，可以消耗4动力抽1张行动牌。"
+	mob_head.set_costs([])
+	# 可取消：确认后先回复2动力，再以当时当前动力循环移动（到取消或无动力）
+	mob_head.set_actions([{
+		"type": &"CHOOSE_ONE",
+		"params": {
+			"optional": true,
+			"options": [{"label": "回复2动力并用当前动力移动", "actions": [
+				{"type": &"RESTORE_POWER", "params": {"amount": 2}},
+				{"type": &"EXECUTE_SINGLE_MOVE", "params": {"use_current_power": true, "loop_until_cancel": true}},
+			]}],
+		},
+	}])
+	mob_head.description = "每回合1次，消耗动力后若没有动力剩余，可回复2动力并用当前动力移动。"
 	effects[mob_head.effect_id] = mob_head
 
 	# ═══════════════════════════════════════════
@@ -463,7 +464,7 @@ static func build_equipment_effects() -> Dictionary:
 	])
 	mob_torso.set_target_rules([{"rule": &"NO_TARGET"}])
 	mob_torso.set_costs([
-		{"cost_type": &"DISCARD_ACTION_CARD", "count": 2},
+		{"cost_type": &"DISCARD_ACTION_CARD", "count": 2, "optional": true},
 	])
 	mob_torso.set_actions([
 		{"type": &"EXECUTE_STAT_MODIFY", "params": {"stat_type": &"power", "value": 5, "method": &"add", "duration": &"THIS_TURN"}},
@@ -472,23 +473,31 @@ static func build_equipment_effects() -> Dictionary:
 	effects[mob_torso.effect_id] = mob_torso
 
 	# ═══════════════════════════════════════════
-	# 019 机动装·右臂：其他装备将因新损伤弃置时，可把最多2点损伤转移到本区域
-	# 损伤位置替代型 —— 监听 DAMAGE_REDIRECT_WINDOW，最多2点
+	# 019 机动装·右臂：我方主阶段可弃置此牌，本回合动力+4（DIRECT 主动效果）
+	# "使用迎击牌时"路径由 effect_032 处理；二者共享同一牌实例，无每回合限次
 	# ═══════════════════════════════════════════
 	var mob_rarm := _ActionEffect.new()
 	mob_rarm.effect_id = &"equipment_effect_019"
-	mob_rarm.display_name = "机动装·右臂·损伤转移(最多2点)"
-	mob_rarm.mode = _TC.MODE_LISTEN
-	mob_rarm.priority = 20
-	mob_rarm.listen_timing = &"DAMAGE_REDIRECT_WINDOW"
-	mob_rarm.set_conditions([{"op": &"REDIRECT_HAS_DESTROYABLE_EQUIP"}])
+	mob_rarm.display_name = "机动装·右臂·弃置动力+4(主动)"
+	mob_rarm.mode = _TC.MODE_DIRECT
+	mob_rarm.priority = 10
+	mob_rarm.set_conditions([
+		{"op": &"IS_OWNER_TURN"},
+	])
 	mob_rarm.set_target_rules([{"rule": &"NO_TARGET"}])
 	mob_rarm.set_costs([])
+	# 我方主阶段可弃置此牌换本回合动力+4；"使用迎击牌时"路径由 effect_032 处理
 	mob_rarm.set_actions([{
-		"type": &"OFFER_DAMAGE_REDIRECT",
-		"params": {"max_points": 2}
+		"type": &"CHOOSE_ONE",
+		"params": {
+			"optional": true,
+			"options": [{"label": "弃置此牌，本回合动力+4", "actions": [
+				{"type": &"DISCARD_SELF_FROM_SLOT", "params": {"reason": &"effect_self_discard"}},
+				{"type": &"EXECUTE_STAT_MODIFY", "params": {"stat_type": &"power", "value": 4, "method": &"add", "duration": &"THIS_TURN"}},
+			]}],
+		},
 	}])
-	mob_rarm.description = "其他区域设置的装备牌会因即将设置的损伤而弃置时，可以将最多2损伤转移至此牌所在区域。"
+	mob_rarm.description = "我方回合或使用迎击牌时，可以弃置此牌，使机甲本回合动力+4。"
 	effects[mob_rarm.effect_id] = mob_rarm
 
 	# ═══════════════════════════════════════════
@@ -508,15 +517,10 @@ static func build_equipment_effects() -> Dictionary:
 	])
 	mob_larm.set_target_rules([{"rule": &"NO_TARGET"}])
 	mob_larm.set_costs([])
-	mob_larm.set_actions([{
-		"type": &"CHOOSE_ONE",
-		"params": {
-			"optional": true,
-			"options": [{"label": "回复3动力", "actions": [
-				{"type": &"RESTORE_POWER", "params": {"amount": 3}}
-			]}],
-		},
-	}])
+	# 自动回复（"命中后回复"非"可以"，无 CHOOSE_ONE）；回复攻击者动力
+	mob_larm.set_actions([
+		{"type": &"RESTORE_POWER", "params": {"amount": 3, "mech_id": "$binding_context.mech_id"}},
+	])
 	mob_larm.description = "机甲发动的攻击命中后，回复3动力。"
 	effects[mob_larm.effect_id] = mob_larm
 
@@ -526,36 +530,30 @@ static func build_equipment_effects() -> Dictionary:
 	# ═══════════════════════════════════════════
 	var mob_lleg := _ActionEffect.new()
 	mob_lleg.effect_id = &"equipment_effect_021"
-	mob_lleg.display_name = "损伤≥2时动力上限+1"
+	mob_lleg.display_name = "机动装·腿·每损伤动力+1"
 	mob_lleg.mode = _TC.MODE_DIRECT  # 占位，实际实时重算
 	mob_lleg.priority = 10
 	mob_lleg.set_conditions([{"op": &"ALWAYS"}])
 	mob_lleg.set_target_rules([{"rule": &"NO_TARGET"}])
 	mob_lleg.set_costs([])
 	mob_lleg.set_actions([])
-	mob_lleg.description = "此牌上设置的损伤≥2时，动力+1（实时重算）。"
+	mob_lleg.description = "此牌上每设置有1损伤，动力+1（实时重算）。"
 	effects[mob_lleg.effect_id] = mob_lleg
 
 	# ═══════════════════════════════════════════
 	# 022 狙击装·头部：使用远程武器发动攻击时，该攻击范围+1
-	# 强制修正型 —— 监听 ATTACK_BEFORE，读 effective_weapon_type
+	# 派生值实时重算型 —— 不注册监听器，由 app_root._get_weapon_range /
+	# attack_action._step_select_weapon 调用 get_passive_weapon_range_bonus
 	# ═══════════════════════════════════════════
 	var snip_head := _ActionEffect.new()
 	snip_head.effect_id = &"equipment_effect_022"
 	snip_head.display_name = "狙击装·头部·远程武器范围+1"
-	snip_head.mode = _TC.MODE_LISTEN
+	snip_head.mode = _TC.MODE_DIRECT  # 占位模式，实际不注册监听（实时重算）
 	snip_head.priority = 10
-	snip_head.listen_timing = _TC.ATTACK_BEFORE
-	snip_head.listen_action_type = &"attack"
-	snip_head.set_conditions([
-		{"op": &"SELF_MECH_IS_ATTACKER"},
-		{"op": &"ATTACK_EFFECTIVE_WEAPON_KIND", "weapon_kind": &"远程"},
-	])
+	snip_head.set_conditions([{"op": &"ALWAYS"}])
 	snip_head.set_target_rules([{"rule": &"NO_TARGET"}])
 	snip_head.set_costs([])
-	snip_head.set_actions([
-		{"type": &"MODIFY_ATTACK_RANGE", "params": {"delta": 1}},
-	])
+	snip_head.set_actions([])
 	snip_head.description = "使用远程武器发动攻击时，该攻击范围+1。"
 	effects[snip_head.effect_id] = snip_head
 
@@ -564,38 +562,53 @@ static func build_equipment_effects() -> Dictionary:
 	# ═══════════════════════════════════════════
 	var snip_torso := _ActionEffect.new()
 	snip_torso.effect_id = &"equipment_effect_023"
-	snip_torso.display_name = "狙击装·躯干·无效果"
-	snip_torso.mode = _TC.MODE_DIRECT
+	snip_torso.display_name = "狙击装·躯干·被远程攻击弃牌减威力"
+	snip_torso.mode = _TC.MODE_LISTEN
 	snip_torso.priority = 10
-	snip_torso.set_conditions([{"op": &"ALWAYS"}])
+	snip_torso.listen_timing = _TC.ATTACK_PRE
+	snip_torso.listen_action_type = &"attack"
+	snip_torso.set_conditions([
+		{"op": &"SELF_MECH_IS_ATTACK_TARGET"},
+		{"op": &"ATTACK_EFFECTIVE_WEAPON_KIND", "weapon_kind": &"远程"},
+	])
 	snip_torso.set_target_rules([{"rule": &"NO_TARGET"}])
 	snip_torso.set_costs([])
-	snip_torso.set_actions([])
-	snip_torso.description = "无额外卡牌效果。"
+	snip_torso.set_actions([{
+		"type": &"CHOOSE_ONE",
+		"params": {
+			"optional": true,
+			"options": [{"label": "弃此牌，攻击威力-4", "actions": [
+				{"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": -4}},
+				{"type": &"DISCARD_SELF_FROM_SLOT", "params": {}},
+			]}],
+		},
+	}])
+	snip_torso.description = "被远程武器攻击时，可以弃置此牌，使此次攻击威力-4。"
 	effects[snip_torso.effect_id] = snip_torso
 
 	# ═══════════════════════════════════════════
-	# 024 狙击装·右臂：每我方回合1次，可弃1行动牌，回复1动力
-	# DIRECT 主动效果 —— 由装备面板按钮/skill_bar 触发，每我方回合1次
+	# 024 狙击装·右臂：我方回合1次，可弃1行动牌，回复2动力
+	# DIRECT 主动效果：装备面板发动按钮触发，每我方回合1次
+	# 弃牌为 optional 费用 -> 走 _request_optional_discard 弹选牌框让玩家自选弃哪张（取消=不发动，不消耗本回合次数）
 	# ═══════════════════════════════════════════
 	var snip_rarm := _ActionEffect.new()
 	snip_rarm.effect_id = &"equipment_effect_024"
-	snip_rarm.display_name = "狙击装·右臂·弃1牌回复1动力"
+	snip_rarm.display_name = "狙击装·右臂·弃1牌回复2动力"
 	snip_rarm.mode = _TC.MODE_DIRECT
 	snip_rarm.priority = 10
 	snip_rarm.once_per_turn_key = &"equipment_effect_024"
 	snip_rarm.set_conditions([
-		{"op": &"IS_OWNER_MAIN_PHASE"},
+		{"op": &"IS_OWNER_TURN"},
 		{"op": &"HAS_ACTION_CARD_IN_HAND"},
 	])
 	snip_rarm.set_target_rules([{"rule": &"NO_TARGET"}])
 	snip_rarm.set_costs([
-		{"cost_type": &"DISCARD_ACTION_CARD", "count": 1},
+		{"cost_type": &"DISCARD_ACTION_CARD", "count": 1, "optional": true},
 	])
 	snip_rarm.set_actions([
-		{"type": &"RESTORE_POWER", "params": {"amount": 1}},
+		{"type": &"RESTORE_POWER", "params": {"amount": 2}},
 	])
-	snip_rarm.description = "每我方回合1次，可以弃置1张行动牌，回复1动力。"
+	snip_rarm.description = "我方回合1次，可以弃置1张行动牌，回复2动力。"
 	effects[snip_rarm.effect_id] = snip_rarm
 
 	# ═══════════════════════════════════════════
@@ -625,12 +638,12 @@ static func build_equipment_effects() -> Dictionary:
 	effects[snip_larm.effect_id] = snip_larm
 
 	# ═══════════════════════════════════════════
-	# 026 狙击装·右腿：打出攻击牌时，可立即移动到相邻1格
-	# 诱发型 —— 监听 USE_ACTION_AT（打出攻击牌时）
+	# 026 狙击装·右腿：使用攻击牌时，可立即免费移动到相邻1格（free_move 不消耗动力，adjacent_only 仅相邻）
+	# 诱发型 —— 监听 USE_ACTION_AT（使用攻击牌时）
 	# ═══════════════════════════════════════════
 	var snip_rleg := _ActionEffect.new()
 	snip_rleg.effect_id = &"equipment_effect_026"
-	snip_rleg.display_name = "狙击装·右腿·打出攻击牌移动1格"
+	snip_rleg.display_name = "狙击装·右腿·使用攻击牌移动1格"
 	snip_rleg.mode = _TC.MODE_LISTEN
 	snip_rleg.priority = 10
 	snip_rleg.listen_timing = _TC.USE_ACTION_AT
@@ -641,25 +654,19 @@ static func build_equipment_effects() -> Dictionary:
 	])
 	snip_rleg.set_target_rules([{"rule": &"NO_TARGET"}])
 	snip_rleg.set_costs([])
-	snip_rleg.set_actions([{
-		"type": &"CHOOSE_ONE",
-		"params": {
-			"optional": true,
-			"options": [{"label": "移动到相邻1格", "actions": [
-				{"type": &"EXECUTE_SINGLE_MOVE", "params": {"max_cells": 1}}
-			]}],
-		},
-	}])
-	snip_rleg.description = "打出攻击牌时，可立即移动到相邻的1个格子上。"
+	snip_rleg.set_actions([
+		{"type": &"EXECUTE_SINGLE_MOVE", "params": {"max_cells": 1, "free_move": true, "adjacent_only": true, "use_current_power": false, "loop_until_cancel": false}},
+	])
+	snip_rleg.description = "使用攻击牌时，可立即移动到相邻的1个格子上。"
 	effects[snip_rleg.effect_id] = snip_rleg
 
 	# ═══════════════════════════════════════════
-	# 027 狙击装·左腿：打出迎击牌时，可立即移动到相邻1格
-	# 诱发型 —— 监听 USE_ACTION_AT（打出迎击牌时）
+	# 027 狙击装·左腿：使用迎击牌时，可立即免费移动到相邻1格（free_move 不消耗动力，adjacent_only 仅相邻）
+	# 诱发型 —— 监听 USE_ACTION_AT（使用迎击牌时）
 	# ═══════════════════════════════════════════
 	var snip_lleg := _ActionEffect.new()
 	snip_lleg.effect_id = &"equipment_effect_027"
-	snip_lleg.display_name = "狙击装·左腿·打出迎击牌移动1格"
+	snip_lleg.display_name = "狙击装·左腿·使用迎击牌移动1格"
 	snip_lleg.mode = _TC.MODE_LISTEN
 	snip_lleg.priority = 10
 	snip_lleg.listen_timing = _TC.USE_ACTION_AT
@@ -670,16 +677,10 @@ static func build_equipment_effects() -> Dictionary:
 	])
 	snip_lleg.set_target_rules([{"rule": &"NO_TARGET"}])
 	snip_lleg.set_costs([])
-	snip_lleg.set_actions([{
-		"type": &"CHOOSE_ONE",
-		"params": {
-			"optional": true,
-			"options": [{"label": "移动到相邻1格", "actions": [
-				{"type": &"EXECUTE_SINGLE_MOVE", "params": {"max_cells": 1}}
-			]}],
-		},
-	}])
-	snip_lleg.description = "打出迎击牌时，可立即移动到相邻的1个格子上。"
+	snip_lleg.set_actions([
+		{"type": &"EXECUTE_SINGLE_MOVE", "params": {"max_cells": 1, "free_move": true, "adjacent_only": true, "use_current_power": false, "loop_until_cancel": false}},
+	])
+	snip_lleg.description = "使用迎击牌时，可立即移动到相邻的1个格子上。"
 	effects[snip_lleg.effect_id] = snip_lleg
 
 	# ═══════════════════════════════════════════
@@ -714,12 +715,12 @@ static func build_equipment_effects() -> Dictionary:
 	effects[melee_head.effect_id] = melee_head
 
 	# ═══════════════════════════════════════════
-	# 029 近战装·躯干：打出迎击牌时，当前回合护甲+2
-	# 诱发型 —— 监听 USE_ACTION_AT（打出迎击牌时）
+	# 029 近战装·躯干：使用迎击牌时，当前回合护甲+2
+	# 诱发型 —— 监听 USE_ACTION_AT（使用迎击牌时）
 	# ═══════════════════════════════════════════
 	var melee_torso := _ActionEffect.new()
 	melee_torso.effect_id = &"equipment_effect_029"
-	melee_torso.display_name = "近战装·躯干·打出迎击牌护甲+2"
+	melee_torso.display_name = "近战装·躯干·使用迎击牌护甲+2"
 	melee_torso.mode = _TC.MODE_LISTEN
 	melee_torso.priority = 10
 	melee_torso.listen_timing = _TC.USE_ACTION_AT
@@ -731,9 +732,10 @@ static func build_equipment_effects() -> Dictionary:
 	melee_torso.set_target_rules([{"rule": &"NO_TARGET"}])
 	melee_torso.set_costs([])
 	melee_torso.set_actions([
-		{"type": &"MODIFY_ARMOR", "params": {"delta": 2, "duration": &"THIS_TURN"}},
+		{"type": &"EXECUTE_STAT_MODIFY", "params": {"stat_type": &"armor", "value": 2, "method": &"add", "duration": &"THIS_TURN"}},
+		{"type": &"EXECUTE_STAT_MODIFY", "params": {"stat_type": &"power", "value": 2, "method": &"add", "duration": &"THIS_TURN"}},
 	])
-	melee_torso.description = "打出迎击牌时，当前回合护甲+2。"
+	melee_torso.description = "使用迎击牌时，当前回合护甲+2，动力+2。"
 	effects[melee_torso.effect_id] = melee_torso
 
 	# ═══════════════════════════════════════════
@@ -772,10 +774,12 @@ static func build_equipment_effects() -> Dictionary:
 	melee_rleg.mode = _TC.MODE_LISTEN
 	melee_rleg.priority = 10
 	melee_rleg.listen_timing = _TC.DISCARD_AFTER
-	# 条件：弃置的牌是本牌，且从设置区域弃置，且原因是因损伤
+	melee_rleg.listen_action_type = &"discard_card"
+	# 条件：弃置的牌是本牌，且从设置区域弃置，且原因是因损伤，且机甲其他区域有损伤可移除
 	melee_rleg.set_conditions([
 		{"op": &"DISCARD_IS_SELF_FROM_SLOT"},
 		{"op": &"DISCARD_REASON_IS", "reason": &"damage_durability"},
+		{"op": &"TARGET_HAS_DAMAGE"},
 	])
 	melee_rleg.set_target_rules([{"rule": &"NO_TARGET"}])
 	melee_rleg.set_costs([])
@@ -784,12 +788,99 @@ static func build_equipment_effects() -> Dictionary:
 		"params": {
 			"optional": true,
 			"options": [{"label": "移除其他区域最多2损伤", "actions": [
-				{"type": &"REMOVE_DAMAGE_TOKENS_OTHER_SLOTS", "params": {"amount": 2}}
+				{"type": &"EXECUTE_DAMAGE_CHANGE", "params": {"target_mech_id": "$binding_context.mech_id", "value": 2, "method": &"decrease", "executor": "$binding_context.mech_id", "exclude_slot_id": "$binding_context.slot_id", "max_value": 2, "reason": &"equipment_leave_remove_damage"}}
 			]}],
 		},
 	}])
 	melee_rleg.description = "此牌因损伤而从区域中弃置时可移除机甲其他区域内最多2损伤。"
 	effects[melee_rleg.effect_id] = melee_rleg
+
+	# ═══════════════════════════════════════════
+	# 032 机动装·右臂：使用迎击牌时，可弃置此牌，本回合动力+4
+	# 诱发型 -- 监听 use_action_card.USE_ACTION_AT（迎击牌进入临时区时）
+	# 与 effect_019 共享同一牌实例（part_027 effect_ids=[019,032]）；无每回合限次
+	# 加动力发生在迎击牌效果执行前（USE_ACTION_AT 时点，迎击移动/反击尚未执行）
+	# ═══════════════════════════════════════════
+	var mob_rarm_counter := _ActionEffect.new()
+	mob_rarm_counter.effect_id = &"equipment_effect_032"
+	mob_rarm_counter.display_name = "机动装·右臂·使用迎击牌弃置动力+4"
+	mob_rarm_counter.mode = _TC.MODE_LISTEN
+	mob_rarm_counter.priority = 10
+	mob_rarm_counter.listen_timing = _TC.USE_ACTION_AT
+	mob_rarm_counter.listen_action_type = &"use_action_card"
+	mob_rarm_counter.set_conditions([
+		{"op": &"USED_CARD_OWNER_IS_SELF"},
+		{"op": &"USED_COUNTER_CARD"},
+	])
+	mob_rarm_counter.set_target_rules([{"rule": &"NO_TARGET"}])
+	mob_rarm_counter.set_costs([])
+	mob_rarm_counter.set_actions([{
+		"type": &"CHOOSE_ONE",
+		"params": {
+			"optional": true,
+			"options": [{"label": "弃置机动装·右臂，本回合动力+4", "actions": [
+				{"type": &"DISCARD_SELF_FROM_SLOT", "params": {"reason": &"effect_self_discard"}},
+				{"type": &"EXECUTE_STAT_MODIFY", "params": {"stat_type": &"power", "value": 4, "method": &"add", "duration": &"THIS_TURN"}},
+			]}],
+		},
+	}])
+	mob_rarm_counter.description = "使用迎击牌时，可以弃置此牌，使机甲本回合动力+4。"
+	effects[mob_rarm_counter.effect_id] = mob_rarm_counter
+
+	# ═══════════════════════════════════════════
+	# 033 精英装·头部/右腿/左腿：此牌设置到区域中时可以抽1张行动牌
+	# 诱发型 -- 监听 set_equipment.SET_EQUIP_AFTER（_step_activate_equip 先注册 listener 再 fire）
+	# 条件 SET_EQUIP_IS_SELF 只在本次设置的是本牌时触发（替换同名卡是新实例，分别触发）
+	# ═══════════════════════════════════════════
+	var elite_set_draw := _ActionEffect.new()
+	elite_set_draw.effect_id = &"equipment_effect_033"
+	elite_set_draw.display_name = "精英装·设置时抽1行动牌"
+	elite_set_draw.mode = _TC.MODE_LISTEN
+	elite_set_draw.priority = 10
+	elite_set_draw.listen_timing = _TC.SET_EQUIP_AFTER
+	elite_set_draw.listen_action_type = &"set_equipment"
+	elite_set_draw.set_conditions([{"op": &"SET_EQUIP_IS_SELF"}])
+	elite_set_draw.set_target_rules([{"rule": &"NO_TARGET"}])
+	elite_set_draw.set_costs([])
+	elite_set_draw.set_actions([{
+		"type": &"CHOOSE_ONE",
+		"params": {
+			"optional": true,
+			"options": [{"label": "抽1张行动牌", "actions": [
+				{"type": &"DRAW_ACTION", "params": {"count": 1, "player_id": "$binding_context.player_id"}},
+			]}],
+		},
+	}])
+	elite_set_draw.description = "此牌设置到区域中时可以抽1张行动牌。"
+	effects[elite_set_draw.effect_id] = elite_set_draw
+
+	# ═══════════════════════════════════════════
+	# 034 精英装·躯干/右臂/左臂：此牌因损伤而从区域中弃置时可以抽2张行动牌
+	# 诱发型 -- 监听 discard.DISCARD_AFTER（牌在 tmp_zone）；仅 damage_durability 原因触发
+	# ═══════════════════════════════════════════
+	var elite_discard_draw := _ActionEffect.new()
+	elite_discard_draw.effect_id = &"equipment_effect_034"
+	elite_discard_draw.display_name = "精英装·因损伤弃置抽2行动牌"
+	elite_discard_draw.mode = _TC.MODE_LISTEN
+	elite_discard_draw.priority = 10
+	elite_discard_draw.listen_timing = _TC.DISCARD_AFTER
+	elite_discard_draw.set_conditions([
+		{"op": &"DISCARD_IS_SELF_FROM_SLOT"},
+		{"op": &"DISCARD_REASON_IS", "reason": &"damage_durability"},
+	])
+	elite_discard_draw.set_target_rules([{"rule": &"NO_TARGET"}])
+	elite_discard_draw.set_costs([])
+	elite_discard_draw.set_actions([{
+		"type": &"CHOOSE_ONE",
+		"params": {
+			"optional": true,
+			"options": [{"label": "抽2张行动牌", "actions": [
+				{"type": &"DRAW_ACTION", "params": {"count": 2, "player_id": "$binding_context.player_id"}},
+			]}],
+		},
+	}])
+	elite_discard_draw.description = "此牌因损伤而从区域中弃置时可以抽2张行动牌。"
+	effects[elite_discard_draw.effect_id] = elite_discard_draw
 
 	# ═══════════════════════════════════════════
 	# 测试用：非迎击牌（装备牌）AVAILABILITY 响应效果
@@ -812,6 +903,1509 @@ static func build_equipment_effects() -> Dictionary:
 	}])
 	test_respond.description = "被攻击时可响应：用当前动力移动1次（测试非迎击牌响应触发强袭2）。"
 	effects[test_respond.effect_id] = test_respond
+
+	# ═══════════════════════════════════════════
+	# 035 联邦白马·躯干：使用迎击牌响应攻击时，可置1损伤在此牌上，之后该攻击威力-4
+	# 诱发型 -- 监听 use_action_card.USE_ACTION_AT（迎击牌响应，payload.attack_action_id 绑定原攻击）
+	# ═══════════════════════════════════════════
+	var fed_wm_torso := _ActionEffect.new()
+	fed_wm_torso.effect_id = &"equipment_effect_035"
+	fed_wm_torso.display_name = "联邦白马·躯干·迎击置损伤减威力4"
+	fed_wm_torso.mode = _TC.MODE_LISTEN
+	fed_wm_torso.priority = 10
+	fed_wm_torso.listen_timing = _TC.USE_ACTION_AT
+	fed_wm_torso.listen_action_type = &"use_action_card"
+	fed_wm_torso.set_conditions([
+		{"op": &"USED_CARD_OWNER_IS_SELF"},
+		{"op": &"USED_COUNTER_CARD"},
+		{"op": &"USED_ACTION_HAS_LINKED_ATTACK"},
+	])
+	fed_wm_torso.set_target_rules([{"rule": &"NO_TARGET"}])
+	fed_wm_torso.set_costs([])
+	# 可取消：确认后先置1损伤到此牌(fixed_slot 不开转移窗)，再减绑定攻击威力4。
+	# MODIFY_ATTACK_MIGHT 在 use_action_card 上下文执行，经 payload.attack_action_id 定位原 attack。
+	# Q3：若置1损伤致本牌弃置，减威力不执行（_source_equipment_discarded 守卫）。
+	fed_wm_torso.set_actions([{
+		"type": &"CHOOSE_ONE",
+		"params": {
+			"optional": true,
+			"options": [{"label": "置1损伤在此牌上，攻击威力-4", "actions": [
+				{"type": &"EXECUTE_DAMAGE_CHANGE", "params": {"target_mech_id": "$binding_context.mech_id", "target_slot_id": "$binding_context.slot_id", "value": 1, "method": &"increase", "executor": &"SYSTEM_DEFAULT", "reason": &"equipment_effect_cost", "fixed_slot": true}},
+				{"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": -4}},
+			]}],
+		},
+	}])
+	fed_wm_torso.description = "使用迎击牌响应攻击时，可以设置1损伤在此牌上，之后使该攻击威力-4。"
+	effects[fed_wm_torso.effect_id] = fed_wm_torso
+
+	# ═══════════════════════════════════════════
+	# 036 联邦白马·右臂：使用名称带光束的近战武器攻击时，威力+3
+	# 诱发型 -- 监听 ATTACK_BEFORE，读 effective_weapon_type + WEAPON_NAME_CONTAINS
+	# ═══════════════════════════════════════════
+	var fed_wm_rarm := _ActionEffect.new()
+	fed_wm_rarm.effect_id = &"equipment_effect_036"
+	fed_wm_rarm.display_name = "联邦白马·右臂·光束近战威力+3"
+	fed_wm_rarm.mode = _TC.MODE_LISTEN
+	fed_wm_rarm.priority = 10
+	fed_wm_rarm.listen_timing = _TC.ATTACK_BEFORE
+	fed_wm_rarm.listen_action_type = &"attack"
+	fed_wm_rarm.set_conditions([
+		{"op": &"SELF_MECH_IS_ATTACKER"},
+		{"op": &"ATTACK_EFFECTIVE_WEAPON_KIND", "weapon_kind": &"近战"},
+		{"op": &"WEAPON_NAME_CONTAINS", "substring": "光束"},
+	])
+	fed_wm_rarm.set_target_rules([{"rule": &"NO_TARGET"}])
+	fed_wm_rarm.set_costs([])
+	fed_wm_rarm.set_actions([
+		{"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": 3}},
+	])
+	fed_wm_rarm.description = "使用名称带有光束的近战武器攻击时，威力+3。"
+	effects[fed_wm_rarm.effect_id] = fed_wm_rarm
+
+	# ═══════════════════════════════════════════
+	# 037 联邦白马·左臂：使用名称带光束的远程武器攻击时，威力+3
+	# ═══════════════════════════════════════════
+	var fed_wm_larm := _ActionEffect.new()
+	fed_wm_larm.effect_id = &"equipment_effect_037"
+	fed_wm_larm.display_name = "联邦白马·左臂·光束远程威力+3"
+	fed_wm_larm.mode = _TC.MODE_LISTEN
+	fed_wm_larm.priority = 10
+	fed_wm_larm.listen_timing = _TC.ATTACK_BEFORE
+	fed_wm_larm.listen_action_type = &"attack"
+	fed_wm_larm.set_conditions([
+		{"op": &"SELF_MECH_IS_ATTACKER"},
+		{"op": &"ATTACK_EFFECTIVE_WEAPON_KIND", "weapon_kind": &"远程"},
+		{"op": &"WEAPON_NAME_CONTAINS", "substring": "光束"},
+	])
+	fed_wm_larm.set_target_rules([{"rule": &"NO_TARGET"}])
+	fed_wm_larm.set_costs([])
+	fed_wm_larm.set_actions([
+		{"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": 3}},
+	])
+	fed_wm_larm.description = "使用名称带有光束的远程武器攻击时，威力+3。"
+	effects[fed_wm_larm.effect_id] = fed_wm_larm
+
+	# ═══════════════════════════════════════════
+	# 038 联邦白马·右腿：机甲被指定为攻击目标时，可当前回合动力+3
+	# 诱发型 -- 监听 ATTACK_PRE（仿 effect_006，value 2->3）
+	# ═══════════════════════════════════════════
+	var fed_wm_rleg := _ActionEffect.new()
+	fed_wm_rleg.effect_id = &"equipment_effect_038"
+	fed_wm_rleg.display_name = "联邦白马·右腿·被攻击目标时动力+3"
+	fed_wm_rleg.mode = _TC.MODE_LISTEN
+	fed_wm_rleg.priority = 10
+	fed_wm_rleg.listen_timing = _TC.ATTACK_PRE
+	fed_wm_rleg.listen_action_type = &"attack"
+	fed_wm_rleg.set_conditions([{"op": &"SELF_MECH_IS_ATTACK_TARGET"}])
+	fed_wm_rleg.set_target_rules([{"rule": &"NO_TARGET"}])
+	fed_wm_rleg.set_costs([])
+	fed_wm_rleg.set_actions([{
+		"type": &"CHOOSE_ONE",
+		"params": {
+			"optional": true,
+			"options": [{"label": "获得当前回合动力+3", "actions": [
+				{"type": &"EXECUTE_STAT_MODIFY", "params": {"stat_type": &"power", "value": 3, "method": &"add", "duration": &"THIS_TURN"}}
+			]}],
+		},
+	}])
+	fed_wm_rleg.description = "机甲被指定为攻击目标时，可在当前回合动力+3。"
+	effects[fed_wm_rleg.effect_id] = fed_wm_rleg
+
+	# ═══════════════════════════════════════════
+	# 039 联邦白马·左腿：被攻击命中时，可置2损伤在此牌上，之后最多减少3攻击损伤
+	# 诱发型 -- 监听 ATTACK_AFTER（仿 effect_007，弃自身改 fixed_slot 置2损伤）
+	# ═══════════════════════════════════════════
+	var fed_wm_lleg := _ActionEffect.new()
+	fed_wm_lleg.effect_id = &"equipment_effect_039"
+	fed_wm_lleg.display_name = "联邦白马·左腿·被命中置2损伤减3攻击损伤"
+	fed_wm_lleg.mode = _TC.MODE_LISTEN
+	fed_wm_lleg.priority = 10
+	fed_wm_lleg.listen_timing = _TC.ATTACK_AFTER
+	fed_wm_lleg.listen_action_type = &"attack"
+	fed_wm_lleg.set_conditions([
+		{"op": &"SELF_MECH_IS_ATTACK_TARGET"},
+		{"op": &"ATTACK_HIT"},
+		{"op": &"ATTACK_MARKERS_ABOVE", "threshold": 0},
+	])
+	fed_wm_lleg.set_target_rules([{"rule": &"NO_TARGET"}])
+	fed_wm_lleg.set_costs([])
+	# 可取消：确认后先置2损伤到此牌(fixed_slot)，再减攻击损伤3（MODIFY_ATTACK_MARKERS delta:-3，
+	# 最终最低0，自动等效 min(3,损伤)）。Q3：若置2损伤致本牌弃置，减损伤不执行。
+	fed_wm_lleg.set_actions([{
+		"type": &"CHOOSE_ONE",
+		"params": {
+			"optional": true,
+			"options": [{"label": "置2损伤在此牌上，最多减少3攻击损伤", "actions": [
+				{"type": &"EXECUTE_DAMAGE_CHANGE", "params": {"target_mech_id": "$binding_context.mech_id", "target_slot_id": "$binding_context.slot_id", "value": 2, "method": &"increase", "executor": &"SYSTEM_DEFAULT", "reason": &"equipment_effect_cost", "fixed_slot": true}},
+				{"type": &"MODIFY_ATTACK_MARKERS", "params": {"delta": -3}},
+			]}],
+		},
+	}])
+	fed_wm_lleg.description = "机甲被攻击命中时，可以设置2损伤在此牌上，之后可最多减少此次攻击产生的3损伤。"
+	effects[fed_wm_lleg.effect_id] = fed_wm_lleg
+
+	# ═══════════════════════════════════════════
+	# 042 帝国赤枭·右臂：使用名称带热能的远程武器攻击时，威力+3
+	# 诱发型 -- 监听 ATTACK_BEFORE（仿 effect_037 光束远程，substring=热能）
+	# ═══════════════════════════════════════════
+	var red_owl_rarm := _ActionEffect.new()
+	red_owl_rarm.effect_id = &"equipment_effect_042"
+	red_owl_rarm.display_name = "帝国赤枭·右臂·热能远程威力+3"
+	red_owl_rarm.mode = _TC.MODE_LISTEN
+	red_owl_rarm.priority = 10
+	red_owl_rarm.listen_timing = _TC.ATTACK_BEFORE
+	red_owl_rarm.listen_action_type = &"attack"
+	red_owl_rarm.set_conditions([
+		{"op": &"SELF_MECH_IS_ATTACKER"},
+		{"op": &"ATTACK_EFFECTIVE_WEAPON_KIND", "weapon_kind": &"远程"},
+		{"op": &"WEAPON_NAME_CONTAINS", "substring": "热能"},
+	])
+	red_owl_rarm.set_target_rules([{"rule": &"NO_TARGET"}])
+	red_owl_rarm.set_costs([])
+	red_owl_rarm.set_actions([
+		{"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": 3}},
+	])
+	red_owl_rarm.description = "使用名称带有热能的远程武器攻击时，威力+3。"
+	effects[red_owl_rarm.effect_id] = red_owl_rarm
+
+	# ═══════════════════════════════════════════
+	# 043 帝国赤枭·左臂：使用名称带热能的近战武器攻击时，威力+3
+	# ═══════════════════════════════════════════
+	var red_owl_larm := _ActionEffect.new()
+	red_owl_larm.effect_id = &"equipment_effect_043"
+	red_owl_larm.display_name = "帝国赤枭·左臂·热能近战威力+3"
+	red_owl_larm.mode = _TC.MODE_LISTEN
+	red_owl_larm.priority = 10
+	red_owl_larm.listen_timing = _TC.ATTACK_BEFORE
+	red_owl_larm.listen_action_type = &"attack"
+	red_owl_larm.set_conditions([
+		{"op": &"SELF_MECH_IS_ATTACKER"},
+		{"op": &"ATTACK_EFFECTIVE_WEAPON_KIND", "weapon_kind": &"近战"},
+		{"op": &"WEAPON_NAME_CONTAINS", "substring": "热能"},
+	])
+	red_owl_larm.set_target_rules([{"rule": &"NO_TARGET"}])
+	red_owl_larm.set_costs([])
+	red_owl_larm.set_actions([
+		{"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": 3}},
+	])
+	red_owl_larm.description = "使用名称带有热能的近战武器攻击时，威力+3。"
+	effects[red_owl_larm.effect_id] = red_owl_larm
+
+	# ═══════════════════════════════════════════
+	# 044 帝国赤枭·右腿：每回合1次，累计消耗8动力后可回复2动力
+	# 诱发型 -- 监听 BASIC_MOVE_AFTER（动力消耗走 spend_power 不发 STAT_MOD_SETTLE，仿 effect_012）
+	# ═══════════════════════════════════════════
+	var red_owl_rleg := _ActionEffect.new()
+	red_owl_rleg.effect_id = &"equipment_effect_044"
+	red_owl_rleg.display_name = "帝国赤枭·右腿·消耗8动力回复2"
+	red_owl_rleg.mode = _TC.MODE_DIRECT
+	red_owl_rleg.priority = 10
+	red_owl_rleg.once_per_turn_key = &"equipment_effect_044"
+	red_owl_rleg.set_conditions([
+		{"op": &"POWER_SPENT_THIS_TURN_ABOVE", "threshold": 8},
+	])
+	red_owl_rleg.set_target_rules([{"rule": &"NO_TARGET"}])
+	red_owl_rleg.set_costs([])
+	red_owl_rleg.set_actions([
+		{"type": &"RESTORE_POWER", "params": {"amount": 2}},
+	])
+	red_owl_rleg.description = "每回合1次，机甲在当前回合内消耗了8动力，可回复2动力。"
+	effects[red_owl_rleg.effect_id] = red_owl_rleg
+
+	# ═══════════════════════════════════════════
+	# 045 帝国赤枭·左腿：每回合1次，累计消耗8动力后可回复1动力
+	# ═══════════════════════════════════════════
+	var red_owl_lleg := _ActionEffect.new()
+	red_owl_lleg.effect_id = &"equipment_effect_045"
+	red_owl_lleg.display_name = "帝国赤枭·左腿·消耗8动力回复1"
+	red_owl_lleg.mode = _TC.MODE_DIRECT
+	red_owl_lleg.priority = 10
+	red_owl_lleg.once_per_turn_key = &"equipment_effect_045"
+	red_owl_lleg.set_conditions([
+		{"op": &"POWER_SPENT_THIS_TURN_ABOVE", "threshold": 8},
+	])
+	red_owl_lleg.set_target_rules([{"rule": &"NO_TARGET"}])
+	red_owl_lleg.set_costs([])
+	red_owl_lleg.set_actions([
+		{"type": &"RESTORE_POWER", "params": {"amount": 1}},
+	])
+	red_owl_lleg.description = "每回合1次，机甲在当前回合内消耗了8动力，可回复1动力。"
+	effects[red_owl_lleg.effect_id] = red_owl_lleg
+
+	# ═══════════════════════════════════════════
+	# 040 帝国赤枭·躯干：每回合1次，主阶段可消耗2n金币本回合动力+n（DIRECT 主动）
+	# CHOOSE_INTEGER 选 n（max=floor(金币/2)），花 2n 金币动力+n。与 effect_041 共享 once。
+	# ═══════════════════════════════════════════
+	var red_owl_torso_direct := _ActionEffect.new()
+	red_owl_torso_direct.effect_id = &"equipment_effect_040"
+	red_owl_torso_direct.display_name = "帝国赤枭·躯干·金币换动力(主阶段)"
+	red_owl_torso_direct.mode = _TC.MODE_DIRECT
+	red_owl_torso_direct.priority = 10
+	red_owl_torso_direct.once_per_turn_key = &"red_owl_torso_card_power"
+	red_owl_torso_direct.set_conditions([
+		{"op": &"IS_OWNER_TURN"},
+		{"op": &"OWNER_ACTION_HAND_ABOVE", "threshold": 1},
+	])
+	red_owl_torso_direct.set_target_rules([{"rule": &"NO_TARGET"}])
+	red_owl_torso_direct.set_costs([])
+	red_owl_torso_direct.set_actions([{
+		"type": &"CHOOSE_INTEGER",
+		"params": {
+			"optional": true,
+			"label": "选择n：弃置n张行动牌，本回合动力+2n",
+			"min_value": 1,
+			"max_value_expr": "$binding_context.owner_action_hand_count",
+			"bind_as": "n",
+			"actions": [
+				{"type": &"EXECUTE_DISCARD", "params": {"count_expr": "$choice.n", "executor": "$binding_context.player_id", "reason": &"effect_discard"}},
+				{"type": &"EXECUTE_STAT_MODIFY", "params": {"target_id": "$binding_context.mech_id", "stat_type": &"power", "value_expr": "2 * $choice.n", "method": &"add", "duration": &"THIS_TURN"}},
+			],
+		},
+	}])
+	red_owl_torso_direct.description = "每回合1次，可以弃置n数量的行动牌(n为整数)，当前回合动力+2n。"
+	effects[red_owl_torso_direct.effect_id] = red_owl_torso_direct
+
+	# ═══════════════════════════════════════════
+	# 041 帝国赤枭·躯干：使用迎击牌时可消耗2n金币本回合动力+n（与040共享once）
+	# LISTEN USE_ACTION_AT，CHOOSE_INTEGER 选 n。与主阶段共享每回合1次。
+	# ═══════════════════════════════════════════
+	var red_owl_torso_counter := _ActionEffect.new()
+	red_owl_torso_counter.effect_id = &"equipment_effect_041"
+	red_owl_torso_counter.display_name = "帝国赤枭·躯干·弃牌换动力(迎击)"
+	red_owl_torso_counter.mode = _TC.MODE_LISTEN
+	red_owl_torso_counter.priority = 10
+	red_owl_torso_counter.listen_timing = _TC.USE_ACTION_AT
+	red_owl_torso_counter.listen_action_type = &"use_action_card"
+	red_owl_torso_counter.once_per_turn_key = &"red_owl_torso_card_power"
+	red_owl_torso_counter.set_conditions([
+		{"op": &"USED_CARD_OWNER_IS_SELF"},
+		{"op": &"USED_COUNTER_CARD"},
+		{"op": &"OWNER_ACTION_HAND_ABOVE", "threshold": 1},
+	])
+	red_owl_torso_counter.set_target_rules([{"rule": &"NO_TARGET"}])
+	red_owl_torso_counter.set_costs([])
+	red_owl_torso_counter.set_actions([{
+		"type": &"CHOOSE_INTEGER",
+		"params": {
+			"optional": true,
+			"label": "弃置n张行动牌，本回合动力+2n",
+			"min_value": 1,
+			"max_value_expr": "$binding_context.owner_action_hand_count",
+			"bind_as": "n",
+			"actions": [
+				{"type": &"EXECUTE_DISCARD", "params": {"count_expr": "$choice.n", "executor": "$binding_context.player_id", "reason": &"effect_discard"}},
+				{"type": &"EXECUTE_STAT_MODIFY", "params": {"target_id": "$binding_context.mech_id", "stat_type": &"power", "value_expr": "2 * $choice.n", "method": &"add", "duration": &"THIS_TURN"}},
+			],
+		},
+	}])
+	red_owl_torso_counter.description = "使用迎击牌时，可弃置n张行动牌当前回合动力+2n（与主阶段共享每回合1次）。"
+	effects[red_owl_torso_counter.effect_id] = red_owl_torso_counter
+
+	# ═══════════════════════════════════════════
+	# 046 超重甲·头部：总损伤<4免疫（派生值，card_damage_immune_armor_amount 扩展）
+	# ═══════════════════════════════════════════
+	var heavy_head_total4 := _ActionEffect.new()
+	heavy_head_total4.effect_id = &"equipment_effect_046"
+	heavy_head_total4.display_name = "超重甲·头部·总损伤<4免疫"
+	heavy_head_total4.mode = _TC.MODE_DIRECT  # 占位，实际实时重算
+	heavy_head_total4.priority = 10
+	heavy_head_total4.set_conditions([{"op": &"ALWAYS"}])
+	heavy_head_total4.set_target_rules([{"rule": &"NO_TARGET"}])
+	heavy_head_total4.set_costs([])
+	heavy_head_total4.set_actions([])
+	heavy_head_total4.description = "损伤不会影响机甲区域提供的护甲，除非机甲部件装备区域总损伤数≥4（实时重算）。"
+	effects[heavy_head_total4.effect_id] = heavy_head_total4
+
+	# ═══════════════════════════════════════════
+	# 047 超重甲·躯干：被指定为攻击目标时，可弃2行动牌，当前回合护甲+5
+	# 诱发型 -- 监听 ATTACK_PRE，弃2牌成本 + 临时护甲（仿 effect_015，value 4->5）
+	# ═══════════════════════════════════════════
+	var heavy_torso5 := _ActionEffect.new()
+	heavy_torso5.effect_id = &"equipment_effect_047"
+	heavy_torso5.display_name = "超重甲·躯干·被攻击弃2牌护甲+5"
+	heavy_torso5.mode = _TC.MODE_LISTEN
+	heavy_torso5.priority = 10
+	heavy_torso5.listen_timing = _TC.ATTACK_PRE
+	heavy_torso5.listen_action_type = &"attack"
+	heavy_torso5.set_conditions([
+		{"op": &"SELF_MECH_IS_ATTACK_TARGET"},
+		{"op": &"OWNER_ACTION_HAND_ABOVE", "threshold": 2},
+	])
+	heavy_torso5.set_target_rules([{"rule": &"NO_TARGET"}])
+	heavy_torso5.set_costs([
+		{"cost_type": &"DISCARD_ACTION_CARD", "count": 2, "optional": true},
+	])
+	heavy_torso5.set_actions([
+		{"type": &"EXECUTE_STAT_MODIFY", "params": {"stat_type": &"armor", "value": 5, "method": &"add", "duration": &"THIS_TURN"}},
+	])
+	heavy_torso5.description = "机甲被指定为攻击目标时，可弃置2张行动牌，当前回合护甲+5。"
+	effects[heavy_torso5.effect_id] = heavy_torso5
+
+	# ═══════════════════════════════════════════
+	# 048 超重甲·右臂：此牌损伤≥2时动力+2（派生值，slot_damage_threshold_power_bonus 扩展）
+	# ═══════════════════════════════════════════
+	var heavy_rarm2 := _ActionEffect.new()
+	heavy_rarm2.effect_id = &"equipment_effect_048"
+	heavy_rarm2.display_name = "超重甲·右臂·损伤≥2动力+2"
+	heavy_rarm2.mode = _TC.MODE_DIRECT  # 占位，实际实时重算
+	heavy_rarm2.priority = 10
+	heavy_rarm2.set_conditions([{"op": &"ALWAYS"}])
+	heavy_rarm2.set_target_rules([{"rule": &"NO_TARGET"}])
+	heavy_rarm2.set_costs([])
+	heavy_rarm2.set_actions([])
+	heavy_rarm2.description = "此牌上设置有损伤≥2时，动力+2（实时重算）。"
+	effects[heavy_rarm2.effect_id] = heavy_rarm2
+
+	# ═══════════════════════════════════════════
+	# 049 超重甲·臂/腿：此牌损伤<2免疫，≥2才扣甲（派生值，card_damage_immune_armor_amount 扩展）
+	# ═══════════════════════════════════════════
+	var heavy_limb_immune2 := _ActionEffect.new()
+	heavy_limb_immune2.effect_id = &"equipment_effect_049"
+	heavy_limb_immune2.display_name = "超重甲·臂腿·此牌损伤<2免疫"
+	heavy_limb_immune2.mode = _TC.MODE_DIRECT  # 占位，实际实时重算
+	heavy_limb_immune2.priority = 10
+	heavy_limb_immune2.set_conditions([{"op": &"ALWAYS"}])
+	heavy_limb_immune2.set_target_rules([{"rule": &"NO_TARGET"}])
+	heavy_limb_immune2.set_costs([])
+	heavy_limb_immune2.set_actions([])
+	heavy_limb_immune2.description = "损伤不会影响此牌所在区域提供的护甲，除非此牌上设置的损伤≥2（实时重算）。"
+	effects[heavy_limb_immune2.effect_id] = heavy_limb_immune2
+
+	# ═══════════════════════════════════════════
+	# 089 重甲装·头部：损伤不影响护甲，除非机甲部件装备区域总损伤数≥3
+	# 派生值实时重算型 -- 由 MechSlotState.get_effective_armor 调用 card_damage_immune_armor_amount
+	# （总损伤<3时免疫；≥3时损伤正常减护甲。与 effect_014 无条件免疫区分）
+	# ═══════════════════════════════════════════
+	var heavy_head_total := _ActionEffect.new()
+	heavy_head_total.effect_id = &"equipment_effect_089"
+	heavy_head_total.display_name = "重甲装·头部·总损伤<3免疫"
+	heavy_head_total.mode = _TC.MODE_DIRECT  # 占位，实际实时重算
+	heavy_head_total.priority = 10
+	heavy_head_total.set_conditions([{"op": &"ALWAYS"}])
+	heavy_head_total.set_target_rules([{"rule": &"NO_TARGET"}])
+	heavy_head_total.set_costs([])
+	heavy_head_total.set_actions([])
+	heavy_head_total.description = "损伤不会影响机甲区域提供的护甲，除非机甲部件装备区域总损伤数≥3（实时重算）。"
+	effects[heavy_head_total.effect_id] = heavy_head_total
+
+	# ═══════════════════════════════════════════
+	# 050 高机动装·头部：每回合1次，消耗动力后若动力为0，可回复3动力并用当前动力移动
+	# 诱发型：监听 basic_move.BASIC_MOVE_AFTER（仿 effect_017；spend_power 不发 STAT_MOD_SETTLE）
+	# ═══════════════════════════════════════════
+	var hm_head := _ActionEffect.new()
+	hm_head.effect_id = &"equipment_effect_050"
+	hm_head.display_name = "高机动装·头部·耗尽动力回复3并移动"
+	hm_head.mode = _TC.MODE_LISTEN
+	hm_head.priority = 10
+	hm_head.listen_timing = _TC.BASIC_MOVE_AFTER
+	hm_head.listen_action_type = &"basic_move"
+	hm_head.once_per_turn_key = &"equipment_effect_050"
+	hm_head.once_per_turn_max = 1
+	hm_head.set_conditions([
+		{"op": &"SELF_MECH_IS_MOVE_SUBJECT"},
+		{"op": &"OWNER_POWER_EQUALS", "value": 0},
+	])
+	hm_head.set_target_rules([{"rule": &"NO_TARGET"}])
+	hm_head.set_costs([])
+	hm_head.set_actions([{
+		"type": &"CHOOSE_ONE",
+		"params": {
+			"optional": true,
+			"options": [{"label": "回复3动力并用当前动力移动", "actions": [
+				{"type": &"RESTORE_POWER", "params": {"amount": 3}},
+				{"type": &"EXECUTE_SINGLE_MOVE", "params": {"use_current_power": true, "loop_until_cancel": true}},
+			]}],
+		},
+	}])
+	hm_head.description = "每回合1次，消耗动力后若没有动力剩余，可回复3动力并用当前动力移动。"
+	effects[hm_head.effect_id] = hm_head
+
+	# ═══════════════════════════════════════════
+	# 051 高机动装·躯干：被指定为攻击目标时，可弃2行动牌，当前回合动力+6
+	# 诱发型 -- 监听 ATTACK_PRE（仿 effect_018，value 5->6）
+	# ═══════════════════════════════════════════
+	var hm_torso := _ActionEffect.new()
+	hm_torso.effect_id = &"equipment_effect_051"
+	hm_torso.display_name = "高机动装·躯干·被攻击弃2牌动力+6"
+	hm_torso.mode = _TC.MODE_LISTEN
+	hm_torso.priority = 10
+	hm_torso.listen_timing = _TC.ATTACK_PRE
+	hm_torso.listen_action_type = &"attack"
+	hm_torso.set_conditions([
+		{"op": &"SELF_MECH_IS_ATTACK_TARGET"},
+		{"op": &"OWNER_ACTION_HAND_ABOVE", "threshold": 2},
+	])
+	hm_torso.set_target_rules([{"rule": &"NO_TARGET"}])
+	hm_torso.set_costs([
+		{"cost_type": &"DISCARD_ACTION_CARD", "count": 2, "optional": true},
+	])
+	hm_torso.set_actions([
+		{"type": &"EXECUTE_STAT_MODIFY", "params": {"stat_type": &"power", "value": 6, "method": &"add", "duration": &"THIS_TURN"}},
+	])
+	hm_torso.description = "机甲被指定为攻击目标时，可弃置2张行动牌，使当前回合动力+6。"
+	effects[hm_torso.effect_id] = hm_torso
+
+	# ═══════════════════════════════════════════
+	# 052 高机动装·右臂：我方主阶段可弃置此牌，本回合动力+5（DIRECT 主动）
+	# "使用迎击牌时"路径由 effect_053 处理；二者共享同一牌实例
+	# ═══════════════════════════════════════════
+	var hm_rarm := _ActionEffect.new()
+	hm_rarm.effect_id = &"equipment_effect_052"
+	hm_rarm.display_name = "高机动装·右臂·弃置动力+5(主动)"
+	hm_rarm.mode = _TC.MODE_DIRECT
+	hm_rarm.priority = 10
+	hm_rarm.set_conditions([
+		{"op": &"IS_OWNER_TURN"},
+	])
+	hm_rarm.set_target_rules([{"rule": &"NO_TARGET"}])
+	hm_rarm.set_costs([])
+	hm_rarm.set_actions([{
+		"type": &"CHOOSE_ONE",
+		"params": {
+			"optional": true,
+			"options": [{"label": "弃置此牌，本回合动力+5", "actions": [
+				{"type": &"DISCARD_SELF_FROM_SLOT", "params": {"reason": &"effect_self_discard"}},
+				{"type": &"EXECUTE_STAT_MODIFY", "params": {"stat_type": &"power", "value": 5, "method": &"add", "duration": &"THIS_TURN"}},
+			]}],
+		},
+	}])
+	hm_rarm.description = "我方回合或使用迎击牌时，可以弃置此牌，使机甲本回合动力+5。"
+	effects[hm_rarm.effect_id] = hm_rarm
+
+	# ═══════════════════════════════════════════
+	# 053 高机动装·右臂：使用迎击牌时，可弃置此牌，本回合动力+5
+	# 诱发型 -- 监听 use_action_card.USE_ACTION_AT（仿 effect_032，value 4->5）
+	# ═══════════════════════════════════════════
+	var hm_rarm_counter := _ActionEffect.new()
+	hm_rarm_counter.effect_id = &"equipment_effect_053"
+	hm_rarm_counter.display_name = "高机动装·右臂·使用迎击牌弃置动力+5"
+	hm_rarm_counter.mode = _TC.MODE_LISTEN
+	hm_rarm_counter.priority = 10
+	hm_rarm_counter.listen_timing = _TC.USE_ACTION_AT
+	hm_rarm_counter.listen_action_type = &"use_action_card"
+	hm_rarm_counter.set_conditions([
+		{"op": &"USED_CARD_OWNER_IS_SELF"},
+		{"op": &"USED_COUNTER_CARD"},
+	])
+	hm_rarm_counter.set_target_rules([{"rule": &"NO_TARGET"}])
+	hm_rarm_counter.set_costs([])
+	hm_rarm_counter.set_actions([{
+		"type": &"CHOOSE_ONE",
+		"params": {
+			"optional": true,
+			"options": [{"label": "弃置高机动装·右臂，本回合动力+5", "actions": [
+				{"type": &"DISCARD_SELF_FROM_SLOT", "params": {"reason": &"effect_self_discard"}},
+				{"type": &"EXECUTE_STAT_MODIFY", "params": {"stat_type": &"power", "value": 5, "method": &"add", "duration": &"THIS_TURN"}},
+			]}],
+		},
+	}])
+	hm_rarm_counter.description = "使用迎击牌时，可以弃置此牌，使机甲本回合动力+5。"
+	effects[hm_rarm_counter.effect_id] = hm_rarm_counter
+
+	# ═══════════════════════════════════════════
+	# 054 高机动装·左臂：机甲发动的攻击命中后，回复4动力
+	# 诱发型 -- 监听 ATTACK_AFTER（仿 effect_020，amount 3->4）
+	# ═══════════════════════════════════════════
+	var hm_larm := _ActionEffect.new()
+	hm_larm.effect_id = &"equipment_effect_054"
+	hm_larm.display_name = "高机动装·左臂·攻击命中后回复4动力"
+	hm_larm.mode = _TC.MODE_LISTEN
+	hm_larm.priority = 10
+	hm_larm.listen_timing = _TC.ATTACK_AFTER
+	hm_larm.listen_action_type = &"attack"
+	hm_larm.set_conditions([
+		{"op": &"SELF_MECH_IS_ATTACKER"},
+		{"op": &"ATTACK_HIT"},
+	])
+	hm_larm.set_target_rules([{"rule": &"NO_TARGET"}])
+	hm_larm.set_actions([
+		{"type": &"RESTORE_POWER", "params": {"amount": 4, "mech_id": "$binding_context.mech_id"}},
+	])
+	hm_larm.description = "机甲发动的攻击命中后，回复4动力。"
+	effects[hm_larm.effect_id] = hm_larm
+
+	# ═══════════════════════════════════════════
+	# 055 狙击影装·头部：我方远程武器攻击范围+2（仿 effect_022，delta 1->2）
+	# 派生值实时重算型 -- 不注册监听器，由 get_passive_weapon_range_bonus 实时重算
+	# ═══════════════════════════════════════════
+	var snipshadow_head := _ActionEffect.new()
+	snipshadow_head.effect_id = &"equipment_effect_055"
+	snipshadow_head.display_name = "狙击影装·头部·远程武器范围+2"
+	snipshadow_head.mode = _TC.MODE_DIRECT  # 占位模式，实际不注册监听（实时重算）
+	snipshadow_head.priority = 10
+	snipshadow_head.set_conditions([{"op": &"ALWAYS"}])
+	snipshadow_head.set_target_rules([{"rule": &"NO_TARGET"}])
+	snipshadow_head.set_costs([])
+	snipshadow_head.set_actions([])
+	snipshadow_head.description = "我方远程武器攻击范围+2。"
+	effects[snipshadow_head.effect_id] = snipshadow_head
+
+	# ═══════════════════════════════════════════
+	# 056 狙击影装·躯干/王牌装·头腿：此牌从区域中弃置时可获得2金币
+	# 诱发型 -- 监听 DISCARD_AFTER（任意从设置区域弃置原因均触发）
+	# ═══════════════════════════════════════════
+	var snipshadow_leave_gold := _ActionEffect.new()
+	snipshadow_leave_gold.effect_id = &"equipment_effect_056"
+	snipshadow_leave_gold.display_name = "狙击影装·躯干·离场获2金币"
+	snipshadow_leave_gold.mode = _TC.MODE_LISTEN
+	snipshadow_leave_gold.priority = 10
+	snipshadow_leave_gold.listen_timing = _TC.DISCARD_AFTER
+	snipshadow_leave_gold.listen_action_type = &"discard_card"
+	snipshadow_leave_gold.set_conditions([
+		{"op": &"DISCARD_IS_SELF_FROM_SLOT"},
+	])
+	snipshadow_leave_gold.set_target_rules([{"rule": &"NO_TARGET"}])
+	snipshadow_leave_gold.set_costs([])
+	snipshadow_leave_gold.set_actions([{
+		"type": &"CHOOSE_ONE",
+		"params": {
+			"optional": true,
+			"options": [{"label": "获得2金币", "actions": [
+				{"type": &"GAIN_GOLD", "params": {"amount": 2, "player_id": "$binding_context.player_id"}},
+			]}],
+		},
+	}])
+	snipshadow_leave_gold.description = "此牌从区域中弃置时可获得2金币。"
+	effects[snipshadow_leave_gold.effect_id] = snipshadow_leave_gold
+
+	# ═══════════════════════════════════════════
+	# 057 狙击影装·右臂：我方回合1次，可弃1行动牌，回复3动力（仿 effect_024，amount 2->3）
+	# DIRECT 主动效果；optional 弃牌 -> 弹选牌框让玩家自选弃哪张
+	# ═══════════════════════════════════════════
+	var snipshadow_rarm := _ActionEffect.new()
+	snipshadow_rarm.effect_id = &"equipment_effect_057"
+	snipshadow_rarm.display_name = "狙击影装·右臂·弃1牌回复3动力"
+	snipshadow_rarm.mode = _TC.MODE_DIRECT
+	snipshadow_rarm.priority = 10
+	snipshadow_rarm.once_per_turn_key = &"equipment_effect_057"
+	snipshadow_rarm.once_per_turn_max = 1
+	snipshadow_rarm.set_conditions([
+		{"op": &"IS_OWNER_TURN"},
+		{"op": &"HAS_ACTION_CARD_IN_HAND"},
+	])
+	snipshadow_rarm.set_target_rules([{"rule": &"NO_TARGET"}])
+	snipshadow_rarm.set_costs([
+		{"cost_type": &"DISCARD_ACTION_CARD", "count": 1, "optional": true},
+	])
+	snipshadow_rarm.set_actions([
+		{"type": &"RESTORE_POWER", "params": {"amount": 3}},
+	])
+	snipshadow_rarm.description = "我方回合1次，可以弃置1张行动牌，回复3动力。"
+	effects[snipshadow_rarm.effect_id] = snipshadow_rarm
+
+	# ═══════════════════════════════════════════
+	# 058 狙击影装·左臂：使用远程武器攻击时，可弃1行动牌，使威力+3（仿 effect_025，delta 2->3）
+	# 诱发型 -- 监听 ATTACK_BEFORE
+	# ═══════════════════════════════════════════
+	var snipshadow_larm := _ActionEffect.new()
+	snipshadow_larm.effect_id = &"equipment_effect_058"
+	snipshadow_larm.display_name = "狙击影装·左臂·远程弃1牌威力+3"
+	snipshadow_larm.mode = _TC.MODE_LISTEN
+	snipshadow_larm.priority = 10
+	snipshadow_larm.listen_timing = _TC.ATTACK_BEFORE
+	snipshadow_larm.listen_action_type = &"attack"
+	snipshadow_larm.set_conditions([
+		{"op": &"SELF_MECH_IS_ATTACKER"},
+		{"op": &"ATTACK_EFFECTIVE_WEAPON_KIND", "weapon_kind": &"远程"},
+		{"op": &"OWNER_ACTION_HAND_ABOVE", "threshold": 1},
+	])
+	snipshadow_larm.set_target_rules([{"rule": &"NO_TARGET"}])
+	snipshadow_larm.set_costs([
+		{"cost_type": &"DISCARD_ACTION_CARD", "count": 1, "optional": true},
+	])
+	snipshadow_larm.set_actions([
+		{"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": 3}},
+	])
+	snipshadow_larm.description = "使用远程武器发动攻击时，可以弃置1张行动牌，使威力+3。"
+	effects[snipshadow_larm.effect_id] = snipshadow_larm
+
+	# ═══════════════════════════════════════════
+	# 059 狙击影装·右腿：使用攻击牌时，立即回复2动力，之后可移动到相邻1格（移动消耗正常动力）
+	# 诱发型 -- 监听 USE_ACTION_AT（使用攻击牌时）；回复强制，移动可取消
+	# ═══════════════════════════════════════════
+	var snipshadow_rleg := _ActionEffect.new()
+	snipshadow_rleg.effect_id = &"equipment_effect_059"
+	snipshadow_rleg.display_name = "狙击影装·右腿·使用攻击牌回复2并移动1格"
+	snipshadow_rleg.mode = _TC.MODE_LISTEN
+	snipshadow_rleg.priority = 10
+	snipshadow_rleg.listen_timing = _TC.USE_ACTION_AT
+	snipshadow_rleg.listen_action_type = &"use_action_card"
+	snipshadow_rleg.set_conditions([
+		{"op": &"USED_CARD_OWNER_IS_SELF"},
+		{"op": &"USED_CARD_TYPE_IS", "card_type": "攻击"},
+	])
+	snipshadow_rleg.set_target_rules([{"rule": &"NO_TARGET"}])
+	snipshadow_rleg.set_costs([])
+	snipshadow_rleg.set_actions([
+		{"type": &"RESTORE_POWER", "params": {"amount": 2}},
+		{"type": &"EXECUTE_SINGLE_MOVE", "params": {"max_cells": 1, "use_current_power": true, "loop_until_cancel": false}},
+	])
+	snipshadow_rleg.description = "使用攻击牌时，立即回复2动力，之后可立即移动到相邻的1个格子上。"
+	effects[snipshadow_rleg.effect_id] = snipshadow_rleg
+
+	# ═══════════════════════════════════════════
+	# 060 狙击影装·左腿：使用迎击牌时，立即回复2动力，之后可移动到相邻1格（移动消耗正常动力）
+	# 诱发型 -- 监听 USE_ACTION_AT（使用迎击牌时）
+	# ═══════════════════════════════════════════
+	var snipshadow_lleg := _ActionEffect.new()
+	snipshadow_lleg.effect_id = &"equipment_effect_060"
+	snipshadow_lleg.display_name = "狙击影装·左腿·使用迎击牌回复2并移动1格"
+	snipshadow_lleg.mode = _TC.MODE_LISTEN
+	snipshadow_lleg.priority = 10
+	snipshadow_lleg.listen_timing = _TC.USE_ACTION_AT
+	snipshadow_lleg.listen_action_type = &"use_action_card"
+	snipshadow_lleg.set_conditions([
+		{"op": &"USED_CARD_OWNER_IS_SELF"},
+		{"op": &"USED_COUNTER_CARD"},
+	])
+	snipshadow_lleg.set_target_rules([{"rule": &"NO_TARGET"}])
+	snipshadow_lleg.set_costs([])
+	snipshadow_lleg.set_actions([
+		{"type": &"RESTORE_POWER", "params": {"amount": 2}},
+		{"type": &"EXECUTE_SINGLE_MOVE", "params": {"max_cells": 1, "use_current_power": true, "loop_until_cancel": false}},
+	])
+	snipshadow_lleg.description = "使用迎击牌时，立即回复2动力，之后可立即移动到相邻的1个格子上。"
+	effects[snipshadow_lleg.effect_id] = snipshadow_lleg
+
+	# ═══════════════════════════════════════════
+	# 061 近战特装·头部：范围-2(最低1)+威力+4+转近战（不适用于近战武器）
+	# 类型转换型 -- 监听 ATTACK_BEFORE，priority 20（仿 effect_028，might 3->4）
+	# ═══════════════════════════════════════════
+	var meleesp_head := _ActionEffect.new()
+	meleesp_head.effect_id = &"equipment_effect_061"
+	meleesp_head.display_name = "近战特装·头部·非近战转近战范围-2威力+4"
+	meleesp_head.mode = _TC.MODE_LISTEN
+	meleesp_head.priority = 20
+	meleesp_head.listen_timing = _TC.ATTACK_BEFORE
+	meleesp_head.listen_action_type = &"attack"
+	meleesp_head.set_conditions([
+		{"op": &"SELF_MECH_IS_ATTACKER"},
+		{"op": &"ATTACK_EFFECTIVE_WEAPON_KIND_NOT", "weapon_kind": &"近战"},
+	])
+	meleesp_head.set_target_rules([{"rule": &"NO_TARGET"}])
+	meleesp_head.set_costs([])
+	meleesp_head.set_actions([{
+		"type": &"CHOOSE_ONE",
+		"params": {
+			"optional": true,
+			"options": [{"label": "范围-2(最低1)+威力+4+转近战", "actions": [
+				{"type": &"MODIFY_ATTACK_RANGE", "params": {"delta": -2, "min_value": 1}},
+				{"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": 4}},
+				{"type": &"SET_ATTACK_EFFECTIVE_WEAPON_KIND", "params": {"weapon_kind": &"近战"}},
+			]}],
+		},
+	}])
+	meleesp_head.description = "可以将发动攻击武器的范围-2(不会低于1)，然后威力+4，类型变为近战武器(不适用于近战武器)。"
+	effects[meleesp_head.effect_id] = meleesp_head
+
+	# ═══════════════════════════════════════════
+	# 062 近战特装·躯干：使用迎击牌时，当前回合护甲+3，动力+3（仿 effect_029，2->3）
+	# 诱发型 -- 监听 USE_ACTION_AT
+	# ═══════════════════════════════════════════
+	var meleesp_torso := _ActionEffect.new()
+	meleesp_torso.effect_id = &"equipment_effect_062"
+	meleesp_torso.display_name = "近战特装·躯干·使用迎击牌护甲+3动力+3"
+	meleesp_torso.mode = _TC.MODE_LISTEN
+	meleesp_torso.priority = 10
+	meleesp_torso.listen_timing = _TC.USE_ACTION_AT
+	meleesp_torso.listen_action_type = &"use_action_card"
+	meleesp_torso.set_conditions([
+		{"op": &"USED_CARD_OWNER_IS_SELF"},
+		{"op": &"USED_COUNTER_CARD"},
+	])
+	meleesp_torso.set_target_rules([{"rule": &"NO_TARGET"}])
+	meleesp_torso.set_costs([])
+	meleesp_torso.set_actions([
+		{"type": &"EXECUTE_STAT_MODIFY", "params": {"stat_type": &"armor", "value": 3, "method": &"add", "duration": &"THIS_TURN"}},
+		{"type": &"EXECUTE_STAT_MODIFY", "params": {"stat_type": &"power", "value": 3, "method": &"add", "duration": &"THIS_TURN"}},
+	])
+	meleesp_torso.description = "使用迎击牌时，当前回合护甲+3，动力+3。"
+	effects[meleesp_torso.effect_id] = meleesp_torso
+
+	# ═══════════════════════════════════════════
+	# 063 近战特装·臂：近战攻击弃1牌威力+2，之后选目标区域最多1张装备效果无效至本回合结束
+	# 诱发型 -- 监听 ATTACK_PRE；CHOOSE_MANY_CARDS source=ATTACK_TARGET_EQUIPMENT + NEGATE_EQUIPMENT_EFFECT
+	# ═══════════════════════════════════════════
+	var meleesp_arm := _ActionEffect.new()
+	meleesp_arm.effect_id = &"equipment_effect_063"
+	meleesp_arm.display_name = "近战特装·臂·近战弃1牌威力+2并无效目标装备"
+	meleesp_arm.mode = _TC.MODE_LISTEN
+	meleesp_arm.priority = 10
+	meleesp_arm.listen_timing = _TC.ATTACK_PRE
+	meleesp_arm.listen_action_type = &"attack"
+	meleesp_arm.set_conditions([
+		{"op": &"SELF_MECH_IS_ATTACKER"},
+		{"op": &"ATTACK_EFFECTIVE_WEAPON_KIND", "weapon_kind": &"近战"},
+		{"op": &"OWNER_ACTION_HAND_ABOVE", "threshold": 1},
+	])
+	meleesp_arm.set_target_rules([{"rule": &"NO_TARGET"}])
+	meleesp_arm.set_costs([
+		{"cost_type": &"DISCARD_ACTION_CARD", "count": 1, "optional": true},
+	])
+	meleesp_arm.set_actions([
+		{"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": 2}},
+		{
+			"type": &"CHOOSE_MANY_CARDS",
+			"params": {
+				"source": &"ATTACK_TARGET_EQUIPMENT",
+				"max_count": 1,
+				"min_count": 0,
+				"discard_selected": false,
+				"label": "选择至多1张装备，使其效果无效至本回合结束",
+				"confirm_verb": "无效",
+				"cancel_label": "不选择",
+				"per_card_actions": [
+					{"type": &"NEGATE_EQUIPMENT_EFFECT", "params": {"target_card_id": "$chosen_card.card_instance_id", "duration": "UNTIL_TURN_END"}}
+				],
+			},
+		},
+	])
+	meleesp_arm.description = "使用近战武器发动攻击时，可以弃置1张行动牌，使威力+2，之后可以选择攻击目标区域最多1张牌效果无效直到本回合结束。"
+	effects[meleesp_arm.effect_id] = meleesp_arm
+
+	# ═══════════════════════════════════════════
+	# 064 近战特装·右腿：此牌从区域中弃置时回复3动力并用当前动力移动
+	# 诱发型 -- 监听 DISCARD_AFTER（任意从设置区域弃置原因均触发）
+	# ═══════════════════════════════════════════
+	var meleesp_rleg := _ActionEffect.new()
+	meleesp_rleg.effect_id = &"equipment_effect_064"
+	meleesp_rleg.display_name = "近战特装·右腿·离场回复3并移动"
+	meleesp_rleg.mode = _TC.MODE_LISTEN
+	meleesp_rleg.priority = 10
+	meleesp_rleg.listen_timing = _TC.DISCARD_AFTER
+	meleesp_rleg.listen_action_type = &"discard_card"
+	meleesp_rleg.set_conditions([
+		{"op": &"DISCARD_IS_SELF_FROM_SLOT"},
+	])
+	meleesp_rleg.set_target_rules([{"rule": &"NO_TARGET"}])
+	meleesp_rleg.set_costs([])
+	meleesp_rleg.set_actions([{
+		"type": &"CHOOSE_ONE",
+		"params": {
+			"optional": true,
+			"options": [{"label": "回复3动力并用当前所有动力移动", "actions": [
+				{"type": &"RESTORE_POWER", "params": {"amount": 3}},
+				{"type": &"EXECUTE_SINGLE_MOVE", "params": {"use_current_power": true, "loop_until_cancel": true}},
+			]}],
+		},
+	}])
+	meleesp_rleg.description = "此牌从区域中弃置时可使机甲回复3动力，之后可以用当前所有动力进行移动。"
+	effects[meleesp_rleg.effect_id] = meleesp_rleg
+
+	# ═══════════════════════════════════════════
+	# 065 王牌装·臂：此牌因损伤而从区域中弃置时，可抽1装备牌立即设置或卖出
+	# 诱发型 -- 监听 DISCARD_AFTER + DISCARD_REASON_IS damage_durability
+	# 新复杂交互 DRAW_EQUIPMENT_AND_CHOOSE_SET_OR_SELL（仿 DRAW_EQUIPMENT_AND_IMMEDIATELY_SET 加卖出分支）
+	# ═══════════════════════════════════════════
+	var ace_arm_damage_draw := _ActionEffect.new()
+	ace_arm_damage_draw.effect_id = &"equipment_effect_065"
+	ace_arm_damage_draw.display_name = "王牌装·臂·损伤弃置抽装备设置或卖出"
+	ace_arm_damage_draw.mode = _TC.MODE_LISTEN
+	ace_arm_damage_draw.priority = 10
+	ace_arm_damage_draw.listen_timing = _TC.DISCARD_AFTER
+	ace_arm_damage_draw.listen_action_type = &"discard_card"
+	ace_arm_damage_draw.set_conditions([
+		{"op": &"DISCARD_IS_SELF_FROM_SLOT"},
+		{"op": &"DISCARD_REASON_IS", "reason": &"damage_durability"},
+	])
+	ace_arm_damage_draw.set_target_rules([{"rule": &"NO_TARGET"}])
+	ace_arm_damage_draw.set_costs([])
+	ace_arm_damage_draw.set_actions([{
+		"type": &"CHOOSE_ONE",
+		"params": {
+			"optional": true,
+			"options": [{"label": "抽1张装备牌，立即设置或卖出", "actions": [
+				{"type": &"DRAW_EQUIPMENT_AND_CHOOSE_SET_OR_SELL", "params": {"target_id": "$binding_context.mech_id", "count": 1, "sell_uses_turn_limit": true}},
+			]}],
+		},
+	}])
+	ace_arm_damage_draw.description = "此牌因损伤而从区域中弃置时可以抽1张装备牌，立即设置或者卖出。"
+	effects[ace_arm_damage_draw.effect_id] = ace_arm_damage_draw
+
+	# ═══════════════════════════════════════════
+	# 066 联邦的圣牛·头部：机甲每设置1张名称带联邦的装备牌(含自身)则此牌护甲+1
+	# 派生值实时重算型 -- 由 compute_head_faction_armor_bonus 判定（含自身）
+	# ═══════════════════════════════════════════
+	var holyox_head := _ActionEffect.new()
+	holyox_head.effect_id = &"equipment_effect_066"
+	holyox_head.display_name = "联邦的圣牛·头部·每联邦装备护甲+1(含自身)"
+	holyox_head.mode = _TC.MODE_DIRECT  # 占位，实际实时重算
+	holyox_head.priority = 10
+	holyox_head.set_conditions([{"op": &"ALWAYS"}])
+	holyox_head.set_target_rules([{"rule": &"NO_TARGET"}])
+	holyox_head.set_costs([])
+	holyox_head.set_actions([])
+	holyox_head.description = "机甲每设置有1张名称带有联邦的装备牌则此牌护甲+1。"
+	effects[holyox_head.effect_id] = holyox_head
+
+	# ═══════════════════════════════════════════
+	# 067 联邦的圣牛·躯干：被指定为攻击目标时，可弃2行动牌，使该攻击威力-4
+	# 诱发型 -- 监听 ATTACK_PRE（仿 effect_023 但成本是弃2牌且本牌不离场）
+	# ═══════════════════════════════════════════
+	var holyox_torso := _ActionEffect.new()
+	holyox_torso.effect_id = &"equipment_effect_067"
+	holyox_torso.display_name = "联邦的圣牛·躯干·被攻击弃2牌威力-4"
+	holyox_torso.mode = _TC.MODE_LISTEN
+	holyox_torso.priority = 10
+	holyox_torso.listen_timing = _TC.ATTACK_PRE
+	holyox_torso.listen_action_type = &"attack"
+	holyox_torso.set_conditions([
+		{"op": &"SELF_MECH_IS_ATTACK_TARGET"},
+		{"op": &"OWNER_ACTION_HAND_ABOVE", "threshold": 2},
+	])
+	holyox_torso.set_target_rules([{"rule": &"NO_TARGET"}])
+	holyox_torso.set_costs([
+		{"cost_type": &"DISCARD_ACTION_CARD", "count": 2, "optional": true},
+	])
+	holyox_torso.set_actions([
+		{"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": -4}},
+	])
+	holyox_torso.description = "机甲被指定为攻击目标时，可以弃置2张行动牌，使该攻击威力-4。"
+	effects[holyox_torso.effect_id] = holyox_torso
+
+	# ═══════════════════════════════════════════
+	# 068 联邦的圣牛·臂：使用名称带光束的武器攻击时，可弃1行动牌，使威力+3
+	# 诱发型 -- 监听 ATTACK_BEFORE（仿 effect_036/037，substring=光束，无类型限制）
+	# ═══════════════════════════════════════════
+	var holyox_arm := _ActionEffect.new()
+	holyox_arm.effect_id = &"equipment_effect_068"
+	holyox_arm.display_name = "联邦的圣牛·臂·光束弃1牌威力+3"
+	holyox_arm.mode = _TC.MODE_LISTEN
+	holyox_arm.priority = 10
+	holyox_arm.listen_timing = _TC.ATTACK_BEFORE
+	holyox_arm.listen_action_type = &"attack"
+	holyox_arm.set_conditions([
+		{"op": &"SELF_MECH_IS_ATTACKER"},
+		{"op": &"WEAPON_NAME_CONTAINS", "substring": "光束"},
+		{"op": &"OWNER_ACTION_HAND_ABOVE", "threshold": 1},
+	])
+	holyox_arm.set_target_rules([{"rule": &"NO_TARGET"}])
+	holyox_arm.set_costs([
+		{"cost_type": &"DISCARD_ACTION_CARD", "count": 1, "optional": true},
+	])
+	holyox_arm.set_actions([
+		{"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": 3}},
+	])
+	holyox_arm.description = "使用名称带有光束的武器攻击时，可以弃置1张行动牌，使威力+3。"
+	effects[holyox_arm.effect_id] = holyox_arm
+
+	# ═══════════════════════════════════════════
+	# 069 联邦的圣牛·右腿：每我方回合1次，可弃1行动牌，之后抽1行动牌或回复2动力
+	# DIRECT 主动效果；CHOOSE_ONE 二选一（不可取消，避免已付成本后无收益）
+	# ═══════════════════════════════════════════
+	var holyox_rleg := _ActionEffect.new()
+	holyox_rleg.effect_id = &"equipment_effect_069"
+	holyox_rleg.display_name = "联邦的圣牛·右腿·弃1牌抽1或回复2"
+	holyox_rleg.mode = _TC.MODE_DIRECT
+	holyox_rleg.priority = 10
+	holyox_rleg.once_per_turn_key = &"equipment_effect_069"
+	holyox_rleg.once_per_turn_max = 1
+	holyox_rleg.set_conditions([
+		{"op": &"IS_OWNER_TURN"},
+		{"op": &"HAS_ACTION_CARD_IN_HAND"},
+	])
+	holyox_rleg.set_target_rules([{"rule": &"NO_TARGET"}])
+	holyox_rleg.set_costs([
+		{"cost_type": &"DISCARD_ACTION_CARD", "count": 1, "optional": true},
+	])
+	holyox_rleg.set_actions([{
+		"type": &"CHOOSE_ONE",
+		"params": {
+			"optional": false,
+			"options": [
+				{"label": "抽1张行动牌", "actions": [
+					{"type": &"DRAW_ACTION", "params": {"count": 1, "player_id": "$binding_context.player_id"}},
+				]},
+				{"label": "回复2动力", "actions": [
+					{"type": &"RESTORE_POWER", "params": {"amount": 2}},
+				]},
+			],
+		},
+	}])
+	holyox_rleg.description = "我方回合1次，可以弃置1张行动牌，之后抽1张行动牌或回复2动力。"
+	effects[holyox_rleg.effect_id] = holyox_rleg
+
+	# ═══════════════════════════════════════════
+	# 070 帝国的雄鹰·头部：机甲每设置1张名称带帝国的装备牌(含自身)则此牌动力+1
+	# 派生值实时重算型 -- 由 compute_head_faction_power_bonus 判定（含自身）
+	# ═══════════════════════════════════════════
+	var eagle_head := _ActionEffect.new()
+	eagle_head.effect_id = &"equipment_effect_070"
+	eagle_head.display_name = "帝国雄鹰·头部·每帝国装备动力+1(含自身)"
+	eagle_head.mode = _TC.MODE_DIRECT  # 占位，实际实时重算
+	eagle_head.priority = 10
+	eagle_head.set_conditions([{"op": &"ALWAYS"}])
+	eagle_head.set_target_rules([{"rule": &"NO_TARGET"}])
+	eagle_head.set_costs([])
+	eagle_head.set_actions([])
+	eagle_head.description = "机甲每设置有1张名称带有帝国的装备牌则此牌动力+1。"
+	effects[eagle_head.effect_id] = eagle_head
+
+	# ═══════════════════════════════════════════
+	# 071 帝国的雄鹰·躯干：每回合1次，主阶段可弃置n张行动牌移动n格(无视动力)（DIRECT）
+	# CHOOSE_INTEGER 选 n（max=行动手牌数），弃 n 张行动牌 + 免费移动 n 格。与 effect_072 共享 once。
+	# ═══════════════════════════════════════════
+	var eagle_torso_direct := _ActionEffect.new()
+	eagle_torso_direct.effect_id = &"equipment_effect_071"
+	eagle_torso_direct.display_name = "帝国雄鹰·躯干·弃牌换移动(主阶段)"
+	eagle_torso_direct.mode = _TC.MODE_DIRECT
+	eagle_torso_direct.priority = 10
+	eagle_torso_direct.once_per_turn_key = &"eagle_torso_card_move"
+	eagle_torso_direct.once_per_turn_max = 1
+	eagle_torso_direct.set_conditions([
+		{"op": &"IS_OWNER_TURN"},
+		{"op": &"OWNER_ACTION_HAND_ABOVE", "threshold": 1},
+	])
+	eagle_torso_direct.set_target_rules([{"rule": &"NO_TARGET"}])
+	eagle_torso_direct.set_costs([])
+	eagle_torso_direct.set_actions([{
+		"type": &"CHOOSE_INTEGER",
+		"params": {
+			"optional": true,
+			"label": "选择n：弃置n张行动牌，无视动力移动n格",
+			"min_value": 1,
+			"max_value_expr": "$binding_context.owner_action_hand_count",
+			"bind_as": "n",
+			"actions": [
+				{"type": &"EXECUTE_DISCARD", "params": {"count_expr": "$choice.n", "executor": "$binding_context.player_id", "reason": &"effect_discard"}},
+				{"type": &"EXECUTE_SINGLE_MOVE", "params": {"target_mech_id": "$binding_context.mech_id", "max_cells_expr": "$choice.n", "free_move": true, "loop_until_cancel": false}},
+			],
+		},
+	}])
+	eagle_torso_direct.description = "每回合1次，可以弃置n数量的行动牌(n为整数)，之后移动n个格子(无视动力)。"
+	effects[eagle_torso_direct.effect_id] = eagle_torso_direct
+
+	# ═══════════════════════════════════════════
+	# 072 帝国的雄鹰·躯干：使用迎击牌时可消耗2n金币移动n格(无视动力)（与071共享once）
+	# LISTEN USE_ACTION_AT
+	# ═══════════════════════════════════════════
+	var eagle_torso_counter := _ActionEffect.new()
+	eagle_torso_counter.effect_id = &"equipment_effect_072"
+	eagle_torso_counter.display_name = "帝国雄鹰·躯干·弃牌换移动(迎击)"
+	eagle_torso_counter.mode = _TC.MODE_LISTEN
+	eagle_torso_counter.priority = 10
+	eagle_torso_counter.listen_timing = _TC.USE_ACTION_AT
+	eagle_torso_counter.listen_action_type = &"use_action_card"
+	eagle_torso_counter.once_per_turn_key = &"eagle_torso_card_move"
+	eagle_torso_counter.once_per_turn_max = 1
+	eagle_torso_counter.set_conditions([
+		{"op": &"USED_CARD_OWNER_IS_SELF"},
+		{"op": &"USED_COUNTER_CARD"},
+		{"op": &"OWNER_ACTION_HAND_ABOVE", "threshold": 1},
+	])
+	eagle_torso_counter.set_target_rules([{"rule": &"NO_TARGET"}])
+	eagle_torso_counter.set_costs([])
+	eagle_torso_counter.set_actions([{
+		"type": &"CHOOSE_INTEGER",
+		"params": {
+			"optional": true,
+			"label": "选择n：弃置n张行动牌，无视动力移动n格",
+			"min_value": 1,
+			"max_value_expr": "$binding_context.owner_action_hand_count",
+			"bind_as": "n",
+			"actions": [
+				{"type": &"EXECUTE_DISCARD", "params": {"count_expr": "$choice.n", "executor": "$binding_context.player_id", "reason": &"effect_discard"}},
+				{"type": &"EXECUTE_SINGLE_MOVE", "params": {"target_mech_id": "$binding_context.mech_id", "max_cells_expr": "$choice.n", "free_move": true, "loop_until_cancel": false}},
+			],
+		},
+	}])
+	eagle_torso_counter.description = "每回合1次，可以弃置n数量的行动牌(n为整数)，之后移动n个格子(无视动力)。此效果也可以在使用迎击牌时使用。"
+	effects[eagle_torso_counter.effect_id] = eagle_torso_counter
+
+	# ═══════════════════════════════════════════
+	# 073 帝国的雄鹰·臂：使用名称带热能的武器攻击时，可弃1行动牌，使威力+3
+	# 诱发型 -- 监听 ATTACK_BEFORE（仿 effect_068，substring=热能）
+	# ═══════════════════════════════════════════
+	var eagle_arm := _ActionEffect.new()
+	eagle_arm.effect_id = &"equipment_effect_073"
+	eagle_arm.display_name = "帝国雄鹰·臂·热能弃1牌威力+3"
+	eagle_arm.mode = _TC.MODE_LISTEN
+	eagle_arm.priority = 10
+	eagle_arm.listen_timing = _TC.ATTACK_BEFORE
+	eagle_arm.listen_action_type = &"attack"
+	eagle_arm.set_conditions([
+		{"op": &"SELF_MECH_IS_ATTACKER"},
+		{"op": &"WEAPON_NAME_CONTAINS", "substring": "热能"},
+		{"op": &"OWNER_ACTION_HAND_ABOVE", "threshold": 1},
+	])
+	eagle_arm.set_target_rules([{"rule": &"NO_TARGET"}])
+	eagle_arm.set_costs([
+		{"cost_type": &"DISCARD_ACTION_CARD", "count": 1, "optional": true},
+	])
+	eagle_arm.set_actions([
+		{"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": 3}},
+	])
+	eagle_arm.description = "使用名称带有热能的武器攻击时，可以弃置1张行动牌，使威力+3。"
+	effects[eagle_arm.effect_id] = eagle_arm
+
+	# ═══════════════════════════════════════════
+	# 074 轰雷装：损伤不影响此牌所在区域护甲，除非此牌上损伤≥3（派生值，仿 effect_049 阈值3）
+	# ═══════════════════════════════════════════
+	var thunder_immune := _ActionEffect.new()
+	thunder_immune.effect_id = &"equipment_effect_074"
+	thunder_immune.display_name = "轰雷装·此牌损伤<3免疫护甲"
+	thunder_immune.mode = _TC.MODE_DIRECT  # 占位，实际实时重算
+	thunder_immune.priority = 10
+	thunder_immune.set_conditions([{"op": &"ALWAYS"}])
+	thunder_immune.set_target_rules([{"rule": &"NO_TARGET"}])
+	thunder_immune.set_costs([])
+	thunder_immune.set_actions([])
+	thunder_immune.description = "损伤不会影响此牌所在区域提供的护甲，除非此牌上设置的损伤≥3（实时重算）。"
+	effects[thunder_immune.effect_id] = thunder_immune
+
+	# ═══════════════════════════════════════════
+	# 075 轰雷装·躯干：被指定为攻击目标时，可弃2行动牌，本回合护甲+5；若远程攻击则威力-4
+	# 诱发型 -- 监听 ATTACK_PRE；内层 CHOOSE_ONE 非可选 + 互斥条件 -> 自动选（不弹窗）
+	# ═══════════════════════════════════════════
+	var thunder_torso := _ActionEffect.new()
+	thunder_torso.effect_id = &"equipment_effect_075"
+	thunder_torso.display_name = "轰雷装·躯干·被攻击弃2牌护甲+5远程威力-4"
+	thunder_torso.mode = _TC.MODE_LISTEN
+	thunder_torso.priority = 10
+	thunder_torso.listen_timing = _TC.ATTACK_PRE
+	thunder_torso.listen_action_type = &"attack"
+	thunder_torso.set_conditions([
+		{"op": &"SELF_MECH_IS_ATTACK_TARGET"},
+		{"op": &"OWNER_ACTION_HAND_ABOVE", "threshold": 2},
+	])
+	thunder_torso.set_target_rules([{"rule": &"NO_TARGET"}])
+	thunder_torso.set_costs([
+		{"cost_type": &"DISCARD_ACTION_CARD", "count": 2, "optional": true},
+	])
+	thunder_torso.set_actions([
+		{"type": &"EXECUTE_STAT_MODIFY", "params": {"target_id": "$binding_context.mech_id", "stat_type": &"armor", "value": 5, "method": &"add", "duration": &"THIS_TURN"}},
+		{
+			"type": &"CHOOSE_ONE",
+			"params": {
+				"optional": false,
+				"options": [
+					{"label": "远程攻击威力-4", "condition": [{"op": &"ATTACK_EFFECTIVE_WEAPON_KIND", "weapon_kind": &"远程"}], "actions": [
+						{"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": -4}},
+					]},
+					{"label": "非远程：无额外修正", "condition": [{"op": &"ATTACK_EFFECTIVE_WEAPON_KIND_NOT", "weapon_kind": &"远程"}], "actions": []},
+				],
+			},
+		},
+	])
+	thunder_torso.description = "机甲被指定为攻击目标时，可弃置2张行动牌，使当前回合护甲+5，并且若此攻击是远程武器发出的，则其威力-4。"
+	effects[thunder_torso.effect_id] = thunder_torso
+
+	# ═══════════════════════════════════════════
+	# 076 极电装·头部：范围-2(最低1)+威力+4+转近战+回复2动力（适用近战武器，无近战限制）
+	# 类型转换型 -- 监听 ATTACK_BEFORE，priority 20（仿 effect_061 但去掉 NOT近战 限制 + 回复2）
+	# ═══════════════════════════════════════════
+	var polar_head := _ActionEffect.new()
+	polar_head.effect_id = &"equipment_effect_076"
+	polar_head.display_name = "极电装·头部·范围-2威力+4转近战回复2(适用近战)"
+	polar_head.mode = _TC.MODE_LISTEN
+	polar_head.priority = 20
+	polar_head.listen_timing = _TC.ATTACK_BEFORE
+	polar_head.listen_action_type = &"attack"
+	polar_head.set_conditions([
+		{"op": &"SELF_MECH_IS_ATTACKER"},
+	])
+	polar_head.set_target_rules([{"rule": &"NO_TARGET"}])
+	polar_head.set_costs([])
+	polar_head.set_actions([{
+		"type": &"CHOOSE_ONE",
+		"params": {
+			"optional": true,
+			"options": [{"label": "范围-2(最低1)+威力+4+转近战+回复2动力", "actions": [
+				{"type": &"MODIFY_ATTACK_RANGE", "params": {"delta": -2, "min_value": 1}},
+				{"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": 4}},
+				{"type": &"SET_ATTACK_EFFECTIVE_WEAPON_KIND", "params": {"weapon_kind": &"近战"}},
+				{"type": &"RESTORE_POWER", "params": {"amount": 2}},
+			]}],
+		},
+	}])
+	polar_head.description = "可以将发动攻击武器的范围-2(不会低于1)，然后威力+4，类型变为近战武器，之后回复2动力。"
+	effects[polar_head.effect_id] = polar_head
+
+	# ═══════════════════════════════════════════
+	# 077 极电装·躯干：被攻击时弃2牌抽1行动牌并本回合动力+3
+	# （即时迎击"若抽到迎击牌可立即响应"需 bind_result_to + OPEN_OR_USE_RESPONSE 完整流程，暂简化为弃2抽1动力+3，待实机/F3 补）
+	# 诱发型 -- 监听 ATTACK_PRE
+	# ═══════════════════════════════════════════
+	var polar_torso := _ActionEffect.new()
+	polar_torso.effect_id = &"equipment_effect_077"
+	polar_torso.display_name = "极电装·躯干·被攻击弃2牌抽1动力+3"
+	polar_torso.mode = _TC.MODE_LISTEN
+	polar_torso.priority = 10
+	polar_torso.listen_timing = _TC.ATTACK_PRE
+	polar_torso.listen_action_type = &"attack"
+	polar_torso.set_conditions([
+		{"op": &"SELF_MECH_IS_ATTACK_TARGET"},
+		{"op": &"OWNER_ACTION_HAND_ABOVE", "threshold": 2},
+	])
+	polar_torso.set_target_rules([{"rule": &"NO_TARGET"}])
+	polar_torso.set_costs([
+		{"cost_type": &"DISCARD_ACTION_CARD", "count": 2, "optional": true},
+	])
+	polar_torso.set_actions([
+		{"type": &"DRAW_ACTION", "params": {"count": 1, "player_id": "$binding_context.player_id"}},
+		{"type": &"EXECUTE_STAT_MODIFY", "params": {"target_id": "$binding_context.mech_id", "stat_type": &"power", "value": 3, "method": &"add", "duration": &"THIS_TURN"}},
+	])
+	polar_torso.description = "机甲被指定为攻击目标时，可弃置2张行动牌，立即抽1张行动牌(若是迎击牌可以立即响应该攻击)，并使当前回合动力+3。"
+	effects[polar_torso.effect_id] = polar_torso
+
+	# ═══════════════════════════════════════════
+	# 078 极电装·臂：近战攻击弃2牌威力+3，之后选目标区域最多2张装备效果无效至本回合结束
+	# 诱发型 -- 监听 ATTACK_PRE（仿 effect_063，威力 2->3 / cost 1->2 / max_count 1->2）
+	# ═══════════════════════════════════════════
+	var polar_arm := _ActionEffect.new()
+	polar_arm.effect_id = &"equipment_effect_078"
+	polar_arm.display_name = "极电装·臂·近战弃2牌威力+3并无效2张目标装备"
+	polar_arm.mode = _TC.MODE_LISTEN
+	polar_arm.priority = 10
+	polar_arm.listen_timing = _TC.ATTACK_PRE
+	polar_arm.listen_action_type = &"attack"
+	polar_arm.set_conditions([
+		{"op": &"SELF_MECH_IS_ATTACKER"},
+		{"op": &"ATTACK_EFFECTIVE_WEAPON_KIND", "weapon_kind": &"近战"},
+		{"op": &"OWNER_ACTION_HAND_ABOVE", "threshold": 2},
+	])
+	polar_arm.set_target_rules([{"rule": &"NO_TARGET"}])
+	polar_arm.set_costs([
+		{"cost_type": &"DISCARD_ACTION_CARD", "count": 2, "optional": true},
+	])
+	polar_arm.set_actions([
+		{"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": 3}},
+		{
+			"type": &"CHOOSE_MANY_CARDS",
+			"params": {
+				"source": &"ATTACK_TARGET_EQUIPMENT",
+				"max_count": 2,
+				"min_count": 0,
+				"discard_selected": false,
+				"label": "选择至多2张装备，使其效果无效至本回合结束",
+				"confirm_verb": "无效",
+				"cancel_label": "不选择",
+				"per_card_actions": [
+					{"type": &"NEGATE_EQUIPMENT_EFFECT", "params": {"target_card_id": "$chosen_card.card_instance_id", "duration": "UNTIL_TURN_END"}}
+				],
+			},
+		},
+	])
+	polar_arm.description = "使用近战武器发动攻击时，可以弃置2张行动牌，使威力+3，之后可以选择攻击目标区域最多2张牌效果无效直到本回合结束。"
+	effects[polar_arm.effect_id] = polar_arm
+
+	# ═══════════════════════════════════════════
+	# 079 极电装·右腿：此牌从区域中弃置时可移除机甲其他区域内最多2损伤
+	# 诱发型 -- 监听 DISCARD_AFTER；EXECUTE_DAMAGE_CHANGE decrease 复用维修移除损伤UI
+	# （exclude_slot_id=$binding_context.slot_id 排除来源槽，由 damage_change_action decrease 路径
+	#  透传到 damage_placement_panel.removal，valid_slots 跳过来源槽）
+	# ═══════════════════════════════════════════
+	var polar_rleg := _ActionEffect.new()
+	polar_rleg.effect_id = &"equipment_effect_079"
+	polar_rleg.display_name = "极电装·右腿·离场移除其他区域最多2损伤"
+	polar_rleg.mode = _TC.MODE_LISTEN
+	polar_rleg.priority = 10
+	polar_rleg.listen_timing = _TC.DISCARD_AFTER
+	polar_rleg.listen_action_type = &"discard_card"
+	polar_rleg.set_conditions([
+		{"op": &"DISCARD_IS_SELF_FROM_SLOT"},
+		{"op": &"TARGET_HAS_DAMAGE"},
+	])
+	polar_rleg.set_target_rules([{"rule": &"NO_TARGET"}])
+	polar_rleg.set_costs([])
+	polar_rleg.set_actions([{
+		"type": &"CHOOSE_ONE",
+		"params": {
+			"optional": true,
+			"options": [{"label": "移除其他区域最多2损伤", "actions": [
+				{"type": &"EXECUTE_DAMAGE_CHANGE", "params": {"target_mech_id": "$binding_context.mech_id", "value": 2, "method": &"decrease", "executor": "$binding_context.mech_id", "exclude_slot_id": "$binding_context.slot_id", "max_value": 2, "reason": &"equipment_leave_remove_damage"}},
+			]}],
+		},
+	}])
+	polar_rleg.description = "此牌从区域中弃置时可移除机甲其他区域内最多2损伤。"
+	effects[polar_rleg.effect_id] = polar_rleg
+
+	# ═══════════════════════════════════════════
+	# 080 联邦的一角兽·头部：场上所有机甲名称带联邦的装备牌额外+1护甲（全场光环派生值）
+	# 派生值实时重算型 -- 由 get_global_faction_equipment_aura_bonus 判定
+	# ═══════════════════════════════════════════
+	var unicorn_head := _ActionEffect.new()
+	unicorn_head.effect_id = &"equipment_effect_080"
+	unicorn_head.display_name = "联邦的一角兽·头部·全场联邦装备+1护甲"
+	unicorn_head.mode = _TC.MODE_DIRECT  # 占位，实际实时重算
+	unicorn_head.priority = 10
+	unicorn_head.set_conditions([{"op": &"ALWAYS"}])
+	unicorn_head.set_target_rules([{"rule": &"NO_TARGET"}])
+	unicorn_head.set_costs([])
+	unicorn_head.set_actions([])
+	unicorn_head.description = "场上所有机甲的所有区域中名称带有联邦的装备牌将额外提供1护甲。"
+	effects[unicorn_head.effect_id] = unicorn_head
+
+	# ═══════════════════════════════════════════
+	# 081 联邦的一角兽·躯干：被指定为目标时可置4损伤到此牌并直接无效该攻击
+	# 诱发型 -- 监听 ATTACK_PRE priority 30；ATTACK_CAN_BE_NEGATED + fixed_slot置4 + NEGATE_ATTACK
+	# ═══════════════════════════════════════════
+	var unicorn_torso := _ActionEffect.new()
+	unicorn_torso.effect_id = &"equipment_effect_081"
+	unicorn_torso.display_name = "联邦的一角兽·躯干·置4损伤无效攻击"
+	unicorn_torso.mode = _TC.MODE_LISTEN
+	unicorn_torso.priority = 30
+	unicorn_torso.listen_timing = _TC.ATTACK_PRE
+	unicorn_torso.listen_action_type = &"attack"
+	unicorn_torso.set_conditions([
+		{"op": &"SELF_MECH_IS_ATTACK_TARGET"},
+		{"op": &"ATTACK_CAN_BE_NEGATED"},
+		{"op": &"SELF_DAMAGE_TOKENS_BELOW", "threshold": 6},
+	])
+	unicorn_torso.set_target_rules([{"rule": &"NO_TARGET"}])
+	unicorn_torso.set_costs([])
+	unicorn_torso.set_actions([{
+		"type": &"CHOOSE_ONE",
+		"params": {
+			"optional": true,
+			"options": [{"label": "在此牌上设置4损伤，直接无效该攻击", "actions": [
+				{"type": &"EXECUTE_DAMAGE_CHANGE", "params": {"target_mech_id": "$binding_context.mech_id", "target_slot_id": "$binding_context.slot_id", "value": 4, "method": &"increase", "executor": &"SYSTEM_DEFAULT", "reason": &"equipment_effect_cost", "fixed_slot": true}},
+				{"type": &"NEGATE_ATTACK", "params": {}},
+			]}],
+		},
+	}])
+	unicorn_torso.description = "机甲被指定为攻击目标时，可以设置4损伤到此牌上，之后直接无效该攻击。"
+	effects[unicorn_torso.effect_id] = unicorn_torso
+
+	# ═══════════════════════════════════════════
+	# 082 联邦的一角兽·右臂：发动攻击时可置2损伤到此牌使本次攻击威力+4
+	# 诱发型 -- 监听 ATTACK_BEFORE；fixed_slot置2 + MODIFY_ATTACK_MIGHT +4
+	# ═══════════════════════════════════════════
+	var unicorn_rarm := _ActionEffect.new()
+	unicorn_rarm.effect_id = &"equipment_effect_082"
+	unicorn_rarm.display_name = "联邦的一角兽·右臂·置2损伤威力+4"
+	unicorn_rarm.mode = _TC.MODE_LISTEN
+	unicorn_rarm.priority = 10
+	unicorn_rarm.listen_timing = _TC.ATTACK_BEFORE
+	unicorn_rarm.listen_action_type = &"attack"
+	unicorn_rarm.set_conditions([
+		{"op": &"SELF_MECH_IS_ATTACKER"},
+	])
+	unicorn_rarm.set_target_rules([{"rule": &"NO_TARGET"}])
+	unicorn_rarm.set_costs([])
+	unicorn_rarm.set_actions([{
+		"type": &"CHOOSE_ONE",
+		"params": {
+			"optional": true,
+			"options": [{"label": "在此牌上设置2损伤，本次攻击威力+4", "actions": [
+				{"type": &"EXECUTE_DAMAGE_CHANGE", "params": {"target_mech_id": "$binding_context.mech_id", "target_slot_id": "$binding_context.slot_id", "value": 2, "method": &"increase", "executor": &"SYSTEM_DEFAULT", "reason": &"equipment_effect_cost", "fixed_slot": true}},
+				{"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": 4}},
+			]}],
+		},
+	}])
+	unicorn_rarm.description = "发动攻击时，可以设置2损伤到此牌上，使本次攻击威力+4。"
+	effects[unicorn_rarm.effect_id] = unicorn_rarm
+
+	# ═══════════════════════════════════════════
+	# 083 联邦的一角兽·左臂：攻击命中时可置3损伤到此牌使本回合可攻击次数+1
+	# 诱发型 -- 监听 ATTACK_AFTER；fixed_slot置3 + MODIFY_ATTACK_COUNT +1 THIS_TURN
+	# ═══════════════════════════════════════════
+	var unicorn_larm := _ActionEffect.new()
+	unicorn_larm.effect_id = &"equipment_effect_083"
+	unicorn_larm.display_name = "联邦的一角兽·左臂·置3损伤攻击次数+1"
+	unicorn_larm.mode = _TC.MODE_LISTEN
+	unicorn_larm.priority = 10
+	unicorn_larm.listen_timing = _TC.ATTACK_AFTER
+	unicorn_larm.listen_action_type = &"attack"
+	unicorn_larm.set_conditions([
+		{"op": &"SELF_MECH_IS_ATTACKER"},
+		{"op": &"ATTACK_HIT"},
+	])
+	unicorn_larm.set_target_rules([{"rule": &"NO_TARGET"}])
+	unicorn_larm.set_costs([])
+	unicorn_larm.set_actions([{
+		"type": &"CHOOSE_ONE",
+		"params": {
+			"optional": true,
+			"options": [{"label": "在此牌上设置3损伤，本回合可攻击次数+1", "actions": [
+				{"type": &"EXECUTE_DAMAGE_CHANGE", "params": {"target_mech_id": "$binding_context.mech_id", "target_slot_id": "$binding_context.slot_id", "value": 3, "method": &"increase", "executor": &"SYSTEM_DEFAULT", "reason": &"equipment_effect_cost", "fixed_slot": true}},
+				{"type": &"MODIFY_ATTACK_COUNT", "params": {"target_id": "$binding_context.mech_id", "delta": 1, "duration": &"THIS_TURN"}},
+			]}],
+		},
+	}])
+	unicorn_larm.description = "发动攻击命中时，可以设置3损伤到此牌上，之后本回合的可攻击次数+1。"
+	effects[unicorn_larm.effect_id] = unicorn_larm
+
+	# ═══════════════════════════════════════════
+	# 084 联邦的一角兽·右腿：响应对我方攻击，可置2损伤到此牌并立即移动2格，发动后可继续发动
+	# AVAILABILITY 响应攻击；RESPOND_ATTACK + REPEAT_SELF_DAMAGE_AND_FREE_MOVE（新复杂交互循环）
+	# ═══════════════════════════════════════════
+	var unicorn_rleg := _ActionEffect.new()
+	unicorn_rleg.effect_id = &"equipment_effect_084"
+	unicorn_rleg.display_name = "联邦的一角兽·右腿·响应自损2移动2格循环"
+	unicorn_rleg.mode = _TC.MODE_AVAILABILITY
+	unicorn_rleg.priority = 10
+	unicorn_rleg.availability_condition = _TC.AVAIL_RESPOND_ATTACK
+	unicorn_rleg.availability_priority = 10
+	unicorn_rleg.listen_timing = _TC.ATTACK_AT
+	unicorn_rleg.listen_action_type = &"attack"
+	unicorn_rleg.set_conditions([
+		{"op": &"SELF_MECH_IS_ATTACK_TARGET"},
+		{"op": &"SELF_DAMAGE_TOKENS_BELOW", "threshold": 5},
+	])
+	unicorn_rleg.set_target_rules([{"rule": &"NO_TARGET"}])
+	unicorn_rleg.set_costs([])
+	unicorn_rleg.set_actions([
+		{"type": &"RESPOND_ATTACK", "params": {"attack_id": "$payload.action_id", "source_card_id": "$binding_context.card_instance_id", "is_counter_card": false}},
+		{"type": &"REPEAT_SELF_DAMAGE_AND_FREE_MOVE", "params": {
+			"source_card_id": "$binding_context.card_instance_id",
+			"target_mech_id": "$binding_context.mech_id",
+			"target_slot_id": "$binding_context.slot_id",
+			"damage_per_loop": 2,
+			"move_cells_per_loop": 2,
+			"ignore_power": true,
+			"allow_continue": true,
+			"stop_if_source_leaves_slot": true,
+			"stop_damage_threshold": 5,
+			"damage_reason": &"equipment_effect_cost",
+		}},
+	])
+	unicorn_rleg.description = "响应对我方的攻击，可以设置2损伤到此牌上，机甲可立即移动2个格子。发动此效果后，可以立即继续发动此效果。"
+	effects[unicorn_rleg.effect_id] = unicorn_rleg
+
+	# ═══════════════════════════════════════════
+	# 085 联邦的一角兽·左腿：被攻击命中时可置3损伤到此牌，之后最多减少5攻击损伤
+	# 诱发型 -- 监听 ATTACK_AFTER；fixed_slot置3 + MODIFY_ATTACK_MARKERS -5（自动夹到0=min(5,markers)）
+	# ═══════════════════════════════════════════
+	var unicorn_lleg := _ActionEffect.new()
+	unicorn_lleg.effect_id = &"equipment_effect_085"
+	unicorn_lleg.display_name = "联邦的一角兽·左腿·置3损伤最多减5攻击损伤"
+	unicorn_lleg.mode = _TC.MODE_LISTEN
+	unicorn_lleg.priority = 10
+	unicorn_lleg.listen_timing = _TC.ATTACK_AFTER
+	unicorn_lleg.listen_action_type = &"attack"
+	unicorn_lleg.set_conditions([
+		{"op": &"SELF_MECH_IS_ATTACK_TARGET"},
+		{"op": &"ATTACK_HIT"},
+		{"op": &"ATTACK_MARKERS_ABOVE", "threshold": 0},
+	])
+	unicorn_lleg.set_target_rules([{"rule": &"NO_TARGET"}])
+	unicorn_lleg.set_costs([])
+	unicorn_lleg.set_actions([{
+		"type": &"CHOOSE_ONE",
+		"params": {
+			"optional": true,
+			"options": [{"label": "在此牌上设置3损伤，最多减少5攻击损伤", "actions": [
+				{"type": &"EXECUTE_DAMAGE_CHANGE", "params": {"target_mech_id": "$binding_context.mech_id", "target_slot_id": "$binding_context.slot_id", "value": 3, "method": &"increase", "executor": &"SYSTEM_DEFAULT", "reason": &"equipment_effect_cost", "fixed_slot": true}},
+				{"type": &"MODIFY_ATTACK_MARKERS", "params": {"delta": -5}},
+			]}],
+		},
+	}])
+	unicorn_lleg.description = "机甲被攻击命中时，可以设置3损伤到此牌上，之后可最多减少此次攻击产生的5损伤。"
+	effects[unicorn_lleg.effect_id] = unicorn_lleg
+
+	# ═══════════════════════════════════════════
+	# 086 帝国的神莺·头部：场上所有机甲名称带帝国的装备牌额外+1动力（全场光环派生值）
+	# 派生值实时重算型 -- 由 get_global_faction_equipment_aura_bonus(帝国) 判定
+	# ═══════════════════════════════════════════
+	var lark_head := _ActionEffect.new()
+	lark_head.effect_id = &"equipment_effect_086"
+	lark_head.display_name = "帝国的神莺·头部·全场帝国装备+1动力"
+	lark_head.mode = _TC.MODE_DIRECT  # 占位，实际实时重算
+	lark_head.priority = 10
+	lark_head.set_conditions([{"op": &"ALWAYS"}])
+	lark_head.set_target_rules([{"rule": &"NO_TARGET"}])
+	lark_head.set_costs([])
+	lark_head.set_actions([])
+	lark_head.description = "场上所有机甲的所有区域中名称带有帝国的装备牌将额外提供1动力。"
+	effects[lark_head.effect_id] = lark_head
+
+	# ═══════════════════════════════════════════
+	# 090 帝国的神莺·右臂：攻击命中时可置2损伤到此牌，抽3行动牌并回复3动力
+	# 诱发型 -- 监听 ATTACK_AFTER；fixed_slot置2 + DRAW_ACTION 3 + RESTORE_POWER 3
+	# ═══════════════════════════════════════════
+	var lark_rarm := _ActionEffect.new()
+	lark_rarm.effect_id = &"equipment_effect_090"
+	lark_rarm.display_name = "帝国的神莺·右臂·置2损伤抽3回复3"
+	lark_rarm.mode = _TC.MODE_LISTEN
+	lark_rarm.priority = 10
+	lark_rarm.listen_timing = _TC.ATTACK_AFTER
+	lark_rarm.listen_action_type = &"attack"
+	lark_rarm.set_conditions([
+		{"op": &"SELF_MECH_IS_ATTACKER"},
+		{"op": &"ATTACK_HIT"},
+	])
+	lark_rarm.set_target_rules([{"rule": &"NO_TARGET"}])
+	lark_rarm.set_costs([])
+	lark_rarm.set_actions([{
+		"type": &"CHOOSE_ONE",
+		"params": {
+			"optional": true,
+			"options": [{"label": "在此牌上设置2损伤，抽3行动牌并回复3动力", "actions": [
+				{"type": &"EXECUTE_DAMAGE_CHANGE", "params": {"target_mech_id": "$binding_context.mech_id", "target_slot_id": "$binding_context.slot_id", "value": 2, "method": &"increase", "executor": &"SYSTEM_DEFAULT", "reason": &"equipment_effect_cost", "fixed_slot": true}},
+				{"type": &"DRAW_ACTION", "params": {"count": 3, "player_id": "$binding_context.player_id"}},
+				{"type": &"RESTORE_POWER", "params": {"amount": 3}},
+			]}],
+		},
+	}])
+	lark_rarm.description = "发动攻击命中时，可以设置2损伤到此牌上，之后抽3张行动牌，回复3动力。"
+	effects[lark_rarm.effect_id] = lark_rarm
+
+	# ═══════════════════════════════════════════
+	# 091 帝国的神莺·腿：每回合1次，当前回合消耗8动力后可无视动力移动2格
+	# 诱发型 -- 监听 BASIC_MOVE_AFTER（仿 effect_044，收益改免费移动2格）
+	# ═══════════════════════════════════════════
+	var lark_leg := _ActionEffect.new()
+	lark_leg.effect_id = &"equipment_effect_091"
+	lark_leg.display_name = "帝国的神莺·腿·消耗8动力免费移动2格"
+	lark_leg.mode = _TC.MODE_DIRECT
+	lark_leg.priority = 10
+	lark_leg.once_per_turn_key = &"equipment_effect_091"
+	lark_leg.once_per_turn_max = 1
+	lark_leg.set_conditions([
+		{"op": &"POWER_SPENT_THIS_TURN_ABOVE", "threshold": 8},
+	])
+	lark_leg.set_target_rules([{"rule": &"NO_TARGET"}])
+	lark_leg.set_costs([])
+	lark_leg.set_actions([
+		{"type": &"RESTORE_POWER", "params": {"amount": 2}},
+		{"type": &"EXECUTE_SINGLE_MOVE", "params": {"max_cells": 2, "free_move": true, "loop_until_cancel": false}},
+	])
+	lark_leg.description = "每回合1次，机甲在当前回合内消耗了8动力，可无视动力移动2格，并回复2动力。"
+	effects[lark_leg.effect_id] = lark_leg
+
+	# ═══════════════════════════════════════════
+	# 087 帝国的神莺·躯干：此牌也可当作威力20范围6的远程武器使用（权限型/派生武器型）
+	# 不注册 timing listener；由武器选择面板/攻击可用性识别（get_virtual_weapon_from_equipment）。
+	# 使用此虚拟武器需 current_power>0；配套 effect_088 处理耗尽动力+禁回。
+	# ═══════════════════════════════════════════
+	var lark_torso_weapon := _ActionEffect.new()
+	lark_torso_weapon.effect_id = &"equipment_effect_087"
+	lark_torso_weapon.display_name = "帝国的神莺·躯干·虚拟远程武器(威力20范围6)"
+	lark_torso_weapon.mode = _TC.MODE_DIRECT  # 占位，权限型由武器查询接口识别
+	lark_torso_weapon.priority = 10
+	lark_torso_weapon.set_conditions([{"op": &"ALWAYS"}])
+	lark_torso_weapon.set_target_rules([{"rule": &"NO_TARGET"}])
+	lark_torso_weapon.set_costs([])
+	lark_torso_weapon.set_actions([])
+	lark_torso_weapon.description = "此牌也可以当作威力20，范围6的远程武器使用。使用此牌发动攻击需要消耗当前所有动力(不为0)，且直到下个我方回合开始无法回复。"
+	effects[lark_torso_weapon.effect_id] = lark_torso_weapon
+
+	# ═══════════════════════════════════════════
+	# 088 帝国的神莺·躯干：使用本牌虚拟武器攻击时，强制消耗全部当前动力+施加禁回状态
+	# 诱发型 -- 监听 ATTACK_BEFORE priority 30；ATTACK_SOURCE_IS_SELF + SPEND_POWER(ALL_CURRENT) + ADD_STATUS CANNOT_RESTORE_POWER
+	# ═══════════════════════════════════════════
+	var lark_torso_cost := _ActionEffect.new()
+	lark_torso_cost.effect_id = &"equipment_effect_088"
+	lark_torso_cost.display_name = "帝国的神莺·躯干·虚拟武器耗尽动力+禁回"
+	lark_torso_cost.mode = _TC.MODE_LISTEN
+	lark_torso_cost.priority = 30
+	lark_torso_cost.listen_timing = _TC.ATTACK_BEFORE
+	lark_torso_cost.listen_action_type = &"attack"
+	lark_torso_cost.set_conditions([
+		{"op": &"SELF_MECH_IS_ATTACKER"},
+		{"op": &"ATTACK_SOURCE_IS_SELF"},
+		{"op": &"OWNER_POWER_ABOVE_OR_EQUAL", "threshold": 1},
+	])
+	lark_torso_cost.set_target_rules([{"rule": &"NO_TARGET"}])
+	lark_torso_cost.set_costs([
+		{"cost_type": &"SPEND_POWER", "amount": &"ALL_CURRENT", "optional": false},
+	])
+	lark_torso_cost.set_actions([
+		{"type": &"ADD_STATUS", "params": {"status_type": &"CANNOT_RESTORE_POWER", "target_id": "$binding_context.mech_id", "duration": &"UNTIL_OWNER_TURN_START", "source_card_id": "$binding_context.card_instance_id"}},
+	])
+	lark_torso_cost.description = "使用此牌发动攻击需要消耗当前所有动力(不为0)，且直到下个我方回合开始无法回复。"
+	effects[lark_torso_cost.effect_id] = lark_torso_cost
 
 	return effects
 
@@ -844,6 +2438,9 @@ static func count_faction_equipment(mech, exclude_slot_id: StringName, substring
 	for sid in mech.slots:
 		if sid == exclude_slot_id:
 			continue
+		# 排除备用区（用户裁定：联邦/帝国头部计数只含部件区+武器区，排除整个备用区）
+		if String(sid).begins_with("reserve"):
+			continue
 		var slot = mech.slots[sid]
 		if slot == null:
 			continue
@@ -866,6 +2463,44 @@ static func compute_faction_power_bonus(mech, slot_id: StringName) -> int:
 	return count_faction_equipment(mech, slot_id, "帝国")
 
 
+## 头部阵营护甲加成（get_armor 调用，门控 by 头部 effect_id）：
+## effect_002（联邦普装头）：其他区域联邦装备数（排除自身）
+## effect_066（联邦圣牛头）：机甲所有联邦装备数（含自身）
+static func compute_head_faction_armor_bonus(mech) -> int:
+	if mech == null or mech.get("slots") == null:
+		return 0
+	var head_slot = mech.slots.get(&"头部")
+	if head_slot == null:
+		return 0
+	var head_card = head_slot.get("equipped_card")
+	if not is_equipment_active(head_card):
+		return 0
+	if _card_has_effect_id(head_card, &"equipment_effect_066"):
+		return count_faction_equipment(mech, &"", "联邦")  # 含自身（exclude=&"" 不排除任何槽）
+	if _card_has_effect_id(head_card, &"equipment_effect_002"):
+		return count_faction_equipment(mech, &"头部", "联邦")  # 其他区域
+	return 0
+
+
+## 头部阵营动力上限加成（get_total_power 调用，门控 by 头部 effect_id）：
+## effect_008（帝国普装头）：其他区域帝国装备数（排除自身）
+## effect_070（帝国雄鹰头）：机甲所有帝国装备数（含自身）
+static func compute_head_faction_power_bonus(mech) -> int:
+	if mech == null or mech.get("slots") == null:
+		return 0
+	var head_slot = mech.slots.get(&"头部")
+	if head_slot == null:
+		return 0
+	var head_card = head_slot.get("equipped_card")
+	if not is_equipment_active(head_card):
+		return 0
+	if _card_has_effect_id(head_card, &"equipment_effect_070"):
+		return count_faction_equipment(mech, &"", "帝国")  # 含自身
+	if _card_has_effect_id(head_card, &"equipment_effect_008"):
+		return count_faction_equipment(mech, &"头部", "帝国")  # 其他区域
+	return 0
+
+
 ## 判断某 slot 的装备是否有"损伤不影响护甲"效果（重甲头部/左臂/右腿/左腿，effect_014）
 static func slot_has_damage_immune_armor(mech, slot_id: StringName) -> bool:
 	if mech == null or mech.get("slots") == null:
@@ -886,8 +2521,151 @@ static func card_has_damage_immune_armor(card) -> bool:
 	return _card_has_effect_id(card, &"equipment_effect_014")
 
 
-## 判断某 slot 的装备是否有"损伤≥阈值时动力上限+1"效果
-## effect_016（重甲右臂/机动右腿，阈值1）/ effect_021（机动左腿，阈值2）
+## 返回某 slot 装备因"损伤不影响护甲"效果而应扣减的 region_damage 数量（0=免疫，region_damage=正常扣减）
+## 由 MechSlotState.get_effective_armor(mech) 调用：
+##   effect_014（重甲左臂/右腿/左腿）：无条件免疫 -> 0
+##   effect_089（重甲头部）：机甲部件总损伤 < 3 时免疫 -> 0；≥3 时正常扣减
+##   无以上效果：正常扣减 region_damage
+## Phase 2 将扩展：总损伤≥4（超重甲头部）、此牌损伤≥2/≥3（超重甲臂腿/轰雷）等阈值变体。
+static func card_damage_immune_armor_amount(card, mech, region_damage: int) -> int:
+	if not is_equipment_active(card):
+		return region_damage
+	if _card_has_effect_id(card, &"equipment_effect_014"):
+		return 0  # 此牌所在区域无条件免疫（重甲左臂/右腿/左腿）
+	# 机甲头部光环：重甲头部(089)/超重甲头部(046)保护机甲【所有】部件区域，
+	# 总损伤 < 阈值时全域免疫（文档"机甲区域提供的护甲"= 全部 6 个部件区域，非仅头部）。
+	# 头部自身也由此光环覆盖；mech==null（UI 未传）时跳过光环走下方 per-card 退路。
+	if mech != null:
+		if _mech_head_has_effect(mech, &"equipment_effect_089") and _mech_total_part_damage(mech) < 3:
+			return 0
+		if _mech_head_has_effect(mech, &"equipment_effect_046") and _mech_total_part_damage(mech) < 4:
+			return 0
+	if _card_has_effect_id(card, &"equipment_effect_089"):
+		# 头部自身：mech!=null 已被上方光环覆盖；mech==null 保守按正常扣减
+		if mech != null and _mech_total_part_damage(mech) < 3:
+			return 0
+		return region_damage
+	if _card_has_effect_id(card, &"equipment_effect_046"):
+		# 超重甲头部：机甲部件总损伤 < 4 时免疫；≥4 失效（一次性计入全部已有损伤）
+		if mech != null and _mech_total_part_damage(mech) < 4:
+			return 0
+		return region_damage
+	if _card_has_effect_id(card, &"equipment_effect_049"):
+		# 超重甲臂/腿：此牌上损伤 < 2 时免疫；≥2 时保护失效，扣该槽全部 region_damage
+		var _d049: int = int(card.damage_tokens) if (card != null and card.get("damage_tokens")) else 0
+		if _d049 < 2:
+			return 0
+		return region_damage
+	if _card_has_effect_id(card, &"equipment_effect_074"):
+		# 轰雷装：此牌上损伤 < 3 时免疫；≥3 时保护失效，扣该槽全部 region_damage（仿 effect_049 阈值3）
+		var _d074: int = int(card.damage_tokens) if (card != null and card.get("damage_tokens")) else 0
+		if _d074 < 3:
+			return 0
+		return region_damage
+	return region_damage
+
+
+## 机甲头部是否装备了指定效果（重甲头部 089 / 超重甲头部 046 光环判定用）
+static func _mech_head_has_effect(mech, effect_id: StringName) -> bool:
+	if mech == null or mech.get("slots") == null:
+		return false
+	var head = mech.slots.get(&"头部")
+	if head == null:
+		return false
+	var c = head.get("equipped_card")
+	return is_equipment_active(c) and _card_has_effect_id(c, effect_id)
+
+
+## 机甲 6 个部件槽的【区域】损伤总数，用于重甲头部"总损伤≥3"/超重甲头部"<4"判定。
+## 损伤放置为 region+card 双计：region_damage_tokens 代表区域真实损伤标记数，
+## card.damage_tokens 是装备牌归属/耐久判定用的镜像。"机甲部件总损伤数"指区域级
+## 损伤总数，故只统计 region_damage_tokens；若再累加 card 会双计翻倍（放1个算成2），
+## 致重甲头部 <3 阈值在 2 个损伤时（算成4）误判失效。
+static func _mech_total_part_damage(mech) -> int:
+	if mech == null or mech.get("slots") == null:
+		return 0
+	var total: int = 0
+	for sid: StringName in [&"头部", &"躯干", &"右臂", &"左臂", &"右腿", &"左腿"]:
+		var slot = mech.slots.get(sid)
+		if slot == null:
+			continue
+		total += int(slot.region_damage_tokens) if "region_damage_tokens" in slot else 0
+	return total
+
+
+## 全场阵营装备光环（effect_080 联邦护甲 / effect_086 帝国动力）：
+## 场上每有1张正面设置的来源头（effect_080/effect_086），所有名称含该阵营的正面装备牌额外+1。
+## queried_card 为被查询的装备牌实例；faction=联邦->effect_080护甲, 帝国->effect_086动力。
+## 由 MechSlotState.get_effective_armor(联邦)/get_effective_power(帝国) 调用。避免递归：只查 effect_id 不查护甲。
+static func get_global_faction_equipment_aura_bonus(queried_card, faction: String) -> int:
+	if not is_equipment_active(queried_card):
+		return 0
+	var qname: String = String(queried_card.def.get("display_name"))
+	if qname.find(faction) < 0:
+		return 0  # 只有名称含阵营的装备受益
+	var aura_effect: StringName = &"equipment_effect_080" if faction == "联邦" else &"equipment_effect_086"
+	if _aura_game_state == null:
+		return 0
+	var count: int = 0
+	for mech_id in _aura_game_state.mechs:
+		var mech = _aura_game_state.mechs[mech_id]
+		if mech == null or mech.get("slots") == null:
+			continue
+		for sid in mech.slots:
+			var slot = mech.slots[sid]
+			if slot == null:
+				continue
+			var c = slot.get("equipped_card")
+			if is_equipment_active(c) and _card_has_effect_id(c, aura_effect):
+				count += 1
+	return count
+
+
+## 装备牌虚拟武器（effect_087 帝国的神莺·躯干）：本牌可当作威力20范围6的远程武器。
+## 由武器选择面板/攻击可用性预检调用（current_power>0 才可选）。返回虚拟武器条目，非本牌返回 {}。
+## 注意：武器选择面板与攻击武器解析的接入待实机/F3 补（当前 effect_087 为权限型占位）。
+static func get_virtual_weapon_from_equipment(card) -> Dictionary:
+	if not is_equipment_active(card):
+		return {}
+	if not _card_has_effect_id(card, &"equipment_effect_087"):
+		return {}
+	return {
+		"source_card_id": card.instance_id,
+		"display_name": String(card.def.get("display_name")),
+		"weapon_kind": &"远程",
+		"might": 20,
+		"range_value": 6,
+		"is_virtual": true,
+	}
+
+
+## 狙击装·头部被动远程武器范围加成（派生值实时重算）
+## effect_022（狙击装·头部）远程武器范围+1 / effect_055（狙击影装·头部 / 轰雷装·头部）远程武器范围+2
+## 由 app_root._get_weapon_range（攻击预检查）与 attack_action._step_select_weapon（存入
+## record["weapon_range"]，命中/选目标校验/高亮自动含之）调用。仅远程武器生效。
+## effect_022/055 已改为派生占位（mode=DIRECT，不注册 listener），与此 helper 配合，
+## 避免与旧的 MODIFY_ATTACK_RANGE 路径双计。机甲仅1个头部，故用基础 weapon_kind 即可
+## （无其他头部效果会改写远程武器类型）。
+static func get_passive_weapon_range_bonus(mech, weapon_kind) -> int:
+	if String(weapon_kind) != "远程":
+		return 0
+	if mech == null or mech.get("slots") == null:
+		return 0
+	var head = mech.slots.get(&"头部")
+	if head == null:
+		return 0
+	var c = head.get("equipped_card")
+	if not is_equipment_active(c):
+		return 0
+	if _card_has_effect_id(c, &"equipment_effect_055"):
+		return 2
+	if _card_has_effect_id(c, &"equipment_effect_022"):
+		return 1
+	return 0
+
+
+## 判断某 slot 的装备是否有"损伤≥阈值时动力+1"或"每损伤+1动力"效果
+## effect_016（重甲右臂，阈值≥1 +1）/ effect_021（机动右腿/左腿，每损伤 +1，逐点）
 static func slot_damage_threshold_power_bonus(mech, slot_id: StringName) -> int:
 	if mech == null or mech.get("slots") == null:
 		return 0
@@ -899,19 +2677,27 @@ static func slot_damage_threshold_power_bonus(mech, slot_id: StringName) -> int:
 		return 0
 	# MechSlotState 是 RefCounted（非 Dictionary），用属性访问取 region_damage_tokens
 	var region_damage: int = int(slot.region_damage_tokens) if "region_damage_tokens" in slot else 0
-	# 同时计入牌上损伤（损伤在牌上时也算该区域有损伤）
-	if card and card.get("damage_tokens"):
-		region_damage = max(region_damage, int(card.damage_tokens))
-	if _card_has_effect_id(card, &"equipment_effect_016") and region_damage >= 1:
+	# 牌上损伤（装备时损伤挂在 equipped_card.damage_tokens）
+	var card_damage: int = int(card.damage_tokens) if (card != null and card.get("damage_tokens")) else 0
+	var any_damage: int = max(region_damage, card_damage)
+	# effect_016 重甲装·右臂：此牌损伤≥1时动力+1（阈值型，固定+1）
+	if _card_has_effect_id(card, &"equipment_effect_016") and any_damage >= 1:
 		return 1
-	if _card_has_effect_id(card, &"equipment_effect_021") and region_damage >= 2:
-		return 1
+	# effect_021 机动装·右腿/左腿：此牌上每设置1损伤动力+1（逐点型，=牌上损伤数）
+	if _card_has_effect_id(card, &"equipment_effect_021"):
+		return card_damage
+	# effect_048 超重甲·右臂：此牌损伤≥2时动力+2（阈值型，固定+2）
+	if _card_has_effect_id(card, &"equipment_effect_048") and any_damage >= 2:
+		return 2
 	return 0
 
 
 ## 判断 card 的 def 是否绑定某 effect_id（查 _card_effect_map）
 static func _card_has_effect_id(card, effect_id: StringName) -> bool:
 	if card == null or card.def == null:
+		return false
+	# 效果被压制（NEGATE_EQUIPMENT_EFFECT）的装备：自身派生值/效果不生效（保留牌面 stats）
+	if card.get("effect_negated") == true:
 		return false
 	if not _initialized:
 		return false  # map 未加载，保守返回 false（效果不生效）

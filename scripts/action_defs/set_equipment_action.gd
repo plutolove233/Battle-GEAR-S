@@ -141,10 +141,15 @@ func _step_place_equip(action: Action) -> Dictionary:
 ## 对 LISTEN 模式效果注册 permanent listener（携带 binding_context=装备牌来源信息），
 ## 对 DIRECT 主动效果也注册到 permanent_listeners（供 skill_bar/equipment_panel 扫描）。
 ## 派生值型效果（联邦/帝国头部、重甲头部、重甲右臂/机动右腿）不注册监听器，实时重算。
-func _register_equipment_effects(card, mech_id: StringName) -> void:
+func _register_equipment_effects(card, mech_id: StringName, slot_id: StringName = &"") -> void:
 	if context == null or context.timing_engine == null:
 		return
 	if card == null or card.def == null:
+		return
+
+	# 备用区装备为白板（face_down）：不注册任何效果监听器（用户裁定：备用区装备
+	# 仅持有者可见、无效果、不被检索；从备用区正式设置到部件区时才注册效果）。
+	if card.get("face_down") == true:
 		return
 
 	# 取该牌的 effect_id 列表
@@ -161,6 +166,7 @@ func _register_equipment_effects(card, mech_id: StringName) -> void:
 		"mech_id": mech_id,
 		"player_id": player_id,
 		"card_def_id": card.def.card_id,
+		"slot_id": slot_id if slot_id != &"" else card.slot_id,
 	}
 
 	var registered_timings: Array[StringName] = []
@@ -205,7 +211,15 @@ func _is_derived_effect(effect_id: StringName) -> bool:
 		&"equipment_effect_014",  # 重甲·损伤不影响护甲
 		&"equipment_effect_016",  # 重甲右臂/机动右腿·损伤≥1+动力
 		&"equipment_effect_021",  # 机动左腿·损伤≥2+动力
-		&"equipment_effect_023",  # 狙击躯干·无效果
+		&"equipment_effect_046",  # 超重甲头部·总损伤<4免疫
+		&"equipment_effect_048",  # 超重甲右臂·损伤≥2动力+2
+		&"equipment_effect_049",  # 超重甲臂/腿·此牌损伤<2免疫
+		&"equipment_effect_066",  # 联邦圣牛头·每联邦装备护甲+1(含自身)
+		&"equipment_effect_070",  # 帝国雄鹰头·每帝国装备动力+1(含自身)
+		&"equipment_effect_074",  # 轰雷·此牌损伤<3免疫护甲
+		&"equipment_effect_080",  # 一角兽头·全场联邦光环护甲+1
+		&"equipment_effect_086",  # 神莺头·全场帝国光环动力+1
+		&"equipment_effect_087",  # 神莺躯干·虚拟武器(权限型，由武器选择识别)
 	]
 
 
@@ -226,7 +240,7 @@ func _step_activate_equip(action: Action) -> Dictionary:
 	if card == null or mech == null:
 		return {"error": "装备激活失败"}
 	card.counters.erase("_pending_equipment_activation")
-	_register_equipment_effects(card, mech_id)
+	_register_equipment_effects(card, mech_id, action.record.get("slot_id", &""))
 	var slot = mech.slots.get(action.record.get("slot_id", &""))
 	if slot != null and slot.slot_kind == &"PART":
 		var old_max_power: int = mech.max_power

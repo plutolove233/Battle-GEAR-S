@@ -397,9 +397,9 @@ RoundService：1v1 轮换 turn_order，player 为位次1。
 6. 闪击 action_006
    - flash_effect1 (DIRECT)：EXECUTE_ATTACK。
    - flash_effect2 (LISTEN, ATTACK_SETTLE)：
-     条件 HAS_ACTION_CARD_IN_HAND + ATTACK_TARGET_ALIVE + WEAPON_CAN_ATTACK_AGAIN；
+     条件 HAS_ACTION_CARD_IN_HAND + WEAPON_CAN_ATTACK_AGAIN + WEAPON_HAS_ATTACKABLE_TARGET_IN_RANGE；
      费用 optional DISCARD_ACTION_CARD 1（弹窗选弃牌再攻/取消）；
-     动作 EXECUTE_ATTACK use_previous_weapon+use_previous_target（同武器同目标再攻）。
+     动作 EXECUTE_ATTACK use_previous_weapon+choose_new_target（同武器，目标在武器范围内任选）。
 
 7. 回避 action_008（迎击牌）
    - evade_availability (AVAILABILITY, RESPOND_ATTACK, priority 5)：被攻击时可用。

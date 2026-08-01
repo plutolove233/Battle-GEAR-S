@@ -195,8 +195,8 @@ func _is_atomic_action(act_type: StringName) -> bool:
 		&"DRAW_ADVANCED_EQUIPMENT", &"PLACE_CARD_IN_DECK_FACE_UP", \
 		&"DECREMENT_STATUS_DURATION", &"CANCEL_PARENT_ACTION", \
 		&"SET_ATTACK_EFFECTIVE_WEAPON_KIND", &"REMOVE_DAMAGE_TOKENS_FROM_DISCARD_ORIGIN_SLOT", \
-		&"OFFER_DAMAGE_REDIRECT", &"DRAW_EQUIPMENT_AND_IMMEDIATELY_SET", \
-		&"DISCARD_SELF_AND_REDUCE_ATTACK_MARKERS", &"REMOVE_DAMAGE_TOKENS_OTHER_SLOTS":
+		&"OFFER_DAMAGE_REDIRECT", \
+		&"DISCARD_SELF_AND_REDUCE_ATTACK_MARKERS", &"DISCARD_SELF_FROM_SLOT", &"REMOVE_DAMAGE_TOKENS_OTHER_SLOTS":
 			return true
 		_:
 			return false
@@ -267,7 +267,9 @@ func _create_action(action_type: StringName, params: Dictionary) -> Action:
 				&"power_fraction", &"loop_until_cancel", &"card_kind", &"random",
 				&"duration", &"tag", &"status_type", &"stacks", &"attack_action_id",
 				&"from_target", &"from_attacker", &"from_player_id", &"to_player_id",
-				&"choose", &"face_up", &"determined_card_ids", &"selected_action_card_ids"]
+				&"choose", &"face_up", &"determined_card_ids", &"selected_action_card_ids", &"phase",
+				&"max_cells", &"free_move", &"adjacent_only",
+				&"target_slot_id", &"target_mech_id", &"fixed_slot", &"exclude_slot_id"]
 			for key: String in params:
 				if key in record_keys:
 					action.record[key] = params[key]
@@ -319,14 +321,25 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 	# 算进攻击威力。仿 MODIFY_ATTACK_MARKERS 范式，绕过 modify_attack_power 的旧字典写入
 	# （新攻击流程不设 current_attack_id、不写 game_state.attacks，modify_attack_power 会空返）。
 	if act_type == &"MODIFY_ATTACK_MIGHT":
-		if parent_action == null:
-			push_warning("MODIFY_ATTACK_MIGHT: 无父动作，无法写入 extra_might")
+		# 定位目标 attack：优先 parent_action（ATTACK_BEFORE/PRE 等时点 parent 即 attack A）；
+		# parent 非 attack（如 effect_035 在 use_action_card.USE_ACTION_AT 执行，parent 是
+		# use_action_card）时，经 payload.attack_action_id 定位原 attack（迎击响应路径注入），
+		# 仿 MODIFY_ATTACK_MARKERS。否则 -4 写到 use_action_card record，attack 读不到。
+		var might_target = parent_action
+		if might_target == null or might_target.action_type != &"attack":
+			var might_attack_id: StringName = payload.get("attack_action_id", &"")
+			if String(might_attack_id) == "" and parent_action != null:
+				might_attack_id = parent_action.record.get("attack_action_id", &"")
+			if String(might_attack_id) != "" and context != null and context.action_registry != null:
+				might_target = context.action_registry.get_action(might_attack_id)
+		if might_target == null:
+			push_warning("MODIFY_ATTACK_MIGHT: 无攻击动作，无法写入 extra_might")
 			return {"state": &"completed"}
 		var params_might: Dictionary = action_def.get("params", {})
 		var might_delta: int = int(params_might.get("delta", payload.get("delta", 0)))
-		var might_prev: int = int(parent_action.record.get("extra_might", 0))
-		parent_action.record["extra_might"] = might_prev + might_delta
-		SLog.log_raw("[ACTION] %s extra_might %+d (累计=%d)" % [String(parent_action.action_id), might_delta, might_prev + might_delta])
+		var might_prev: int = int(might_target.record.get("extra_might", 0))
+		might_target.record["extra_might"] = might_prev + might_delta
+		SLog.log_raw("[ACTION] %s extra_might %+d (累计=%d)" % [String(might_target.action_id), might_delta, might_prev + might_delta])
 		return {"state": &"completed"}
 
 	# 特殊处理 MODIFY_ATTACK_RANGE：把 delta 累加到父动作（attack A）的 record["extra_range"]。
@@ -389,33 +402,19 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 
 	# DRAW_EQUIPMENT_AND_IMMEDIATELY_SET：抽1张装备牌顶 → 立即设置到本牌原区域（区域空时）
 	# 联邦左臂/近战左腿（effect_005）离场诱发。简化版：抽装备牌到装备手牌，若原区域空则自动 set_equipment。
-	if act_type == &"DRAW_EQUIPMENT_AND_IMMEDIATELY_SET":
-		var dei_bind_ctx: Dictionary = payload.get("binding_context", {})
-		var dei_mech_id: StringName = dei_bind_ctx.get("mech_id", payload.get("mech_id", payload.get("source_mech_id", &"")))
-		var dei_owner_player: StringName = dei_bind_ctx.get("player_id", &"")
-		var dei_snapshots: Array = payload.get("discard_snapshots", [])
-		var dei_slot_id: StringName = &""
-		for snap: Dictionary in dei_snapshots:
-			if String(snap.get("card_id", &"")) == String(dei_bind_ctx.get("card_instance_id", &"")):
-				dei_slot_id = snap.get("from_slot_id", &"")
-				break
-		if dei_mech_id != &"" and context.game_actions != null and context.game_state != null:
-			var dei_player = context.game_state.get_player_for_mech(dei_mech_id)
-			if dei_player != null:
-				context.game_actions.draw_equipment_cards({"player_id": dei_owner_player, "count": 1})
-				if dei_slot_id != &"":
-					var dei_mech = context.game_state.mechs.get(dei_mech_id)
-					var dei_slot = dei_mech.slots.get(dei_slot_id) if dei_mech != null else null
-					if dei_slot != null and dei_slot.equipped_card == null and not dei_player.equipment_hand.is_empty():
-						var new_equip_id: StringName = dei_player.equipment_hand[-1]
-						if context.action_service != null:
-							context.action_service.execute(&"set_equipment", {
-								"card_id": new_equip_id,
-								"mech_id": dei_mech_id,
-								"slot_id": dei_slot_id,
-								"source": {"player_id": dei_owner_player, "mech_id": dei_mech_id, "card_instance_id": new_equip_id},
-							})
+	if act_type == &"DISCARD_SELF_FROM_SLOT":
+		var dsf_bind_ctx: Dictionary = payload.get("binding_context", {})
+		var dsf_card_id: StringName = dsf_bind_ctx.get("card_instance_id", payload.get("card_instance_id", &""))
+		if dsf_card_id != &"" and context.deck_service != null:
+			_clear_equipped_card_from_slot(dsf_card_id)
+			context.deck_service.discard_card(dsf_card_id, &"effect_self_discard")
+			SLog.log_raw("[ACTION] DISCARD_SELF_FROM_SLOT 弃置 %s" % String(dsf_card_id))
+		else:
+			push_warning("DISCARD_SELF_FROM_SLOT: 缺 card_instance_id 或 deck_service")
 		return {"state": &"completed"}
+
+	# DRAW_EQUIPMENT_AND_IMMEDIATELY_SET 已移至 TimingEngine._execute_actions 拦截
+	# （抽装备->玩家选合法区域设置；取消/无合法区域则弃置抽到的牌 reason=effect_unset_discard）
 
 	# OFFER_DAMAGE_REDIRECT：损伤转移汇总弹窗（A6）
 	# 不在此特判——由 TimingEngine._execute_actions 拦截并挂起弹窗（同 CHOOSE_ONE 范式），
@@ -616,6 +615,21 @@ func _resolve_atomic_value(value, payload: Dictionary, parent_action):
 		var bc_key: String = s.replace("$binding_context.", "")
 		var bind_ctx: Dictionary = payload.get("binding_context", {}) if payload != null else {}
 		return bind_ctx.get(bc_key)
+	# $chosen_card.xxx -> 从 payload.chosen_card 取值（CHOOSE_MANY_CARDS 逐张执行 per_card_actions 时注入）
+	if s.begins_with("$chosen_card."):
+		var cc_key: String = s.replace("$chosen_card.", "")
+		var chosen: Dictionary = payload.get("chosen_card", {}) if payload != null else {}
+		return chosen.get(cc_key)
+	# $variables.xxx / $choice.xxx -> 已由 TimingEngine._eval_expr 在 CHOOSE_INTEGER 阶段解析为具体值；
+	# 此处兜底从 payload.choice / payload.variables 取
+	if s.begins_with("$variables."):
+		var v_key: String = s.replace("$variables.", "")
+		var vars: Dictionary = payload.get("variables", {}) if payload != null else {}
+		return vars.get(v_key)
+	if s.begins_with("$choice."):
+		var ch_key: String = s.replace("$choice.", "")
+		var ch: Dictionary = payload.get("choice", {}) if payload != null else {}
+		return ch.get(ch_key)
 	# $source.xxx → 从 parent_action.source 取值
 	var src: Dictionary = parent_action.source if (parent_action != null and parent_action.source is Dictionary) else {}
 	if s == "$source.card_instance_id":
@@ -1097,7 +1111,7 @@ func _extract_attack_params(action_def: Dictionary, payload: Dictionary, parent_
 	result["attack_card_id"] = params.get("attack_card_id", payload.get("attack_card_id", payload.get("card_instance_id", &"")))
 	result["target_count"] = params.get("target_count", 1)
 	result["source"] = _build_source_from_payload(payload, parent_action)
-	# 闪击等效果：使用上一次攻击的武器和目标
+	# 闪击等再攻型效果：使用上一次攻击的武器（目标可锁定或重选，见下方各 flag）
 	# attack B 的 payload 是 attack A 的 record（含 attack_source=发动方信息）。
 	# _build_source_from_payload 从顶层 player_id/source_mech_id 取，但 attack A 的 record
 	# 没有这些顶层字段（它们在 attack_source 里），故再攻型 attack B 的 source 会全空，
@@ -1116,6 +1130,12 @@ func _extract_attack_params(action_def: Dictionary, payload: Dictionary, parent_
 	if params.get("use_previous_target", false):
 		result["target_id"] = payload.get("target_id", &"")
 		result["skip_target_select"] = true
+	# 闪击再攻：用攻击A的武器，但目标可在武器范围内重选（不锁定攻击A的目标）。
+	# choose_new_target 清空上方 fallback 继承的 payload.target_id，使 attack B 走
+	# select_attack_target 流程让玩家在武器范围内任选目标。
+	if params.get("choose_new_target", false):
+		result["target_id"] = &""
+		result["skip_target_select"] = false
 	# 反击 effect2：监听攻击1的攻击结算时点后发动攻击2。payload 是原 attack 动作 record。
 	# 攻击2的发动方=迎击牌持有者（由注册 effect2 时通过 binding_context 携带）。
 	# 目标不锁定为原攻击者——按规则攻击2是一个完整新攻击，发动方重新选武器、
@@ -1202,6 +1222,7 @@ func _extract_move_params(action_def: Dictionary, payload: Dictionary, parent_ac
 	result["mech_id"] = params.get("mech_id", payload.get("source_mech_id", &""))
 	result["target_cell"] = params.get("target_cell", &"")
 	result["available_power"] = params.get("available_power", 0)
+	result["free_move"] = params.get("free_move", false)
 	result["source"] = _build_source_from_payload(payload, parent_action)
 	return result
 
@@ -1210,14 +1231,21 @@ func _extract_single_move_params(action_def: Dictionary, payload: Dictionary, pa
 	var params: Dictionary = action_def.get("params", {})
 	var result: Dictionary = {}
 	# mech_id 优先级：显式 params > source_mech_id（迎击/辅助牌 use_action_card 上下文）>
+	# mech_id（basic_move payload，机动装·头部 effect_017 监听 BASIC_MOVE_AFTER：移动主体=本牌机甲）>
 	# attacker_id（强袭 effect2 等监听 attack 动作、在补跑路径执行的 effect：移动主体是攻击发起方）。
 	var move_mech: StringName = params.get("mech_id", payload.get("source_mech_id", &""))
+	if move_mech == &"":
+		move_mech = payload.get("mech_id", &"")
 	if move_mech == &"":
 		move_mech = payload.get("attacker_id", &"")
 	result["mech_id"] = move_mech
 	result["available_power"] = params.get("available_power", 0)
 	result["power_fraction"] = params.get("power_fraction", 0.0)
 	result["loop_until_cancel"] = params.get("loop_until_cancel", false)
+	# 狙击腿免费相邻1格移动（effect_026/027）
+	result["max_cells"] = params.get("max_cells", 0)
+	result["free_move"] = params.get("free_move", false)
+	result["adjacent_only"] = params.get("adjacent_only", false)
 	result["source"] = _build_source_from_payload(payload, parent_action)
 	return result
 
@@ -1331,8 +1359,18 @@ func _extract_damage_change_params(action_def: Dictionary, payload: Dictionary, 
 	result["mech_ids"] = params.get("mech_ids", [])
 	result["value"] = params.get("value", 0)
 	result["method"] = params.get("method", &"increase")
-	result["executor"] = params.get("executor", &"")
+	# executor 解析 $binding_context.mech_id 等表达式（effect_031 近战右腿离场移除损伤用）。
+	# 不解析则保留字面 "$binding_context.mech_id"，_popup_owner 的 damage_token_placement 路由
+	# _owner_of_mechid 返回空 -> PvP 两端都弹窗（仅持有者应弹+执行）。
+	result["executor"] = _resolve_atomic_value(params.get("executor", &""), payload, parent_action)
 	result["reason"] = params.get("reason", &"")
+	# fixed_slot：直接置X点到指定 slot（规则2"设置X损伤到此牌/区域上"），跳过转移窗与逐点UI。
+	# effect_035/039 用：target_mech_id/target_slot_id 从 $binding_context 解析（来源装备牌机甲/槽）。
+	result["fixed_slot"] = bool(params.get("fixed_slot", false))
+	result["target_mech_id"] = _resolve_atomic_value(params.get("target_mech_id", &""), payload, parent_action)
+	result["target_slot_id"] = _resolve_atomic_value(params.get("target_slot_id", &""), payload, parent_action)
+	# exclude_slot_id：decrease 移除损伤时排除此槽（effect_079 离场移除"其他区域"损伤，排除来源槽）
+	result["exclude_slot_id"] = _resolve_atomic_value(params.get("exclude_slot_id", &""), payload, parent_action)
 	result["source"] = _build_source_from_payload(payload, parent_action)
 	return result
 

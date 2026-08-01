@@ -310,11 +310,15 @@ func place_one_damage_token(mech_id: StringName, slot_id: StringName) -> void:
 	if mech == null or not mech.slots.has(slot_id):
 		return
 	var slot = mech.slots[slot_id]
-	# 优先加到装备牌上
+	# 损伤真正设置在区域上（region_damage_tokens，装备弃置后仍保留；get_effective_armor 只减 region）。
+	# 装备牌同时记一份 damage_tokens 用于耐久损坏判定（is_equipment_broken）。
+	# 与 DamageTokenService.place_one_token_at_slot 一致（region + card 双计）。
+	# 此前仅加到 card 不加 region，致转移/固定置损伤路径下卡损坏弃置后区域损伤丢失。
+	slot.region_damage_tokens += 1
 	if slot.equipped_card != null:
 		slot.equipped_card.damage_tokens += 1
-	else:
-		slot.region_damage_tokens += 1
+	# 损伤变化后重算动力上限（effect_016/021/048 派生动力随损伤变，max_power 需同步）
+	mech.recalc_power_limits()
 
 
 ## ── 光环系统 ──

@@ -42,6 +42,18 @@ const ICON_RADIUS := HEX_RADIUS * 0.32
 var tiles: Dictionary = {}  # key: Vector2i(col, row), value: Dictionary
 var units: Dictionary = {}
 var hovered_hex: Dictionary = {}
+# 悬停移动路径预览（鼠标悬停可达格时画最短路线连线）
+var _context = null  # GameContext（find_optimal_path 用）
+var _local_mech_id: StringName = &""  # 本地玩家机甲 id（路径起点）
+var _local_mech_pos: Dictionary = {}  # 本地机甲当前位置（axial q/r），移动中画"当前位置->目标"线用
+var _hover_move_path: Array = []  # 悬停预览路径 center 列表，空=不画
+# 逐格移动进行中标志 + 目标格。移动中不画悬停路径（避免误导），改画"当前位置->目标"实时连线。
+var _move_active: bool = false
+var _move_destination: Dictionary = {}  # axial {"q","r"}，本次移动终点
+var _move_path_centers: Array = []  # 当前位置->目标的逐格 center 列表（实时更新）
+# 移动开始时规划的原定路线（axial cells，含起点+各格）。移动中只显示其剩余尾巴，
+# 不重新寻路--保证路线始终是同一条、越来越短（用户要求）。
+var _planned_path_cells: Array = []
 var background_texture: Texture2D  # 网格背景
 var base_background_texture: Texture2D  # 底层地图背景
 var highlighted_hexes: Dictionary = {}  # key: "q,r" → true
@@ -50,6 +62,12 @@ var attack_target_hexes: Dictionary = {}
 # 闪烁动画累计时间与开关
 var _blink_accum: float = 0.0
 var _blink_enabled: bool = false
+# 闪烁重绘节流累计：闪烁是视觉脉冲，无需 60fps 全速重画整块棋盘。
+# D3D12 下持续高频 queue_redraw 会反复创建顶点/索引缓冲，长会话耗尽显存描述符堆，
+# 报 buffer_create E_OUTOFMEMORY(0x8007000e) -> vertex_array null -> vertex format
+# 不匹配 / free invalid ID 级联。降频到 ~15Hz 重绘，缓冲创建削减数倍，脉冲观感仍流畅。
+var _blink_redraw_accum: float = 0.0
+const _BLINK_REDRAW_INTERVAL: float = 1.0 / 15.0
 
 # 缩放适配：将 2368×942 的网格缩放到控件实际大小
 var _grid_scale: float = 1.0
@@ -99,6 +117,53 @@ func configure(new_tiles: Array, new_units: Dictionary) -> void:
 	_update_grid_transform()
 	queue_redraw()
 
+## 仅更新单位数据并重绘（不重建地形、不重算 _grid_scale/_grid_offset）。
+## 用于逐格移动轻量刷新：地形与控件尺寸在一场战斗中不变，逐格重算 _update_grid_transform
+## 会在全量面板重建导致布局抖动时读到瞬态 get_rect()，使 _grid_scale 变形放大。
+func update_units(new_units: Dictionary) -> void:
+	units.clear()
+	for side in new_units.keys():
+		var unit: Dictionary = new_units[side]
+		if typeof(unit) != TYPE_DICTIONARY:
+			continue
+		var pos = unit.get("position", {})
+		if typeof(pos) == TYPE_DICTIONARY:
+			var q: int = int(pos.get("q", 0))
+			var r: int = int(pos.get("r", 0))
+			var grid_pos := _axial_to_grid(q, r)
+			units[side] = unit.duplicate(true)
+			units[side]["position"] = {"col": grid_pos.col, "row": grid_pos.row}
+		else:
+			units[side] = unit.duplicate(true)
+	queue_redraw()
+
+## 设置移动开始时规划的原定路线（axial cells，含起点+各格）。移动中只显示其剩余尾巴。
+func set_planned_path(cells: Array) -> void:
+	_planned_path_cells = cells.duplicate(true)
+	_update_move_path_tail()
+
+## 根据机甲当前位置（_local_mech_pos），从原定路线中取出"当前位置->终点"的剩余尾巴，
+## 存为 _move_path_centers。不重新寻路--沿原路线取尾巴，保证路线始终是同一条、越来越短。
+func _update_move_path_tail() -> void:
+	_move_path_centers.clear()
+	if _planned_path_cells.is_empty():
+		return
+	# 找到本地机甲当前所在格在原定路线中的索引
+	var start_idx: int = 0
+	if not _local_mech_pos.is_empty():
+		var cq: int = int(_local_mech_pos.get("q", 0))
+		var cr: int = int(_local_mech_pos.get("r", 0))
+		for i in range(_planned_path_cells.size()):
+			var c = _planned_path_cells[i]
+			if int(c.get("q", 0)) == cq and int(c.get("r", 0)) == cr:
+				start_idx = i
+				break
+	# 从当前位置到终点的各格 center
+	for i in range(start_idx, _planned_path_cells.size()):
+		var c = _planned_path_cells[i]
+		var cg := _axial_to_grid(int(c.get("q", 0)), int(c.get("r", 0)))
+		_move_path_centers.append(_grid_to_world(cg.col, cg.row))
+
 func _axial_to_grid(q: int, r: int) -> Dictionary:
 	# axial to odd-q 转换 (flat-top)
 	# col = q（列号就是 axial 的 q）
@@ -146,8 +211,9 @@ func _load_background() -> void:
 		base_background_texture = load(base_path)
 
 func _draw() -> void:
-	_update_grid_transform()
-	# 应用缩放变换：所有后续绘制自动缩放+居中
+	# 不在 _draw 里调 _update_grid_transform()：每次重绘都重算 _grid_scale 会读到瞬态
+	# get_rect().size（布局抖动时），致整片棋盘闪一下/变形。缩放仅在 configure 与
+	# NOTIFICATION_RESIZED（窗口尺寸变化）时重算，_draw 用缓存的 _grid_scale/_grid_offset。
 	draw_set_transform(_grid_offset, 0.0, Vector2(_grid_scale, _grid_scale))
 	_draw_background()
 	# 绘制所有格子
@@ -178,6 +244,24 @@ func _draw() -> void:
 			draw_polyline(points + PackedVector2Array([points[0]]), red_border, (BORDER_WIDTH * 1.6) / _grid_scale)
 		_draw_hex_label(tile, center)
 		_draw_special_icon(tile, center)
+	# 移动路径预览线：逐格移动进行中画"当前位置->目标"的逐格路径（实时更新，随机甲逐格推进缩短）；
+	# 否则画悬停预览路径（鼠标悬停可达格的最短路线）。线/圆点用白色边缘高光增强清晰度。
+	var _path_centers: Array = []
+	if _move_active and _move_path_centers.size() >= 2:
+		_path_centers = _move_path_centers
+	elif not _move_active and _hover_move_path.size() >= 2:
+		_path_centers = _hover_move_path
+	if _path_centers.size() >= 2:
+		var line_color := Color(0.5, 0.5, 0.5, 0.55)
+		var edge_color := Color(1.0, 1.0, 1.0, 0.6)
+		# 白色边缘：先画稍宽白线，再叠灰线 -> 灰线带白边，清晰度提升
+		for i in range(_path_centers.size() - 1):
+			draw_line(_path_centers[i], _path_centers[i + 1], edge_color, 3.5 / _grid_scale)
+			draw_line(_path_centers[i], _path_centers[i + 1], line_color, 2.0 / _grid_scale)
+		# 节点圆点：灰色填充 + 白色描边
+		for c in _path_centers:
+			draw_circle(c, 7.0 / _grid_scale, line_color)
+			draw_arc(c, 7.0 / _grid_scale, 0.0, TAU, 24, edge_color, 1.5 / _grid_scale)
 	# 绘制单位
 	for side in units.keys():
 		var unit = units[side]
@@ -198,6 +282,7 @@ func _gui_input(event: InputEvent) -> void:
 		var next_hover := _valid_hex_at(grid_pos)
 		if not _same_hex(next_hover, hovered_hex):
 			hovered_hex = next_hover
+			_update_hover_move_path()
 			queue_redraw()
 	elif event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
@@ -213,14 +298,18 @@ func _notification(what: int) -> void:
 	elif what == NOTIFICATION_MOUSE_EXIT:
 		if not hovered_hex.is_empty():
 			hovered_hex = {}
+			_hover_move_path.clear()
 			queue_redraw()
 
-# 闪烁动画：累计时间并触发重绘
+# 闪烁动画：累计时间并触发重绘（节流到 ~15Hz，避免每帧重画整块棋盘耗尽 D3D12 显存）
 func _process(delta: float) -> void:
 	if not _blink_enabled:
 		return
 	_blink_accum += delta
-	queue_redraw()
+	_blink_redraw_accum += delta
+	if _blink_redraw_accum >= _BLINK_REDRAW_INTERVAL:
+		_blink_redraw_accum = 0.0
+		queue_redraw()
 
 func _draw_hex_label(hex: Dictionary, center: Vector2) -> void:
 	var font := _draw_font()
@@ -360,6 +449,38 @@ func _same_hex(a: Dictionary, b: Dictionary) -> bool:
 	# 比较 axial 坐标 (q/r)
 	return int(a.get("q", 0)) == int(b.get("q", 0)) and int(a.get("r", 0)) == int(b.get("r", 0))
 
+
+## 悬停可达格时，计算从本地机甲到悬停格的最短路径，存 center 列表供 _draw 画连线。
+## 仅己方回合、机甲可移动、悬停格可达时画；否则清空（避免误导）。
+## 逐格移动进行中（_move_active）不画悬停路径--改由 _draw 画"当前位置->目标"实时连线，
+## 避免移动中鼠标晃动显示到其它格的误导路径。
+func _update_hover_move_path() -> void:
+	_hover_move_path.clear()
+	if _move_active:
+		return
+	if _context == null or _local_mech_id == &"" or hovered_hex.is_empty():
+		return
+	var gs = _context.game_state
+	if gs == null or _context.map_service == null:
+		return
+	var mech = gs.mechs.get(_local_mech_id)
+	if mech == null or not mech.can_move() or mech.power <= 0:
+		return
+	# 仅当前回合方预览（敌方回合/无动力不画线）
+	if mech.owner_player_id != gs.active_player_id:
+		return
+	var path: Array = _context.map_service.find_optimal_path(_local_mech_id, hovered_hex, mech.power)
+	if path.is_empty():
+		return
+	# 起点（机甲当前格）+ 路径各格 -> center 列表
+	var centers: Array = []
+	var start_grid := _axial_to_grid(int(mech.position.get("q", 0)), int(mech.position.get("r", 0)))
+	centers.append(_grid_to_world(start_grid.col, start_grid.row))
+	for cell in path:
+		var cg := _axial_to_grid(int(cell.get("q", 0)), int(cell.get("r", 0)))
+		centers.append(_grid_to_world(cg.col, cg.row))
+	_hover_move_path = centers
+
 ## 高亮指定hex列表（攻击/移动范围）
 func highlight_hexes(hexes: Array[Dictionary]) -> void:
 	highlighted_hexes.clear()
@@ -382,6 +503,7 @@ func highlight_attack_targets(hexes: Array[Dictionary]) -> void:
 		attack_target_hexes[key] = true
 	_blink_enabled = not attack_target_hexes.is_empty()
 	_blink_accum = 0.0
+	_blink_redraw_accum = 0.0
 	set_process(_blink_enabled)
 	queue_redraw()
 
@@ -390,5 +512,6 @@ func clear_attack_targets() -> void:
 	attack_target_hexes.clear()
 	_blink_enabled = false
 	_blink_accum = 0.0
+	_blink_redraw_accum = 0.0
 	set_process(false)
 	queue_redraw()

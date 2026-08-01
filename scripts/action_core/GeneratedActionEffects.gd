@@ -270,24 +270,27 @@ static func build_all_effects() -> Dictionary:
 	flash_e2.priority = 10
 	flash_e2.listen_timing = _TC.ATTACK_SETTLE
 	flash_e2.listen_action_type = &"attack"
+	# 条件：持有行动牌可弃 + 武器可再次攻击（攻击者存活且武器仍在）+ 武器攻击范围内存在可攻击目标。
+	# 再攻不锁定攻击A的目标，玩家可在武器范围内任选目标，故不再检查 ATTACK_TARGET_ALIVE，
+	# 改由 WEAPON_HAS_ATTACKABLE_TARGET_IN_RANGE 保证范围内有目标可打（弃牌弹窗前置）。
 	flash_e2.set_conditions([
 		{"op": &"HAS_ACTION_CARD_IN_HAND"},
-		{"op": &"ATTACK_TARGET_ALIVE"},
 		{"op": &"WEAPON_CAN_ATTACK_AGAIN"},
+		{"op": &"WEAPON_HAS_ATTACKABLE_TARGET_IN_RANGE"},
 	])
 	flash_e2.set_target_rules([{"rule": &"NO_TARGET"}])
 	flash_e2.set_costs([{"cost_type": &"DISCARD_ACTION_CARD", "count": 1, "optional": true}])
+	# 用攻击A的武器（自动确认，跳过选武器），目标在武器攻击范围内由玩家任选（不跳过选目标）。
 	flash_e2.set_actions([{
 		"type": &"EXECUTE_ATTACK",
 		"params": {
 			"target_count": 1,
 			"use_previous_weapon": true,
-			"use_previous_target": true,
 			"skip_weapon_select": true,
-			"skip_target_select": true,
+			"choose_new_target": true,
 		},
 	}])
-	flash_e2.description = "监听攻击A的攻击结算时点，可弃1行动牌再发动一次攻击。"
+	flash_e2.description = "监听攻击A的攻击结算时点，可弃1行动牌再发动一次攻击（用攻击A的武器，目标可在武器范围内任选）。"
 	effects[flash_e2.effect_id] = flash_e2
 
 	# ═══════════════════════════════════════════
@@ -403,7 +406,12 @@ static func build_all_effects() -> Dictionary:
 	counter_e2.effect_id = &"counter_effect2"
 	counter_e2.display_name = "反击·反击攻击"
 	counter_e2.mode = _TC.MODE_LISTEN
-	counter_e2.priority = 10
+	# 优先级20：反击的反击攻击须先于闪击 effect2（再攻）等同监听 ATTACK_SETTLE 的效果执行。
+	# 原优先级10与闪击 effect2 相同，按注册序闪击 effect2 先触发，其 optional 弃牌弹窗
+	# 会把 attack 置 waiting_timing 并在 fire_timing 首次循环 return，丢弃排在后面的
+	# counter_effect2（反击2永不执行）。提至20后 counter_effect2 走 waiting_effect_action
+	# 路径（创建反击攻击子动作并正确暂存剩余监听器），反击攻击结算后续跑闪击 effect2。
+	counter_e2.priority = 20
 	counter_e2.listen_timing = _TC.ATTACK_SETTLE
 	counter_e2.listen_action_type = &"attack"
 	counter_e2.requires_effect = &"counter_effect1"
@@ -763,7 +771,7 @@ static func build_all_effects() -> Dictionary:
 		"type": &"APPLY_OR_CHECK_LOCKED",
 		"params": {"mode": &"apply", "duration": 1},
 	}])
-	lock_direct.description = "选择1台其他机甲施加锁定状态（持续1回合）。"
+	lock_direct.description = "选择1台其他机甲施加锁定状态（持续1回合）。本回合我方对该目标发动的攻击，目标及其相邻机甲不能响应（识破除外）；该目标被命中后解除。"
 	effects[lock_direct.effect_id] = lock_direct
 
 	# 锁定状态效果2：命中后清除
@@ -780,7 +788,7 @@ static func build_all_effects() -> Dictionary:
 		"type": &"REMOVE_STATUS",
 		"params": {"status_type": &"LOCKED"},
 	}])
-	lock_status_e2.description = "攻击目标被任何人命中后，去除该目标身上此 locker 施加的锁定状态。"
+	lock_status_e2.description = "locker 的攻击命中该目标后，去除该目标身上此 locker 施加的锁定状态。"
 	effects[lock_status_e2.effect_id] = lock_status_e2
 
 	# 锁定状态效果3：回合-1

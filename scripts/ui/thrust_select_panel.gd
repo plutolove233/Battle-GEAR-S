@@ -14,6 +14,7 @@ signal selection_cancelled()
 var _context = null  # type: GameContext
 var _card_ids: Array = []  # 待选 card_instance_id 列表
 var _selected: Array[StringName] = []
+var _max_count: int = 0  # 0 = 不限
 var _label: String = "选择要一起打出的牌"
 var _per_card_suffix: String = ""
 var _confirm_verb: String = "打出"
@@ -26,13 +27,14 @@ var _cancel_btn: Button
 var _count_label: Label
 
 
-func configure(game_context, card_ids: Array, label: String = "选择要一起打出的牌", per_card_suffix: String = "", confirm_verb: String = "打出", cancel_label: String = "不打出") -> void:
+func configure(game_context, card_ids: Array, label: String = "选择要一起打出的牌", per_card_suffix: String = "", confirm_verb: String = "打出", cancel_label: String = "不打出", max_count: int = 0) -> void:
 	_context = game_context
 	_card_ids = card_ids
 	_label = label
 	_per_card_suffix = per_card_suffix
 	_confirm_verb = confirm_verb
 	_cancel_label = cancel_label
+	_max_count = max_count
 	_selected.clear()
 	_ensure_layout()
 	_refresh()
@@ -120,6 +122,8 @@ func _on_card_toggle(card_id: StringName) -> void:
 	if card_id in _selected:
 		_selected.erase(card_id)
 	else:
+		if _max_count > 0 and _selected.size() >= _max_count:
+			return  # 已达上限，不再追加
 		_selected.append(card_id)
 	_refresh()
 

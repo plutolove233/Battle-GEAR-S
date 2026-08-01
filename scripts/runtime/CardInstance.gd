@@ -36,6 +36,7 @@ var face_down: bool = false
 
 ## 效果是否被临时无效化
 var disabled: bool = false
+var effect_negated: bool = false  # NEGATE_EQUIPMENT_EFFECT 压制：效果无效但保留牌面 stats
 
 ## 事件牌计时器（仅 EventCardDef 使用）
 var timer: int = 0

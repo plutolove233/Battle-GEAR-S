@@ -58,11 +58,13 @@ static func can_pay_single(binding, payload: Dictionary, cost: Dictionary, ctx) 
 		&"SPEND_POWER":
 			# 支付动力：检查机甲当前动力是否足够
 			var mech_id: StringName = cost.get("mech_id", binding.get_source_mech_id())
-			var amount: int = int(cost.get("amount", 0))
+			var sp_amount_raw = cost.get("amount", 0)
 			var mech_state = ctx.game_state.mechs.get(mech_id)
 			if mech_state == null:
 				return false
-			return mech_state.power >= amount
+			if str(sp_amount_raw) == "ALL_CURRENT":
+				return mech_state.power >= 1  # 耗尽全部动力：必须有>0动力
+			return mech_state.power >= int(sp_amount_raw)
 
 		&"SPEND_GOLD":
 			# 支付金币：检查玩家当前金币是否足够
@@ -193,12 +195,16 @@ static func pay_single(binding, payload: Dictionary, cost: Dictionary, ctx) -> b
 		&"SPEND_POWER":
 			# 支付动力
 			var mech_id: StringName = cost.get("mech_id", binding.get_source_mech_id())
-			var amount: int = int(cost.get("amount", 0))
+			var sp_amount_raw = cost.get("amount", 0)
 			if ctx.game_actions == null:
 				return false
+			var sp_amount: int = int(sp_amount_raw)
+			if str(sp_amount_raw) == "ALL_CURRENT":
+				var sp_mech = ctx.game_state.mechs.get(mech_id)
+				sp_amount = sp_mech.power if sp_mech != null else 0
 			return ctx.game_actions.spend_power({
 				"mech_id": mech_id,
-				"amount": amount,
+				"amount": sp_amount,
 				"reason": &"EFFECT_COST"
 			})
 

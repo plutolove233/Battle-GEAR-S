@@ -15,6 +15,7 @@ var player_dropdown: OptionButton
 var action_card_dropdown: OptionButton
 var equipment_card_dropdown: OptionButton
 var slot_dropdown: OptionButton
+var damage_slot_dropdown: OptionButton
 
 var action_cards_label: Label
 var equipment_label: Label
@@ -24,11 +25,17 @@ var mech_info_label: Label
 var current_player_id: StringName = &""
 ## 防止刷新玩家下拉时 select() → item_selected → _refresh_all 递归
 var _refreshing_player_list: bool = false
+## 行动牌/装备牌下拉内容仅依赖 card_database（静态），只构建一次；context 变化时重建
+var _card_lists_built: bool = false
+var _built_context = null
 
 ## PvP client 模式：true 时不本地改 state，而是 emit dev_edit_requested 让 app_root 转发 intent 给 host
 var network_mode: bool = false
 ## dev 编辑请求（client 模式）：op + params（含 target 玩家）
 signal dev_edit_requested(op: StringName, params: Dictionary)
+## 本地（非 PvP）编辑已应用：app_root 据此刷新主战斗 UI。
+## PvP 走 _net_exec(dev_edit) 已在双端 _refresh_battle，network_mode=true 时各 handler 提前 return 不会 emit 本信号。
+signal edit_applied()
 
 ## 颜色
 const COLOR_ACTION = Color(0.2, 0.6, 1.0)
@@ -124,6 +131,7 @@ func _setup_ui() -> void:
 	action_card_dropdown = OptionButton.new()
 	action_card_dropdown.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	add_action_hbox.add_child(action_card_dropdown)
+	_color_dropdown(action_card_dropdown, COLOR_ACTION)
 	var add_action_btn := Button.new()
 	add_action_btn.text = "添加"
 	add_action_btn.pressed.connect(_on_add_action_card)
@@ -160,6 +168,7 @@ func _setup_ui() -> void:
 	equipment_card_dropdown = OptionButton.new()
 	equipment_card_dropdown.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	add_equip_hbox.add_child(equipment_card_dropdown)
+	_color_dropdown(equipment_card_dropdown, COLOR_EQUIP)
 	var add_equip_btn := Button.new()
 	add_equip_btn.text = "添加"
 	add_equip_btn.pressed.connect(_on_add_equipment_card)
@@ -171,6 +180,7 @@ func _setup_ui() -> void:
 	slot_dropdown = OptionButton.new()
 	slot_dropdown.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	set_slot_hbox.add_child(slot_dropdown)
+	_color_dropdown(slot_dropdown, COLOR_EQUIP)
 	var set_slot_btn := Button.new()
 	set_slot_btn.text = "设置"
 	set_slot_btn.pressed.connect(_on_set_equipment_to_slot)
@@ -201,10 +211,11 @@ func _setup_ui() -> void:
 	var damage_hbox := HBoxContainer.new()
 	damage_section.add_child(damage_hbox)
 	damage_hbox.add_child(_make_label("槽位: "))
-	var damage_slot_dropdown := OptionButton.new()
+	damage_slot_dropdown = OptionButton.new()
 	damage_slot_dropdown.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	damage_slot_dropdown.name = "DamageSlotDropdown"
 	damage_hbox.add_child(damage_slot_dropdown)
+	_color_dropdown(damage_slot_dropdown, COLOR_DANGER)
 	var add_damage_btn := Button.new()
 	add_damage_btn.text = "+1"
 	add_damage_btn.pressed.connect(_on_add_region_damage)
@@ -304,6 +315,24 @@ func _make_label(text: String) -> Label:
 	return lbl
 
 
+## 给下拉框按钮文字上色（含 hover/pressed/focus 各态），使当前选中项在按钮上一眼可见。
+func _color_dropdown(dropdown: OptionButton, color: Color) -> void:
+	dropdown.add_theme_color_override("font_color", color)
+	dropdown.add_theme_color_override("font_hover_color", color)
+	dropdown.add_theme_color_override("font_pressed_color", color)
+	dropdown.add_theme_color_override("font_focus_color", color)
+
+
+## 取下拉框当前选中项的 metadata（clear 前调用以在重建后恢复选中）。
+func _dropdown_selected_meta(dropdown: OptionButton) -> Variant:
+	if dropdown == null or dropdown.item_count == 0:
+		return null
+	var idx := dropdown.get_selected_id()
+	if idx < 0:
+		return null
+	return dropdown.get_item_metadata(idx)
+
+
 func _create_section(title_text: String, color: Color) -> VBoxContainer:
 	var section := VBoxContainer.new()
 	section.add_theme_constant_override("separation", 4)
@@ -333,9 +362,16 @@ func setup(p_context: GameContext) -> void:
 # ═══════════════════════════════════════════
 
 func _refresh_all() -> void:
+	# context 重建（如 PvP 换种子/新局）时，静态卡牌列表需重建
+	if context != _built_context:
+		_built_context = context
+		_card_lists_built = false
 	_refresh_player_list()
-	_refresh_action_card_list()
-	_refresh_equipment_card_list()
+	# 行动牌/装备牌列表仅依赖 card_database（静态），每局只构建一次，避免每次刷新丢失选中
+	if not _card_lists_built:
+		_refresh_action_card_list()
+		_refresh_equipment_card_list()
+		_card_lists_built = true
 	_refresh_slot_list()
 	_update_info_display()
 
@@ -396,11 +432,13 @@ func _on_player_selected(_index: int) -> void:
 
 
 func _refresh_action_card_list() -> void:
+	var prev_meta: Variant = _dropdown_selected_meta(action_card_dropdown)
 	action_card_dropdown.clear()
 	if context == null or context.card_database == null:
 		return
 	var db = context.card_database
 	var index := 0
+	var select_index := 0
 	for card_id: StringName in db.card_defs:
 		var def = db.card_defs[card_id]
 		if def == null:
@@ -408,15 +446,21 @@ func _refresh_action_card_list() -> void:
 		if def.card_kind == &"action":
 			action_card_dropdown.add_item("%s [%s]" % [def.display_name, String(def.rarity)], index)
 			action_card_dropdown.set_item_metadata(index, card_id)
+			if card_id == prev_meta:
+				select_index = index
 			index += 1
+	if index > 0:
+		action_card_dropdown.select(select_index)
 
 
 func _refresh_equipment_card_list() -> void:
+	var prev_meta: Variant = _dropdown_selected_meta(equipment_card_dropdown)
 	equipment_card_dropdown.clear()
 	if context == null or context.card_database == null:
 		return
 	var db = context.card_database
 	var index := 0
+	var select_index := 0
 	for card_id: StringName in db.card_defs:
 		var def = db.card_defs[card_id]
 		if def == null:
@@ -429,12 +473,17 @@ func _refresh_equipment_card_list() -> void:
 				_: prefix = "[装备] "
 			equipment_card_dropdown.add_item("%s%s [%s]" % [prefix, def.display_name, String(def.rarity)], index)
 			equipment_card_dropdown.set_item_metadata(index, card_id)
+			if card_id == prev_meta:
+				select_index = index
 			index += 1
+	if index > 0:
+		equipment_card_dropdown.select(select_index)
 
 
 func _refresh_slot_list() -> void:
+	var prev_slot_meta: Variant = _dropdown_selected_meta(slot_dropdown)
+	var prev_dmg_meta: Variant = _dropdown_selected_meta(damage_slot_dropdown)
 	slot_dropdown.clear()
-	var damage_slot_dropdown := find_child("DamageSlotDropdown", true, false) as OptionButton
 	if damage_slot_dropdown != null:
 		damage_slot_dropdown.clear()
 
@@ -442,6 +491,8 @@ func _refresh_slot_list() -> void:
 	if mech == null:
 		return
 	var index := 0
+	var select_index := 0
+	var select_dmg_index := 0
 	for slot_id: StringName in mech.slots:
 		var slot: MechSlotState = mech.slots[slot_id]
 		var slot_name := String(slot_id)
@@ -449,10 +500,18 @@ func _refresh_slot_list() -> void:
 			slot_name += " (%s)" % slot.equipped_card.def.display_name
 		slot_dropdown.add_item(slot_name, index)
 		slot_dropdown.set_item_metadata(index, slot_id)
+		if slot_id == prev_slot_meta:
+			select_index = index
 		if damage_slot_dropdown != null:
 			damage_slot_dropdown.add_item("%s (损伤:%d)" % [String(slot_id), slot.region_damage_tokens], index)
 			damage_slot_dropdown.set_item_metadata(index, slot_id)
+			if slot_id == prev_dmg_meta:
+				select_dmg_index = index
 		index += 1
+	if index > 0:
+		slot_dropdown.select(select_index)
+		if damage_slot_dropdown != null:
+			damage_slot_dropdown.select(select_dmg_index)
 
 
 func _update_info_display() -> void:
@@ -545,6 +604,7 @@ func _on_add_action_card() -> void:
 		context.register_hand_card_availability(inst.instance_id)
 
 	_update_info_display()
+	edit_applied.emit()
 
 
 func _on_discard_all_action_cards() -> void:
@@ -559,6 +619,7 @@ func _on_discard_all_action_cards() -> void:
 		_do_discard_action_card(card_id, player)
 
 	_update_info_display()
+	edit_applied.emit()
 
 
 func _on_discard_one_action_card() -> void:
@@ -573,6 +634,7 @@ func _on_discard_one_action_card() -> void:
 		return
 	_do_discard_action_card(player.action_hand[0], player)
 	_update_info_display()
+	edit_applied.emit()
 
 
 func _do_discard_action_card(card_id: StringName, player: PlayerState) -> void:
@@ -618,6 +680,7 @@ func _on_add_equipment_card() -> void:
 	player.equipment_hand.append(inst.instance_id)
 
 	_update_info_display()
+	edit_applied.emit()
 
 
 func _on_set_equipment_to_slot() -> void:
@@ -681,6 +744,7 @@ func _on_set_equipment_to_slot() -> void:
 	# fallback: 手动设置
 	_manual_set_equipment(equip_card_id, slot_id)
 	_update_info_display()
+	edit_applied.emit()
 
 
 func _manual_set_equipment(card_id: StringName, slot_id: StringName) -> void:
@@ -733,6 +797,7 @@ func _on_discard_all_equipment_cards() -> void:
 		context.deck_service.discard_card(card_id, &"dev_mode")
 	player.equipment_hand.clear()
 	_update_info_display()
+	edit_applied.emit()
 
 
 func _on_unequip_all_equipment() -> void:
@@ -749,6 +814,7 @@ func _on_unequip_all_equipment() -> void:
 			context.deck_service.discard_card(slot.equipped_card.instance_id, &"replaced")
 			slot.equipped_card = null
 	_update_info_display()
+	edit_applied.emit()
 
 
 # ═══════════════════════════════════════════
@@ -767,7 +833,6 @@ func _get_selected_damage_slot() -> MechSlotState:
 
 ## 取损伤槽位下拉选中的 slot_id（network_mode emit 用）
 func _get_selected_damage_slot_id() -> StringName:
-	var damage_slot_dropdown := find_child("DamageSlotDropdown", true, false) as OptionButton
 	if damage_slot_dropdown == null:
 		return &""
 	var idx := damage_slot_dropdown.get_selected_id()
@@ -775,6 +840,16 @@ func _get_selected_damage_slot_id() -> StringName:
 		return &""
 	var slot_id: StringName = damage_slot_dropdown.get_item_metadata(idx)
 	return slot_id
+
+
+## dev 模式直接调整区域损伤：同时改 region_damage_tokens 与装备卡 damage_tokens（双计，
+## 与正常 DamageTokenService 一致），使游戏内装备面板可见。不触发时点/损坏检查（额外权限）。
+func _dev_adjust_damage(slot: MechSlotState, mech, amount: int) -> void:
+	slot.region_damage_tokens = maxi(0, slot.region_damage_tokens + amount)
+	if slot.equipped_card != null:
+		slot.equipped_card.damage_tokens = maxi(0, slot.equipped_card.damage_tokens + amount)
+	if mech != null:
+		mech.recalc_power_limits()  # 派生动力(016/021/048)随损伤变，同步max_power/power
 
 
 func _on_add_region_damage() -> void:
@@ -785,8 +860,9 @@ func _on_add_region_damage() -> void:
 		return
 	var slot: MechSlotState = _get_selected_damage_slot()
 	if slot != null:
-		slot.region_damage_tokens += 1
+		_dev_adjust_damage(slot, _current_mech(), 1)
 	_refresh_all()
+	edit_applied.emit()
 
 
 func _on_remove_region_damage() -> void:
@@ -797,8 +873,9 @@ func _on_remove_region_damage() -> void:
 		return
 	var slot: MechSlotState = _get_selected_damage_slot()
 	if slot != null and slot.region_damage_tokens > 0:
-		slot.region_damage_tokens -= 1
+		_dev_adjust_damage(slot, _current_mech(), -1)
 	_refresh_all()
+	edit_applied.emit()
 
 
 func _on_clear_all_region_damage() -> void:
@@ -809,8 +886,13 @@ func _on_clear_all_region_damage() -> void:
 	if mech == null:
 		return
 	for slot_id: StringName in mech.slots:
-		mech.slots[slot_id].region_damage_tokens = 0
+		var slot: MechSlotState = mech.slots[slot_id]
+		slot.region_damage_tokens = 0
+		if slot.equipped_card != null:
+			slot.equipped_card.damage_tokens = 0
+	mech.recalc_power_limits()  # 清空损伤后派生动力归零，同步max_power/power
 	_refresh_all()
+	edit_applied.emit()
 
 
 # ═══════════════════════════════════════════
@@ -825,6 +907,7 @@ func _on_modify_hp(amount: int) -> void:
 	if mech:
 		mech.current_hp = clampi(mech.current_hp + amount, 0, mech.max_hp)
 	_update_info_display()
+	edit_applied.emit()
 
 
 func _on_set_full_hp() -> void:
@@ -835,6 +918,7 @@ func _on_set_full_hp() -> void:
 	if mech:
 		mech.current_hp = mech.max_hp
 	_update_info_display()
+	edit_applied.emit()
 
 
 func _on_modify_power(amount: int) -> void:
@@ -845,6 +929,7 @@ func _on_modify_power(amount: int) -> void:
 	if mech:
 		mech.power = maxi(0, mech.power + amount)
 	_update_info_display()
+	edit_applied.emit()
 
 
 func _on_set_full_power() -> void:
@@ -855,6 +940,7 @@ func _on_set_full_power() -> void:
 	if mech:
 		mech.power = mech.max_power
 	_update_info_display()
+	edit_applied.emit()
 
 
 func _on_modify_gold(amount: int) -> void:
@@ -865,6 +951,7 @@ func _on_modify_gold(amount: int) -> void:
 	if player:
 		player.gold = maxi(0, player.gold + amount)
 	_update_info_display()
+	edit_applied.emit()
 
 
 func _on_set_gold_50() -> void:
@@ -875,6 +962,7 @@ func _on_set_gold_50() -> void:
 	if player:
 		player.gold = 50
 	_update_info_display()
+	edit_applied.emit()
 
 
 func _on_modify_armor(amount: int) -> void:
@@ -886,6 +974,7 @@ func _on_modify_armor(amount: int) -> void:
 		for slot_id: StringName in mech.slots:
 			mech.slots[slot_id].armor_modifier += amount
 	_update_info_display()
+	edit_applied.emit()
 
 
 # ═══════════════════════════════════════════

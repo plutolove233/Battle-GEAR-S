@@ -14,6 +14,8 @@ signal choice_cancelled()
 var _vbox: VBoxContainer
 var _scroll: ScrollContainer
 var _confirm_btn: Button
+## 来源标签（"牌名：效果描述"，可空）
+var _source_label: Label
 ## 当前选中的效果ID
 var _selected_effect_id: StringName = &""
 ## 当前可选选项列表
@@ -21,10 +23,13 @@ var _current_options: Array[Dictionary] = []
 
 
 ## 配置面板：显示可选效果列表
-func configure(options: Array[Dictionary]) -> void:
+func configure(options: Array[Dictionary], source_label: String = "") -> void:
 	_selected_effect_id = &""
 	_current_options = options
 	_ensure_layout()
+	if _source_label:
+		_source_label.text = source_label
+		_source_label.visible = source_label != ""
 	_refresh()
 
 
@@ -37,6 +42,14 @@ func _ensure_layout() -> void:
 	_vbox = VBoxContainer.new()
 	_vbox.add_theme_constant_override("separation", 8)
 	add_child(_vbox)
+
+	# 来源标签（效果牌名+描述，可空）
+	_source_label = Label.new()
+	_source_label.add_theme_color_override("font_color", Color(0.95, 0.82, 0.45))
+	_source_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_source_label.add_theme_font_size_override("font_size", 14)
+	_source_label.visible = false
+	_vbox.add_child(_source_label)
 
 	# 标题
 	var title = Label.new()
