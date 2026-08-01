@@ -69,6 +69,7 @@ class TestDriver:
 			"res://tests/test_predict_discards_cover.gd",
 			"res://tests/test_awaken_real_flow.gd",
 		"res://tests/test_equipment_effects.gd",
+		"res://tests/test_weapon_name_recognition.gd",
 		"res://tests/test_lock_effect.gd",
 		"res://tests/test_ai_controller.gd",
 		"res://tests/test_log_bugs_fix.gd",

@@ -29,6 +29,11 @@ var active_effects_by_source: Dictionary = {}
 func register_card(card) -> void:
 	if card == null or card.def == null:
 		return
+	# [临时沉默] 武器装备牌的效果连接目前均有问题，暂不注册任何武器效果（用户要求先沉默，
+	# 后续统一修复武器时再放开此守卫）。武器基础数值(权威/射程/类型/耐久)由 def 直接提供、
+	# 攻击计算读取，不受影响；仅武器自身特殊效果(聚能加成/被攻击响应等)不发动。
+	if "equipment_kind" in card.def and card.def.equipment_kind == &"WEAPON":
+		return
 	for effect in card.def.effects:
 		if not _should_register(card, effect):
 			continue

@@ -94,6 +94,9 @@ func _step_select_weapon(action: Action) -> Dictionary:
 			# effective_weapon_type 默认 = 实体武器 kind（近战/远程/特殊）
 			# 近战装·头部效果（ATTACK_BEFORE priority 20）可改写为"近战"
 			result["effective_weapon_type"] = weapon_stats.get("weapon_kind", &"")
+			# 武器名写入 record：ATTACK_BEFORE 起所有攻击时点的 payload = record.duplicate()，
+			# WEAPON_NAME_CONTAINS 条件读 payload.weapon_name（白马/赤枭/圣牛/雄鹰臂 +3 威力）。
+			result["weapon_name"] = weapon_stats.get("weapon_name", &"")
 		return result
 
 	# 否则需要玩家选择武器
@@ -424,6 +427,7 @@ func _get_weapon_stats(attacker, weapon_id: StringName) -> Dictionary:
 				"might": base_weapon.get("might", 0),
 				"range_value": base_weapon.get("range_value", 1),
 				"weapon_kind": base_weapon.get("weapon_kind", &""),
+				"weapon_name": base_weapon.get("name", &""),
 			}
 	# 从卡牌实例获取
 	var weapon_card = context.game_state.get_card(weapon_id)
@@ -432,5 +436,9 @@ func _get_weapon_stats(attacker, weapon_id: StringName) -> Dictionary:
 			"might": weapon_card.def.might if "might" in weapon_card.def else 0,
 			"range_value": weapon_card.def.range_value if "range_value" in weapon_card.def else 1,
 			"weapon_kind": weapon_card.def.weapon_kind if "weapon_kind" in weapon_card.def else &"",
+			# 武器名(display_name，如"光束军刀"/"热能战斧")：供 WEAPON_NAME_CONTAINS 条件读取
+			# (白马臂光束/赤枭臂热能/圣牛臂光束/雄鹰臂热能 +3 威力)。此前 record 只存 weapon_id
+			# 无名称，致 WEAPON_NAME_CONTAINS 永远读空 -> 这些效果从不触发。
+			"weapon_name": weapon_card.def.display_name if "display_name" in weapon_card.def else &"",
 		}
-	return {"might": 0, "range_value": 1, "weapon_kind": &""}
+	return {"might": 0, "range_value": 1, "weapon_kind": &"", "weapon_name": &""}

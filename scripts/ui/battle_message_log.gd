@@ -16,6 +16,12 @@ var _context = null  # type: GameContext
 var _last_log_index: int = 0
 var _messages: Array[String] = []
 
+## 消息缓冲上限。_messages 永不裁剪会让 _rebuild_display（O(N) 字符串拼接 +
+## RichTextLabel 整段 BBCode 重排）随游戏推进越来越慢--每条时点/钩子消息触发一次重建，
+## 移动每格发 4 条时点消息尤为明显（"逐渐卡顿、移动为甚"根因）。裁到最近 N 条后，
+## 单次重建成本恒定，长局后期与开局同样流畅。N=500 兼顾回看与性能。
+const _MAX_MESSAGES := 500
+
 ## 槽位中文名映射（与 EquipmentPanel 保持一致）
 const SLOT_NAMES: Dictionary = {
 	&"头部": "头部", &"躯干": "躯干", &"右臂": "右臂", &"左臂": "左臂",
@@ -103,6 +109,7 @@ func on_equipment_effect_fired(card_name: String, _effect_id: StringName, descri
 ## 追加一条消息并自动滚动
 func add_message(text: String) -> void:
 	_messages.append(text)
+	_trim_messages()
 	SLog.log_message(text)
 	_rebuild_display()
 
@@ -117,14 +124,28 @@ func _catch_up_log() -> void:
 	if _context == null:
 		return
 	var gs = _context.game_state
+	var added := false
 	while _last_log_index < gs.log.size():
 		var entry: Dictionary = gs.log[_last_log_index]
 		var text := _translate_log_entry(entry)
 		if text != "":
 			_messages.append(text)
 			SLog.log_message(text)
+			added = true
 		_last_log_index += 1
-	_rebuild_display()
+	_trim_messages()
+	# 仅当确实追加了新条目时才重建--configure 在每次 _refresh_battle / _refresh_panels_only /
+	# _refresh_damage_ui 都会调用，若无新消息也重建则每次刷新都付 O(N) 拼接+整段重排，
+	# 随消息累积越来越慢（"各种操作逐渐卡顿"根因之二）。新消息已由 add_message 实时重建过，
+	# 此处无新增则跳过。
+	if added:
+		_rebuild_display()
+
+
+## 裁剪消息缓冲到最近 _MAX_MESSAGES 条（丢弃最旧的），限制 _rebuild_display 成本。
+func _trim_messages() -> void:
+	while _messages.size() > _MAX_MESSAGES:
+		_messages.remove_at(0)
 
 
 ## 推进日志索引到当前日志末尾（防止 _catch_up_log 重复翻译 hook 已处理的事件）

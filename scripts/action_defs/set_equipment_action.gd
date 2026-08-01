@@ -152,6 +152,13 @@ func _register_equipment_effects(card, mech_id: StringName, slot_id: StringName 
 	if card.get("face_down") == true:
 		return
 
+	# [临时沉默] 武器装备牌的效果连接目前均有问题，暂不注册任何武器效果（用户要求先沉默，
+	# 后续统一修复武器时再放开此守卫）。与 EffectRegistry.register_card 的守卫对应，
+	# 覆盖游戏中 set_equipment 装备的武器（初始武器走 legacy register_card 已被那边守卫拦截）。
+	# 武器基础数值(权威/射程/类型/耐久)由 def 直接提供、攻击计算读取，不受影响。
+	if "equipment_kind" in card.def and card.def.equipment_kind == &"WEAPON":
+		return
+
 	# 取该牌的 effect_id 列表
 	var effect_ids: Array = _GeneratedEquipmentEffects.get_effects_for_card(card.def.card_id, context)
 	if effect_ids.is_empty():
