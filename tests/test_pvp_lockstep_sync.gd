@@ -226,6 +226,85 @@ func test_lockstep_move_sync() -> Variant:
 
 
 # ═══════════════════════════════════════════
+# 锁步同步：cancel_move 按 mech_id 取消 + 强制同步位置/动力/格数
+# 复现并验证问题2根因修复：移动取消时若按 action_id 取消（锁步计数器发散则空操作），
+# 远端 single_move 会走到终点致位置不同步。现 cancel_move 带 mech_id+位置/动力/格数，
+# 远端无论是否仍在移动都被强制拉回本方取消时的真实状态。
+# ═══════════════════════════════════════════
+
+func test_lockstep_cancel_move_syncs_position() -> Variant:
+	var seed_val := 333
+	var host = await _build_pvp_app_root(seed_val, &"player")
+	var client = await _build_pvp_app_root(seed_val, &"enemy")
+	if host == null or client == null:
+		await _free_app_root(host); await _free_app_root(client)
+		return "建局失败"
+	var hg = host.battle.context.game_state
+	var player_mech = hg.get_mech_for_player(&"player")
+	var mech_id: StringName = player_mech.mech_id
+	var start_pos: Dictionary = player_mech.position.duplicate()
+	var start_power: int = player_mech.power
+	var cells: Dictionary = hg.map_state.cells if hg.map_state else {}
+	var reachable: Array[Dictionary] = _RangeCalculator.get_move_reachable_hexes(start_pos, player_mech.power, cells)
+	if reachable.is_empty():
+		await _free_app_root(host); await _free_app_root(client)
+		return "无可达移动格"
+	var target: Dictionary = reachable[0]
+	# 模拟"远端走到终点/不同步"的发散：把 client 的 player 机甲强行挪到 target（动力也改），
+	# 代表远端状态与本方（仍在起点）不一致。随后用本方实际状态构造 cancel_move，
+	# 验证远端被强制同步回本方真实位置/动力/格数（不依赖 action_id 匹配）。
+	var cplayer_mech = client.battle.context.game_state.get_mech_for_player(&"player")
+	cplayer_mech.position = {"q": int(target.get("q", 0)), "r": int(target.get("r", 0))}
+	cplayer_mech.power = start_power - 1
+	cplayer_mech.power_spent_this_turn = 1
+	cplayer_mech.cells_moved_this_turn = 1
+	# 模拟"先前动作(设装备/打牌)致计数器发散"：把 client 的 action 计数器强行抬高，
+	# 代表两端 ActionRegistry._id_counter 不一致（后续攻击 action_id 会不匹配）。cancel_move
+	# 应把远端计数器拉回本方值。
+	var host_counter: int = host.battle.context.action_registry._id_counter
+	client.battle.context.action_registry._id_counter = host_counter + 7
+	# 本方（host）仍在起点：用 host 实际状态构造 cancel_move 数据
+	var cancel_data := {
+		"mech_id": String(mech_id),
+		"q": int(start_pos.get("q", 0)),
+		"r": int(start_pos.get("r", 0)),
+		"power": start_power,
+		"power_spent": 0,
+		"cells_moved": 0,
+		"action_counter": host_counter,
+	}
+	host._net_exec("cancel_move", cancel_data)
+	await _pump(2)
+	client._apply_remote_input("cancel_move", cancel_data)
+	await _pump(2)
+	# 断言：client 被强制同步回起点（位置/动力/格数都与 host 一致）
+	var hpos: Dictionary = host.battle.context.game_state.get_mech_for_player(&"player").position
+	var cpos2: Dictionary = client.battle.context.game_state.get_mech_for_player(&"player").position
+	if int(hpos.get("q", -1)) != int(start_pos.get("q", -2)) or int(hpos.get("r", -1)) != int(start_pos.get("r", -2)):
+		await _free_app_root(host); await _free_app_root(client)
+		return "host 位置被错误改动: %s want %s" % [str(hpos), str(start_pos)]
+	if int(cpos2.get("q", -1)) != int(start_pos.get("q", -2)) or int(cpos2.get("r", -1)) != int(start_pos.get("r", -2)):
+		await _free_app_root(host); await _free_app_root(client)
+		return "client 未被 cancel_move 同步回起点: %s want %s" % [str(cpos2), str(start_pos)]
+	var cpower: int = client.battle.context.game_state.get_mech_for_player(&"player").power
+	var ccells: int = client.battle.context.game_state.get_mech_for_player(&"player").cells_moved_this_turn
+	if cpower != start_power:
+		await _free_app_root(host); await _free_app_root(client)
+		return "client 动力未同步: %d want %d" % [cpower, start_power]
+	if ccells != 0:
+		await _free_app_root(host); await _free_app_root(client)
+		return "client 移动格数未同步: %d want 0" % [ccells]
+	# 计数器应被拉回本方值（纠正先前发散，保证后续动作 action_id 对齐）
+	var ccounter: int = client.battle.context.action_registry._id_counter
+	if ccounter != host_counter:
+		await _free_app_root(host); await _free_app_root(client)
+		return "client 计数器未同步: %d want %d" % [ccounter, host_counter]
+	await _free_app_root(host)
+	await _free_app_root(client)
+	return true
+
+
+# ═══════════════════════════════════════════
 # 锁步同步：set_equipment op 双端槽位装备一致
 # ═══════════════════════════════════════════
 

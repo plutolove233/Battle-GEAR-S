@@ -210,6 +210,10 @@ var _pvp_port: int = 0
 var _pvp_seed: int = -1
 ## client 是否已收到种子并自建局（Phase 2：自建前忽略 snapshot）
 var _pvp_self_built: bool = false
+## host spawn 出的 client 进程 PID（退出时 kill，避免遗留窗口/端口占用致无法开新局）
+var _pvp_client_pid: int = -1
+## 正在退出 PvP 会话（防 disconnect 回调与 session_end 互相重入）
+var _pvp_exiting: bool = false
 
 func _ready() -> void:
 	set_process(true)
@@ -272,6 +276,13 @@ func _on_dev_panel_close() -> void:
 # ═══════════════════════════════════════════
 # 主菜单
 # ═══════════════════════════════════════════
+
+## 战斗界面"返回主菜单"：PvP 走会话退出（通知对方+清理 TCP/子进程），PvE 直接回主菜单。
+func _on_return_to_main_menu() -> void:
+	if game_mode == &"PVP":
+		_quit_pvp_session()
+	else:
+		_show_main_menu()
 
 func _show_main_menu() -> void:
 	var layout := _begin_screen("机斗战甲")
@@ -357,6 +368,9 @@ func _opponent_player_id() -> StringName:
 
 ## 主菜单「PvP测试模式」：以 host 启动，建 PvP 局，开 NetHost，spawn client 进程
 func _start_pvp_host() -> void:
+	# 清理上一轮 PvP 残留（旧 net_host 端口占用 / 旧 client 进程），否则新局监听端口失败
+	_pvp_cleanup()
+	_reset_pvp_state()
 	_pvp_port = 45678
 	game_mode = &"PVP"
 	local_player_id = &"player"
@@ -418,6 +432,7 @@ func _spawn_pvp_client() -> void:
 	if pid == -1:
 		battle.log.append({"message": "[PvP] 启动 client 进程失败", "details": {"exe": exe}})
 	else:
+		_pvp_client_pid = pid
 		battle.log.append({"message": "[PvP] 已 spawn client 进程 pid=%d" % pid, "details": {}})
 
 ## client 进程入口：解析参数，建渲染用 context，连 host，显示空战斗界面等快照
@@ -472,6 +487,73 @@ func _apply_pvp_seed_and_build(seed: int) -> void:
 	# 建战斗面板 + _connect_action_signals 连到真实 context + _refresh_battle（与 host 一致）
 	_show_battle()
 
+
+# ═══════════════════════════════════════════
+# PvP 会话退出与清理
+# ═══════════════════════════════════════════
+
+## 退出 PvP 会话：通知对方 -> 清理网络/子进程 -> 重置状态。
+# 任一玩家"返回主菜单"或断线时调用。host 回主菜单（可开新局），client 关窗（spawn 进程）。
+# 双方都清理 TCP 与 client 子进程，确保端口/进程释放，可立即开新一轮 PvP 测试。
+func _quit_pvp_session() -> void:
+	if game_mode != &"PVP":
+		return
+	if _pvp_exiting:
+		return
+	_pvp_exiting = true
+	var was_client := is_network_client
+	# 通知对方退出（对方收到 session_end 或检测到断线后各自清理；断线兜底）
+	_broadcast_session_end()
+	_pvp_cleanup()
+	_reset_pvp_state()
+	if was_client:
+		# client 是 host spawn 的子进程：直接关窗（不回主菜单，避免遗留第二窗口）
+		get_tree().quit()
+	else:
+		# host 回主菜单，可点"PvP测试模式"开新一轮
+		_show_main_menu()
+
+
+## 向对方下发 session_end（若仍连接）。cleanup 前调用，确保对方能收到主动退出信号。
+func _broadcast_session_end() -> void:
+	var msg := {"type": "session_end"}
+	if is_network_client:
+		if net_client != null and net_client.is_connected_to_host():
+			net_client.send(msg)
+	elif net_host != null and net_host.is_client_connected():
+		net_host.send(msg)
+
+
+## 停止 TCP（host stop / client disconnect）并 kill host spawn 的 client 子进程。
+func _pvp_cleanup() -> void:
+	if net_host != null:
+		net_host.stop()
+		if is_instance_valid(net_host):
+			net_host.queue_free()
+		net_host = null
+	if net_client != null:
+		net_client.disconnect_from_host()
+		if is_instance_valid(net_client):
+			net_client.queue_free()
+		net_client = null
+	# host 杀掉 spawn 的 client 进程，确保其窗口关闭、端口释放
+	if _pvp_client_pid > 0:
+		OS.kill(_pvp_client_pid)
+		_pvp_client_pid = -1
+
+
+## 重置所有 PvP 相关状态（清理后调用，为新局铺路）。
+func _reset_pvp_state() -> void:
+	game_mode = &"PVE"
+	is_network_client = false
+	_pvp_self_built = false
+	_pvp_seed = -1
+	_pvp_client_pid = -1
+	_pvp_exiting = false
+	# 丢弃旧战斗状态（含旧 context 的动作/时点引擎），避免与新局串味
+	battle = null
+
+
 # ── host 端回调 ──
 
 func _on_pvp_client_connected() -> void:
@@ -485,6 +567,9 @@ func _on_pvp_client_connected() -> void:
 func _on_pvp_client_disconnected() -> void:
 	if battle != null:
 		battle.log.append({"message": "[PvP] client 断开", "details": {}})
+	# client 断开（关窗/退出/崩溃）-> host 自动退出 PvP 回主菜单（_pvp_exiting 守卫防自身退出时重入）
+	if game_mode == &"PVP" and not _pvp_exiting:
+		_quit_pvp_session()
 
 ## host 收到 client 的 intent：按 action 分发，以 client 的玩家身份执行
 func _on_pvp_host_message(msg: Variant) -> void:
@@ -496,6 +581,9 @@ func _on_pvp_host_message(msg: Variant) -> void:
 	# Phase 3 锁步:对等输入交换(host 收 client 的 input,本地执行)
 	if String(d.get("type", "")) == "input":
 		_apply_remote_input(String(d.get("op", "")), d.get("data", {}))
+	elif String(d.get("type", "")) == "session_end":
+		# client 主动退出 -> host 自动退出回主菜单
+		_quit_pvp_session()
 
 ## 开发者模式编辑请求：走 _net_exec(dev_edit) 双端应用
 func _on_dev_edit_requested(op: StringName, params: Dictionary) -> void:
@@ -637,6 +725,9 @@ func _on_pvp_connected_to_host() -> void:
 func _on_pvp_disconnected() -> void:
 	if battle != null:
 		battle.log.append({"message": "[PvP] 与 host 断开", "details": {}})
+	# host 断开（回主菜单/退出）-> client 自动退出关窗（_pvp_exiting 守卫防自身退出时重入）
+	if game_mode == &"PVP" and not _pvp_exiting:
+		_quit_pvp_session()
 
 ## client 收到 host 下发的消息：input -> 本地执行(对等)；seed/battle_over
 func _on_pvp_client_message(msg: Variant) -> void:
@@ -654,6 +745,9 @@ func _on_pvp_client_message(msg: Variant) -> void:
 			if battle != null:
 				battle.log.append({"message": "[PvP] 战斗结束", "details": d.get("data", {})})
 				_refresh_battle()
+		"session_end":
+			# host 主动退出 -> client 自动退出关窗
+			_quit_pvp_session()
 		_:
 			pass
 
@@ -868,10 +962,32 @@ func _dispatch_input(op: String, data: Dictionary) -> Variant:
 			_refresh_battle()
 			return {}
 		"cancel_move":
-			# 取消进行中的单次移动动作（逐格 basic_move 中断，机甲停在当前已完成格）
-			var cm_aid: StringName = data.get("action_id", &"")
-			if cm_aid != &"" and ctx.action_service:
-				ctx.action_service.cancel_action(cm_aid)
+			# 取消进行中的单次移动动作（逐格 basic_move 中断，机甲停在当前已完成格）。
+			# 按 mech_id 取消顶层 single_move--不依赖 action_id 匹配（锁步计数器若已发散，
+			# 按 action_id 取消会空操作，远端 single_move 继续走到终点致位置不同步）。
+			var cm_mech_id: StringName = StringName(data.get("mech_id", &""))
+			if cm_mech_id != &"" and ctx.action_registry:
+				for a in ctx.action_registry.get_actions_by_type(&"single_move"):
+					if a.parent_action_id == &"" and StringName(a.record.get("mech_id", &"")) == cm_mech_id:
+						if a.state == &"running" or a.state == &"waiting_timing" or a.state == &"waiting_effect_action" or a.state == &"waiting_input":
+							if ctx.action_service:
+								ctx.action_service.cancel_action(a.action_id)
+						break
+			# 强制同步机甲位置/动力/格数到本方实际值。远端 single_move 可能已走到终点
+			# （上面 cancel 找不到进行中动作），此处把状态拉回本方取消时的真实值，保证两端一致。
+			if cm_mech_id != &"" and ctx.game_state and ctx.game_state.mechs.has(cm_mech_id):
+				var cm_mech = ctx.game_state.mechs.get(cm_mech_id)
+				if cm_mech != null:
+					cm_mech.position = {"q": int(data.get("q", cm_mech.position.get("q", 0))), "r": int(data.get("r", cm_mech.position.get("r", 0)))}
+					cm_mech.power = int(data.get("power", cm_mech.power))
+					cm_mech.power_spent_this_turn = int(data.get("power_spent", cm_mech.power_spent_this_turn))
+					cm_mech.cells_moved_this_turn = int(data.get("cells_moved", cm_mech.cells_moved_this_turn))
+			# 强制同步 ActionRegistry 计数器到本方值：先前动作(设装备/打牌)可能已使两端计数器
+			# 发散，致后续动作 action_id 不匹配（攻击响应窗口 respond_attack 找不到动作->攻击卡临时区）。
+			# 仅当无其他活跃动作时才重设--避免与仍在挂起的效果动作(如 effect_017 EXECUTE_SINGLE_MOVE)
+			# 的 action_id 冲突。被取消的 single_move 及其 basic_move 子动作均已清理，不计入。
+			if ctx.action_registry != null and data.has("action_counter") and ctx.action_registry.get_active_count() == 0:
+				ctx.action_registry._id_counter = int(data.get("action_counter", ctx.action_registry._id_counter))
 			# 轻量刷新（清移动连线+面板），避免全量 _refresh_battle 致界面抖动
 			_refresh_after_move_end()
 			return {}
@@ -1248,7 +1364,7 @@ func _show_battle() -> void:
 	_add_button(action_bar, "状态", Callable(self, "_on_status_panel_clicked"))
 	_add_button(action_bar, "商店", Callable(self, "_on_shop_clicked"))
 	_add_button(action_bar, "牌堆信息", Callable(self, "_on_deck_info_clicked"))
-	_add_button(action_bar, "返回主菜单", Callable(self, "_show_main_menu"))
+	_add_button(action_bar, "返回主菜单", Callable(self, "_on_return_to_main_menu"))
 
 	# ── 取消攻击按钮（初始隐藏）──
 	cancel_attack_button = Button.new()
@@ -3319,7 +3435,7 @@ func _on_cancel_attack() -> void:
 		for a in battle.context.action_registry.get_actions_by_type(&"single_move"):
 			# waiting_timing = 逐格移动 50ms/格暂停中，同样可中断
 			if a.state == &"running" or a.state == &"waiting_effect_action" or a.state == &"waiting_input" or a.state == &"waiting_timing":
-				_net_exec("cancel_move", {"action_id": a.action_id})
+				_net_exec("cancel_move", _build_cancel_move_data(a))
 				_show_cancel_button(false)
 				return
 	if _assault_movement_active:
@@ -3403,9 +3519,31 @@ func _on_move_overlay_input(event: InputEvent) -> void:
 		if battle and battle.context and battle.context.action_registry:
 			for a in battle.context.action_registry.get_actions_by_type(&"single_move"):
 				if a.state == &"running" or a.state == &"waiting_timing" or a.state == &"waiting_effect_action" or a.state == &"waiting_input":
-					_net_exec("cancel_move", {"action_id": a.action_id})
+					_net_exec("cancel_move", _build_cancel_move_data(a))
 					break
 		_update_move_overlay()
+
+## 构造 cancel_move 同步数据：取机甲当前（已完成逐格 basic_move 后的）位置/动力/移动格数。
+## 远端按 mech_id 取消进行中的 single_move（不依赖 action_id 匹配--锁步计数器一旦发散，
+## 按 action_id 取消会空操作，远端 single_move 走到终点致位置不同步），再把机甲状态
+## 强制同步到本方实际值，确保取消后两端位置/动力/格数完全一致。
+func _build_cancel_move_data(single_move_action) -> Dictionary:
+	var mech_id: StringName = single_move_action.record.get("mech_id", &"")
+	var mech = battle.context.game_state.mechs.get(mech_id) if (battle and battle.context and battle.context.game_state) else null
+	if mech == null:
+		return {"mech_id": String(mech_id)}
+	return {
+		"mech_id": String(mech_id),
+		"q": int(mech.position.get("q", 0)),
+		"r": int(mech.position.get("r", 0)),
+		"power": int(mech.power),
+		"power_spent": int(mech.power_spent_this_turn),
+		"cells_moved": int(mech.cells_moved_this_turn),
+		# 本方 ActionRegistry 计数器当前值：远端若因先前动作(设装备/打牌)致计数器发散，
+		# 后续攻击等动作的 action_id 会两端不匹配（respond_attack 找不到动作->攻击卡临时区）。
+		# 移动取消时无其他活跃动作，把远端计数器拉回本方值，保证后续动作 action_id 重新对齐。
+		"action_counter": int(battle.context.action_registry._id_counter) if (battle.context and battle.context.action_registry) else 0,
+	}
 
 ## 清除攻击目标选择的双高亮（绿色范围 + 红色闪烁）并隐藏取消按钮
 ## 在目标确认或取消时调用，使地图恢复为正常 UI
@@ -4816,5 +4954,9 @@ func _status_message(status: Dictionary) -> String:
 	return String(status.get("message", "unknown error"))
 
 func _quit_app() -> void:
+	# 退出前清理 PvP（停 TCP / kill client 子进程），避免遗留窗口与端口占用
+	if game_mode == &"PVP":
+		_pvp_cleanup()
+		_reset_pvp_state()
 	SLog.log_raw("════════ 会话结束 ════════")
 	get_tree().quit()
