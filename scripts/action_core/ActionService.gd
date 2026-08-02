@@ -274,7 +274,8 @@ func _create_action(action_type: StringName, params: Dictionary) -> Action:
 				&"choose", &"face_up", &"determined_card_ids", &"selected_action_card_ids", &"phase",
 				&"max_cells", &"free_move", &"adjacent_only",
 				&"target_slot_id", &"target_mech_id", &"fixed_slot", &"exclude_slot_id",
-				&"cardless_weapon_attack", &"consume_turn_attack_count", &"skip_weapon_select", &"weapon_instance_id"]
+				&"cardless_weapon_attack", &"consume_turn_attack_count", &"skip_weapon_select", &"weapon_instance_id",
+				&"as_card_def_id", &"consume_original_card"]
 			for key: String in params:
 				if key in record_keys:
 					action.record[key] = params[key]
@@ -1605,6 +1606,10 @@ func _extract_use_action_card_params(action_def: Dictionary, payload: Dictionary
 	result["card_action_type_filter"] = params.get("card_action_type", &"")
 	result["target_count"] = params.get("target_count", 1)
 	result["is_virtual"] = params.get("is_virtual", false)
+	# effect_130/135 维修臂：把选定的行动牌当作 as_card_def_id（如维修）打出，
+	# 效果按 as_card_def_id 定义执行，原牌实例进临时区/弃牌堆。
+	result["as_card_def_id"] = params.get("as_card_def_id", &"")
+	result["consume_original_card"] = bool(params.get("consume_original_card", false))
 	result["source"] = _build_source_from_payload(payload, parent_action)
 	return result
 

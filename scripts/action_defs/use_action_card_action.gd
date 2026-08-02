@@ -21,6 +21,18 @@ func _init() -> void:
 	action_type = &"use_action_card"
 
 
+## 取效果定义用的 card_def_id：as_card_def_id 优先（effect_130/135 维修臂把行动牌当维修打出），
+## 否则用牌实例自身 card_id。
+func _as_card_def_id(action, card) -> StringName:
+	if action != null and action.record != null:
+		var as_id: StringName = action.record.get("as_card_def_id", &"")
+		if as_id != &"":
+			return as_id
+	if card != null and card.def != null:
+		return card.def.card_id
+	return &""
+
+
 func setup_steps() -> void:
 	# 文档 4 步结构（翻转后：handler 先跑再 fire timing，不再需要拆空步骤）：
 	#   ①validate_card → USE_ACTION_BEFORE
@@ -59,7 +71,7 @@ func _step_validate_card(action: Action) -> Dictionary:
 
 	# 记录行动牌信息
 	result["card_instance_id"] = card_id
-	result["card_def_id"] = card.def.card_id if card.def else &""
+	result["card_def_id"] = _as_card_def_id(action, card)
 
 	# 记录所属机甲
 	var mech_id: StringName = action.record.get("mech_id", &"")
@@ -88,7 +100,7 @@ func _step_validate_card(action: Action) -> Dictionary:
 
 	# 带 AVAILABILITY 的牌只能从其合法响应窗口使用。掩护虽是辅助牌，
 	# 也不能因为同时拥有 LISTEN 效果而绕过此限制主动打出。
-	var card_mappings: Array = GeneratedActionEffects.get_effects_for_card(card.def.card_id)
+	var card_mappings: Array = GeneratedActionEffects.get_effects_for_card(_as_card_def_id(action, card))
 	var has_direct_or_listen: bool = false
 	var has_availability: bool = false
 	var all_effects: Dictionary = GeneratedActionEffects.build_all_effects()
@@ -156,7 +168,7 @@ func _register_card_effects(action: Action, card_id: StringName) -> void:
 	if card == null or card.def == null:
 		return
 
-	var card_mappings: Array = GeneratedActionEffects.get_effects_for_card(card.def.card_id)
+	var card_mappings: Array = GeneratedActionEffects.get_effects_for_card(_as_card_def_id(action, card))
 	var all_effects: Dictionary = GeneratedActionEffects.build_all_effects()
 
 	for mapping in card_mappings:
@@ -227,7 +239,7 @@ func _step_execute_effects(action: Action) -> Dictionary:
 	# DIRECT 效果通过 TimingEngine._execute_effect → _execute_actions → execute_sub_action 执行。
 	# execute_sub_action 在创建效果动作时会显式登记父子关系（child.parent_action_id 与
 	# parent.pending_effect_action_ids），因此这里无需再用 ActionRegistry size 前后差检测。
-	var card_mappings: Array = GeneratedActionEffects.get_effects_for_card(card.def.card_id)
+	var card_mappings: Array = GeneratedActionEffects.get_effects_for_card(_as_card_def_id(action, card))
 	var all_effects: Dictionary = GeneratedActionEffects.build_all_effects()
 
 	for mapping in card_mappings:
@@ -388,6 +400,7 @@ func _step_settle(action: Action) -> Dictionary:
 func _has_bind_to_attack_action_effect(card) -> bool:
 	if card == null or card.def == null:
 		return false
+	# 判断原牌自身是否含 bind_to_attack_action 效果（不用 as_card_def_id：这是原牌属性）
 	var card_mappings: Array = GeneratedActionEffects.get_effects_for_card(card.def.card_id)
 	for mapping in card_mappings:
 		if mapping is Dictionary and mapping.get("bind_to_attack_action", false):

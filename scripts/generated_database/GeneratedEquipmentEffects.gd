@@ -3061,8 +3061,8 @@ static func build_equipment_effects() -> Dictionary:
 	w130.set_costs([])
 	w130.set_actions([
 		{"type": &"CHOOSE_MANY_CARDS", "params": {"filter": {"zone": &"action_hand", "owner_id": "$binding_context.mech_id"}, "min_count": 1, "max_count": 1, "label": "选择1张行动牌当作维修打出", "confirm_verb": "当作维修", "cancel_label": "取消", "per_card_actions": [
-			{"type": &"DECLARE_CARD_TYPE", "params": {"card_instance_id": "$selected_card_instance_id", "declared_card_def_id": &"action_repair", "duration": &"UNTIL_USE_ACTION_SETTLE"}},
-			{"type": &"EXECUTE_USE_ACTION_CARD", "params": {"card_instance_id": "$selected_card_instance_id", "acting_mech_id": "$binding_context.mech_id", "as_card_def_id": &"action_repair", "consume_original_card": true}},
+			{"type": &"DECLARE_CARD_TYPE", "params": {"card_instance_id": "$selected_card_instance_id", "declared_card_def_id": &"action_013_维修", "duration": &"UNTIL_USE_ACTION_SETTLE"}},
+			{"type": &"EXECUTE_USE_ACTION_CARD", "params": {"card_instance_id": "$selected_card_instance_id", "acting_mech_id": "$binding_context.mech_id", "as_card_def_id": &"action_013_维修", "consume_original_card": true}},
 		]}},
 		{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 2, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_repair_self_damage"}},
 	])
@@ -3154,8 +3154,8 @@ static func build_equipment_effects() -> Dictionary:
 	w135.set_actions([
 		{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [
 			{"label": "将1张行动牌当作维修打出", "condition": {"op": &"REPAIR_BRANCH_AVAILABLE"}, "actions": [{"type": &"CHOOSE_MANY_CARDS", "params": {"filter": {"zone": &"action_hand", "owner_id": "$binding_context.mech_id"}, "min_count": 1, "max_count": 1, "label": "选择维修素材", "confirm_verb": "打出", "cancel_label": "返回", "per_card_actions": [
-				{"type": &"DECLARE_CARD_TYPE", "params": {"card_instance_id": "$selected_card_instance_id", "declared_card_def_id": &"action_repair", "duration": &"UNTIL_USE_ACTION_SETTLE"}},
-				{"type": &"EXECUTE_USE_ACTION_CARD", "params": {"card_instance_id": "$selected_card_instance_id", "acting_mech_id": "$binding_context.mech_id", "as_card_def_id": &"action_repair", "consume_original_card": true}},
+				{"type": &"DECLARE_CARD_TYPE", "params": {"card_instance_id": "$selected_card_instance_id", "declared_card_def_id": &"action_013_维修", "duration": &"UNTIL_USE_ACTION_SETTLE"}},
+				{"type": &"EXECUTE_USE_ACTION_CARD", "params": {"card_instance_id": "$selected_card_instance_id", "acting_mech_id": "$binding_context.mech_id", "as_card_def_id": &"action_013_维修", "consume_original_card": true}},
 			]}}]},
 			{"label": "弃置2张行动牌，再抽2张", "condition": {"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"count": 2}}, "actions": [
 				{"type": &"EXECUTE_DISCARD", "params": {"from_target": "$binding_context.mech_id", "zone": &"action_hand", "count": 2, "choose": true, "chooser_id": "$binding_context.mech_id", "face_up": true, "reason": &"weapon_cycle"}},
