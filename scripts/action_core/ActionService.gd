@@ -734,7 +734,9 @@ func _resolve_atomic_value(value, payload: Dictionary, parent_action):
 	if typeof(value) == TYPE_DICTIONARY:
 		return _resolve_atomic_params(value, payload, parent_action)
 	# 非字符串：直接返回
-	if typeof(value) != TYPE_STRING:
+	if typeof(value) == TYPE_STRING_NAME:
+		value = String(value)  # StringName 转 String 以走 $payload/$binding_context 解析
+	elif typeof(value) != TYPE_STRING:
 		return value
 
 	var s: String = String(value)
@@ -1106,12 +1108,26 @@ func _remove_damage_tokens_other_slots(params: Dictionary, payload: Dictionary) 
 
 ## ADD_STATUS 特殊参数处理（移植自原 AtomicActionResolver 的 ADD_STATUS 分支）
 ## 支持简化参数格式（status_type + duration）与完整参数格式（target_id + status dict）
+## target_card_instance_id：武器牌级状态（如 weapon_used_this_turn）存 card.counters，非机甲状态。
 func _dispatch_add_status(params: Dictionary, payload: Dictionary) -> void:
 	if context == null or context.game_actions == null:
 		return
 	var status_type: StringName = params.get("status_type", &"")
 	var duration = params.get("duration", 1)
 	var target_is_attack_target: bool = params.get("target_is_attack_target", false)
+
+	# 武器牌级状态：存 card.counters[status_type]=true（effect_112 weapon_used_this_turn）
+	# 仅当显式传 target_card_instance_id 时走此路径；勿用自动注入的 weapon_id（否则 effect_088
+	# 等机甲级 ADD_STATUS 会被误当武器牌状态，CANNOT_RESTORE_POWER 错挂到牌上）。
+	if params.has("target_card_instance_id") and status_type != &"":
+		var target_card_id: StringName = params.get("target_card_instance_id", &"")
+		if target_card_id != &"":
+			var wcard = context.game_state.get_card(target_card_id) if context.game_state != null else null
+			if wcard != null:
+				if not "counters" in wcard:
+					wcard.counters = {}
+				wcard.counters[status_type] = true
+				return
 
 	var target_id: StringName = params.get("target_id", &"")
 	if target_id == &"":

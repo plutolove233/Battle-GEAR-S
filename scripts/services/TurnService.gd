@@ -245,6 +245,21 @@ func _clean_this_turn_durations() -> void:
 			continue
 		if card.effect_negated:
 			card.effect_negated = false
+		# 武器装备牌临时修正/标记清理（effect_093/095/112/113/125）
+		# THIS_OWNER_TURN/THIS_TURN 的 might/range_modifiers 清除（聚能临时加成）
+		if card.get("might_modifiers") != null and not card.might_modifiers.is_empty():
+			card.might_modifiers = card.might_modifiers.filter(func(m): return not (m is Dictionary and _is_this_turn_duration(m.get("duration", &""))) if m is Dictionary else true)
+		if card.get("range_modifiers") != null and not card.range_modifiers.is_empty():
+			card.range_modifiers = card.range_modifiers.filter(func(m): return not (m is Dictionary and _is_this_turn_duration(m.get("duration", &""))) if m is Dictionary else true)
+		# weapon_used_this_turn 标记清除（effect_112 设，effect_113 在 TURN_END fire 后此处清）
+		if card.get("counters") != null and card.counters.get("weapon_used_this_turn", false):
+			card.counters["weapon_used_this_turn"] = false
+		# 武器冷却解除：turn_number >= cooldown_until_turn 时清除（effect_125，下个我方回合结束后）
+		if card.get("counters") != null and card.counters.get("cooldown_active", false):
+			var cd_until: int = int(card.cooldown_until_turn) if card.get("cooldown_until_turn") != null else -1
+			if cd_until >= 0 and int(gs.turn_number) >= cd_until:
+				card.counters["cooldown_active"] = false
+				card.cooldown_until_turn = -1
 
 
 ## duration 字段类型不统一：StringName(&"THIS_TURN") / int(锁定 duration=1) / 缺省(&"")，

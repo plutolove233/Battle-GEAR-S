@@ -2198,7 +2198,22 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 		if act_type == &"OFFER_DAMAGE_REDIRECT":
 			var odr_params: Dictionary = act.get("params", {})
 			var odr_max: int = int(odr_params.get("max_points", -1))
+			var odr_mode: StringName = odr_params.get("mode", &"")
+			var odr_reduction: int = int(odr_params.get("reduction", 0))
 			var odr_plan: Array = payload.get("redirect_plan", []) if payload.has("redirect_plan") else []
+			# 盾牌 all_or_nothing（effect_127/133/136）：把全部损伤(减 reduction 后)改向本牌槽。
+			# 自动构建转移计划，不弹逐点选择窗（"optional"取消语义暂简化为自动转移；transfer=0 时等同不转移）。
+			if odr_mode == &"all_or_nothing":
+				var bind_ctx_ao: Dictionary = payload.get("binding_context", {})
+				var ao_mech: StringName = bind_ctx_ao.get("mech_id", &"")
+				var ao_slot: StringName = bind_ctx_ao.get("slot_id", &"")
+				var ao_total: int = int(payload.get("total_points", payload.get("value", 0)))
+				var ao_transfer: int = maxi(0, ao_total - odr_reduction)
+				if ao_mech != &"" and ao_slot != &"" and ao_transfer > 0:
+					_write_redirect_plan(action, [{"to_mech_id": ao_mech, "to_slot_id": ao_slot, "count": ao_transfer}])
+				else:
+					_write_redirect_plan(action, [])  # 减伤归0或不转移
+				continue
 			if odr_plan.is_empty():
 				var bind_ctx_odr: Dictionary = payload.get("binding_context", {})
 				var odr_owner_player: StringName = bind_ctx_odr.get("player_id", &"")

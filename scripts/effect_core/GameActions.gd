@@ -2384,7 +2384,7 @@ func modify_weapon_power(params: Dictionary) -> void:
 	if weapon_id == &"":
 		push_error("MODIFY_WEAPON_POWER 缺少 weapon_id")
 		return
-	var weapon = context.game_state.find_card_instance(weapon_id)
+	var weapon = context.game_state.get_card(weapon_id)
 	if weapon == null:
 		return
 	var mode: StringName = params.get("mode", &"increase")
@@ -2416,7 +2416,7 @@ func set_weapon_stats(params: Dictionary) -> void:
 	if weapon_id == &"":
 		push_error("SET_WEAPON_STATS 缺少 weapon_id")
 		return
-	var weapon = context.game_state.find_card_instance(weapon_id)
+	var weapon = context.game_state.get_card(weapon_id)
 	if weapon == null:
 		return
 	# 绝对覆盖（旧接口）
@@ -2456,7 +2456,7 @@ func set_weapon_cooldown(params: Dictionary) -> void:
 	if weapon_id == &"":
 		push_error("SET_WEAPON_COOLDOWN 缺少 weapon_id")
 		return
-	var weapon = context.game_state.find_card_instance(weapon_id)
+	var weapon = context.game_state.get_card(weapon_id)
 	if weapon == null:
 		return
 	if not "counters" in weapon:
@@ -2573,7 +2573,7 @@ func add_weapon_tag(params: Dictionary) -> void:
 	if weapon_id == &"" or tag == &"":
 		push_error("ADD_WEAPON_TAG 缺少 weapon_id 或 tag")
 		return
-	var weapon = context.game_state.find_card_instance(weapon_id)
+	var weapon = context.game_state.get_card(weapon_id)
 	if weapon == null:
 		return
 	weapon.def.tags.append(tag)

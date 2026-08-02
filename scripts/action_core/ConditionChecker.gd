@@ -157,6 +157,10 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 			# （use_action_card 对攻击牌 +1 attack_count 是另一处已知 bug，不在本次范围）。
 			var wc_attacker_id: StringName = payload.get("attacker_id", &"")
 			var wc_weapon_id: StringName = payload.get("weapon_id", &"")
+			# DIRECT 直攻免牌（effect_128）payload 无 attacker_id/weapon_id，从 binding_context 取
+			if wc_attacker_id == &"" or wc_weapon_id == &"":
+				wc_attacker_id = _equip_mech_id(binding, payload)
+				wc_weapon_id = _equip_card_instance_id(binding, payload)
 			if wc_attacker_id == &"" or wc_weapon_id == &"":
 				return false
 			var wc_ctx = binding.context if binding != null else null
@@ -171,7 +175,16 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 				if wid == wc_weapon_id:
 					weapon_still_equipped = true
 					break
-			return weapon_still_equipped
+			if not weapon_still_equipped:
+				return false
+			# 冷却/锁定拦截（effect_125/104）
+			var wc_card = wc_ctx.game_state.get_card(wc_weapon_id)
+			if wc_card != null:
+				if _is_weapon_on_cooldown(wc_card):
+					return false
+				if wc_card.get("lock_target_mech_id", &"") != &"":
+					return false
+			return true
 
 		&"WEAPON_HAS_ATTACKABLE_TARGET_IN_RANGE":
 			# 闪击再攻：攻击A的武器攻击范围内存在可攻击的机甲（存活且在范围内）。
@@ -180,6 +193,10 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 			# payload = 攻击A 的 record（含 attacker_id / weapon_id / weapon_range / extra_range）。
 			var wt_attacker_id: StringName = payload.get("attacker_id", &"")
 			var wt_weapon_id: StringName = payload.get("weapon_id", &"")
+			# DIRECT 直攻免牌（effect_128）从 binding_context 取
+			if wt_attacker_id == &"" or wt_weapon_id == &"":
+				wt_attacker_id = _equip_mech_id(binding, payload)
+				wt_weapon_id = _equip_card_instance_id(binding, payload)
 			if wt_attacker_id == &"" or wt_weapon_id == &"":
 				return false
 			var wt_ctx = binding.context if binding != null else null
@@ -188,7 +205,16 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 			var wt_attacker = wt_ctx.game_state.mechs.get(wt_attacker_id)
 			if wt_attacker == null or wt_attacker.destroyed:
 				return false
-			var wt_range: int = max(1, int(payload.get("weapon_range", 1)) + int(payload.get("extra_range", 0)))
+			# 有效范围：优先 payload.weapon_range（attack record，含狙击头加成）+ extra_range；
+			# DIRECT 直攻免牌 payload 无 weapon_range，用 get_effective_weapon_stats 派生重算。
+			var wt_range: int = 1
+			if payload.has("weapon_range"):
+				wt_range = max(1, int(payload.get("weapon_range", 1)) + int(payload.get("extra_range", 0)))
+			else:
+				var wt_card = wt_ctx.game_state.get_card(wt_weapon_id)
+				if wt_card != null:
+					wt_range = max(1, int(_GenEquipEffects.get_effective_weapon_stats(wt_card).get("range_value", 1)))
+				wt_range = max(1, wt_range + int(payload.get("extra_range", 0)))
 			var wt_cells: Dictionary = wt_ctx.game_state.map_state.cells if wt_ctx.game_state.map_state else {}
 			for mech_id_wt: StringName in wt_ctx.game_state.mechs:
 				if mech_id_wt == wt_attacker_id:
