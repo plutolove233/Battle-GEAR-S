@@ -832,6 +832,27 @@ func get_available_cards(timing: StringName, action) -> Array[Dictionary]:
 				"effect": effect,
 				"seq": entry.get("seq", 0),
 			})
+	# permanent 监听器（装备 AVAILABILITY 效果，如 effect_084 一角兽右腿响应攻击）：
+	# 装备设置时注册为 permanent_listener(listen_timing)；card_instance_id 在 binding_context 内。
+	# 临时监听器只含手牌迎击牌，装备响应效果须另查 permanent_listeners，否则响应窗口漏列装备效果。
+	var perm_avail: Array = permanent_listeners.get(timing, [])
+	for pentry: Dictionary in perm_avail:
+		var peffect: ActionEffect = pentry.get("effect")
+		if peffect == null:
+			continue
+		if peffect.mode != _TimingConst.MODE_AVAILABILITY:
+			continue
+		var pbind: Dictionary = pentry.get("binding_context", {})
+		var pcid: StringName = pentry.get("card_instance_id", pbind.get("card_instance_id", &""))
+		if _check_availability(peffect, action, pcid):
+			result.append({
+				"effect_id": peffect.effect_id,
+				"card_instance_id": pcid,
+				"display_name": peffect.display_name,
+				"availability_priority": peffect.availability_priority,
+				"effect": peffect,
+				"seq": pentry.get("seq", 0),
+			})
 	# 按可用条件优先级排序（数值越大越先执行；同优先级按注册序"先来后到"）
 	result.sort_custom(func(a, b) -> bool:
 		var pa: int = a["availability_priority"]

@@ -7,7 +7,7 @@ extends VBoxContainer
 class_name ResponsePanel
 
 ## 确认选择迎击/掩护牌
-signal response_selected(card_id: StringName)
+signal response_selected(card_id: StringName, effect_id: StringName)
 ## 跳过迎击
 signal response_passed()
 
@@ -317,7 +317,7 @@ func _on_confirm() -> void:
 	# 第二次调用时迎击牌 use_action_card 被再次发起，且 attack_action_id 被偷换成当时正在
 	# 等待输入的 single_move 子动作 id，原攻击动作因此卡死、既不命中也不造成伤害。
 	# 统一只走 response_selected（app_root._on_response_selected 会自行查 AVAILABILITY 效果）。
-	response_selected.emit(_selected_card_instance_id)
+	response_selected.emit(_selected_card_instance_id, _selected_effect_id)
 
 
 ## 判断是否为掩护牌

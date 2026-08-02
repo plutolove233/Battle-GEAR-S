@@ -1320,10 +1320,10 @@ func test_melee_suite7_structure() -> Variant:
 		return "effect_029 应含 EXECUTE_STAT_MODIFY armor+2"
 	if not e029_power:
 		return "effect_029 应含 EXECUTE_STAT_MODIFY power+2"
-	# effect_030：近战攻击弃1牌威力+2（priority10，晚于028转换）
+	# effect_030：近战攻击弃1牌威力+2（priority30，晚于028转换；与063/078臂效果统一为30，先于目标躯干效果）
 	var e030 = effects.get(&"equipment_effect_030")
-	if e030 == null or e030.priority != 10:
-		return "effect_030 应 priority10"
+	if e030 == null or e030.priority != 30:
+		return "effect_030 应 priority30"
 	if not _has_condition(e030, &"ATTACK_EFFECTIVE_WEAPON_KIND"):
 		return "effect_030 应含 ATTACK_EFFECTIVE_WEAPON_KIND"
 	# effect_031：因损伤弃置移除其他区域2损伤

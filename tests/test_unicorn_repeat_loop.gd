@@ -96,6 +96,8 @@ class Driver:
 	var respond_called: int = 0
 	var move_called: int = 0
 	var choose_called: int = 0
+	var avail_check: String = ""    # Fix A: get_available_cards 须含 effect_084
+	var counter_check: String = ""  # Fix D: effect_084 响应不应设 counter_attacked
 
 	func attach(ctx) -> void:
 		context = ctx
@@ -129,12 +131,28 @@ class Driver:
 		match input_type:
 			&"respond_attack":
 				respond_called += 1
+				# Fix A 验证：get_available_cards 须遍历 permanent_listeners，含装备 AVAILABILITY 效果 effect_084
+				var _TC = preload("res://scripts/action_core/TimingConst.gd")
+				var atk = context.action_registry.get_action(action_id)
+				if atk != null:
+					var avail = context.timing_engine.get_available_cards(_TC.ATTACK_AT, atk)
+					var _found084 := false
+					for _c in avail:
+						if String(_c.get("effect_id", &"")) == "equipment_effect_084":
+							_found084 = true
+							break
+					if not _found084:
+						avail_check = "响应窗口未列出 effect_084（get_available_cards 漏 permanent），实际 %d 项" % avail.size()
 				var sel: Array[Dictionary] = [{
 					"effect_id": &"equipment_effect_084",
 					"card_instance_id": leg_id,
 					"availability_priority": 10,
 				}]
 				context.timing_engine.handle_response_selection(action_id, sel)
+				# Fix D 验证：effect_084 is_counter_card=false，响应后不应设 counter_attacked（损伤由攻击方放置）
+				var atk2 = context.action_registry.get_action(action_id)
+				if atk2 != null and bool(atk2.record.get("counter_attacked", false)):
+					counter_check = "effect_084 响应不应设 counter_attacked（is_counter_card=false）"
 				return null
 			&"select_move_target":
 				move_called += 1
@@ -226,6 +244,13 @@ func test_unicorn_rleg_repeat_loop():
 	await driver.drain(600)
 	for _i in range(5):
 		await _frame()
+
+	# Fix A：响应窗口应列出 effect_084（get_available_cards 遍历 permanent_listeners）
+	if driver.avail_check != "":
+		return driver.avail_check
+	# Fix D：effect_084 响应(is_counter_card=false)不应设 counter_attacked
+	if driver.counter_check != "":
+		return driver.counter_check
 
 	# ① 119 上损伤 = 4（2 轮 × 自损2）
 	var leg_card = gs.get_card(leg_id)

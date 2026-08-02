@@ -746,7 +746,7 @@ static func build_equipment_effects() -> Dictionary:
 	melee_arm.effect_id = &"equipment_effect_030"
 	melee_arm.display_name = "近战装·臂·近战弃1牌威力+2"
 	melee_arm.mode = _TC.MODE_LISTEN
-	melee_arm.priority = 10  # 晚于 priority 20 的近战类型转换
+	melee_arm.priority = 30  # 晚于 priority 20 的近战类型转换；与063/078臂效果统一为30，先于目标躯干效果
 	melee_arm.listen_timing = _TC.ATTACK_BEFORE
 	melee_arm.listen_action_type = &"attack"
 	melee_arm.set_conditions([
@@ -1653,7 +1653,7 @@ static func build_equipment_effects() -> Dictionary:
 	meleesp_arm.effect_id = &"equipment_effect_063"
 	meleesp_arm.display_name = "近战特装·臂·近战弃1牌威力+2并无效目标装备"
 	meleesp_arm.mode = _TC.MODE_LISTEN
-	meleesp_arm.priority = 10
+	meleesp_arm.priority = 30  # 先于目标躯干效果(ATTACK_PRE)：无效目标装备须先于躯干效果触发
 	meleesp_arm.listen_timing = _TC.ATTACK_PRE
 	meleesp_arm.listen_action_type = &"attack"
 	meleesp_arm.set_conditions([
@@ -2089,7 +2089,7 @@ static func build_equipment_effects() -> Dictionary:
 	polar_arm.effect_id = &"equipment_effect_078"
 	polar_arm.display_name = "极电装·臂·近战弃2牌威力+3并无效2张目标装备"
 	polar_arm.mode = _TC.MODE_LISTEN
-	polar_arm.priority = 10
+	polar_arm.priority = 30  # 先于目标躯干效果(ATTACK_PRE)：无效目标装备须先于躯干效果触发
 	polar_arm.listen_timing = _TC.ATTACK_PRE
 	polar_arm.listen_action_type = &"attack"
 	polar_arm.set_conditions([
@@ -2293,7 +2293,7 @@ static func build_equipment_effects() -> Dictionary:
 			"damage_reason": &"equipment_effect_cost",
 		}},
 	])
-	unicorn_rleg.description = "响应对我方的攻击，可以设置2损伤到此牌上，机甲可立即移动2个格子。发动此效果后，可以立即继续发动此效果。"
+	unicorn_rleg.description = "响应对我方的攻击，可以设置2损伤到此牌上，机甲可立即无视动力移动2格。发动此效果后，可以立即继续发动此效果。"
 	effects[unicorn_rleg.effect_id] = unicorn_rleg
 
 	# ═══════════════════════════════════════════

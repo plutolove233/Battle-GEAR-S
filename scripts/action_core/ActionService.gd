@@ -436,7 +436,11 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 			push_warning("RESPOND_ATTACK: 找不到攻击动作 %s" % String(attack_id_ra))
 			return {"state": &"completed"}
 		attack_action.record["responded"] = true
-		attack_action.record["counter_attacked"] = true
+		# counter_attacked 仅迎击牌(is_counter_card=true/缺省)置真；装备响应(如一角兽右腿 effect_084
+		# is_counter_card=false)不算迎击，损伤仍由攻击方放置（assault-noncounter-response 双参数语义）。
+		var ra_is_counter: bool = bool(action_def.get("params", {}).get("is_counter_card", true))
+		if ra_is_counter:
+			attack_action.record["counter_attacked"] = true
 		var ra_card_id: StringName = payload.get("card_instance_id", payload.get("source_card_id", &""))
 		attack_action.record["response_card_id"] = ra_card_id
 		attack_action.record["response_source"] = {

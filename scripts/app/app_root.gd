@@ -996,7 +996,7 @@ func _dispatch_input(op: String, data: Dictionary) -> Variant:
 			var ra_pass := bool(data.get("pass", false))
 			var ra_selected: Array[Dictionary] = []
 			if not ra_pass:
-				ra_selected = _build_selected_cards_from_card(data.get("card_instance_id", &""))
+				ra_selected = _build_selected_cards_from_card(data.get("card_instance_id", &""), data.get("effect_id", &""))
 			if ctx.timing_engine:
 				ctx.timing_engine.handle_response_selection(ra_action_id, ra_selected)
 			_refresh_battle()
@@ -1046,7 +1046,7 @@ func _dispatch_input(op: String, data: Dictionary) -> Variant:
 
 ## 从行动牌 instance_id 重建 selected_cards（含 ActionEffect 对象,不可网络序列化）。
 ## 双端各自调用,网络只传 card_instance_id。逻辑取自 _on_response_selected。
-func _build_selected_cards_from_card(card_id: StringName) -> Array[Dictionary]:
+func _build_selected_cards_from_card(card_id: StringName, effect_id: StringName = &"") -> Array[Dictionary]:
 	var selected_cards: Array[Dictionary] = []
 	if card_id == &"" or battle == null or battle.context == null:
 		return selected_cards
@@ -1054,19 +1054,38 @@ func _build_selected_cards_from_card(card_id: StringName) -> Array[Dictionary]:
 	var card = gs.get_card(card_id)
 	if card == null or card.def == null:
 		return selected_cards
+	var is_counter_card: bool = card.def.card_kind == &"action" and card.def.action_type == &"迎击"
+	# 优先用透传的 effect_id（响应窗口选中时携带，覆盖行动牌/装备牌/机师牌）。
+	# 装备 AVAILABILITY 效果（如 effect_084 一角兽右腿）不在 GeneratedActionEffects，须另查装备效果表，
+	# 否则双端重建 selected_cards 为空 -> handle_response_selection 误判为取消（攻击不被响应）。
+	if effect_id != &"":
+		var eff: ActionEffect = GeneratedActionEffects.build_all_effects().get(effect_id)
+		if eff == null:
+			eff = GeneratedEquipmentEffects.build_equipment_effects().get(effect_id)
+		if eff != null and eff.mode == "AVAILABILITY":
+			selected_cards.append({
+				"effect_id": effect_id,
+				"card_instance_id": card_id,
+				"effect": eff,
+				"availability_priority": eff.availability_priority,
+				"card_name": card.def.display_name,
+				"is_counter": is_counter_card,
+			})
+			return selected_cards
+	# 退回：按 card_id 扫描行动牌 AVAILABILITY 效果（兼容未带 effect_id 的调用）
 	var card_mappings: Array = GeneratedActionEffects.get_effects_for_card(card.def.card_id)
 	var all_effects: Dictionary = GeneratedActionEffects.build_all_effects()
 	for mapping in card_mappings:
-		var effect_id: StringName = mapping.get("effect_id", &"") if mapping is Dictionary else &""
-		var effect: ActionEffect = all_effects.get(effect_id)
+		var eid: StringName = mapping.get("effect_id", &"") if mapping is Dictionary else &""
+		var effect: ActionEffect = all_effects.get(eid)
 		if effect and effect.mode == "AVAILABILITY":
 			selected_cards.append({
-				"effect_id": effect_id,
+				"effect_id": eid,
 				"card_instance_id": card_id,
 				"effect": effect,
 				"availability_priority": effect.availability_priority,
 				"card_name": card.def.display_name,
-				"is_counter": card.def.action_type == "迎击",
+				"is_counter": is_counter_card,
 			})
 			break
 	return selected_cards
@@ -1934,14 +1953,14 @@ func _start_enemy_turn_flow() -> void:
 
 
 ## Response selected (new system: delegate to TimingEngine.handle_response_selection)
-func _on_response_selected(card_id: StringName) -> void:
+func _on_response_selected(card_id: StringName, effect_id: StringName = &"") -> void:
 	if battle == null or battle.context == null:
 		return
 	response_panel.visible = false
-	# 锁步:走 respond_attack op（双端各自从 card_id 重建 selected_cards）。PvE 退化本地执行。
+	# 锁步:走 respond_attack op（双端各自从 card_id+effect_id 重建 selected_cards）。PvE 退化本地执行。
 	var rs_wait: Dictionary = battle.context.action_ui_bridge.get_waiting_action_info() if battle.context.action_ui_bridge else {}
 	var rs_action_id: StringName = rs_wait.get("action_id", &"")
-	_net_exec("respond_attack", {"action_id": rs_action_id, "card_instance_id": card_id, "pass": false})
+	_net_exec("respond_attack", {"action_id": rs_action_id, "card_instance_id": card_id, "effect_id": effect_id, "pass": false})
 
 
 ## Response passed (new system: call TimingEngine.handle_response_selection with empty array)
@@ -1972,8 +1991,8 @@ func _on_availability_effect_selected(effect_id: StringName, card_instance_id: S
 		_refresh_battle()
 		return
 
-	# 锁步:走 respond_attack op（双端从 card_id 重建 selected_cards）
-	_net_exec("respond_attack", {"action_id": action_id, "card_instance_id": card_instance_id, "pass": false})
+	# 锁步:走 respond_attack op（双端从 card_id+effect_id 重建 selected_cards）
+	_net_exec("respond_attack", {"action_id": action_id, "card_instance_id": card_instance_id, "effect_id": effect_id, "pass": false})
 
 
 ## Continue enemy turn after response (new system: TimingEngine auto-resumes action)
