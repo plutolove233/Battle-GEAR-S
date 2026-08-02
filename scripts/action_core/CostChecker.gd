@@ -41,17 +41,17 @@ static func can_pay_single(binding, payload: Dictionary, cost: Dictionary, ctx) 
 			# 弃置行动牌：检查手牌中是否有足够的行动牌
 			var player_id: StringName = cost.get("player_id", binding.get_owner_player_id())
 			var count: int = int(cost.get("count", 1))
-			var card_type_filter: StringName = cost.get("card_type_filter", &"")
+			var card_type_filter: StringName = cost.get("card_type_filter", cost.get("params", {}).get("card_type", &""))
 			var player_state = ctx.game_state.players.get(player_id)
 			if player_state == null:
 				return false
 			if card_type_filter == &"":
 				return player_state.action_hand.size() >= count
-			# 有 card_type_filter 时，只计算匹配类型的牌
+			# 有 card_type_filter 时，只计算匹配类型的牌（attack->攻击/counter->迎击/support->辅助）
 			var matching_count: int = 0
 			for card_id: StringName in player_state.action_hand:
 				var card = ctx.game_state.cards.get(card_id)
-				if card and card.def and card.def.action_type == card_type_filter:
+				if card and card.def and _action_card_matches_type(card.def, card_type_filter):
 					matching_count += 1
 			return matching_count >= count
 
@@ -134,7 +134,8 @@ static func pay_single(binding, payload: Dictionary, cost: Dictionary, ctx) -> b
 			# 弃置行动牌
 			var player_id: StringName = cost.get("player_id", binding.get_owner_player_id())
 			var count: int = int(cost.get("count", 1))
-			var card_type_filter: StringName = cost.get("card_type_filter", &"")
+			var card_type_filter: StringName = cost.get("card_type_filter", cost.get("params", {}).get("card_type", &""))
+			var discard_reason: StringName = cost.get("params", {}).get("reason", &"EFFECT_COST")
 			if ctx.game_actions == null:
 				return false
 
@@ -145,7 +146,7 @@ static func pay_single(binding, payload: Dictionary, cost: Dictionary, ctx) -> b
 					ctx.game_actions.discard_action_card({
 						"player_id": player_id,
 						"card_id": selected_ids[i],
-						"reason": &"EFFECT_COST"
+						"reason": discard_reason
 					})
 				return true
 
@@ -161,7 +162,7 @@ static func pay_single(binding, payload: Dictionary, cost: Dictionary, ctx) -> b
 					ctx.game_actions.discard_action_card({
 						"player_id": player_id,
 						"card_id": card_id,
-						"reason": &"EFFECT_COST"
+						"reason": discard_reason
 					})
 					discarded += 1
 			# 再尝试使用 cost 中的指定牌
@@ -171,7 +172,7 @@ static func pay_single(binding, payload: Dictionary, cost: Dictionary, ctx) -> b
 					ctx.game_actions.discard_action_card({
 						"player_id": player_id,
 						"card_id": card_id,
-						"reason": &"EFFECT_COST"
+						"reason": discard_reason
 					})
 					discarded += 1
 			# 剩余的从手牌中自动选取匹配的牌
@@ -182,12 +183,12 @@ static func pay_single(binding, payload: Dictionary, cost: Dictionary, ctx) -> b
 						break
 					if card_type_filter != &"":
 						var card = ctx.game_state.cards.get(card_id)
-						if card == null or card.def == null or card.def.action_type != card_type_filter:
+						if card == null or card.def == null or not _action_card_matches_type(card.def, card_type_filter):
 							continue
 					ctx.game_actions.discard_action_card({
 						"player_id": player_id,
 						"card_id": card_id,
-						"reason": &"EFFECT_COST"
+						"reason": discard_reason
 					})
 					discarded += 1
 			return discarded >= count
@@ -313,7 +314,7 @@ static func needs_discard_select(binding, payload: Dictionary, costs: Array, ctx
 			continue  # 可选费用通过 pending action 机制处理
 		var count: int = int(cost.get("count", 1))
 		var player_id: StringName = cost.get("player_id", binding.get_owner_player_id())
-		var card_type_filter: StringName = cost.get("card_type_filter", &"")
+		var card_type_filter: StringName = cost.get("card_type_filter", cost.get("params", {}).get("card_type", &""))
 
 		# 如果 payload 中已提供选择的牌ID，则无需再选
 		var selected_ids: Array = payload.get("selected_action_card_ids", [])
@@ -337,7 +338,7 @@ static func needs_discard_select(binding, payload: Dictionary, costs: Array, ctx
 		for card_id: StringName in player_state.action_hand:
 			if card_type_filter != &"":
 				var card = ctx.game_state.cards.get(card_id)
-				if card == null or card.def == null or card.def.action_type != card_type_filter:
+				if card == null or card.def == null or not _action_card_matches_type(card.def, card_type_filter):
 					continue
 			matching_count += 1
 		if matching_count < count:
@@ -352,3 +353,22 @@ static func needs_discard_select(binding, payload: Dictionary, costs: Array, ctx
 		}
 
 	return {}
+
+
+## 行动牌类型匹配（card_type_filter 英文键 -> 中文 action_type）
+## attack->攻击 / counter->迎击 / support->辅助。空 filter 或非行动牌返回 true（不限制）。
+static func _action_card_matches_type(card_def, type_filter: StringName) -> bool:
+	if type_filter == &"":
+		return true
+	if card_def == null:
+		return false
+	var at: StringName = card_def.action_type if "action_type" in card_def else &""
+	match type_filter:
+		&"attack":
+			return at == &"攻击"
+		&"counter":
+			return at == &"迎击"
+		&"support":
+			return at == &"辅助"
+		_:
+			return at == type_filter

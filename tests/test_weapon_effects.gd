@@ -282,3 +282,40 @@ func test_weapon_112_attack_decay() -> Variant:
 	if not bool(card.counters.get("weapon_used_this_turn", false)):
 		return "effect_112 应标记 weapon_used_this_turn"
 	return true
+
+
+## ⑦ effect_125：weapon_029 攻击结算后设置冷却（下个我方回合结束前不能再攻击）
+func test_weapon_125_cooldown() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	_GenEquipEffects.set_aura_game_state(battle.context.game_state)
+	var cid: StringName = await _equip_weapon(battle, "weapon_029_超米伽荣光炮")
+	if cid == &"":
+		return "装备 weapon_029 失败"
+	var gs = battle.context.game_state
+	var pm = gs.get_mech_for_player(&"player")
+	var em = gs.get_mech_for_player(&"enemy")
+	em.current_hp = 100
+	pm.position = {"q": 5, "r": 0}
+	em.position = {"q": 6, "r": 0}  # 距离1，在射程7内
+	_clear_enemy_hand(battle)
+	battle.context.action_ui_bridge.context = battle.context
+	var atk_card: StringName = _ensure_attack_card_in_hand(battle)
+	if atk_card == &"":
+		return "玩家无攻击牌"
+	var atk_result: Dictionary = battle.execute_attack_action(&"player", &"enemy", cid, atk_card)
+	var attack_id: StringName = atk_result.get("action_id", &"") if atk_result is Dictionary else &""
+	if attack_id == &"":
+		return "攻击未发起"
+	await _pump_frames(5)
+	_drive_damage_placement(battle, attack_id)
+	await _pump_frames(3)
+	var card = gs.get_card(cid)
+	# effect_125：攻击结算后 cooldown_active=true
+	if not bool(card.counters.get("cooldown_active", false)):
+		return "effect_125 应设置武器冷却（cooldown_active=true）"
+	# 冷却中 cooldown_until_turn 应>当前 turn_number（下个我方回合结束后才解除）
+	if int(card.cooldown_until_turn) <= int(gs.turn_number):
+		return "cooldown_until_turn 应>当前 turn_number"
+	return true
