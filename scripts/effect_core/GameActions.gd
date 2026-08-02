@@ -346,8 +346,12 @@ func modify_armor(params: Dictionary) -> void:
 
 
 ## 修改机甲动力
+## mode 扩展（effect_117/131/132 用）：
+##   默认/无 mode：按 duration 决定（THIS_TURN/THIS_ATTACK 允许超上限，否则 clamp 到 max_power）。
+##   &"current_only"：只改当前动力不改上限，clamp 到 [min_value, max_power]（effect_117 减目标动力-2）。
+##   &"current_and_temporary_max"：当前动力与临时上限均+delta（effect_131/132 动力+4），回合结束移除临时上限。
 func modify_mech_power(params: Dictionary) -> void:
-	var mech_id: StringName = params.get("mech_id", params.get("source_mech_id", &""))
+	var mech_id: StringName = params.get("mech_id", params.get("target_id", params.get("source_mech_id", &"")))
 	if mech_id == &"" or not context.game_state.mechs.has(mech_id):
 		push_error("MODIFY_MECH_POWER 找不到 mech_id")
 		return
@@ -355,11 +359,21 @@ func modify_mech_power(params: Dictionary) -> void:
 	var mech = context.game_state.mechs[mech_id]
 	var delta: int = int(params.get("delta", 0))
 	var duration: StringName = params.get("duration", &"")
+	var mode: StringName = params.get("mode", &"")
+	var min_value: int = int(params.get("min_value", 0))
 
 	# ── 始终立即应用动力修改 ──
-	# THIS_TURN / THIS_ATTACK 临时动力增益允许超过当前上限
 	var before: int = mech.power
-	if duration == &"THIS_TURN" or duration == &"THIS_ATTACK":
+	if mode == &"current_only":
+		# 只改当前动力，不影响上限；clamp 到 [min_value, 当前max_power]
+		mech.power = clamp(mech.power + delta, min_value, _get_max_power(mech_id))
+	elif mode == &"current_and_temporary_max":
+		# 当前动力+delta（允许超原 max_power，不 clamp）；duration 必为 THIS_TURN，
+		# 由下方 POWER_MODIFIER 状态回合结束还原。"临时上限+4"语义近似为不 clamp（power 不被压回）。
+		mech.power = maxi(min_value, mech.power + delta)
+		if duration == &"":
+			duration = &"THIS_TURN"
+	elif duration == &"THIS_TURN" or duration == &"THIS_ATTACK":
 		mech.power = maxi(0, mech.power + delta)
 	else:
 		mech.power = clamp(mech.power + delta, 0, _get_max_power(mech_id))
@@ -963,6 +977,11 @@ func place_damage_tokens(params: Dictionary) -> void:
 			)
 
 		context.game_state.place_one_damage_token(target_id, slot_id)
+		# 记录逐枚放置 slot 到临时日志，供 damage_change_action._step_settle 回写父 attack
+		# 的 damage_placement_log（effect_101/119 同区/非同区判定）
+		if not context.game_state.temp_values.has("last_damage_placement_log"):
+			context.game_state.temp_values["last_damage_placement_log"] = []
+		context.game_state.temp_values["last_damage_placement_log"].append(String(slot_id))
 
 		context.effect_engine.fire_hook(&"ON_AFTER_DAMAGE_TOKEN_PLACED", {
 			"target_id": target_id,
@@ -1218,6 +1237,26 @@ func place_or_trigger_trap(params: Dictionary) -> void:
 		return
 
 	var cell_id: StringName = params.get("cell_id", &"")
+	# mode=place_each：在多个格子各放1陷阱（effect_137 双子机雷）。cell_ids 数组。
+	if mode == &"place_each":
+		var cell_ids: Array = params.get("cell_ids", [])
+		if cell_ids.is_empty() and cell_id != &"":
+			cell_ids = [cell_id]
+		for cid in cell_ids:
+			var cid_sn: StringName = StringName(String(cid))
+			if cid_sn == &"" or not context.game_state.map_state.cells.has(cid_sn):
+				continue
+			var me_marker_id: StringName = context.game_state.next_id(&"marker")
+			var me_marker := {
+				"marker_id": me_marker_id,
+				"marker_type": &"TRAP",
+				"cell_id": cid_sn,
+				"owner_player_id": params.get("source_owner_player_id", params.get("player_id", &"")),
+			}
+			context.game_state.map_state.markers[me_marker_id] = me_marker
+			context.game_state.map_state.cells[cid_sn]["marker_id"] = me_marker_id
+			context.effect_engine.fire_hook(&"ON_MAP_MARKER_PLACED", {"marker_id": me_marker_id, "marker_type": &"TRAP", "cell_id": cid_sn})
+		return
 	if cell_id == &"" or not context.game_state.map_state.cells.has(cell_id):
 		push_error("PLACE_OR_TRIGGER_TRAP 找不到 cell_id")
 		return
@@ -1226,7 +1265,8 @@ func place_or_trigger_trap(params: Dictionary) -> void:
 	var marker := {
 		"marker_id": marker_id,
 		"marker_type": &"TRAP",
-		"cell_id": cell_id
+		"cell_id": cell_id,
+		"owner_player_id": params.get("source_owner_player_id", params.get("player_id", &"")),
 	}
 
 	context.game_state.map_state.markers[marker_id] = marker
@@ -1323,6 +1363,13 @@ func random_discard_action_card(params: Dictionary) -> void:
 	var count: int = int(params.get("count", 1))
 
 	# 解析 from_target / from_attacker（与 discard_action_card 相同逻辑）
+	# owner_id（机甲）解析：effect_123 传 owner_id=$binding_context.mech_id，反查玩家。
+	if player_id == &"":
+		var owner_mech_id: StringName = params.get("owner_id", &"")
+		if owner_mech_id != &"" and context.game_state != null:
+			var owner_player = context.game_state.get_player_for_mech(owner_mech_id)
+			if owner_player != null:
+				player_id = owner_player.player_id
 	if bool(params.get("from_target", false)):
 		var target_id: StringName = params.get("target_id", &"")
 		if target_id == &"":
@@ -1364,6 +1411,14 @@ func random_discard_action_card(params: Dictionary) -> void:
 	# 设置临时标记供条件检查（弃置后是否为最后一张行动牌）
 	if is_last_before_discard:
 		context.game_state.temp_values["is_last_action_card_in_hand"] = true
+	# 写回父攻击动作的 attack 作用域变量（effect_124 读 VARIABLE_ABOVE(scope=attack, weapon_028_was_last)）
+	var rdc_atk_id: StringName = params.get("parent_attack_id", &"")
+	if rdc_atk_id != &"" and context.action_registry != null:
+		var rdc_atk = context.action_registry.get_action(rdc_atk_id)
+		if rdc_atk != null and rdc_atk.record is Dictionary:
+			if not rdc_atk.record.has("variables"):
+				rdc_atk.record["variables"] = {}
+			rdc_atk.record["variables"]["weapon_028_was_last"] = 1 if is_last_before_discard else 0
 
 	for card_id in cards_to_discard:
 		discard_action_card({
@@ -2319,8 +2374,12 @@ func move_without_power(params: Dictionary) -> void:
 
 
 ## 修改武器威力（非仅回复）
+## mode=increase（默认）：累加 delta 到 might_modifiers（delta 可负，如 effect_112 每攻击-4）。
+## mode=restore：回补本 bucket 的负修正，restore_delta = min(delta, -bucket_sum)（不超 0，即不超 printed_might）。
+## bucket 区分来源（weapon_decay 等），使 restore 只回补本机制衰减，不清其他来源。
+## duration: &"PERMANENT"(默认) / &"THIS_OWNER_TURN" / &"THIS_TURN"（TurnService 回合结束清除临时项）。
 func modify_weapon_power(params: Dictionary) -> void:
-	var weapon_id: StringName = params.get("weapon_id", params.get("target_weapon_id", &""))
+	var weapon_id: StringName = params.get("weapon_id", params.get("target_weapon_id", params.get("target_card_instance_id", &"")))
 	var delta: int = int(params.get("delta", 0))
 	if weapon_id == &"":
 		push_error("MODIFY_WEAPON_POWER 缺少 weapon_id")
@@ -2328,24 +2387,122 @@ func modify_weapon_power(params: Dictionary) -> void:
 	var weapon = context.game_state.find_card_instance(weapon_id)
 	if weapon == null:
 		return
-	weapon.might_modifiers.append({"delta": delta, "duration": params.get("duration", &"PERMANENT")})
+	var mode: StringName = params.get("mode", &"increase")
+	var bucket: String = String(params.get("bucket", "default"))
+	var duration: StringName = params.get("duration", &"PERMANENT")
+	if not "might_modifiers" in weapon:
+		weapon.might_modifiers = []
+	if mode == &"restore":
+		# 计算本 bucket 当前累计（通常为负）
+		var bucket_sum: int = 0
+		for m in weapon.might_modifiers:
+			if m is Dictionary and String(m.get("bucket", "default")) == bucket:
+				bucket_sum += int(m.get("delta", 0))
+		# 只回补到 0（不超 printed_might），回补量为正
+		var restore_delta: int = max(0, min(delta, -bucket_sum)) if bucket_sum < 0 else 0
+		if restore_delta > 0:
+			weapon.might_modifiers.append({"delta": restore_delta, "duration": duration, "bucket": bucket, "source_card_id": params.get("source_card_id", &"")})
+	else:
+		weapon.might_modifiers.append({"delta": delta, "duration": duration, "bucket": bucket, "source_card_id": params.get("source_card_id", &"")})
+	SLog.log_raw("[ACTION] modify_weapon_power %s %+d mode=%s bucket=%s" % [String(weapon_id), delta, String(mode), bucket])
 
 
 ## 设置武器属性为指定值
+## 旧版绝对覆盖：might/range（>=0 写 might_override/range_override）。
+## 新版相对修正（effect_093/095 聚能临时）：might_delta/range_delta + duration + stack。
+## target_card_instance_id 指定本武器实例；stack=true（默认）叠加，false 则替换同 bucket 项。
 func set_weapon_stats(params: Dictionary) -> void:
-	var weapon_id: StringName = params.get("weapon_id", params.get("target_weapon_id", &""))
-	var new_might: int = int(params.get("might", -1))
-	var new_range: int = int(params.get("range", -1))
+	var weapon_id: StringName = params.get("weapon_id", params.get("target_weapon_id", params.get("target_card_instance_id", &"")))
 	if weapon_id == &"":
 		push_error("SET_WEAPON_STATS 缺少 weapon_id")
 		return
 	var weapon = context.game_state.find_card_instance(weapon_id)
 	if weapon == null:
 		return
+	# 绝对覆盖（旧接口）
+	var new_might: int = int(params.get("might", -1))
+	var new_range: int = int(params.get("range", -1))
 	if new_might >= 0:
 		weapon.might_override = new_might
 	if new_range >= 0:
 		weapon.range_override = new_range
+	# 相对修正（新接口：聚能临时 might_delta/range_delta）
+	var might_delta: int = int(params.get("might_delta", 0))
+	var range_delta: int = int(params.get("range_delta", 0))
+	var duration: StringName = params.get("duration", &"PERMANENT")
+	var stack: bool = bool(params.get("stack", true))
+	var bucket: String = String(params.get("bucket", "energy_temp"))
+	if might_delta != 0:
+		if not "might_modifiers" in weapon:
+			weapon.might_modifiers = []
+		if not stack:
+			weapon.might_modifiers = weapon.might_modifiers.filter(func(m): return not (m is Dictionary and String(m.get("bucket", "")) == bucket))
+		weapon.might_modifiers.append({"delta": might_delta, "duration": duration, "bucket": bucket, "source_card_id": params.get("source_card_id", &"")})
+	if range_delta != 0:
+		if not "range_modifiers" in weapon:
+			weapon.range_modifiers = []
+		if not stack:
+			weapon.range_modifiers = weapon.range_modifiers.filter(func(m): return not (m is Dictionary and String(m.get("bucket", "")) == bucket))
+		weapon.range_modifiers.append({"delta": range_delta, "duration": duration, "bucket": bucket, "source_card_id": params.get("source_card_id", &"")})
+	SLog.log_raw("[ACTION] set_weapon_stats %s might_delta=%d range_delta=%d dur=%s" % [String(weapon_id), might_delta, range_delta, String(duration)])
+
+
+## 设置/清除武器冷却（effect_125/126/129）
+## clear=true：清除冷却（聚能后允许再攻）。否则设置冷却：counters["cooldown_active"]=true，
+## cooldown_until_turn = 当前 turn_number + 2（1v1 轮换下到达下个我方回合），TurnService 在
+## 我方回合 TURN_AFTER_END 且 turn_number >= cooldown_until_turn 时清除。
+func set_weapon_cooldown(params: Dictionary) -> void:
+	var weapon_id: StringName = params.get("weapon_id", params.get("target_card_instance_id", &""))
+	if weapon_id == &"":
+		push_error("SET_WEAPON_COOLDOWN 缺少 weapon_id")
+		return
+	var weapon = context.game_state.find_card_instance(weapon_id)
+	if weapon == null:
+		return
+	if not "counters" in weapon:
+		weapon.counters = {}
+	if bool(params.get("clear", false)):
+		weapon.counters["cooldown_active"] = false
+		weapon.cooldown_until_turn = -1
+		SLog.log_raw("[ACTION] SET_WEAPON_COOLDOWN clear %s" % String(weapon_id))
+	else:
+		weapon.counters["cooldown_active"] = true
+		var cur_turn: int = int(context.game_state.turn_number) if context.game_state != null else 0
+		weapon.cooldown_until_turn = cur_turn + 2  # 下个我方回合（1v1 轮换）
+		SLog.log_raw("[ACTION] SET_WEAPON_COOLDOWN set %s until_turn=%d" % [String(weapon_id), weapon.cooldown_until_turn])
+
+
+## 弃置机甲所有正面朝上的部件装备牌（effect_140 质能全转换剑炮攻击结算后代价）
+## 按 slot_kinds 顺序（头->躯干->右臂->左臂->右腿->左腿）串行弃置，每张走标准 discard_card
+## 生命周期（发 ON_CARD_DISCARDED->DISCARD_AFTER，触发离场效果）。preserve_slot_damage 保留区域损伤。
+func discard_all_face_up_parts(params: Dictionary, payload: Dictionary = {}) -> void:
+	var mech_id: StringName = params.get("target_mech_id", params.get("mech_id", &""))
+	if mech_id == &"" or not context.game_state.mechs.has(mech_id):
+		push_error("DISCARD_ALL_FACE_UP_PARTS 缺少 mech_id")
+		return
+	var mech = context.game_state.mechs[mech_id]
+	var slot_kinds: Array = params.get("slot_kinds", [&"HEAD", &"TORSO", &"RIGHT_ARM", &"LEFT_ARM", &"RIGHT_LEG", &"LEFT_LEG"])
+	var reason: StringName = params.get("reason", &"weapon_040_conversion_cost")
+	# 建立 slot_id -> slot_kind 映射，按给定 slot_kinds 顺序遍历
+	for sid in mech.slots:
+		var slot = mech.slots[sid]
+		if slot == null:
+			continue
+		var kind: StringName = slot.slot_kind if "slot_kind" in slot else &""
+		if not (String(kind) in slot_kinds.map(func(k): return String(k))):
+			continue
+		var card = slot.get("equipped_card")
+		if card == null or card.def == null:
+			continue
+		if card.def.card_kind != &"equipment":
+			continue
+		if card.get("equipment_kind") != &"PART":
+			continue
+		if card.get("face_down") == true:
+			continue
+		# 弃置该部件牌（discard_card 内部清 slot.equipped_card + 注销监听器 + 重算动力）
+		discard_card({"card_id": card.instance_id, "reason": reason})
+	SLog.log_raw("[ACTION] DISCARD_ALL_FACE_UP_PARTS %s slot_kinds=%s" % [String(mech_id), str(slot_kinds)])
 
 
 ## 将护甲转化为动力

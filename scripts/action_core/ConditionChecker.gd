@@ -25,6 +25,7 @@ class_name ConditionChecker
 ## Preloaded references for cross-file custom types
 const _EffectBinding = preload("res://scripts/action_core/EffectBinding.gd")
 const _RangeCalculator = preload("res://scripts/battle/RangeCalculator.gd")
+const _GenEquipEffects = preload("res://scripts/generated_database/GeneratedEquipmentEffects.gd")
 
 
 ## 检查所有条件是否满足
@@ -321,8 +322,16 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 		&"ATTACK_SOURCE_IS_SELF":
 			# 攻击来自此牌（源卡是攻击使用的武器）
 			var source_instance_id: StringName = binding.get_source_instance_id()
+			if source_instance_id == &"":
+				return false
+			# 虚拟武器(神莺躯干 effect_087)攻击时 record.attack_weapon_instance_id=躯干instance；
+			# 实体武器攻击时 record.weapon_id=武器卡instance。两者皆与 source_instance_id 比较。
+			# effect_088 source=躯干instance，仅虚拟攻击(weapon_id==躯干)时命中，实体武器不误触。
 			var attack_weapon_id: StringName = payload.get("attack_weapon_instance_id", &"")
-			return source_instance_id == attack_weapon_id
+			if attack_weapon_id != &"" and source_instance_id == attack_weapon_id:
+				return true
+			var asw_weapon_id: StringName = payload.get("weapon_id", &"")
+			return asw_weapon_id != &"" and source_instance_id == asw_weapon_id
 
 		&"MOVED_DISTANCE_THIS_TURN_ABOVE":
 			# 本回合累积移动距离 >= threshold
@@ -368,8 +377,15 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 			return payload.get("is_last_action_card_in_hand", false) == true
 
 		&"DAMAGE_TOKENS_ALL_IN_SAME_SLOT":
-			# 本次攻击产生的损伤全部放置于同一区域
-			return payload.get("damage_tokens_all_in_same_slot", false) == true
+			# 本次攻击产生的损伤全部放置于同一区域（effect_101）。基于 attack.damage_placement_log 判定。
+			var dtas_log: Array = payload.get("damage_placement_log", [])
+			if dtas_log.size() < 1:
+				return false
+			var dtas_first = dtas_log[0]
+			for s in dtas_log:
+				if s != dtas_first:
+					return false
+			return true
 
 		&"OWNER_ACTION_HAND_EMPTY":
 			# 源牌拥有者行动手牌为空
@@ -400,6 +416,12 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 			var threshold: int = int(condition.get("threshold", 0))
 			if variable_name == &"":
 				return false
+			# attack 作用域变量：存于 attack.record["variables"][name]（INCREMENT_VARIABLE scope=attack 写入），
+			# attack 各时点 payload = record.duplicate()，故 payload.variables 可读。
+			var va_scope: StringName = condition.get("scope", &"")
+			if va_scope == &"attack":
+				var atk_vars: Dictionary = payload.get("variables", {}) if payload != null else {}
+				return int(atk_vars.get(variable_name, 0)) > threshold
 			var player_id: StringName = binding.get_owner_player_id()
 			var mech_id: StringName = binding.get_source_mech_id()
 			var key: String = "%s_%s_%s" % [player_id, mech_id, variable_name]
@@ -816,6 +838,255 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 			return _RangeCalculator.is_in_weapon_range(tcr_holder.position, tcr_target_mech.position, tcr_max_range, tcr_map_cells)
 
 
+		# ════════════════════════════════════════════════════════════
+		# 武器装备牌效果专用条件（effect_093+）
+		# ════════════════════════════════════════════════════════════
+
+		&"ENERGY_TARGET_IS_SELF":
+			# 聚能 effect_fire 的目标武器 == 本牌（effect_093/095/114/126 聚能联动）
+			# effect_fire record 由 ActionService._execute_atomic_action(APPLY_ENERGY_TO_WEAPON) 写入
+			# energy_target_weapon_instance_id；EFFECT_FIRE_AFTER payload = effect_fire record.duplicate()。
+			var ets_self: StringName = _equip_card_instance_id(binding, payload)
+			var ets_target: StringName = payload.get("energy_target_weapon_instance_id", &"")
+			return ets_self != &"" and ets_self == ets_target
+
+		&"WEAPON_MODE_EQUALS":
+			# 本武器形态 == mode（流星钢锤 effect_098/099）
+			var wme_mode: StringName = condition.get("mode", &"")
+			var wme_card_id: StringName = _equip_card_instance_id(binding, payload)
+			var wme_card = _get_card(binding, wme_card_id)
+			if wme_card == null:
+				return false
+			var cur_mode: StringName = wme_card.weapon_mode if "weapon_mode" in wme_card else &""
+			if cur_mode == &"":
+				cur_mode = &"normal"
+			return cur_mode == wme_mode
+
+		&"WEAPON_MODE_NOT_EQUALS":
+			var wmn_mode: StringName = condition.get("mode", &"")
+			var wmn_card_id: StringName = _equip_card_instance_id(binding, payload)
+			var wmn_card = _get_card(binding, wmn_card_id)
+			if wmn_card == null:
+				return false
+			var cur_mode_n: StringName = wmn_card.weapon_mode if "weapon_mode" in wmn_card else &""
+			if cur_mode_n == &"":
+				cur_mode_n = &"normal"
+			return cur_mode_n != wmn_mode
+
+		&"WEAPON_IS_ON_COOLDOWN":
+			# 武器冷却中（effect_128 直攻/武器选择过滤用；effect_126 聚能清除前置）
+			var wic_card_id: StringName = _equip_card_instance_id(binding, payload)
+			var wic_card = _get_card(binding, wic_card_id)
+			if wic_card == null:
+				return false
+			return _is_weapon_on_cooldown(wic_card)
+
+		&"WEAPON_IS_LOCKED_OUT":
+			# 拘束钩爪 effect_104 锁定期间本牌不能攻击
+			var wil_card_id: StringName = _equip_card_instance_id(binding, payload)
+			var wil_card = _get_card(binding, wil_card_id)
+			if wil_card == null:
+				return false
+			var lock_tgt: StringName = wil_card.lock_target_mech_id if "lock_target_mech_id" in wil_card else &""
+			if lock_tgt == &"":
+				return false
+			# 锁定目标离场/被毁则自动解锁
+			var wil_ctx = binding.context if binding != null else null
+			if wil_ctx == null or wil_ctx.get("game_state") == null:
+				return true
+			var lock_mech = wil_ctx.game_state.mechs.get(lock_tgt)
+			return lock_mech != null and not lock_mech.destroyed
+
+		&"WEAPON_STATUS_ABSENT":
+			# 武器无某状态（effect_113：未用 weapon_used_this_turn 才回复威力）。状态存 card.counters。
+			var wsa_status: StringName = condition.get("status_type", &"")
+			if wsa_status == &"":
+				return false
+			var wsa_card_id: StringName = _equip_card_instance_id(binding, payload)
+			var wsa_card = _get_card(binding, wsa_card_id)
+			if wsa_card == null:
+				return true
+			return not bool(wsa_card.counters.get(wsa_status, false)) if "counters" in wsa_card else true
+
+		&"SOURCE_OWNER_IS_TURN_PLAYER":
+			# 来源玩家 == 当前回合玩家（effect_113/114 回复判定）。与 IS_OWNER_TURN 同义。
+			var sotp_owner: StringName = _equip_player_id(binding, payload)
+			var sotp_ctx = binding.context if binding != null else null
+			if sotp_owner == &"" or sotp_ctx == null or sotp_ctx.get("game_state") == null:
+				return false
+			return sotp_ctx.game_state.active_player_id == sotp_owner
+
+		&"TARGET_POWER_EQUALS":
+			# 目标当前动力 == value（effect_118：减动力后目标动力为0）
+			var tpe_value: int = int(condition.get("value", condition.get("threshold", 0)))
+			var tpe_target: StringName = payload.get("target_id", &"")
+			var tpe_ctx = binding.context if binding != null else null
+			if tpe_target == &"" or tpe_ctx == null or tpe_ctx.get("game_state") == null:
+				return false
+			var tpe_mech = tpe_ctx.game_state.mechs.get(tpe_target)
+			if tpe_mech == null:
+				return false
+			return tpe_mech.power == tpe_value
+
+		&"DAMAGE_TOKENS_NOT_ALL_IN_SAME_SLOT":
+			# 本次攻击损伤未全在同一区域（effect_119：至少2枚分布≥2区）
+			var dtnas_log: Array = payload.get("damage_placement_log", [])
+			if dtnas_log.size() < 2:
+				return false
+			var distinct: Dictionary = {}
+			for s in dtnas_log:
+				distinct[s] = true
+			return distinct.size() >= 2
+
+		&"SELF_MECH_IS_DAMAGE_TARGET":
+			# 本牌所属机甲 = 损伤目标（盾牌 effect_127/133/136）
+			var smd_mech: StringName = _equip_mech_id(binding, payload)
+			var smd_target: StringName = payload.get("target_mech_id", payload.get("target_id", &""))
+			if smd_target == &"":
+				# damage_change payload 用 mech_ids 列表
+				var smd_ids: Array = payload.get("mech_ids", [])
+				for mid in smd_ids:
+					if String(mid) == String(smd_mech):
+						return true
+				return false
+			return smd_mech != &"" and smd_mech == smd_target
+
+		&"DAMAGE_SOURCE_IS_ATTACK_OR_TRAP":
+			# 损伤来源是攻击或陷阱（盾牌覆盖陷阱）
+			var dsr_reason: String = String(payload.get("reason", &""))
+			if dsr_reason.find("attack") >= 0 or dsr_reason.find("trap") >= 0:
+				return true
+			# damage_change 由 attack 子动作发起时无 reason，检查 payload 是否来自 attack（有 attack_action_id）
+			return payload.has("attack_action_id") or payload.get("source", {}).has("attack_action_id")
+
+		&"PAYLOAD_DAMAGE_TOKENS_ABOVE":
+			# 待放损伤 > threshold（盾牌：损伤>0 才弹转移）
+			var pdt_threshold: int = int(condition.get("threshold", 0))
+			var pdt_total: int = int(payload.get("total_points", payload.get("value", 0)))
+			return pdt_total > pdt_threshold
+
+		&"TARGET_HAS_ACTION_CARDS":
+			# 目标有 ≥ minimum 张行动牌（effect_100 弃目标牌前置）
+			var tac_min: int = int(condition.get("minimum", 1))
+			var tac_target: StringName = payload.get("target_id", &"")
+			var tac_ctx = binding.context if binding != null else null
+			if tac_target == &"" or tac_ctx == null or tac_ctx.get("game_state") == null:
+				return false
+			var tac_player = tac_ctx.game_state.get_player_for_mech(tac_target)
+			if tac_player == null:
+				return false
+			return tac_player.action_hand.size() >= tac_min
+
+		&"ATTACK_COUNT_ABOVE":
+			# 本回合攻击次数 > threshold（effect_128 直攻免牌：攻击次数>0 才可用）
+			var aca_threshold: int = int(condition.get("threshold", 0))
+			var aca_count: int = payload.get("attack_count_this_turn", 0)
+			# DIRECT 主动触发时 payload 无此字段，从 binding_context 机甲查
+			if not payload.has("attack_count_this_turn"):
+				var aca_mech_id: StringName = _equip_mech_id(binding, payload)
+				var aca_ctx = binding.context if binding != null else null
+				if aca_mech_id != &"" and aca_ctx != null and aca_ctx.get("game_state") != null:
+					var aca_mech = aca_ctx.game_state.mechs.get(aca_mech_id)
+					if aca_mech != null:
+						aca_count = int(aca_mech.attack_count_this_turn) if "attack_count_this_turn" in aca_mech else 0
+			return aca_count > aca_threshold
+
+		&"TARGET_IS_ADJACENT":
+			# 攻击目标与攻击方当前位置六边形相邻（距离1，effect_115 霰弹/爆弹/轨道炮）
+			var tadj_attacker: StringName = payload.get("attacker_id", &"")
+			var tadj_target: StringName = payload.get("target_id", &"")
+			var tadj_ctx = binding.context if binding != null else null
+			if tadj_attacker == &"" or tadj_target == &"" or tadj_ctx == null or tadj_ctx.get("game_state") == null:
+				return false
+			var tadj_a = tadj_ctx.game_state.mechs.get(tadj_attacker)
+			var tadj_t = tadj_ctx.game_state.mechs.get(tadj_target)
+			if tadj_a == null or tadj_t == null:
+				return false
+			return _hex_distance(tadj_a.position, tadj_t.position) == 1
+
+		&"REPAIR_HAS_VALID_TARGET":
+			# 场上自身或相邻1格存在非满状态机甲（effect_130 维修机械臂前置）
+			var rht_range: int = int(condition.get("range", 1))
+			var rht_mech: StringName = _equip_mech_id(binding, payload)
+			var rht_ctx = binding.context if binding != null else null
+			if rht_mech == &"" or rht_ctx == null or rht_ctx.get("game_state") == null:
+				return false
+			return _has_repair_target(rht_ctx.game_state, rht_mech, rht_range)
+
+		&"REPAIR_BRANCH_AVAILABLE":
+			# 多功能机械臂 effect_135：维修分支可用（有维修目标 + ≥1行动牌）
+			var rba_ctx = binding.context if binding != null else null
+			if rba_ctx == null or rba_ctx.get("game_state") == null:
+				return false
+			var rba_mech: StringName = _equip_mech_id(binding, payload)
+			var rba_player: StringName = _equip_player_id(binding, payload)
+			if rba_mech == &"":
+				return false
+			if not _has_repair_target(rba_ctx.game_state, rba_mech, 1):
+				return false
+			if rba_player != &"":
+				var rba_pl = rba_ctx.game_state.players.get(rba_player)
+				if rba_pl == null or rba_pl.action_hand.is_empty():
+					return false
+			return true
+
+		&"MULTI_ARM_HAS_AVAILABLE_OPTION":
+			# effect_135：维修分支 或 弃2抽2分支 至少一个可用
+			var mao_ctx = binding.context if binding != null else null
+			if mao_ctx == null or mao_ctx.get("game_state") == null:
+				return false
+			var mao_mech: StringName = _equip_mech_id(binding, payload)
+			var mao_player: StringName = _equip_player_id(binding, payload)
+			if mao_mech == &"":
+				return false
+			# 维修分支
+			if _has_repair_target(mao_ctx.game_state, mao_mech, 1):
+				if mao_player != &"":
+					var mao_pl_a = mao_ctx.game_state.players.get(mao_player)
+					if mao_pl_a != null and not mao_pl_a.action_hand.is_empty():
+						return true
+			# 弃2抽2分支
+			if mao_player != &"":
+				var mao_pl_b = mao_ctx.game_state.players.get(mao_player)
+				if mao_pl_b != null and mao_pl_b.action_hand.size() >= 2:
+					return true
+			return false
+
+		&"WEAPON_HAS_VALID_TRAP_CELL":
+			# effect_134：武器范围内有可放陷阱格
+			return _count_valid_trap_cells(binding, payload) >= 1
+
+		&"WEAPON_HAS_VALID_TRAP_CELLS":
+			# effect_137：武器范围内有 ≥ count 个可放陷阱格
+			var wvc_count: int = int(condition.get("count", 1))
+			return _count_valid_trap_cells(binding, payload) >= wvc_count
+
+		&"TARGET_CELL_CAN_HOLD_TRAP":
+			# 选格规则：所选格子可放陷阱（无既有陷阱）
+			var tct_cell: StringName = payload.get("selected_cell_id", payload.get("cell_id", &""))
+			var tct_ctx = binding.context if binding != null else null
+			if tct_cell == &"" or tct_ctx == null or tct_ctx.get("game_state") == null:
+				return false
+			return _cell_can_hold_trap(tct_ctx.game_state, tct_cell)
+
+		&"DISCARD_PARENT_ATTACK_WEAPON_IS_SELF":
+			# effect_124：随机弃牌的父攻击武器 == 本牌。payload.parent_attack_id 指向 attack，
+			# 读 attack.weapon_id 与本牌比较。
+			var dpas_self: StringName = _equip_card_instance_id(binding, payload)
+			if dpas_self == &"":
+				return false
+			var dpas_ctx = binding.context if binding != null else null
+			if dpas_ctx == null or dpas_ctx.get("action_registry") == null:
+				return false
+			var dpas_atk_id: StringName = payload.get("parent_attack_id", payload.get("attack_action_id", &""))
+			if dpas_atk_id == &"":
+				return false
+			var dpas_atk = dpas_ctx.action_registry.get_action(dpas_atk_id)
+			if dpas_atk == null:
+				return false
+			var dpas_wid: StringName = dpas_atk.record.get("weapon_id", &"")
+			return dpas_wid == dpas_self
+
 		_:
 			push_warning("ConditionChecker: 未知条件操作符 %s，默认返回 true" % op)
 			return true
@@ -902,3 +1173,120 @@ static func _source_card_damage_tokens(binding, payload: Dictionary) -> int:
 	if card == null:
 		return 0
 	return int(card.damage_tokens) if card.get("damage_tokens") else 0
+
+
+# ════════════════════════════════════════════════════════════
+# 武器装备牌效果专用 helper（effect_093+）
+# ════════════════════════════════════════════════════════════
+
+## 取卡牌实例（从 game_state.get_card）
+static func _get_card(binding, card_id: StringName):
+	if card_id == &"" or binding == null or binding.context == null:
+		return null
+	var gs = binding.context.get("game_state")
+	if gs == null:
+		return null
+	return gs.get_card(card_id)
+
+
+## 武器是否处于冷却（effect_125/126）。冷却标记存 card.counters["cooldown_active"]。
+static func _is_weapon_on_cooldown(card) -> bool:
+	if card == null or not "counters" in card:
+		return false
+	return bool(card.counters.get("cooldown_active", false))
+
+
+## 六边形轴向距离（pos = {q, r}）
+static func _hex_distance(a: Dictionary, b: Dictionary) -> int:
+	var aq: int = int(a.get("q", 0))
+	var ar: int = int(a.get("r", 0))
+	var bq: int = int(b.get("q", 0))
+	var br: int = int(b.get("r", 0))
+	return (absi(aq - bq) + absi(aq + ar - bq - br) + absi(ar - br)) / 2
+
+
+## 是否存在合法维修目标：自身或相邻 range 格内、非满状态机甲
+static func _has_repair_target(gs, mech_id: StringName, range: int) -> bool:
+	if gs == null or not gs.mechs.has(mech_id):
+		return false
+	var src = gs.mechs[mech_id]
+	# 自身非满状态
+	if src.current_hp < src.max_hp:
+		return true
+	# 检查是否有损伤（区域/装备牌）
+	if _mech_has_damage(src):
+		return true
+	# 相邻机甲
+	for mid in gs.mechs:
+		if mid == mech_id:
+			continue
+		var m = gs.mechs[mid]
+		if m == null or m.destroyed:
+			continue
+		if _hex_distance(src.position, m.position) <= range:
+			if m.current_hp < m.max_hp or _mech_has_damage(m):
+				return true
+	return false
+
+
+static func _mech_has_damage(mech) -> bool:
+	if mech == null:
+		return false
+	for sid in mech.slots:
+		var slot = mech.slots[sid]
+		if slot == null:
+			continue
+		if int(slot.region_damage_tokens) > 0:
+			return true
+		if slot.equipped_card != null and int(slot.equipped_card.damage_tokens) > 0:
+			return true
+	return false
+
+
+## 格子是否可放陷阱（无既有陷阱标记，且非不可通行地形）
+static func _cell_can_hold_trap(gs, cell_id: StringName) -> bool:
+	if gs == null or gs.map_state == null:
+		return false
+	if not gs.map_state.cells.has(cell_id):
+		return false
+	var cell = gs.map_state.cells[cell_id]
+	if cell == null:
+		return false
+	# 不可通行地形(RED)不可放陷阱
+	if String(cell.get("terrain", &"NORMAL")) == &"RED":
+		return false
+	# 已有陷阱标记的格子不可叠加
+	if gs.map_state.markers != null:
+		for mid in gs.map_state.markers:
+			var m = gs.map_state.markers[mid]
+			if m is Dictionary and m.get("cell_id", &"") == cell_id and m.get("marker_type", &"") == &"TRAP":
+				return false
+	return true
+
+
+## 统计武器有效范围内可放陷阱的格子数（effect_134/137 前置）
+static func _count_valid_trap_cells(binding, payload: Dictionary) -> int:
+	var ctc_card_id: StringName = _equip_card_instance_id(binding, payload)
+	var ctc_mech_id: StringName = _equip_mech_id(binding, payload)
+	var ctc_ctx = binding.context if binding != null else null
+	if ctc_card_id == &"" or ctc_mech_id == &"" or ctc_ctx == null or ctc_ctx.get("game_state") == null:
+		return 0
+	var gs = ctc_ctx.game_state
+	var card = gs.get_card(ctc_card_id)
+	if card == null:
+		return 0
+	var mech = gs.mechs.get(ctc_mech_id)
+	if mech == null:
+		return 0
+	var stats: Dictionary = _GenEquipEffects.get_effective_weapon_stats(card)
+	var range: int = max(1, int(stats.get("range_value", 1)))
+	var count: int = 0
+	for cell_id in gs.map_state.cells:
+		var cell = gs.map_state.cells[cell_id]
+		if cell == null:
+			continue
+		var cell_pos: Dictionary = {"q": int(cell.get("q", 0)), "r": int(cell.get("r", 0))}
+		if _RangeCalculator.is_in_weapon_range(mech.position, cell_pos, range, gs.map_state.cells):
+			if _cell_can_hold_trap(gs, cell_id):
+				count += 1
+	return count

@@ -290,6 +290,20 @@ func _step_apply_damage(action: Action) -> Dictionary:
 	if not hit:
 		return result
 
+	# 拘束钩爪 effect_104：目标被任意攻击命中时，解除锁定此目标的所有武器（"下一次被攻击命中时结束"）
+	var clear_lock_target: StringName = action.record.get("target_id", &"")
+	if clear_lock_target != &"" and context.game_state != null:
+		for m_id in context.game_state.mechs:
+			var m = context.game_state.mechs[m_id]
+			if m == null:
+				continue
+			for wid in m.get_weapon_ids():
+				if String(wid).begins_with("frame_base_weapon"):
+					continue
+				var wcard = context.game_state.get_card(wid)
+				if wcard != null and wcard.get("lock_target_mech_id") == clear_lock_target:
+					wcard.lock_target_mech_id = &""
+
 	var damage: int = action.record.get("damage", 0)
 	var markers: int = action.record.get("markers", 0)
 	# 应用 extra_markers（破甲 +2 / 联邦左腿 -最多2 等 ATTACK_AFTER 时点效果写入）。
@@ -435,30 +449,17 @@ func _get_weapon_stats(attacker, weapon_id: StringName) -> Dictionary:
 				"weapon_kind": base_weapon.get("weapon_kind", &""),
 				"weapon_name": base_weapon.get("name", &""),
 			}
-	# 从卡牌实例获取
+	# 从卡牌实例获取（实体武器 / 虚拟武器）
+	# 统一经 _GenEquipEffects.get_effective_weapon_stats 查询：含持久/临时修正、派生值
+	# （26/27 每损伤-2、40 护甲×2/动力）、流星钢锤形态。避免各处直读 def.might 双计。
 	var weapon_card = context.game_state.get_card(weapon_id)
 	if weapon_card and weapon_card.def:
-		# 虚拟武器（帝国的神莺·躯干 effect_087）：躯干装备牌可当作威力20范围6的远程武器使用，
-		# 不占武器槽。射程受狙击装·头部远程范围加成（派生值实时重算）。
-		# is_virtual 标志供 _step_select_weapon 写入 attack_weapon_instance_id（仅虚拟武器触发 effect_088）。
-		var vw = _GenEquipEffects.get_virtual_weapon_from_equipment(weapon_card)
-		if not vw.is_empty():
-			var vw_kind: StringName = vw.get("weapon_kind", &"远程")
-			return {
-				"might": int(vw.get("might", 20)),
-				# 基础射程；狙击装·头部远程加成由 _step_select_weapon 统一加（与实体武器一致，避免双计）。
-				"range_value": int(vw.get("range_value", 6)),
-				"weapon_kind": vw_kind,
-				"weapon_name": StringName(vw.get("display_name", &"")),
-				"is_virtual": true,
-			}
+		var eff_stats: Dictionary = _GenEquipEffects.get_effective_weapon_stats(weapon_card)
 		return {
-			"might": weapon_card.def.might if "might" in weapon_card.def else 0,
-			"range_value": weapon_card.def.range_value if "range_value" in weapon_card.def else 1,
-			"weapon_kind": weapon_card.def.weapon_kind if "weapon_kind" in weapon_card.def else &"",
-			# 武器名(display_name，如"光束军刀"/"热能战斧")：供 WEAPON_NAME_CONTAINS 条件读取
-			# (白马臂光束/赤枭臂热能/圣牛臂光束/雄鹰臂热能 +3 威力)。此前 record 只存 weapon_id
-			# 无名称，致 WEAPON_NAME_CONTAINS 永远读空 -> 这些效果从不触发。
-			"weapon_name": weapon_card.def.display_name if "display_name" in weapon_card.def else &"",
+			"might": int(eff_stats.get("might", 0)),
+			"range_value": int(eff_stats.get("range_value", 1)),
+			"weapon_kind": eff_stats.get("weapon_kind", &""),
+			"weapon_name": eff_stats.get("weapon_name", &""),
+			"is_virtual": bool(eff_stats.get("is_virtual", false)),
 		}
 	return {"might": 0, "range_value": 1, "weapon_kind": &"", "weapon_name": &""}

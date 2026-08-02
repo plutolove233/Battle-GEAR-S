@@ -154,12 +154,9 @@ func _register_equipment_effects(card, mech_id: StringName, slot_id: StringName 
 	if card.get("face_down") == true:
 		return
 
-	# [临时沉默] 武器装备牌的效果连接目前均有问题，暂不注册任何武器效果（用户要求先沉默，
-	# 后续统一修复武器时再放开此守卫）。与 EffectRegistry.register_card 的守卫对应，
-	# 覆盖游戏中 set_equipment 装备的武器（初始武器走 legacy register_card 已被那边守卫拦截）。
-	# 武器基础数值(权威/射程/类型/耐久)由 def 直接提供、攻击计算读取，不受影响。
-	if "equipment_kind" in card.def and card.def.equipment_kind == &"WEAPON":
-		return
+	# 武器装备牌效果现已落码（effect_093+），正常注册。武器仅在正面设置到 WEAPON 槽时注册
+	# permanent listener；备用区不注册（上面 face_down 守卫已拦）。派生值型武器效果（120/138）
+	# 由 _is_derived_effect 跳过监听器注册，实时重算。
 
 	# 取该牌的 effect_id 列表
 	var effect_ids: Array = _GeneratedEquipmentEffects.get_effects_for_card(card.def.card_id, context)
@@ -230,6 +227,8 @@ func _is_derived_effect(effect_id: StringName) -> bool:
 		&"equipment_effect_080",  # 一角兽头·全场联邦光环护甲+1
 		&"equipment_effect_086",  # 神莺头·全场帝国光环动力+1
 		&"equipment_effect_087",  # 神莺躯干·虚拟武器(权限型，由武器选择识别)
+		&"equipment_effect_120",  # 武器 26/27·每1自损威力-2(派生值实时重算)
+		&"equipment_effect_138",  # 武器 40·质能全转换威力=护甲×2范围=动力(派生值实时重算)
 	]
 
 

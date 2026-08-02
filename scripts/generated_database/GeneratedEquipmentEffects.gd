@@ -2440,6 +2440,795 @@ static func build_equipment_effects() -> Dictionary:
 	lark_torso_cost.description = "使用此牌发动攻击需要消耗当前所有动力(不为0)，且直到下个我方回合开始无法回复。"
 	effects[lark_torso_cost.effect_id] = lark_torso_cost
 
+	# ═══════════════════════════════════════════════════════════════
+	# 武器装备牌效果（equipment_effect_093 ~ 139，共47个定义）
+	# 权威拆解：new_logic/Battle-GEAR-S_武器装备牌效果逻辑拆解_40张全量.txt
+	# 武器仅正面设置到 WEAPON 槽时注册 permanent listener；备用区不注册；离场注销。
+	# ATTACK_AFTER 在主损伤放置前：简单额外损伤用 MODIFY_ATTACK_MARKERS；需读放置结果的
+	# （101/119）在 ATTACK_SETTLE 读 damage_placement_log。
+	# ═══════════════════════════════════════════════════════════════
+
+	# 093 聚能后本回合范围+1（01光束军刀/17热能机枪）
+	var w093 := _ActionEffect.new()
+	w093.effect_id = &"equipment_effect_093"
+	w093.display_name = "聚能后本回合范围+1"
+	w093.mode = _TC.MODE_LISTEN
+	w093.priority = 10
+	w093.listen_timing = _TC.EFFECT_FIRE_AFTER
+	w093.listen_action_type = &"effect_fire"
+	w093.set_conditions([{"op": &"ENERGY_TARGET_IS_SELF"}])
+	w093.set_target_rules([{"rule": &"NO_TARGET"}])
+	w093.set_costs([])
+	w093.set_actions([{"type": &"SET_WEAPON_STATS", "params": {"target_card_instance_id": "$binding_context.card_instance_id", "might_delta": 0, "range_delta": 1, "duration": &"THIS_OWNER_TURN", "stack": true}}])
+	w093.description = "对此牌使用聚能时，本回合额外使此牌范围+1。"
+	effects[w093.effect_id] = w093
+
+	# 094 被光束名武器攻击时弃攻击牌响应，威力-5（01光束军刀/16光束步枪）
+	var w094 := _ActionEffect.new()
+	w094.effect_id = &"equipment_effect_094"
+	w094.display_name = "被光束名武器攻击时弃攻击牌响应，威力-5"
+	w094.mode = _TC.MODE_AVAILABILITY
+	w094.priority = 10
+	w094.availability_priority = 5
+	w094.listen_timing = _TC.ATTACK_AT
+	w094.listen_action_type = &"attack"
+	w094.set_conditions([
+		{"op": &"SELF_MECH_IS_ATTACK_TARGET"},
+		{"op": &"WEAPON_NAME_CONTAINS", "params": {"substring": "光束"}},
+		{"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"card_type": &"attack", "count": 1}},
+	])
+	w094.set_target_rules([{"rule": &"NO_TARGET"}])
+	w094.set_costs([{"cost_type": &"DISCARD_ACTION_CARD", "count": 1, "optional": false, "params": {"card_type": &"attack", "reason": &"weapon_named_response"}}])
+	w094.set_actions([
+		{"type": &"RESPOND_ATTACK", "params": {"source_type": &"equipment", "source_card_instance_id": "$binding_context.card_instance_id", "is_counter_card": false}},
+		{"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": -5}},
+	])
+	w094.description = "机甲被名称带有光束的武器攻击时，可弃1张攻击行动牌响应，使该攻击威力-5。"
+	effects[w094.effect_id] = w094
+
+	# 095 聚能后本回合威力+3（02热能战斧/16光束步枪）
+	var w095 := _ActionEffect.new()
+	w095.effect_id = &"equipment_effect_095"
+	w095.display_name = "聚能后本回合威力+3"
+	w095.mode = _TC.MODE_LISTEN
+	w095.priority = 10
+	w095.listen_timing = _TC.EFFECT_FIRE_AFTER
+	w095.listen_action_type = &"effect_fire"
+	w095.set_conditions([{"op": &"ENERGY_TARGET_IS_SELF"}])
+	w095.set_target_rules([{"rule": &"NO_TARGET"}])
+	w095.set_costs([])
+	w095.set_actions([{"type": &"SET_WEAPON_STATS", "params": {"target_card_instance_id": "$binding_context.card_instance_id", "might_delta": 3, "range_delta": 0, "duration": &"THIS_OWNER_TURN", "stack": true}}])
+	w095.description = "对此牌使用聚能时，本回合额外使此牌威力+3。"
+	effects[w095.effect_id] = w095
+
+	# 096 被热能名武器攻击时弃攻击牌响应，威力-5（02热能战斧/17热能机枪）
+	var w096 := _ActionEffect.new()
+	w096.effect_id = &"equipment_effect_096"
+	w096.display_name = "被热能名武器攻击时弃攻击牌响应，威力-5"
+	w096.mode = _TC.MODE_AVAILABILITY
+	w096.priority = 10
+	w096.availability_priority = 5
+	w096.listen_timing = _TC.ATTACK_AT
+	w096.listen_action_type = &"attack"
+	w096.set_conditions([
+		{"op": &"SELF_MECH_IS_ATTACK_TARGET"},
+		{"op": &"WEAPON_NAME_CONTAINS", "params": {"substring": "热能"}},
+		{"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"card_type": &"attack", "count": 1}},
+	])
+	w096.set_target_rules([{"rule": &"NO_TARGET"}])
+	w096.set_costs([{"cost_type": &"DISCARD_ACTION_CARD", "count": 1, "optional": false, "params": {"card_type": &"attack", "reason": &"weapon_named_response"}}])
+	w096.set_actions([
+		{"type": &"RESPOND_ATTACK", "params": {"source_type": &"equipment", "source_card_instance_id": "$binding_context.card_instance_id", "is_counter_card": false}},
+		{"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": -5}},
+	])
+	w096.description = "机甲被名称带有热能的武器攻击时，可弃1张攻击行动牌响应，使该攻击威力-5。"
+	effects[w096.effect_id] = w096
+
+	# 097 命中后可使本次攻击损伤标记+2（03破甲狼爪/09重型锤矛）
+	var w097 := _ActionEffect.new()
+	w097.effect_id = &"equipment_effect_097"
+	w097.display_name = "命中后可使本次攻击损伤标记+2"
+	w097.mode = _TC.MODE_LISTEN
+	w097.priority = 10
+	w097.listen_timing = _TC.ATTACK_AFTER
+	w097.listen_action_type = &"attack"
+	w097.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"PAYLOAD_ATTACK_HIT"}])
+	w097.set_target_rules([{"rule": &"NO_TARGET"}])
+	w097.set_costs([])
+	w097.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "额外设置2损伤", "actions": [{"type": &"MODIFY_ATTACK_MARKERS", "params": {"delta": 2}}]}]}}])
+	w097.description = "此牌发动的攻击命中后可额外设置2损伤。"
+	effects[w097.effect_id] = w097
+
+	# 098 流星钢锤主阶段切换形态（04）
+	var w098 := _ActionEffect.new()
+	w098.effect_id = &"equipment_effect_098"
+	w098.display_name = "流星钢锤主阶段切换形态"
+	w098.mode = _TC.MODE_DIRECT
+	w098.priority = 10
+	w098.set_conditions([{"op": &"IS_OWNER_MAIN_PHASE"}])
+	w098.set_target_rules([{"rule": &"NO_TARGET"}])
+	w098.set_costs([])
+	w098.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [
+		{"label": "威力-5，范围+2", "condition": {"op": &"WEAPON_MODE_NOT_EQUALS", "params": {"mode": &"extended"}}, "actions": [{"type": &"SET_WEAPON_MODE", "params": {"target_card_instance_id": "$binding_context.card_instance_id", "mode": &"extended"}}]},
+		{"label": "恢复原本数值", "condition": {"op": &"WEAPON_MODE_EQUALS", "params": {"mode": &"extended"}}, "actions": [{"type": &"SET_WEAPON_MODE", "params": {"target_card_instance_id": "$binding_context.card_instance_id", "mode": &"normal"}}]},
+	]}}])
+	w098.description = "我方回合中可以使此牌威力-5范围+2，或恢复原本数值。"
+	effects[w098.effect_id] = w098
+
+	# 099 流星钢锤攻击被响应后切换形态（04）
+	var w099 := _ActionEffect.new()
+	w099.effect_id = &"equipment_effect_099"
+	w099.display_name = "流星钢锤攻击被响应后切换形态"
+	w099.mode = _TC.MODE_LISTEN
+	w099.priority = 10
+	w099.listen_timing = _TC.ATTACK_AT
+	w099.listen_action_type = &"attack"
+	w099.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"ATTACK_WAS_RESPONDED"}])
+	w099.set_target_rules([{"rule": &"NO_TARGET"}])
+	w099.set_costs([])
+	w099.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [
+		{"label": "威力-5，范围+2", "actions": [{"type": &"SET_WEAPON_MODE", "params": {"target_card_instance_id": "$binding_context.card_instance_id", "mode": &"extended", "refresh_parent_attack": true}}]},
+		{"label": "恢复原本数值", "actions": [{"type": &"SET_WEAPON_MODE", "params": {"target_card_instance_id": "$binding_context.card_instance_id", "mode": &"normal", "refresh_parent_attack": true}}]},
+	]}}])
+	w099.description = "此牌发动的攻击被响应后，可切换形态。"
+	effects[w099.effect_id] = w099
+
+	# 100 命中后可弃目标2张行动牌（05扭转钢鞭）
+	var w100 := _ActionEffect.new()
+	w100.effect_id = &"equipment_effect_100"
+	w100.display_name = "命中后可弃目标2张行动牌"
+	w100.mode = _TC.MODE_LISTEN
+	w100.priority = 10
+	w100.listen_timing = _TC.ATTACK_AFTER
+	w100.listen_action_type = &"attack"
+	w100.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"PAYLOAD_ATTACK_HIT"}, {"op": &"TARGET_HAS_ACTION_CARDS", "params": {"minimum": 1}}])
+	w100.set_target_rules([{"rule": &"NO_TARGET"}])
+	w100.set_costs([])
+	w100.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "弃置目标2张行动牌", "actions": [{"type": &"EXECUTE_DISCARD", "params": {"from_target": "$payload.target_id", "zone": &"action_hand", "count": 2, "count_mode": &"up_to", "choose": true, "chooser_id": "$binding_context.mech_id", "face_up": false, "reason": &"weapon_effect"}}]}]}}])
+	w100.description = "此牌发动的攻击命中后可弃置攻击目标2张行动牌。"
+	effects[w100.effect_id] = w100
+
+	# 101 同区额外2损伤（06光束战戟/07热能战镰/21光束狙击枪/22穿甲热能枪）
+	var w101 := _ActionEffect.new()
+	w101.effect_id = &"equipment_effect_101"
+	w101.display_name = "本次攻击损伤全在同一区域后，可在该区域额外放2损伤"
+	w101.mode = _TC.MODE_LISTEN
+	w101.priority = 10
+	w101.listen_timing = _TC.ATTACK_SETTLE
+	w101.listen_action_type = &"attack"
+	w101.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"PAYLOAD_ATTACK_HIT"}, {"op": &"ATTACK_MARKERS_ABOVE", "params": {"threshold": 1}}, {"op": &"DAMAGE_TOKENS_ALL_IN_SAME_SLOT"}])
+	w101.set_target_rules([{"rule": &"NO_TARGET"}])
+	w101.set_costs([])
+	w101.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "在同一区域额外设置2损伤", "actions": [{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 2, "target_mech_id": "$payload.target_id", "target_slot": "$payload.single_damage_slot_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_extra_damage"}}]}]}}])
+	w101.description = "此牌发动的攻击产生的损伤如果全部设置于同一区域，则可以额外设置2损伤在该区域上。"
+	effects[w101.effect_id] = w101
+
+	# 102 命中后可额外2损伤，之后本牌自损1（08断甲长刀）
+	var w102 := _ActionEffect.new()
+	w102.effect_id = &"equipment_effect_102"
+	w102.display_name = "命中后可额外2损伤，之后本牌自损1"
+	w102.mode = _TC.MODE_LISTEN
+	w102.priority = 10
+	w102.listen_timing = _TC.ATTACK_AFTER
+	w102.listen_action_type = &"attack"
+	w102.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"PAYLOAD_ATTACK_HIT"}])
+	w102.set_target_rules([{"rule": &"NO_TARGET"}])
+	w102.set_costs([])
+	w102.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "额外2损伤并使此牌受1损伤", "actions": [
+		{"type": &"MODIFY_ATTACK_MARKERS", "params": {"delta": 2}},
+		{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 1, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_self_damage"}},
+	]}]}}])
+	w102.description = "此牌发动的攻击命中后可额外设置2损伤，之后在此牌上设置1损伤。"
+	effects[w102.effect_id] = w102
+
+	# 103 本牌攻击未命中时自损2（09重型锤矛）
+	var w103 := _ActionEffect.new()
+	w103.effect_id = &"equipment_effect_103"
+	w103.display_name = "本牌攻击未命中时自损2"
+	w103.mode = _TC.MODE_LISTEN
+	w103.priority = 10
+	w103.listen_timing = _TC.ATTACK_AFTER
+	w103.listen_action_type = &"attack"
+	w103.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"PAYLOAD_ATTACK_MISS"}])
+	w103.set_target_rules([{"rule": &"NO_TARGET"}])
+	w103.set_costs([])
+	w103.set_actions([{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 2, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_miss_self_damage"}}])
+	w103.description = "此牌发动的攻击没有命中，则设置2损伤在此牌上。"
+	effects[w103.effect_id] = w103
+
+	# 104 命中后施加锁定；锁定期间本牌不能攻击（10拘束钩爪）
+	var w104 := _ActionEffect.new()
+	w104.effect_id = &"equipment_effect_104"
+	w104.display_name = "命中后施加锁定；锁定期间本牌不能攻击"
+	w104.mode = _TC.MODE_LISTEN
+	w104.priority = 10
+	w104.listen_timing = _TC.ATTACK_AFTER
+	w104.listen_action_type = &"attack"
+	w104.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"PAYLOAD_ATTACK_HIT"}, {"op": &"ATTACK_TARGET_ALIVE"}])
+	w104.set_target_rules([{"rule": &"NO_TARGET"}])
+	w104.set_costs([])
+	w104.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "施加锁定", "actions": [{"type": &"SET_WEAPON_LOCK", "params": {"weapon_id": "$binding_context.card_instance_id", "target_id": "$payload.target_id", "mode": &"apply"}}]}]}}])
+	w104.description = "命中后可施加锁定，持续到目标下一次被攻击命中，期间此牌不能攻击。"
+	effects[w104.effect_id] = w104
+
+	# 105 本牌攻击命中后自损1（11光束斩舰刀/12热能双刃斧）
+	var w105 := _ActionEffect.new()
+	w105.effect_id = &"equipment_effect_105"
+	w105.display_name = "本牌攻击命中后自损1"
+	w105.mode = _TC.MODE_LISTEN
+	w105.priority = 10
+	w105.listen_timing = _TC.ATTACK_AFTER
+	w105.listen_action_type = &"attack"
+	w105.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"PAYLOAD_ATTACK_HIT"}])
+	w105.set_target_rules([{"rule": &"NO_TARGET"}])
+	w105.set_costs([])
+	w105.set_actions([{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 1, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_hit_self_damage"}}])
+	w105.description = "此牌发动的攻击命中后，在此牌上设置1损伤。"
+	effects[w105.effect_id] = w105
+
+	# 106 光束斩舰刀攻击时可威力+3并记录后续自损（11）
+	var w106 := _ActionEffect.new()
+	w106.effect_id = &"equipment_effect_106"
+	w106.display_name = "光束斩舰刀攻击时可威力+3并记录后续自损"
+	w106.mode = _TC.MODE_LISTEN
+	w106.priority = 10
+	w106.listen_timing = _TC.ATTACK_BEFORE
+	w106.listen_action_type = &"attack"
+	w106.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}])
+	w106.set_target_rules([{"rule": &"NO_TARGET"}])
+	w106.set_costs([])
+	w106.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "威力+3（结算后此牌受1损伤）", "actions": [
+		{"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": 3}},
+		{"type": &"INCREMENT_VARIABLE", "params": {"scope": &"attack", "variable_name": &"weapon_011_bonus_used", "delta": 1}},
+	]}]}}])
+	w106.description = "此牌攻击时，可以使威力+3，攻击结算后在此牌上设置1损伤。"
+	effects[w106.effect_id] = w106
+
+	# 107 光束斩舰刀加成攻击结算后自损1（11）
+	var w107 := _ActionEffect.new()
+	w107.effect_id = &"equipment_effect_107"
+	w107.display_name = "光束斩舰刀加成攻击结算后自损1"
+	w107.mode = _TC.MODE_LISTEN
+	w107.priority = 10
+	w107.listen_timing = _TC.ATTACK_SETTLE
+	w107.listen_action_type = &"attack"
+	w107.requires_effect = &"equipment_effect_106"
+	w107.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"VARIABLE_ABOVE", "params": {"scope": &"attack", "variable_name": &"weapon_011_bonus_used", "threshold": 0}}])
+	w107.set_target_rules([{"rule": &"NO_TARGET"}])
+	w107.set_costs([])
+	w107.set_actions([{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 1, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_bonus_settle_self_damage"}}])
+	w107.description = "攻击结算后在此牌上设置1损伤（仅选过威力+3时）。"
+	effects[w107.effect_id] = w107
+
+	# 108 热能双刃斧攻击时可范围+2并记录后续自损（12）
+	var w108 := _ActionEffect.new()
+	w108.effect_id = &"equipment_effect_108"
+	w108.display_name = "热能双刃斧攻击时可范围+2并记录后续自损"
+	w108.mode = _TC.MODE_LISTEN
+	w108.priority = 10
+	w108.listen_timing = _TC.ATTACK_BEFORE
+	w108.listen_action_type = &"attack"
+	w108.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}])
+	w108.set_target_rules([{"rule": &"NO_TARGET"}])
+	w108.set_costs([])
+	w108.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "范围+2（结算后此牌受1损伤）", "actions": [
+		{"type": &"MODIFY_ATTACK_RANGE", "params": {"delta": 2, "min_value": 0}},
+		{"type": &"INCREMENT_VARIABLE", "params": {"scope": &"attack", "variable_name": &"weapon_012_bonus_used", "delta": 1}},
+	]}]}}])
+	w108.description = "此牌攻击时，可以使范围+2，攻击结算后在此牌上设置1损伤。"
+	effects[w108.effect_id] = w108
+
+	# 109 热能双刃斧加成攻击结算后自损1（12）
+	var w109 := _ActionEffect.new()
+	w109.effect_id = &"equipment_effect_109"
+	w109.display_name = "热能双刃斧加成攻击结算后自损1"
+	w109.mode = _TC.MODE_LISTEN
+	w109.priority = 10
+	w109.listen_timing = _TC.ATTACK_SETTLE
+	w109.listen_action_type = &"attack"
+	w109.requires_effect = &"equipment_effect_108"
+	w109.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"VARIABLE_ABOVE", "params": {"scope": &"attack", "variable_name": &"weapon_012_bonus_used", "threshold": 0}}])
+	w109.set_target_rules([{"rule": &"NO_TARGET"}])
+	w109.set_costs([])
+	w109.set_actions([{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 1, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_bonus_settle_self_damage"}}])
+	w109.description = "攻击结算后在此牌上设置1损伤（仅选过范围+2时）。"
+	effects[w109.effect_id] = w109
+
+	# 110 使用闪回激光剑攻击必须额外消耗2动力（13）
+	var w110 := _ActionEffect.new()
+	w110.effect_id = &"equipment_effect_110"
+	w110.display_name = "使用闪回激光剑攻击必须额外消耗2动力"
+	w110.mode = _TC.MODE_LISTEN
+	w110.priority = 20
+	w110.listen_timing = _TC.ATTACK_BEFORE
+	w110.listen_action_type = &"attack"
+	w110.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"OWNER_POWER_ABOVE_OR_EQUAL", "params": {"threshold": 2}}])
+	w110.set_target_rules([{"rule": &"NO_TARGET"}])
+	w110.set_costs([{"cost_type": &"SPEND_POWER", "amount": 2, "optional": false}])
+	w110.set_actions([])
+	w110.description = "需要额外消耗2动力才能使用此牌攻击。"
+	effects[w110.effect_id] = w110
+
+	# 111 闪回激光剑攻击时可再耗4动力使威力+3（13）
+	var w111 := _ActionEffect.new()
+	w111.effect_id = &"equipment_effect_111"
+	w111.display_name = "闪回激光剑攻击时可再耗4动力使威力+3"
+	w111.mode = _TC.MODE_LISTEN
+	w111.priority = 10
+	w111.listen_timing = _TC.ATTACK_BEFORE
+	w111.listen_action_type = &"attack"
+	w111.requires_effect = &"equipment_effect_110"
+	w111.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"OWNER_POWER_ABOVE_OR_EQUAL", "params": {"threshold": 4}}])
+	w111.set_target_rules([{"rule": &"NO_TARGET"}])
+	w111.set_costs([])
+	w111.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "再消耗4动力，威力+3", "actions": [
+		{"type": &"SPEND_POWER", "params": {"amount": 4}},
+		{"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": 3}},
+	]}]}}])
+	w111.description = "此牌攻击时，可以再消耗4动力使此次攻击威力+3。"
+	effects[w111.effect_id] = w111
+
+	# 112 每次攻击结算后武器威力永久-4并标记本回合已用（14/15）
+	var w112 := _ActionEffect.new()
+	w112.effect_id = &"equipment_effect_112"
+	w112.display_name = "每次攻击结算后武器威力永久-4并标记本回合已用"
+	w112.mode = _TC.MODE_LISTEN
+	w112.priority = 10
+	w112.listen_timing = _TC.ATTACK_SETTLE
+	w112.listen_action_type = &"attack"
+	w112.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}])
+	w112.set_target_rules([{"rule": &"NO_TARGET"}])
+	w112.set_costs([])
+	w112.set_actions([
+		{"type": &"MODIFY_WEAPON_POWER", "params": {"target_card_instance_id": "$binding_context.card_instance_id", "delta": -4, "mode": &"increase", "duration": &"PERMANENT", "bucket": "weapon_decay"}},
+		{"type": &"ADD_STATUS", "params": {"status_type": &"weapon_used_this_turn", "target_card_instance_id": "$binding_context.card_instance_id", "duration": &"UNTIL_OWNER_TURN_AFTER_END", "refresh": true}},
+	])
+	w112.description = "此牌每发动过1次攻击，威力-4。"
+	effects[w112.effect_id] = w112
+
+	# 113 我方回合未用本牌攻击则回合结束回复4威力（14/15）
+	var w113 := _ActionEffect.new()
+	w113.effect_id = &"equipment_effect_113"
+	w113.display_name = "我方回合未用本牌攻击则回合结束回复4威力"
+	w113.mode = _TC.MODE_LISTEN
+	w113.priority = 10
+	w113.listen_timing = _TC.TURN_END
+	w113.listen_action_type = &"turn"
+	w113.set_conditions([{"op": &"SOURCE_OWNER_IS_TURN_PLAYER"}, {"op": &"WEAPON_STATUS_ABSENT", "params": {"status_type": &"weapon_used_this_turn"}}])
+	w113.set_target_rules([{"rule": &"NO_TARGET"}])
+	w113.set_costs([])
+	w113.set_actions([{"type": &"MODIFY_WEAPON_POWER", "params": {"target_card_instance_id": "$binding_context.card_instance_id", "delta": 4, "mode": &"restore", "clamp_max": &"printed_might", "duration": &"PERMANENT", "bucket": "weapon_decay"}}])
+	w113.description = "我方回合未使用此牌攻击则在回合结束时回复4威力。"
+	effects[w113.effect_id] = w113
+
+	# 114 对此牌使用聚能时回复4威力（14/15）
+	var w114 := _ActionEffect.new()
+	w114.effect_id = &"equipment_effect_114"
+	w114.display_name = "对此牌使用聚能时回复4威力"
+	w114.mode = _TC.MODE_LISTEN
+	w114.priority = 10
+	w114.listen_timing = _TC.EFFECT_FIRE_AFTER
+	w114.listen_action_type = &"effect_fire"
+	w114.set_conditions([{"op": &"ENERGY_TARGET_IS_SELF"}])
+	w114.set_target_rules([{"rule": &"NO_TARGET"}])
+	w114.set_costs([])
+	w114.set_actions([{"type": &"MODIFY_WEAPON_POWER", "params": {"target_card_instance_id": "$binding_context.card_instance_id", "delta": 4, "mode": &"restore", "clamp_max": &"printed_might", "duration": &"PERMANENT", "bucket": "weapon_decay"}}])
+	w114.description = "对此牌使用聚能时也可回复4威力。"
+	effects[w114.effect_id] = w114
+
+	# 115 命中且目标与攻击方相邻时可额外2损伤（18/19/23）
+	var w115 := _ActionEffect.new()
+	w115.effect_id = &"equipment_effect_115"
+	w115.display_name = "命中且目标与攻击方相邻时可额外2损伤"
+	w115.mode = _TC.MODE_LISTEN
+	w115.priority = 10
+	w115.listen_timing = _TC.ATTACK_AFTER
+	w115.listen_action_type = &"attack"
+	w115.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"PAYLOAD_ATTACK_HIT"}, {"op": &"TARGET_IS_ADJACENT"}])
+	w115.set_target_rules([{"rule": &"NO_TARGET"}])
+	w115.set_costs([])
+	w115.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "相邻：额外设置2损伤", "actions": [{"type": &"MODIFY_ATTACK_MARKERS", "params": {"delta": 2}}]}]}}])
+	w115.description = "命中且目标与机甲当前位置相邻，则可额外设置2损伤。"
+	effects[w115.effect_id] = w115
+
+	# 116 命中后可额外1损伤（20火箭筒）
+	var w116 := _ActionEffect.new()
+	w116.effect_id = &"equipment_effect_116"
+	w116.display_name = "命中后可额外1损伤"
+	w116.mode = _TC.MODE_LISTEN
+	w116.priority = 10
+	w116.listen_timing = _TC.ATTACK_AFTER
+	w116.listen_action_type = &"attack"
+	w116.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"PAYLOAD_ATTACK_HIT"}])
+	w116.set_target_rules([{"rule": &"NO_TARGET"}])
+	w116.set_costs([])
+	w116.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "额外设置1损伤", "actions": [{"type": &"MODIFY_ATTACK_MARKERS", "params": {"delta": 1}}]}]}}])
+	w116.description = "此牌发动的攻击命中后可额外设置1损伤。"
+	effects[w116.effect_id] = w116
+
+	# 117 指定目标时可使目标当前动力-2并记录已发动（24密集导弹炮）
+	var w117 := _ActionEffect.new()
+	w117.effect_id = &"equipment_effect_117"
+	w117.display_name = "指定目标时可使目标当前动力-2并记录已发动"
+	w117.mode = _TC.MODE_LISTEN
+	w117.priority = 20
+	w117.listen_timing = _TC.ATTACK_PRE
+	w117.listen_action_type = &"attack"
+	w117.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"ATTACK_TARGET_ALIVE"}])
+	w117.set_target_rules([{"rule": &"NO_TARGET"}])
+	w117.set_costs([])
+	w117.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "使目标当前动力-2", "actions": [
+		{"type": &"MODIFY_MECH_POWER", "params": {"target_id": "$payload.target_id", "delta": -2, "mode": &"current_only", "min_value": 0, "duration": &"PERMANENT"}},
+		{"type": &"INCREMENT_VARIABLE", "params": {"scope": &"attack", "variable_name": &"weapon_024_power_drain_used", "delta": 1}},
+	]}]}}])
+	w117.description = "此牌发动攻击指定目标时，可以使目标当前动力-2。"
+	effects[w117.effect_id] = w117
+
+	# 118 已减动力且命中时，若目标动力为0则额外2损伤（24）
+	var w118 := _ActionEffect.new()
+	w118.effect_id = &"equipment_effect_118"
+	w118.display_name = "已减动力且命中时，若目标动力为0则额外2损伤"
+	w118.mode = _TC.MODE_LISTEN
+	w118.priority = 10
+	w118.listen_timing = _TC.ATTACK_AFTER
+	w118.listen_action_type = &"attack"
+	w118.requires_effect = &"equipment_effect_117"
+	w118.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"PAYLOAD_ATTACK_HIT"}, {"op": &"VARIABLE_ABOVE", "params": {"scope": &"attack", "variable_name": &"weapon_024_power_drain_used", "threshold": 0}}, {"op": &"TARGET_POWER_EQUALS", "params": {"value": 0}}])
+	w118.set_target_rules([{"rule": &"NO_TARGET"}])
+	w118.set_costs([])
+	w118.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "目标动力为0：额外设置2损伤", "actions": [{"type": &"MODIFY_ATTACK_MARKERS", "params": {"delta": 2}}]}]}}])
+	w118.description = "若目标机甲动力为0，则攻击命中可额外设置2损伤。"
+	effects[w118.effect_id] = w118
+
+	# 119 本次攻击损伤未全在同一区域后，可额外2损伤（25超级火箭筒）
+	var w119 := _ActionEffect.new()
+	w119.effect_id = &"equipment_effect_119"
+	w119.display_name = "本次攻击损伤未全在同一区域后，可额外2损伤"
+	w119.mode = _TC.MODE_LISTEN
+	w119.priority = 10
+	w119.listen_timing = _TC.ATTACK_SETTLE
+	w119.listen_action_type = &"attack"
+	w119.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"PAYLOAD_ATTACK_HIT"}, {"op": &"ATTACK_MARKERS_ABOVE", "params": {"threshold": 1}}, {"op": &"DAMAGE_TOKENS_NOT_ALL_IN_SAME_SLOT"}])
+	w119.set_target_rules([{"rule": &"NO_TARGET"}])
+	w119.set_costs([])
+	w119.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "损伤分散：额外设置2损伤", "actions": [{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 2, "target_mech_id": "$payload.target_id", "target_slot": &"choose_by_executor", "executor_id": "$binding_context.mech_id", "reason": &"weapon_extra_damage"}}]}]}}])
+	w119.description = "此牌发动的攻击产生的损伤如果未设置于同一区域，则可额外再设置2损伤。"
+	effects[w119.effect_id] = w119
+
+	# 120 每有1损伤，武器有效威力-2（26/27）派生值型——不注册监听器
+	var w120 := _ActionEffect.new()
+	w120.effect_id = &"equipment_effect_120"
+	w120.display_name = "每有1损伤，武器有效威力-2"
+	w120.mode = _TC.MODE_DIRECT
+	w120.priority = 10
+	w120.set_conditions([{"op": &"ALWAYS"}])
+	w120.set_target_rules([{"rule": &"NO_TARGET"}])
+	w120.set_costs([])
+	w120.set_actions([])
+	w120.description = "此牌每设置有1损伤，则威力-2（实时重算）。"
+	effects[w120.effect_id] = w120
+
+	# 121 大型光束炮攻击时可自损1并将本次威力回复至全值+2（26）
+	var w121 := _ActionEffect.new()
+	w121.effect_id = &"equipment_effect_121"
+	w121.display_name = "大型光束炮攻击时可自损1并将本次威力回复至全值+2"
+	w121.mode = _TC.MODE_LISTEN
+	w121.priority = 10
+	w121.listen_timing = _TC.ATTACK_BEFORE
+	w121.listen_action_type = &"attack"
+	w121.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}])
+	w121.set_target_rules([{"rule": &"NO_TARGET"}])
+	w121.set_costs([])
+	w121.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "此牌受1损伤，回复全部威力并威力+2", "actions": [
+		{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 1, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_self_damage"}},
+		{"type": &"SET_ATTACK_MIGHT_FROM_PRINTED_WEAPON", "params": {"weapon_instance_id": "$binding_context.card_instance_id", "bonus": 2, "ignore_self_damage_penalty": true, "preserve_external_extra_might": true}},
+	]}]}}])
+	w121.description = "此牌攻击时，可以在此牌上设置1损伤，回复全部威力，并使威力+2。"
+	effects[w121.effect_id] = w121
+
+	# 122 热能加特林命中时可自损2，之后额外3损伤（27）
+	var w122 := _ActionEffect.new()
+	w122.effect_id = &"equipment_effect_122"
+	w122.display_name = "热能加特林命中时可自损2，之后额外3损伤"
+	w122.mode = _TC.MODE_LISTEN
+	w122.priority = 10
+	w122.listen_timing = _TC.ATTACK_AFTER
+	w122.listen_action_type = &"attack"
+	w122.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"PAYLOAD_ATTACK_HIT"}])
+	w122.set_target_rules([{"rule": &"NO_TARGET"}])
+	w122.set_costs([])
+	w122.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "此牌受2损伤，额外设置3损伤", "actions": [
+		{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 2, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_self_damage"}},
+		{"type": &"MODIFY_ATTACK_MARKERS", "params": {"delta": 3}},
+	]}]}}])
+	w122.description = "此牌攻击命中时，可以在此牌上设置2损伤，之后可额外设置3损伤。"
+	effects[w122.effect_id] = w122
+
+	# 123 攻击时随机弃我方1张行动牌（28雷爆磁轨炮）
+	var w123 := _ActionEffect.new()
+	w123.effect_id = &"equipment_effect_123"
+	w123.display_name = "攻击时随机弃我方1张行动牌"
+	w123.mode = _TC.MODE_LISTEN
+	w123.priority = 20
+	w123.listen_timing = _TC.ATTACK_BEFORE
+	w123.listen_action_type = &"attack"
+	w123.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"count": 1}}])
+	w123.set_target_rules([{"rule": &"NO_TARGET"}])
+	w123.set_costs([])
+	w123.set_actions([{"type": &"RANDOM_DISCARD_ACTION_CARD", "params": {"owner_id": "$binding_context.mech_id", "count": 1, "reason": &"weapon_028_random_cost", "parent_attack_id": "$payload.action_id"}}])
+	w123.description = "此牌发动攻击时，随机弃置我方1张行动牌。"
+	effects[w123.effect_id] = w123
+
+	# 124 随机弃牌若为最后一张，则本次攻击威力+3（28）
+	var w124 := _ActionEffect.new()
+	w124.effect_id = &"equipment_effect_124"
+	w124.display_name = "随机弃牌若为最后一张，则本次攻击威力+3"
+	w124.mode = _TC.MODE_LISTEN
+	w124.priority = 10
+	w124.listen_timing = _TC.ATTACK_AFTER
+	w124.listen_action_type = &"attack"
+	w124.requires_effect = &"equipment_effect_123"
+	w124.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"VARIABLE_ABOVE", "params": {"scope": &"attack", "variable_name": &"weapon_028_was_last", "threshold": 0}}])
+	w124.set_target_rules([{"rule": &"NO_TARGET"}])
+	w124.set_costs([])
+	w124.set_actions([{"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": 3}}])
+	w124.description = "若被弃置的牌是我方的最后一张牌，则此次攻击威力+3。"
+	effects[w124.effect_id] = w124
+
+	# 125 攻击结算后设置武器冷却至下个我方回合结束（29/30）
+	var w125 := _ActionEffect.new()
+	w125.effect_id = &"equipment_effect_125"
+	w125.display_name = "攻击结算后设置武器冷却至下个我方回合结束"
+	w125.mode = _TC.MODE_LISTEN
+	w125.priority = 10
+	w125.listen_timing = _TC.ATTACK_SETTLE
+	w125.listen_action_type = &"attack"
+	w125.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}])
+	w125.set_target_rules([{"rule": &"NO_TARGET"}])
+	w125.set_costs([])
+	w125.set_actions([{"type": &"SET_WEAPON_COOLDOWN", "params": {"target_card_instance_id": "$binding_context.card_instance_id", "clear_timing": &"NEXT_OWNER_TURN_AFTER_END", "refresh": true}}])
+	w125.description = "此牌发动攻击后，直到下个我方回合结束不能再使用此牌发动攻击。"
+	effects[w125.effect_id] = w125
+
+	# 126 对此牌使用聚能后清除冷却（29/30）
+	var w126 := _ActionEffect.new()
+	w126.effect_id = &"equipment_effect_126"
+	w126.display_name = "对此牌使用聚能后清除冷却"
+	w126.mode = _TC.MODE_LISTEN
+	w126.priority = 20
+	w126.listen_timing = _TC.EFFECT_FIRE_AFTER
+	w126.listen_action_type = &"effect_fire"
+	w126.set_conditions([{"op": &"ENERGY_TARGET_IS_SELF"}, {"op": &"WEAPON_IS_ON_COOLDOWN"}])
+	w126.set_target_rules([{"rule": &"NO_TARGET"}])
+	w126.set_costs([])
+	w126.set_actions([{"type": &"SET_WEAPON_COOLDOWN", "params": {"target_card_instance_id": "$binding_context.card_instance_id", "clear": true}}])
+	w126.description = "对此牌使用聚能后允许再次发动攻击。"
+	effects[w126.effect_id] = w126
+
+	# 127 盾牌将攻击/陷阱全部损伤转移到自身，减伤0（31合金盾牌）
+	var w127 := _ActionEffect.new()
+	w127.effect_id = &"equipment_effect_127"
+	w127.display_name = "盾牌将攻击/陷阱全部损伤转移到自身，减伤0"
+	w127.mode = _TC.MODE_LISTEN
+	w127.priority = 20
+	w127.listen_timing = &"DAMAGE_REDIRECT_WINDOW"
+	w127.listen_action_type = &"damage_change"
+	w127.set_conditions([{"op": &"SELF_MECH_IS_DAMAGE_TARGET"}, {"op": &"DAMAGE_SOURCE_IS_ATTACK_OR_TRAP"}, {"op": &"PAYLOAD_DAMAGE_TOKENS_ABOVE", "params": {"threshold": 0}}])
+	w127.set_target_rules([{"rule": &"NO_TARGET"}])
+	w127.set_costs([])
+	w127.set_actions([{"type": &"OFFER_DAMAGE_REDIRECT", "params": {"max_points": -1, "mode": &"all_or_nothing", "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "reduction": 0, "min_points": 0, "optional": true}}])
+	w127.description = "可以将每次攻击或陷阱产生的全部损伤设置到此牌上。"
+	effects[w127.effect_id] = w127
+
+	# 128 直接使用本牌发动不需要攻击牌的攻击（32/36/39）
+	var w128 := _ActionEffect.new()
+	w128.effect_id = &"equipment_effect_128"
+	w128.display_name = "直接使用本牌发动不需要攻击牌的攻击"
+	w128.mode = _TC.MODE_DIRECT
+	w128.priority = 10
+	w128.set_conditions([{"op": &"IS_OWNER_MAIN_PHASE"}, {"op": &"ATTACK_COUNT_ABOVE", "params": {"threshold": 0}}, {"op": &"WEAPON_CAN_ATTACK_AGAIN"}, {"op": &"WEAPON_HAS_ATTACKABLE_TARGET_IN_RANGE"}])
+	w128.set_target_rules([{"rule": &"NO_TARGET"}])
+	w128.set_costs([])
+	w128.set_actions([{"type": &"EXECUTE_ATTACK", "params": {"attacker_id": "$binding_context.mech_id", "weapon_instance_id": "$binding_context.card_instance_id", "target_count": 1, "skip_weapon_select": true, "choose_new_target": true, "source_action_card": null, "cardless_weapon_attack": true, "consume_turn_attack_count": true}}])
+	w128.description = "可直接使用此牌发动攻击(不需要攻击牌)。"
+	effects[w128.effect_id] = w128
+
+	# 129 本牌攻击结算后自损1（32/36/39）
+	var w129 := _ActionEffect.new()
+	w129.effect_id = &"equipment_effect_129"
+	w129.display_name = "本牌攻击结算后自损1"
+	w129.mode = _TC.MODE_LISTEN
+	w129.priority = 10
+	w129.listen_timing = _TC.ATTACK_SETTLE
+	w129.listen_action_type = &"attack"
+	w129.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}])
+	w129.set_target_rules([{"rule": &"NO_TARGET"}])
+	w129.set_costs([])
+	w129.set_actions([{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 1, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_attack_settle_self_damage"}}])
+	w129.description = "此牌发动攻击结算后会被设置1损伤。"
+	effects[w129.effect_id] = w129
+
+	# 130 每回合1次，将1张行动牌当维修打出，之后本牌自损2（33维修机械臂）
+	var w130 := _ActionEffect.new()
+	w130.effect_id = &"equipment_effect_130"
+	w130.display_name = "每回合1次，将1张行动牌当维修打出，之后本牌自损2"
+	w130.mode = _TC.MODE_DIRECT
+	w130.priority = 10
+	w130.once_per_turn_key = &"weapon_033_use"
+	w130.once_per_turn_max = 1
+	w130.set_conditions([{"op": &"IS_OWNER_MAIN_PHASE"}, {"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"count": 1}}, {"op": &"REPAIR_HAS_VALID_TARGET", "params": {"range": 1}}])
+	w130.set_target_rules([{"rule": &"NO_TARGET"}])
+	w130.set_costs([])
+	w130.set_actions([
+		{"type": &"CHOOSE_MANY_CARDS", "params": {"filter": {"zone": &"action_hand", "owner_id": "$binding_context.mech_id"}, "min_count": 1, "max_count": 1, "label": "选择1张行动牌当作维修打出", "confirm_verb": "当作维修", "cancel_label": "取消", "per_card_actions": [
+			{"type": &"DECLARE_CARD_TYPE", "params": {"card_instance_id": "$selected_card_instance_id", "declared_card_def_id": &"action_repair", "duration": &"UNTIL_USE_ACTION_SETTLE"}},
+			{"type": &"EXECUTE_USE_ACTION_CARD", "params": {"card_instance_id": "$selected_card_instance_id", "acting_mech_id": "$binding_context.mech_id", "as_card_def_id": &"action_repair", "consume_original_card": true}},
+		]}},
+		{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 2, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_repair_self_damage"}},
+	])
+	w130.description = "我方回合1次，可以将1张行动牌当作维修打出，之后在此牌上设置2损伤。"
+	effects[w130.effect_id] = w130
+
+	# 131 我方回合主动：本回合动力+4，之后本牌自损1（34手持推进器）
+	var w131 := _ActionEffect.new()
+	w131.effect_id = &"equipment_effect_131"
+	w131.display_name = "我方回合主动：本回合动力+4，之后本牌自损1"
+	w131.mode = _TC.MODE_DIRECT
+	w131.priority = 10
+	w131.once_per_turn_key = &"weapon_034_boost"
+	w131.once_per_turn_max = 1
+	w131.set_conditions([{"op": &"IS_OWNER_MAIN_PHASE"}])
+	w131.set_target_rules([{"rule": &"NO_TARGET"}])
+	w131.set_costs([])
+	w131.set_actions([
+		{"type": &"MODIFY_MECH_POWER", "params": {"target_id": "$binding_context.mech_id", "delta": 4, "mode": &"current_and_temporary_max", "duration": &"THIS_TURN"}},
+		{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 1, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_power_boost_self_damage"}},
+	])
+	w131.description = "我方回合可以使机甲在本回合动力+4，之后在此牌上设置1损伤。"
+	effects[w131.effect_id] = w131
+
+	# 132 打出迎击牌时可使本回合动力+4并自损1（34）
+	var w132 := _ActionEffect.new()
+	w132.effect_id = &"equipment_effect_132"
+	w132.display_name = "打出迎击牌时可使本回合动力+4并自损1"
+	w132.mode = _TC.MODE_LISTEN
+	w132.priority = 10
+	w132.listen_timing = _TC.USE_ACTION_AT
+	w132.listen_action_type = &"use_action_card"
+	w132.once_per_turn_key = &"weapon_034_boost"
+	w132.once_per_turn_max = 1
+	w132.set_conditions([{"op": &"USED_CARD_OWNER_IS_SELF"}, {"op": &"USED_COUNTER_CARD"}])
+	w132.set_target_rules([{"rule": &"NO_TARGET"}])
+	w132.set_costs([])
+	w132.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "手持推进器：本回合动力+4并受1损伤", "actions": [
+		{"type": &"MODIFY_MECH_POWER", "params": {"target_id": "$binding_context.mech_id", "delta": 4, "mode": &"current_and_temporary_max", "duration": &"THIS_TURN"}},
+		{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 1, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_power_boost_self_damage"}},
+	]}]}}])
+	w132.description = "打出迎击牌时，可以使机甲在本回合动力+4，之后在此牌上设置1损伤。"
+	effects[w132.effect_id] = w132
+
+	# 133 强合金盾牌全量吸收并使转移损伤-1（35）
+	var w133 := _ActionEffect.new()
+	w133.effect_id = &"equipment_effect_133"
+	w133.display_name = "强合金盾牌全量吸收并使转移损伤-1"
+	w133.mode = _TC.MODE_LISTEN
+	w133.priority = 20
+	w133.listen_timing = &"DAMAGE_REDIRECT_WINDOW"
+	w133.listen_action_type = &"damage_change"
+	w133.set_conditions([{"op": &"SELF_MECH_IS_DAMAGE_TARGET"}, {"op": &"DAMAGE_SOURCE_IS_ATTACK_OR_TRAP"}, {"op": &"PAYLOAD_DAMAGE_TOKENS_ABOVE", "params": {"threshold": 0}}])
+	w133.set_target_rules([{"rule": &"NO_TARGET"}])
+	w133.set_costs([])
+	w133.set_actions([{"type": &"OFFER_DAMAGE_REDIRECT", "params": {"max_points": -1, "mode": &"all_or_nothing", "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "reduction": 1, "min_points": 0, "optional": true}}])
+	w133.description = "可以将每次攻击或陷阱产生的全部损伤设置到此牌上，并使此次设置的损伤-1。"
+	effects[w133.effect_id] = w133
+
+	# 134 每回合1次在武器范围内设置1陷阱，之后本牌自损1（36投掷式机雷）
+	var w134 := _ActionEffect.new()
+	w134.effect_id = &"equipment_effect_134"
+	w134.display_name = "每回合1次在武器范围内设置1陷阱，之后本牌自损1"
+	w134.mode = _TC.MODE_DIRECT
+	w134.priority = 10
+	w134.once_per_turn_key = &"weapon_036_trap"
+	w134.once_per_turn_max = 1
+	w134.set_conditions([{"op": &"IS_OWNER_MAIN_PHASE"}, {"op": &"WEAPON_HAS_VALID_TRAP_CELL"}])
+	w134.set_target_rules([{"rule": &"CHOOSE_MAP_CELL_IN_WEAPON_RANGE"}, {"rule": &"TARGET_CELL_CAN_HOLD_TRAP"}])
+	w134.set_costs([])
+	w134.set_actions([
+		{"type": &"PLACE_OR_TRIGGER_TRAP", "params": {"mode": &"place", "cell_id": "$selected_cell_id", "count": 1, "source_mech_id": "$binding_context.mech_id", "source_card_instance_id": "$binding_context.card_instance_id"}},
+		{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 1, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_trap_self_damage"}},
+	])
+	w134.description = "我方回合1次，可以在此牌攻击范围内的格子上设置1陷阱，之后在此牌上设置1损伤。"
+	effects[w134.effect_id] = w134
+
+	# 135 每回合1次：行动牌当维修，或弃2抽2；之后本牌自损2（37多功能机械臂）
+	var w135 := _ActionEffect.new()
+	w135.effect_id = &"equipment_effect_135"
+	w135.display_name = "每回合1次：行动牌当维修，或弃2抽2；之后本牌自损2"
+	w135.mode = _TC.MODE_DIRECT
+	w135.priority = 10
+	w135.once_per_turn_key = &"weapon_037_use"
+	w135.once_per_turn_max = 1
+	w135.set_conditions([{"op": &"IS_OWNER_MAIN_PHASE"}, {"op": &"MULTI_ARM_HAS_AVAILABLE_OPTION"}])
+	w135.set_target_rules([{"rule": &"NO_TARGET"}])
+	w135.set_costs([])
+	w135.set_actions([
+		{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [
+			{"label": "将1张行动牌当作维修打出", "condition": {"op": &"REPAIR_BRANCH_AVAILABLE"}, "actions": [{"type": &"CHOOSE_MANY_CARDS", "params": {"filter": {"zone": &"action_hand", "owner_id": "$binding_context.mech_id"}, "min_count": 1, "max_count": 1, "label": "选择维修素材", "confirm_verb": "打出", "cancel_label": "返回", "per_card_actions": [
+				{"type": &"DECLARE_CARD_TYPE", "params": {"card_instance_id": "$selected_card_instance_id", "declared_card_def_id": &"action_repair", "duration": &"UNTIL_USE_ACTION_SETTLE"}},
+				{"type": &"EXECUTE_USE_ACTION_CARD", "params": {"card_instance_id": "$selected_card_instance_id", "acting_mech_id": "$binding_context.mech_id", "as_card_def_id": &"action_repair", "consume_original_card": true}},
+			]}}]},
+			{"label": "弃置2张行动牌，再抽2张", "condition": {"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"count": 2}}, "actions": [
+				{"type": &"EXECUTE_DISCARD", "params": {"from_target": "$binding_context.mech_id", "zone": &"action_hand", "count": 2, "choose": true, "chooser_id": "$binding_context.mech_id", "face_up": true, "reason": &"weapon_cycle"}},
+				{"type": &"DRAW_ACTION", "params": {"target_id": "$binding_context.mech_id", "count": 2, "reason": &"weapon_cycle"}},
+			]},
+		]}},
+		{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 2, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_multi_arm_self_damage"}},
+	])
+	w135.description = "我方回合1次，可以将1张行动牌当作维修打出或是弃置2张行动牌再抽2张，之后在此牌上设置2损伤。"
+	effects[w135.effect_id] = w135
+
+	# 136 月神合金盾牌全量吸收并使转移损伤-2（38）
+	var w136 := _ActionEffect.new()
+	w136.effect_id = &"equipment_effect_136"
+	w136.display_name = "月神合金盾牌全量吸收并使转移损伤-2"
+	w136.mode = _TC.MODE_LISTEN
+	w136.priority = 20
+	w136.listen_timing = &"DAMAGE_REDIRECT_WINDOW"
+	w136.listen_action_type = &"damage_change"
+	w136.set_conditions([{"op": &"SELF_MECH_IS_DAMAGE_TARGET"}, {"op": &"DAMAGE_SOURCE_IS_ATTACK_OR_TRAP"}, {"op": &"PAYLOAD_DAMAGE_TOKENS_ABOVE", "params": {"threshold": 0}}])
+	w136.set_target_rules([{"rule": &"NO_TARGET"}])
+	w136.set_costs([])
+	w136.set_actions([{"type": &"OFFER_DAMAGE_REDIRECT", "params": {"max_points": -1, "mode": &"all_or_nothing", "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "reduction": 2, "min_points": 0, "optional": true}}])
+	w136.description = "可以将每次攻击或陷阱产生的全部损伤设置到此牌上，并使此次设置的损伤-2。"
+	effects[w136.effect_id] = w136
+
+	# 137 每回合1次在范围内2个格子各放1陷阱，之后本牌自损1（39投掷式双子机雷）
+	var w137 := _ActionEffect.new()
+	w137.effect_id = &"equipment_effect_137"
+	w137.display_name = "每回合1次在范围内2个格子各放1陷阱，之后本牌自损1"
+	w137.mode = _TC.MODE_DIRECT
+	w137.priority = 10
+	w137.once_per_turn_key = &"weapon_039_trap"
+	w137.once_per_turn_max = 1
+	w137.set_conditions([{"op": &"IS_OWNER_MAIN_PHASE"}, {"op": &"WEAPON_HAS_VALID_TRAP_CELLS", "params": {"count": 2}}])
+	w137.set_target_rules([{"rule": &"CHOOSE_TWO_DISTINCT_MAP_CELLS_IN_WEAPON_RANGE"}, {"rule": &"TARGET_CELL_CAN_HOLD_TRAP"}])
+	w137.set_costs([])
+	w137.set_actions([
+		{"type": &"CHOOSE_MANY_MAP_CELLS", "params": {"count": 2, "distinct": true, "range_source_weapon_instance_id": "$binding_context.card_instance_id", "cell_rule": &"TARGET_CELL_CAN_HOLD_TRAP", "label": "选择2个格子设置陷阱"}},
+		{"type": &"PLACE_OR_TRIGGER_TRAP", "params": {"mode": &"place_each", "cell_ids": "$selected_cell_ids", "count_each": 1, "source_mech_id": "$binding_context.mech_id", "source_card_instance_id": "$binding_context.card_instance_id"}},
+		{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 1, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_trap_self_damage"}},
+	])
+	w137.description = "我方回合1次，可以在此牌范围内的2个格子上各设置1陷阱，之后在此牌上设置1损伤。"
+	effects[w137.effect_id] = w137
+
+	# 138 威力实时变为当前护甲×2，范围实时变为当前动力（40）派生值型——不注册监听器
+	var w138 := _ActionEffect.new()
+	w138.effect_id = &"equipment_effect_138"
+	w138.display_name = "威力实时变为当前护甲×2，范围实时变为当前动力"
+	w138.mode = _TC.MODE_DIRECT
+	w138.priority = 10
+	w138.set_conditions([{"op": &"ALWAYS"}])
+	w138.set_target_rules([{"rule": &"NO_TARGET"}])
+	w138.set_costs([])
+	w138.set_actions([])
+	w138.description = "可以将此牌的威力变为机甲当前护甲数值*2，范围变为当前动力数值。"
+	effects[w138.effect_id] = w138
+
+	# 139 本牌攻击结算后弃置所有正面部件装备牌（40）
+	var w139 := _ActionEffect.new()
+	w139.effect_id = &"equipment_effect_139"
+	w139.display_name = "本牌攻击结算后弃置所有正面部件装备牌"
+	w139.mode = _TC.MODE_LISTEN
+	w139.priority = 10
+	w139.listen_timing = _TC.ATTACK_SETTLE
+	w139.listen_action_type = &"attack"
+	w139.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}])
+	w139.set_target_rules([{"rule": &"NO_TARGET"}])
+	w139.set_costs([])
+	w139.set_actions([{"type": &"DISCARD_ALL_FACE_UP_PARTS", "params": {"target_mech_id": "$binding_context.mech_id", "slot_kinds": [&"HEAD", &"TORSO", &"RIGHT_ARM", &"LEFT_ARM", &"RIGHT_LEG", &"LEFT_LEG"], "reason": &"weapon_040_conversion_cost", "preserve_slot_damage": true}}])
+	w139.description = "此牌发动攻击结算完成后，弃置机甲所有正面朝上的部件装备牌。"
+	effects[w139.effect_id] = w139
+
 	return effects
 
 
@@ -2695,6 +3484,124 @@ static func get_passive_weapon_range_bonus(mech, weapon_kind) -> int:
 	if _card_has_effect_id(c, &"equipment_effect_022"):
 		return 1
 	return 0
+
+
+## ── 武器装备牌统一威力/范围查询（effect_093+ 用）──
+## 所有武器威力/范围查询入口（attack_action._get_weapon_stats / weapon_picker_panel /
+## equipment_panel / 范围预检 / 最大范围预估）统一调用此函数，禁用牌面直读。
+## 返回 {might, range_value, weapon_kind, weapon_name, is_virtual}。
+## 不含狙击装·头部远程范围加成（由调用方 get_passive_weapon_range_bonus 单独加，避双计）。
+static func get_effective_weapon_stats(card) -> Dictionary:
+	if card == null or card.def == null:
+		return {"might": 0, "range_value": 1, "weapon_kind": &"", "weapon_name": &"", "is_virtual": false}
+	# 虚拟武器（神莺躯干 effect_087）基础值
+	var vw = get_virtual_weapon_from_equipment(card)
+	var base_might: int
+	var base_range: int
+	var wkind: StringName
+	var wname: StringName
+	var is_virt: bool = false
+	if not vw.is_empty():
+		base_might = int(vw.get("might", 20))
+		base_range = int(vw.get("range_value", 6))
+		wkind = vw.get("weapon_kind", &"远程")
+		wname = StringName(vw.get("display_name", &""))
+		is_virt = true
+	else:
+		base_might = int(card.def.might) if "might" in card.def else 0
+		base_range = int(card.def.range_value) if "range_value" in card.def else 1
+		wkind = card.def.weapon_kind if "weapon_kind" in card.def else &""
+		wname = card.def.display_name if "display_name" in card.def else &""
+
+	var might: int = base_might
+	var range: int = base_range
+
+	# 派生值型：effect_138 质能全转换（40）威力=max(0,armor*2) 范围=max(0,current_power)
+	# 替代牌面 1/1，之后再叠加下方修正。
+	if _card_has_effect_id(card, &"equipment_effect_138"):
+		var ec_mech = _get_card_mech(card)
+		if ec_mech != null:
+			might = max(0, int(ec_mech.get_armor()) * 2)
+			range = max(0, int(ec_mech.power))
+		else:
+			might = 0
+			range = 0
+
+	# 持久/临时修正（聚能 effect_093/095 临时 +3/+1、其他 might_modifiers/range_modifiers）
+	might += _sum_weapon_modifiers(card, &"might")
+	range += _sum_weapon_modifiers(card, &"range")
+
+	# 派生值型：effect_120 每1自损威力-2（26/27 大型光束炮/热能加特林）
+	if _card_has_effect_id(card, &"equipment_effect_120"):
+		might += get_weapon_might_by_self_damage(card, 0)
+
+	# 形态修正（流星钢锤 effect_098/099 extended: might-5, range+2）
+	var mode: StringName = card.weapon_mode if "weapon_mode" in card else &""
+	if mode == &"":
+		mode = &"normal"
+	if mode == &"extended":
+		might -= 5
+		range += 2
+
+	might = max(0, might)
+	range = max(0, range)
+	return {"might": might, "range_value": range, "weapon_kind": wkind, "weapon_name": wname, "is_virtual": is_virt}
+
+
+## 武器 might/range 修正列表求和（might_modifiers / range_modifiers）
+## 每项 {delta, duration, bucket}。THIS_OWNER_TURN/THIS_TURN 项由 TurnService 回合结束清除，
+## 故查询时列表中所有项均生效，直接求和。
+static func _sum_weapon_modifiers(card, kind: StringName) -> int:
+	if card == null:
+		return 0
+	var arr: Array = card.might_modifiers if (kind == &"might" and "might_modifiers" in card) else (card.range_modifiers if (kind == &"range" and "range_modifiers" in card) else [])
+	var total: int = 0
+	for m in arr:
+		if m is Dictionary:
+			total += int(m.get("delta", 0))
+	return total
+
+
+## 取卡牌所属机甲（经 _aura_game_state 查 card.mech_id）
+static func _get_card_mech(card):
+	if card == null or _aura_game_state == null:
+		return null
+	var mid: StringName = card.mech_id if "mech_id" in card else &""
+	if mid == &"":
+		return null
+	return _aura_game_state.mechs.get(mid)
+
+
+## effect_120（26/27）每1自损威力-2。统计本牌承受的损伤数（card.damage_tokens）。
+## printed_might 参数仅用于兼容旧签名，实际返回 -2*damage_tokens（调用方加到 might）。
+static func get_weapon_might_by_self_damage(card, printed_might: int) -> int:
+	if card == null:
+		return 0
+	var tokens: int = int(card.damage_tokens) if card.get("damage_tokens") else 0
+	return -2 * tokens
+
+
+## effect_138（40 质能全转换）派生值：返回 {might, range}（已含 max(0,*) 钳制）
+## 供 UI 预览等需要单独查询时使用；get_effective_weapon_stats 已内含此逻辑。
+static func get_energy_conversion_weapon_stats(card) -> Dictionary:
+	var mech = _get_card_mech(card)
+	if mech == null:
+		return {"might": 0, "range": 0}
+	return {"might": max(0, int(mech.get_armor()) * 2), "range": max(0, int(mech.power))}
+
+
+## 流星钢锤形态修正（extended: might-5, range+2）。get_effective_weapon_stats 已内含；
+## 此函数供需要单独应用形态修正的场景（如刷新当前 attack 基础值）。
+static func apply_weapon_mode_modifier(card, stats: Dictionary) -> Dictionary:
+	if card == null:
+		return stats
+	var mode: StringName = card.weapon_mode if "weapon_mode" in card else &""
+	if mode == &"":
+		mode = &"normal"
+	if mode == &"extended":
+		stats["might"] = max(0, int(stats.get("might", 0)) - 5)
+		stats["range_value"] = max(0, int(stats.get("range_value", 0)) + 2)
+	return stats
 
 
 ## 判断某 slot 的装备是否有"损伤≥阈值时动力+1"或"每损伤+1动力"效果

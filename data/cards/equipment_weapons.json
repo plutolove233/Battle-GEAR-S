@@ -12,10 +12,7 @@
     "range": 2,
     "durability": 3,
     "cost": 3,
-    "effect_ids": [
-      "equipment_effect_089",
-      "equipment_effect_090"
-    ]
+    "effect_ids": ["equipment_effect_093", "equipment_effect_094"]
   },
   {
     "id": "weapon_002_热能战斧",
@@ -26,14 +23,11 @@
     "rarity": "N",
     "count": 1,
     "effect_text": "对此牌使用聚能时，本回合额外使此牌威力+3。机甲被名称带有热能的武器攻击时，可弃置1张攻击行动牌响应该攻击，使该攻击威力-5。",
-    "damage": 11,
+    "damage": 12,
     "range": 2,
     "durability": 3,
     "cost": 3,
-    "effect_ids": [
-      "equipment_effect_091",
-      "equipment_effect_092"
-    ]
+    "effect_ids": ["equipment_effect_095", "equipment_effect_096"]
   },
   {
     "id": "weapon_003_破甲狼爪",
@@ -44,13 +38,11 @@
     "rarity": "N",
     "count": 1,
     "effect_text": "此牌发动的攻击命中后可额外设置2损伤。",
-    "damage": 14,
+    "damage": 15,
     "range": 1,
     "durability": 3,
     "cost": 3,
-    "effect_ids": [
-      "equipment_effect_093"
-    ]
+    "effect_ids": ["equipment_effect_097"]
   },
   {
     "id": "weapon_004_流星钢锤",
@@ -60,14 +52,12 @@
     "slot": "武器",
     "rarity": "N",
     "count": 1,
-    "effect_text": "可以使此牌威力-5，范围+2。",
-    "damage": 15,
+    "effect_text": "我方回合中或此牌发动的攻击被响应后，可以使此牌威力-5，范围+2，或恢复此牌原本数值。",
+    "damage": 18,
     "range": 1,
     "durability": 3,
     "cost": 3,
-    "effect_ids": [
-      "equipment_effect_094"
-    ]
+    "effect_ids": ["equipment_effect_098", "equipment_effect_099"]
   },
   {
     "id": "weapon_005_扭转钢鞭",
@@ -82,9 +72,7 @@
     "range": 3,
     "durability": 3,
     "cost": 3,
-    "effect_ids": [
-      "equipment_effect_095"
-    ]
+    "effect_ids": ["equipment_effect_100"]
   },
   {
     "id": "weapon_006_光束战戟",
@@ -94,14 +82,12 @@
     "slot": "武器",
     "rarity": "R",
     "count": 2,
-    "effect_text": "此牌发动的攻击产生的损伤如果全部放置于同一区域，则可以额外设置2损伤在该区域上。",
-    "damage": 14,
+    "effect_text": "此牌发动的攻击产生的损伤如果全部设置于同一区域，则可以额外设置2损伤在该区域上。",
+    "damage": 15,
     "range": 3,
-    "durability": 4,
+    "durability": 3,
     "cost": 5,
-    "effect_ids": [
-      "equipment_effect_096"
-    ]
+    "effect_ids": ["equipment_effect_101"]
   },
   {
     "id": "weapon_007_热能战镰",
@@ -111,14 +97,12 @@
     "slot": "武器",
     "rarity": "R",
     "count": 2,
-    "effect_text": "此牌发动的攻击产生的损伤如果全部放置于同一区域，则可以额外设置2损伤在该区域上。",
-    "damage": 14,
+    "effect_text": "此牌发动的攻击产生的损伤如果全部设置于同一区域，则可以额外设置2损伤在该区域上。",
+    "damage": 15,
     "range": 3,
-    "durability": 4,
+    "durability": 3,
     "cost": 5,
-    "effect_ids": [
-      "equipment_effect_096"
-    ]
+    "effect_ids": ["equipment_effect_101"]
   },
   {
     "id": "weapon_008_断甲长刀",
@@ -128,14 +112,12 @@
     "slot": "武器",
     "rarity": "R",
     "count": 1,
-    "effect_text": "此牌发动的攻击命中后可额外设置1枚损伤。",
-    "damage": 14,
+    "effect_text": "此牌发动的攻击命中后可额外设置2损伤，之后在此牌上设置1损伤。",
+    "damage": 15,
     "range": 3,
     "durability": 4,
     "cost": 5,
-    "effect_ids": [
-      "equipment_effect_097"
-    ]
+    "effect_ids": ["equipment_effect_102"]
   },
   {
     "id": "weapon_009_重型锤矛",
@@ -145,15 +127,12 @@
     "slot": "武器",
     "rarity": "R",
     "count": 1,
-    "effect_text": "此牌发动的攻击命中后可额外设置1枚损伤。此牌发动的攻击没有命中，则设置2损伤在此牌上。",
-    "damage": 16,
+    "effect_text": "此牌发动的攻击命中后可额外设置2损伤。此牌发动的攻击没有命中，则设置2损伤在此牌上。",
+    "damage": 18,
     "range": 3,
     "durability": 5,
     "cost": 5,
-    "effect_ids": [
-      "equipment_effect_097",
-      "equipment_effect_098"
-    ]
+    "effect_ids": ["equipment_effect_097", "equipment_effect_103"]
   },
   {
     "id": "weapon_010_拘束钩爪",
@@ -166,11 +145,9 @@
     "effect_text": "此牌发动的攻击命中后，可对该攻击目标施加锁定效果，此效果将持续到目标下一次被攻击命中时结束，且在效果持续期间，此牌不能攻击。",
     "damage": 10,
     "range": 5,
-    "durability": 4,
+    "durability": 3,
     "cost": 5,
-    "effect_ids": [
-      "equipment_effect_099"
-    ]
+    "effect_ids": ["equipment_effect_104"]
   },
   {
     "id": "weapon_011_光束斩舰刀",
@@ -181,14 +158,11 @@
     "rarity": "SR",
     "count": 2,
     "effect_text": "此牌发动的攻击命中后，在此牌上设置1损伤。此牌攻击时，可以使威力+3，攻击结算后在此牌上设置1损伤。",
-    "damage": 18,
+    "damage": 20,
     "range": 3,
-    "durability": 4,
+    "durability": 5,
     "cost": 7,
-    "effect_ids": [
-      "equipment_effect_100",
-      "equipment_effect_101"
-    ]
+    "effect_ids": ["equipment_effect_105", "equipment_effect_106", "equipment_effect_107"]
   },
   {
     "id": "weapon_012_热能双刃斧",
@@ -199,14 +173,11 @@
     "rarity": "SR",
     "count": 2,
     "effect_text": "此牌发动的攻击命中后，在此牌上设置1损伤。此牌攻击时，可以使范围+2，攻击结算后在此牌上设置1损伤。",
-    "damage": 18,
+    "damage": 20,
     "range": 3,
-    "durability": 4,
+    "durability": 5,
     "cost": 7,
-    "effect_ids": [
-      "equipment_effect_100",
-      "equipment_effect_102"
-    ]
+    "effect_ids": ["equipment_effect_105", "equipment_effect_108", "equipment_effect_109"]
   },
   {
     "id": "weapon_013_闪回激光剑",
@@ -217,14 +188,11 @@
     "rarity": "SR",
     "count": 1,
     "effect_text": "需要额外消耗2动力才能使用此牌攻击。此牌攻击时，可以再消耗4动力使此次攻击威力+3。",
-    "damage": 18,
+    "damage": 20,
     "range": 3,
     "durability": 4,
     "cost": 7,
-    "effect_ids": [
-      "equipment_effect_103",
-      "equipment_effect_104"
-    ]
+    "effect_ids": ["equipment_effect_110", "equipment_effect_111"]
   },
   {
     "id": "weapon_014_等离子螺旋矛",
@@ -235,15 +203,11 @@
     "rarity": "SSR",
     "count": 1,
     "effect_text": "此牌每发动过1次攻击，威力-4。我方回合未使用此牌攻击则在回合结束时回复4威力。对此牌使用聚能时也可回复4威力。",
-    "damage": 22,
+    "damage": 24,
     "range": 4,
     "durability": 5,
     "cost": 10,
-    "effect_ids": [
-      "equipment_effect_105",
-      "equipment_effect_106",
-      "equipment_effect_107"
-    ]
+    "effect_ids": ["equipment_effect_112", "equipment_effect_113", "equipment_effect_114"]
   },
   {
     "id": "weapon_015_高灼能双翼斧",
@@ -254,15 +218,11 @@
     "rarity": "SSR",
     "count": 1,
     "effect_text": "此牌每发动过1次攻击，威力-4。我方回合未使用此牌攻击则在回合结束时回复4威力。对此牌使用聚能时也可回复4威力。",
-    "damage": 22,
+    "damage": 24,
     "range": 4,
     "durability": 5,
     "cost": 10,
-    "effect_ids": [
-      "equipment_effect_105",
-      "equipment_effect_106",
-      "equipment_effect_107"
-    ]
+    "effect_ids": ["equipment_effect_112", "equipment_effect_113", "equipment_effect_114"]
   },
   {
     "id": "weapon_016_光束步枪",
@@ -277,10 +237,7 @@
     "range": 4,
     "durability": 3,
     "cost": 3,
-    "effect_ids": [
-      "equipment_effect_091",
-      "equipment_effect_108"
-    ]
+    "effect_ids": ["equipment_effect_095", "equipment_effect_094"]
   },
   {
     "id": "weapon_017_热能机枪",
@@ -291,14 +248,11 @@
     "rarity": "N",
     "count": 1,
     "effect_text": "对此牌使用聚能时，本回合额外使此牌范围+1。机甲被名称带有热能的武器攻击时，可弃置1张攻击行动牌响应该攻击，使该攻击威力-5。",
-    "damage": 9,
+    "damage": 8,
     "range": 4,
     "durability": 3,
     "cost": 3,
-    "effect_ids": [
-      "equipment_effect_089",
-      "equipment_effect_092"
-    ]
+    "effect_ids": ["equipment_effect_093", "equipment_effect_096"]
   },
   {
     "id": "weapon_018_光束霰弹枪",
@@ -309,13 +263,11 @@
     "rarity": "N",
     "count": 1,
     "effect_text": "此牌发动的攻击命中后，倘若攻击目标与机甲当前位置相邻，则可额外设置2损伤。",
-    "damage": 9,
+    "damage": 10,
     "range": 3,
     "durability": 3,
     "cost": 3,
-    "effect_ids": [
-      "equipment_effect_109"
-    ]
+    "effect_ids": ["equipment_effect_115"]
   },
   {
     "id": "weapon_019_热能爆弹枪",
@@ -326,13 +278,11 @@
     "rarity": "N",
     "count": 1,
     "effect_text": "此牌发动的攻击命中后，倘若攻击目标与机甲当前位置相邻，则可额外设置2损伤。",
-    "damage": 7,
-    "range": 4,
+    "damage": 10,
+    "range": 3,
     "durability": 3,
     "cost": 3,
-    "effect_ids": [
-      "equipment_effect_109"
-    ]
+    "effect_ids": ["equipment_effect_115"]
   },
   {
     "id": "weapon_020_火箭筒",
@@ -343,13 +293,11 @@
     "rarity": "N",
     "count": 1,
     "effect_text": "此牌发动的攻击命中后可额外设置1损伤。",
-    "damage": 7,
+    "damage": 8,
     "range": 4,
     "durability": 3,
     "cost": 3,
-    "effect_ids": [
-      "equipment_effect_110"
-    ]
+    "effect_ids": ["equipment_effect_116"]
   },
   {
     "id": "weapon_021_光束狙击枪",
@@ -359,14 +307,12 @@
     "slot": "武器",
     "rarity": "R",
     "count": 2,
-    "effect_text": "此牌发动的攻击产生的损伤如果全部放置于同一区域，则可以额外设置2损伤在该区域上。",
+    "effect_text": "此牌发动的攻击产生的损伤如果全部设置于同一区域，则可以额外设置2损伤在该区域上。",
     "damage": 10,
     "range": 5,
-    "durability": 4,
+    "durability": 3,
     "cost": 5,
-    "effect_ids": [
-      "equipment_effect_096"
-    ]
+    "effect_ids": ["equipment_effect_101"]
   },
   {
     "id": "weapon_022_穿甲热能枪",
@@ -376,14 +322,12 @@
     "slot": "武器",
     "rarity": "R",
     "count": 2,
-    "effect_text": "此牌发动的攻击产生的损伤如果全部放置于同一区域，则可以额外设置2损伤在该区域上。",
+    "effect_text": "此牌发动的攻击产生的损伤如果全部设置于同一区域，则可以额外设置2损伤在该区域上。",
     "damage": 10,
     "range": 5,
-    "durability": 4,
+    "durability": 3,
     "cost": 5,
-    "effect_ids": [
-      "equipment_effect_096"
-    ]
+    "effect_ids": ["equipment_effect_101"]
   },
   {
     "id": "weapon_023_扩散轨道炮",
@@ -394,13 +338,11 @@
     "rarity": "R",
     "count": 1,
     "effect_text": "此牌发动的攻击命中后，倘若攻击目标与机甲当前位置相邻，则可额外设置2损伤。",
-    "damage": 13,
+    "damage": 12,
     "range": 4,
-    "durability": 4,
+    "durability": 3,
     "cost": 5,
-    "effect_ids": [
-      "equipment_effect_109"
-    ]
+    "effect_ids": ["equipment_effect_115"]
   },
   {
     "id": "weapon_024_密集导弹炮",
@@ -413,11 +355,9 @@
     "effect_text": "此牌发动攻击指定目标时，可以使目标当前动力-2，之后若目标机甲动力为0，则攻击命中可额外设置2损伤。",
     "damage": 9,
     "range": 5,
-    "durability": 4,
+    "durability": 3,
     "cost": 5,
-    "effect_ids": [
-      "equipment_effect_111"
-    ]
+    "effect_ids": ["equipment_effect_117", "equipment_effect_118"]
   },
   {
     "id": "weapon_025_超级火箭筒",
@@ -427,14 +367,12 @@
     "slot": "武器",
     "rarity": "R",
     "count": 1,
-    "effect_text": "此牌发动的攻击命中后可额外设置1枚损伤。",
+    "effect_text": "此牌发动的攻击产生的损伤如果未设置于同一区域，则可额外再设置2损伤。",
     "damage": 10,
     "range": 5,
-    "durability": 4,
+    "durability": 3,
     "cost": 5,
-    "effect_ids": [
-      "equipment_effect_097"
-    ]
+    "effect_ids": ["equipment_effect_119"]
   },
   {
     "id": "weapon_026_大型光束炮",
@@ -449,10 +387,7 @@
     "range": 6,
     "durability": 4,
     "cost": 7,
-    "effect_ids": [
-      "equipment_effect_112",
-      "equipment_effect_113"
-    ]
+    "effect_ids": ["equipment_effect_120", "equipment_effect_121"]
   },
   {
     "id": "weapon_027_热能加特林",
@@ -467,10 +402,7 @@
     "range": 5,
     "durability": 4,
     "cost": 7,
-    "effect_ids": [
-      "equipment_effect_112",
-      "equipment_effect_114"
-    ]
+    "effect_ids": ["equipment_effect_120", "equipment_effect_122"]
   },
   {
     "id": "weapon_028_雷爆磁轨炮",
@@ -485,9 +417,7 @@
     "range": 6,
     "durability": 4,
     "cost": 7,
-    "effect_ids": [
-      "equipment_effect_115"
-    ]
+    "effect_ids": ["equipment_effect_123", "equipment_effect_124"]
   },
   {
     "id": "weapon_029_超米伽荣光炮",
@@ -502,10 +432,7 @@
     "range": 7,
     "durability": 5,
     "cost": 10,
-    "effect_ids": [
-      "equipment_effect_116",
-      "equipment_effect_117"
-    ]
+    "effect_ids": ["equipment_effect_125", "equipment_effect_126"]
   },
   {
     "id": "weapon_030_核聚变神火炮",
@@ -520,10 +447,7 @@
     "range": 7,
     "durability": 5,
     "cost": 10,
-    "effect_ids": [
-      "equipment_effect_116",
-      "equipment_effect_117"
-    ]
+    "effect_ids": ["equipment_effect_125", "equipment_effect_126"]
   },
   {
     "id": "weapon_031_合金盾牌",
@@ -533,14 +457,12 @@
     "slot": "武器",
     "rarity": "N",
     "count": 2,
-    "effect_text": "可以将攻击或陷阱产生的损伤移至此牌上。",
+    "effect_text": "可以将每次攻击或陷阱产生的全部损伤设置到此牌上。",
     "damage": 6,
     "range": 1,
     "durability": 4,
     "cost": 4,
-    "effect_ids": [
-      "equipment_effect_118"
-    ]
+    "effect_ids": ["equipment_effect_127"]
   },
   {
     "id": "weapon_032_投掷式飞弹",
@@ -555,10 +477,7 @@
     "range": 4,
     "durability": 6,
     "cost": 3,
-    "effect_ids": [
-      "equipment_effect_119",
-      "equipment_effect_120"
-    ]
+    "effect_ids": ["equipment_effect_128", "equipment_effect_129"]
   },
   {
     "id": "weapon_033_维修机械臂",
@@ -568,14 +487,12 @@
     "slot": "武器",
     "rarity": "N",
     "count": 2,
-    "effect_text": "每我方回合1次，可以将1张行动牌当作维修打出，之后在此牌上设置2损伤。",
+    "effect_text": "我方回合1次，可以将1张行动牌当作维修打出，之后在此牌上设置2损伤。",
     "damage": 4,
     "range": 3,
     "durability": 4,
     "cost": 4,
-    "effect_ids": [
-      "equipment_effect_121"
-    ]
+    "effect_ids": ["equipment_effect_130"]
   },
   {
     "id": "weapon_034_手持推进器",
@@ -590,10 +507,7 @@
     "range": 1,
     "durability": 4,
     "cost": 3,
-    "effect_ids": [
-      "equipment_effect_122",
-      "equipment_effect_123"
-    ]
+    "effect_ids": ["equipment_effect_131", "equipment_effect_132"]
   },
   {
     "id": "weapon_035_强合金盾牌",
@@ -603,14 +517,12 @@
     "slot": "武器",
     "rarity": "R",
     "count": 2,
-    "effect_text": "可以将攻击或陷阱产生的损伤移至此牌上。",
+    "effect_text": "可以将每次攻击或陷阱产生的全部损伤设置到此牌上，并使此次设置的损伤-1。",
     "damage": 8,
-    "range": 1,
+    "range": 2,
     "durability": 5,
     "cost": 5,
-    "effect_ids": [
-      "equipment_effect_118"
-    ]
+    "effect_ids": ["equipment_effect_133"]
   },
   {
     "id": "weapon_036_投掷式机雷",
@@ -620,16 +532,12 @@
     "slot": "武器",
     "rarity": "R",
     "count": 2,
-    "effect_text": "此牌发动攻击结算后会被设置1损伤。可直接使用此牌发动攻击(不需要攻击牌)。可以在此牌攻击范围内的格子上设置1陷阱，之后在此牌上设置1损伤。",
+    "effect_text": "此牌发动攻击结算后会被设置1损伤。可直接使用此牌发动攻击(不需要攻击牌)。我方回合1次，可以在此牌攻击范围内的格子上设置1陷阱，之后在此牌上设置1损伤。",
     "damage": 12,
     "range": 4,
     "durability": 6,
     "cost": 5,
-    "effect_ids": [
-      "equipment_effect_119",
-      "equipment_effect_120",
-      "equipment_effect_124"
-    ]
+    "effect_ids": ["equipment_effect_128", "equipment_effect_129", "equipment_effect_134"]
   },
   {
     "id": "weapon_037_多功能机械臂",
@@ -639,14 +547,12 @@
     "slot": "武器",
     "rarity": "R",
     "count": 1,
-    "effect_text": "每我方回合1次，可以将1张行动牌当作维修打出或是弃置2张行动牌再抽2张行动牌，之后在此牌上设置2损伤。",
+    "effect_text": "我方回合1次，可以将1张行动牌当作维修打出或是弃置2张行动牌再抽2张行动牌，之后在此牌上设置2损伤。",
     "damage": 6,
     "range": 3,
     "durability": 5,
     "cost": 5,
-    "effect_ids": [
-      "equipment_effect_125"
-    ]
+    "effect_ids": ["equipment_effect_135"]
   },
   {
     "id": "weapon_038_月神合金盾牌",
@@ -656,14 +562,12 @@
     "slot": "武器",
     "rarity": "SR",
     "count": 1,
-    "effect_text": "可以将攻击或陷阱产生的损伤移至此牌上。",
+    "effect_text": "可以将每次攻击或陷阱产生的全部损伤设置到此牌上，并使此次设置的损伤-2。",
     "damage": 10,
-    "range": 2,
+    "range": 3,
     "durability": 6,
     "cost": 6,
-    "effect_ids": [
-      "equipment_effect_118"
-    ]
+    "effect_ids": ["equipment_effect_136"]
   },
   {
     "id": "weapon_039_投掷式双子机雷",
@@ -673,16 +577,12 @@
     "slot": "武器",
     "rarity": "SR",
     "count": 1,
-    "effect_text": "此牌攻击结算后会被设置1损伤。可直接使用此牌发动攻击(不需要攻击牌)。可以在此牌范围内的2个格子上各设置1陷阱，之后在此牌上设置1损伤。",
+    "effect_text": "此牌攻击结算后会被设置1损伤。可直接使用此牌发动攻击(不需要攻击牌)。我方回合1次，可以在此牌范围内的2个格子上各设置1陷阱，之后在此牌上设置1损伤。",
     "damage": 14,
     "range": 4,
     "durability": 6,
     "cost": 6,
-    "effect_ids": [
-      "equipment_effect_126",
-      "equipment_effect_120",
-      "equipment_effect_127"
-    ]
+    "effect_ids": ["equipment_effect_128", "equipment_effect_129", "equipment_effect_137"]
   },
   {
     "id": "weapon_040_质能全转换剑炮",
@@ -697,9 +597,6 @@
     "range": 1,
     "durability": 5,
     "cost": 8,
-    "effect_ids": [
-      "equipment_effect_128",
-      "equipment_effect_129"
-    ]
+    "effect_ids": ["equipment_effect_138", "equipment_effect_139"]
   }
 ]

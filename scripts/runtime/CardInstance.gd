@@ -51,6 +51,20 @@ var known_to: Array[StringName] = []
 ## 聚能状态层数（用于武器蓄能）
 var energy_charge_stacks: int = 0
 
+## ── 武器装备牌运行时修正（effect_093+ 武器效果用）──
+## 持久/临时威力修正列表：[{delta, duration, bucket, source_card_id}]
+## duration: &"PERMANENT"(跨回合持久) / &"THIS_OWNER_TURN"(到所属玩家回合结束) / &"THIS_TURN"
+## bucket: 区分修正来源(weapon_012/014衰减、聚能临时、形态等)，便于精确清除/上限回复
+var might_modifiers: Array = []
+## 持久/临时射程修正列表（结构同 might_modifiers）
+var range_modifiers: Array = []
+## 武器形态（流星钢锤 effect_098/099）：&"" / &"normal" / &"extended"
+var weapon_mode: StringName = &""
+## 武器冷却截止回合序号（effect_125/126）：-1=无冷却；>当前回合序号时不可攻击
+var cooldown_until_turn: int = -1
+## 锁定状态关联（effect_104 拘束钩爪）：锁定期间本牌不能攻击。存被锁目标 mech_id，&""=未锁定
+var lock_target_mech_id: StringName = &""
+
 
 func _init(p_instance_id: StringName = &"", p_def = null) -> void:
 	instance_id = p_instance_id

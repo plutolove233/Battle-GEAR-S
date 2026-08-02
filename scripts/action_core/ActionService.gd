@@ -13,6 +13,7 @@
 extends RefCounted
 class_name ActionService
 const SLog = preload("res://scripts/services/slog.gd")
+const _GenEquipEffects = preload("res://scripts/generated_database/GeneratedEquipmentEffects.gd")
 # 新增动作类用 preload 引用，避免 headless -s 模式下新 class_name 尚未注册到全局缓存
 const _AwakenAction = preload("res://scripts/action_defs/awaken_action.gd")
 
@@ -196,7 +197,10 @@ func _is_atomic_action(act_type: StringName) -> bool:
 		&"DECREMENT_STATUS_DURATION", &"CANCEL_PARENT_ACTION", \
 		&"SET_ATTACK_EFFECTIVE_WEAPON_KIND", &"REMOVE_DAMAGE_TOKENS_FROM_DISCARD_ORIGIN_SLOT", \
 		&"OFFER_DAMAGE_REDIRECT", \
-		&"DISCARD_SELF_AND_REDUCE_ATTACK_MARKERS", &"DISCARD_SELF_FROM_SLOT", &"REMOVE_DAMAGE_TOKENS_OTHER_SLOTS":
+		&"DISCARD_SELF_AND_REDUCE_ATTACK_MARKERS", &"DISCARD_SELF_FROM_SLOT", &"REMOVE_DAMAGE_TOKENS_OTHER_SLOTS", \
+		&"RANDOM_DISCARD_ACTION_CARD", &"SET_WEAPON_MODE", &"SET_WEAPON_COOLDOWN", \
+		&"SET_ATTACK_MIGHT_FROM_PRINTED_WEAPON", &"DISCARD_ALL_FACE_UP_PARTS", &"CHOOSE_MANY_MAP_CELLS", \
+		&"SET_WEAPON_LOCK":
 			return true
 		_:
 			return false
@@ -494,6 +498,129 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 					amt_attack.record["temp_armor_grants"] = []
 				amt_attack.record["temp_armor_grants"].append({"mech_id": amt_mech_id, "delta": amt_delta})
 		SLog.log_raw("[ACTION] %s 机甲 %s temp_armor_bonus %+d (累计=%d)" % [String(amt_attack_id), String(amt_mech_id), amt_delta, amt_mech.temp_armor_bonus])
+		return {"state": &"completed"}
+
+	# ── 武器装备牌效果专用特判（effect_093+）──
+
+	# APPLY_ENERGY_TO_WEAPON：把聚能目标武器写回父 effect_fire 动作 record，
+	# 供 EFFECT_FIRE_AFTER 时点的武器聚能联动效果（effect_093/095/114/126）经
+	# ENERGY_TARGET_IS_SELF 条件读取。parent_action 即 effect_fire 动作。
+	# selected_weapon_id 由 CHOOSE_OWN_WEAPON 目标选择注入 payload。
+	if act_type == &"APPLY_ENERGY_TO_WEAPON":
+		var aetw_weapon: StringName = payload.get("selected_weapon_id", payload.get("weapon_id", &""))
+		if aetw_weapon == &"":
+			var aetw_p: Dictionary = action_def.get("params", {})
+			aetw_weapon = aetw_p.get("weapon_id", aetw_p.get("target_card_instance_id", &""))
+			if String(aetw_weapon).begins_with("$"):
+				aetw_weapon = _resolve_atomic_value(aetw_weapon, payload, parent_action)
+		if aetw_weapon != &"" and parent_action != null and parent_action.record is Dictionary:
+			parent_action.record["energy_target_weapon_instance_id"] = aetw_weapon
+
+	# INCREMENT_VARIABLE scope=attack：写父 attack 动作 record["variables"][name]，
+	# 供同 attack 的 ATTACK_SETTLE 时点经 VARIABLE_ABOVE(scope=attack) 读取（effect_106/108/117）。
+	# parent 非 attack 时回退全局 game_state.variables（原 increment_variable 行为）。
+	if act_type == &"INCREMENT_VARIABLE":
+		var iv_params: Dictionary = action_def.get("params", {})
+		var iv_scope: StringName = iv_params.get("scope", &"")
+		if iv_scope == &"attack" and parent_action != null and parent_action.action_type == &"attack":
+			var iv_name: StringName = iv_params.get("variable_name", &"")
+			var iv_delta: int = int(iv_params.get("delta", 1))
+			if iv_name != &"":
+				if not parent_action.record.has("variables"):
+					parent_action.record["variables"] = {}
+				var iv_prev: int = int(parent_action.record["variables"].get(iv_name, 0))
+				parent_action.record["variables"][iv_name] = iv_prev + iv_delta
+				return {"state": &"completed"}
+
+	# SET_ATTACK_MIGHT_FROM_PRINTED_WEAPON：本次攻击威力覆盖为 牌面威力+bonus，
+	# 忽略本牌损伤惩罚（effect_121 大型光束炮回复全值+2）。仅改本次 attack.record["weapon_might"]。
+	if act_type == &"SET_ATTACK_MIGHT_FROM_PRINTED_WEAPON":
+		var sam_params: Dictionary = action_def.get("params", {})
+		var sam_wid: StringName = sam_params.get("weapon_instance_id", sam_params.get("target_card_instance_id", &""))
+		if String(sam_wid).begins_with("$"):
+			sam_wid = _resolve_atomic_value(sam_wid, payload, parent_action)
+		var sam_bonus: int = int(sam_params.get("bonus", 0))
+		var sam_target = parent_action
+		if sam_target == null or sam_target.action_type != &"attack":
+			var sam_atk_id: StringName = payload.get("attack_action_id", &"")
+			if sam_atk_id != &"" and context.action_registry != null:
+				sam_target = context.action_registry.get_action(sam_atk_id)
+		if sam_target != null and sam_wid != &"" and context.game_state != null:
+			var sam_card = context.game_state.get_card(sam_wid)
+			if sam_card != null and sam_card.def != null:
+				var printed: int = int(sam_card.def.might) if "might" in sam_card.def else 0
+				sam_target.record["weapon_might"] = printed + sam_bonus
+				SLog.log_raw("[ACTION] %s weapon_might 覆盖为 牌面%d+bonus%d=%d" % [String(sam_target.action_id), printed, sam_bonus, printed + sam_bonus])
+		return {"state": &"completed"}
+
+	# SET_WEAPON_MODE：设置武器形态（流星钢锤 effect_098/099）。refresh_parent_attack=true 时
+	# 同步刷新当前 attack 的基础 weapon_might/weapon_range（只替换 base，不重叠 extra）。
+	if act_type == &"SET_WEAPON_MODE":
+		var swm_params: Dictionary = action_def.get("params", {})
+		var swm_wid: StringName = swm_params.get("target_card_instance_id", swm_params.get("weapon_id", &""))
+		if String(swm_wid).begins_with("$"):
+			swm_wid = _resolve_atomic_value(swm_wid, payload, parent_action)
+		var swm_mode: StringName = swm_params.get("mode", &"normal")
+		if swm_wid != &"" and context.game_state != null:
+			var swm_card = context.game_state.get_card(swm_wid)
+			if swm_card != null:
+				swm_card.weapon_mode = swm_mode
+				SLog.log_raw("[ACTION] SET_WEAPON_MODE %s -> %s" % [String(swm_wid), String(swm_mode)])
+				if bool(swm_params.get("refresh_parent_attack", false)) and parent_action != null and parent_action.action_type == &"attack":
+					var swm_attacker_id: StringName = parent_action.record.get("attacker_id", &"")
+					var swm_attacker = context.game_state.mechs.get(swm_attacker_id) if swm_attacker_id != &"" else null
+					if swm_attacker != null:
+						var swm_stats: Dictionary = _GenEquipEffects.get_effective_weapon_stats(swm_card)
+						parent_action.record["weapon_might"] = int(swm_stats.get("might", 0))
+						parent_action.record["weapon_range"] = int(swm_stats.get("range_value", 1)) + _GenEquipEffects.get_passive_weapon_range_bonus(swm_attacker, swm_stats.get("weapon_kind", &""))
+		return {"state": &"completed"}
+
+	# PLACE_DAMAGE_TOKENS 强制落点（effect_082/102/105/121/122/129/134/137 等自损/额外损伤强制落本武器槽）：
+	# 指定 target_slot(+target_card_instance_id) 时走 place_damage_tokens_on_slot（逐点放、region+card 双计、
+	# 不开转移窗、不弹逐点 UI），避免自损误触盾牌转移。无 target_slot 时回退原 place_damage_tokens（弹 UI）。
+	if act_type == &"PLACE_DAMAGE_TOKENS":
+		var pdt_params: Dictionary = action_def.get("params", {})
+		var pdt_slot: StringName = pdt_params.get("target_slot", &"")
+		var pdt_card_id: StringName = pdt_params.get("target_card_instance_id", &"")
+		if String(pdt_slot).begins_with("$"):
+			pdt_slot = _resolve_atomic_value(pdt_slot, payload, parent_action)
+		if String(pdt_card_id).begins_with("$"):
+			pdt_card_id = _resolve_atomic_value(pdt_card_id, payload, parent_action)
+		# 仅有 target_card_instance_id 无 target_slot：从卡实例反查 slot_id
+		if pdt_slot == &"" and pdt_card_id != &"" and context.game_state != null:
+			var pdt_card = context.game_state.get_card(pdt_card_id)
+			if pdt_card != null:
+				pdt_slot = pdt_card.slot_id if "slot_id" in pdt_card else &""
+		if pdt_slot != &"" and pdt_slot != &"choose_by_executor":
+			var pdt_mech: StringName = pdt_params.get("target_mech_id", &"")
+			if String(pdt_mech).begins_with("$"):
+				pdt_mech = _resolve_atomic_value(pdt_mech, payload, parent_action)
+			if pdt_mech == &"":
+				pdt_mech = payload.get("source_mech_id", payload.get("mech_id", &""))
+			var pdt_count: int = int(pdt_params.get("count", pdt_params.get("amount", 0)))
+			if pdt_mech != &"" and pdt_count > 0 and context.game_actions != null:
+				context.game_actions.place_damage_tokens_on_slot({"mech_id": pdt_mech, "slot_id": pdt_slot, "amount": pdt_count, "source_card_id": pdt_card_id})
+			return {"state": &"completed"}
+
+	# SET_WEAPON_LOCK：拘束钩爪 effect_104 施加/解除锁定。apply 时设 card.lock_target_mech_id=target，
+	# 期间 WEAPON_IS_LOCKED_OUT 拦截本牌攻击。目标下一次被任意攻击命中时由 attack_action 清除。
+	if act_type == &"SET_WEAPON_LOCK":
+		var swl_params: Dictionary = action_def.get("params", {})
+		var swl_wid: StringName = swl_params.get("weapon_id", swl_params.get("target_card_instance_id", &""))
+		if String(swl_wid).begins_with("$"):
+			swl_wid = _resolve_atomic_value(swl_wid, payload, parent_action)
+		var swl_target: StringName = swl_params.get("target_id", &"")
+		if String(swl_target).begins_with("$"):
+			swl_target = _resolve_atomic_value(swl_target, payload, parent_action)
+		var swl_mode: StringName = swl_params.get("mode", &"apply")
+		if swl_wid != &"" and context.game_state != null:
+			var swl_card = context.game_state.get_card(swl_wid)
+			if swl_card != null:
+				if swl_mode == &"apply":
+					swl_card.lock_target_mech_id = swl_target
+				else:
+					swl_card.lock_target_mech_id = &""
+				SLog.log_raw("[ACTION] SET_WEAPON_LOCK %s mode=%s target=%s" % [String(swl_wid), String(swl_mode), String(swl_target)])
 		return {"state": &"completed"}
 
 	var params: Dictionary = action_def.get("params", {})
@@ -857,6 +984,13 @@ func _dispatch_atomic_action(act_type: StringName, params: Dictionary, payload: 
 			ga.modify_weapon_power(params)
 		&"SET_WEAPON_STATS":
 			ga.set_weapon_stats(params)
+		&"SET_WEAPON_COOLDOWN":
+			ga.set_weapon_cooldown(params)
+		&"DISCARD_ALL_FACE_UP_PARTS":
+			ga.discard_all_face_up_parts(params, payload)
+		&"CHOOSE_MANY_MAP_CELLS":
+			# 由 TimingEngine._execute_actions 拦截弹选格 UI（同 CHOOSE_ONE/OFFER_DAMAGE_REDIRECT）
+			pass
 		&"CONVERT_ARMOR_TO_POWER":
 			ga.convert_armor_to_power(params)
 		&"REDIRECT_HEAL_TO_DAMAGE":
