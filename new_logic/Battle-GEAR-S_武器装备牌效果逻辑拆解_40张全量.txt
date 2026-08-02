@@ -1,0 +1,3633 @@
+Battle-GEAR-S（机斗战甲）
+武器装备牌效果文本 -> ActionEffect 逻辑拆解（40张全量）
+========================================================================
+
+权威输入：
+1. 装备牌武器_全部装备牌信息(1).txt
+2. 行动牌的效果与逻辑(2).txt
+3. 各动作的生命周期与时点(2).txt
+4. 机斗战甲规则书(2).txt
+
+全局裁定与实现基线：
+- 现存 equipment_weapons.json 的 effect_ids/effect_text/stats 全部不作为本拆解依据；落码时按本文总览表手工同步。
+- 部件牌已占用 equipment_effect_001~092；武器从093连续分配至139，共47个武器效果定义。
+- 武器仅在正面设置到两个 WEAPON 槽时注册；备用区不注册；离场注销。
+- 权威攻击生命周期：ATTACK_AFTER 位于“计算伤害/损伤”之后、实际造成伤害与放置损伤之前。因此简单“命中后额外N损伤”采用 MODIFY_ATTACK_MARKERS；需要观察实际放置区域的06/07/21/22/25改在 ATTACK_SETTLE 读取 damage_placement_log。
+- “对此牌使用聚能时”统一选择监听聚能 effect_fire 的 EFFECT_FIRE_AFTER，并要求聚能动作把 energy_target_weapon_instance_id 写入payload；每处仍保留歧义回答行。
+- 所有需要玩家输入的CHOOSE/弃牌/选格/损伤放置子动作都会把父动作置 waiting_effect_action，直到当前操作人类玩家确认或取消。
+- 直攻免牌仍走完整attack时点链，默认消耗本回合攻击次数；该裁定均保留回答行。
+
+effect_id 分配摘要：equipment_effect_093 ~ equipment_effect_139
+
+
+########################################################################
+第一组：近战武器（01-15）
+########################################################################
+
+═══════════════════════════════════════════════════════════
+[武器牌 001] 光束军刀  （类型:近战  威力:12 范围:2 耐久:3 金币:3  牌堆数量:1）
+机制族：A.聚能联动；B.被名响应
+═══════════════════════════════════════════════════════════
+效果文本：对此牌使用聚能时，本回合额外使此牌范围+1。机甲被名称带有光束的武器攻击时，可弃置1张攻击行动牌响应，使该攻击威力-5。
+effect_ids：["equipment_effect_093", "equipment_effect_094"]
+
+──────────── 效果拆解（equipment_effect_093）────────────
+display_name：聚能后本回合范围+1
+机制族：A.聚能联动
+优先级：10
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听 "effect_fire" 的 EFFECT_FIRE_AFTER。选择该时点是因为权威《行动牌的效果与逻辑》中“聚能”先选择正面武器并施加聚能状态，effect_fire 结束后目标已确定；payload 必须回填 energy_target_weapon_instance_id。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"ENERGY_TARGET_IS_SELF"},  # 聚能动作的目标武器实例 == 本牌实例
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"SET_WEAPON_STATS", "params": {"target_card_instance_id": "$binding_context.card_instance_id", "might_delta": 0, "range_delta": 1, "duration": &"THIS_OWNER_TURN", "stack": true}},  # 给本武器增加可叠加的本回合范围修正
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：输入：聚能来源、目标武器、本牌实例；输出：weapon_runtime_modifiers.range_delta += 1，owner 回合结束后清除。若在他人回合通过效果聚能，duration 仍绑定“当前活动回合结束”。
+
+实现预告：
+  - 复用：复用 SET_WEAPON_STATS、EFFECT_FIRE_AFTER、NO_TARGET。
+  - 新增/扩展：需新增条件 op【ENERGY_TARGET_IS_SELF】：读取 effect_fire.payload.energy_target_weapon_instance_id；登记 ConditionChecker.gd。聚能效果落码时需保证 effect_fire record 写入该字段。
+
+该效果歧义点：
+  [歧义1] “聚能时”的时点。智能体选择：监听聚能 effect_fire 的 EFFECT_FIRE_AFTER（理由：目标与聚能层数均已落地，且不误触普通使用行动牌）。候选：监听 USE_ACTION_AT，或把 APPLY_ENERGY_TO_WEAPON 升级为有 AFTER 时点的子动作。▶ 回答：____________________
+  [歧义2] 多次聚能是否叠加额外范围。智能体选择：每次聚能均叠加 +1，持续到当前活动回合结束。候选：同回合最多 +1。▶ 回答：____________________
+
+──────────── 效果拆解（equipment_effect_094）────────────
+display_name：被光束名武器攻击时弃攻击牌响应，威力-5
+机制族：B.被名响应
+优先级：10
+模式：AVAILABILITY
+植入：设置到武器槽后注册为 ATTACK_AT 响应窗口的 availability provider；备用区不注册，离场注销。
+触发/查询：availability_condition=AVAIL_RESPOND_ATTACK，availability_priority=5；在 ATTACK_AT 共用响应窗口列出。玩家选择本效果后支付弃牌成本、标记该攻击已被响应，再修正本次攻击威力。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"SELF_MECH_IS_ATTACK_TARGET"},  # 本牌所属机甲是当前攻击目标
+  {"op": &"WEAPON_NAME_CONTAINS", "params": {"substring": "光束"}},  # 有效攻击武器名称含“光束”
+  {"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"card_type": &"attack", "count": 1}},  # 至少有1张攻击行动牌可弃
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[
+  {"cost_type": &"DISCARD_ACTION_CARD", "count": 1, "optional": false, "params": {"card_type": &"attack", "reason": &"weapon_named_response"}}  # 选择本响应后必须弃1张攻击行动牌
+]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"RESPOND_ATTACK", "params": {"source_type": &"equipment", "source_card_instance_id": "$binding_context.card_instance_id", "is_counter_card": false}},  # 将攻击 record.responded 置 true，但不记为迎击牌
+  {"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": -5}}  # attack.record.extra_might -= 5，仅本次攻击
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：输入：攻击动作、本牌所属机甲、待弃攻击牌；输出：attack.responded=true、response_source=本牌、extra_might 累加 -5。
+
+实现预告：
+  - 复用：复用 AVAIL_RESPOND_ATTACK、SELF_MECH_IS_ATTACK_TARGET、WEAPON_NAME_CONTAINS、RESPOND_ATTACK、MODIFY_ATTACK_MIGHT。
+  - 新增/扩展：需确认 DISCARD_ACTION_CARD 成本支持 card_type=&"attack" 过滤；若现实现只支持任意行动牌，扩展其 params 过滤而不新造成本类型。
+
+该效果歧义点：
+  [歧义1] “攻击牌/攻击行动牌”是否包括虚拟攻击牌。智能体选择：只允许手牌中的实体攻击行动牌，虚拟牌与临时区牌不可支付。候选：任何声明为攻击类型的牌均可。▶ 回答：____________________
+  [歧义2] 此响应是否计入迎击次数。智能体选择：仅把攻击标记为“已响应”，不写 target_used_counter_card，不消耗迎击牌相关次数（理由：文本明确为弃攻击牌响应）。候选：视同迎击。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_001.effect_ids = ["equipment_effect_093", "equipment_effect_094"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 需新增/扩展汇总：需新增条件 op【ENERGY_TARGET_IS_SELF】：读取 effect_fire.payload.energy_target_weapon_instance_id；登记 ConditionChecker.gd。聚能效果落码时需保证 effect_fire record 写入该字段。；需确认 DISCARD_ACTION_CARD 成本支持 card_type=&"attack" 过滤；若现实现只支持任意行动牌，扩展其 params 过滤而不新造成本类型。
+
+──────────── 顺序与坑 ────────────
+- 聚能临时范围只能在武器查询层计入一次；被名响应是装备响应，不得写迎击牌标记。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_001 正面装备；本方对其使用1张聚能；当前回合未结束。
+    操作：聚能 effect_fire 进入 EFFECT_FIRE_AFTER。
+    断言：该实例 runtime range_delta==1；UI范围由2变3；另一武器不变。
+场景b：
+  前置：weapon_001 装备；敌方以名称含“光束”的武器攻击本机甲；手牌有1张攻击牌。
+    操作：ATTACK_AT 响应窗口选择本牌效果并支付弃牌。
+    断言：所选攻击牌 zone==action_discard；attack.record.responded==true；target_used_counter_card==false；extra_might==-5。
+场景c：
+  前置：同上但敌方武器名不含“光束”，或本牌在备用区。
+    操作：发起攻击并打开响应窗口。
+    断言：effect_094 不出现在列表；无弃牌、无威力修正。
+场景d：
+  前置：聚能后再聚能一次。
+    操作：连续完成两次聚能。
+    断言：按当前选择，range_delta==2；回合结束后临时修正清零。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] “聚能时”的时点。智能体选择：监听聚能 effect_fire 的 EFFECT_FIRE_AFTER（理由：目标与聚能层数均已落地，且不误触普通使用行动牌）。候选：监听 USE_ACTION_AT，或把 APPLY_ENERGY_TO_WEAPON 升级为有 AFTER 时点的子动作。▶ 回答：____________________
+[歧义2] 多次聚能是否叠加额外范围。智能体选择：每次聚能均叠加 +1，持续到当前活动回合结束。候选：同回合最多 +1。▶ 回答：____________________
+[歧义3] “攻击牌/攻击行动牌”是否包括虚拟攻击牌。智能体选择：只允许手牌中的实体攻击行动牌，虚拟牌与临时区牌不可支付。候选：任何声明为攻击类型的牌均可。▶ 回答：____________________
+[歧义4] 此响应是否计入迎击次数。智能体选择：仅把攻击标记为“已响应”，不写 target_used_counter_card，不消耗迎击牌相关次数（理由：文本明确为弃攻击牌响应）。候选：视同迎击。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 002] 热能战斧  （类型:近战  威力:12 范围:2 耐久:3 金币:3  牌堆数量:1）
+机制族：A.聚能联动；B.被名响应
+═══════════════════════════════════════════════════════════
+效果文本：对此牌使用聚能时，本回合额外使此牌威力+3。机甲被名称带有热能的武器攻击时，可弃置1张攻击行动牌响应该攻击，使该攻击威力-5。
+effect_ids：["equipment_effect_095", "equipment_effect_096"]
+
+──────────── 效果拆解（equipment_effect_095）────────────
+display_name：聚能后本回合威力+3
+机制族：A.聚能联动
+优先级：10
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听 "effect_fire" 的 EFFECT_FIRE_AFTER；仅当聚能目标为本武器时触发。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"ENERGY_TARGET_IS_SELF"},  # 聚能目标 == 本牌
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"SET_WEAPON_STATS", "params": {"target_card_instance_id": "$binding_context.card_instance_id", "might_delta": 3, "range_delta": 0, "duration": &"THIS_OWNER_TURN", "stack": true}},  # 本回合武器威力修正 +3
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：weapon_runtime_modifiers.might_delta += 3；查询武器威力时计入，回合边界清除；攻击 record 只读取一次，避免与 ATTACK_BEFORE 再加一次。
+
+实现预告：
+  - 复用：复用 SET_WEAPON_STATS；与 effect_093 共用聚能触发范式。
+  - 新增/扩展：同 effect_093：新增/复用 ENERGY_TARGET_IS_SELF，并保证临时武器修正不会在 _get_weapon_stats 与攻击选择步骤重复计入。
+
+该效果歧义点：
+  [歧义1] 聚能+3是否每层叠加。智能体选择：每次对此牌使用聚能均叠加 +3。候选：无论聚能层数只额外 +3。▶ 回答：____________________
+  [歧义2] “本回合”在非本方回合获得聚能时的结束点。智能体选择：到当前活动回合结束清除。候选：到本牌所属机甲下个回合结束。▶ 回答：____________________
+
+──────────── 效果拆解（equipment_effect_096）────────────
+display_name：被热能名武器攻击时弃攻击牌响应，威力-5
+机制族：B.被名响应
+优先级：10
+模式：AVAILABILITY
+植入：设置到武器槽后注册为 ATTACK_AT 响应窗口的 availability provider；备用区不注册，离场注销。
+触发/查询：同 effect_094，仅名称过滤由“光束”改为“热能”。availability_priority=5，进入 ATTACK_AT 共用响应窗口。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"SELF_MECH_IS_ATTACK_TARGET"},
+  {"op": &"WEAPON_NAME_CONTAINS", "params": {"substring": "热能"}},
+  {"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"card_type": &"attack", "count": 1}}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[
+  {"cost_type": &"DISCARD_ACTION_CARD", "count": 1, "optional": false, "params": {"card_type": &"attack", "reason": &"weapon_named_response"}}
+]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"RESPOND_ATTACK", "params": {"source_type": &"equipment", "source_card_instance_id": "$binding_context.card_instance_id", "is_counter_card": false}},
+  {"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": -5}}
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：同 effect_094。
+
+实现预告：
+  - 复用：完全复用 effect_094 的实现，仅 substring 数据不同；因文本条件不同，保留独立 effect_id。
+  - 新增/扩展：无额外新增。
+
+该效果歧义点：
+  [歧义1] 与 effect_094 相同：只弃实体攻击行动牌，且不计作迎击。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_002.effect_ids = ["equipment_effect_095", "equipment_effect_096"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 需新增/扩展汇总：同 effect_093：新增/复用 ENERGY_TARGET_IS_SELF，并保证临时武器修正不会在 _get_weapon_stats 与攻击选择步骤重复计入。；无额外新增。
+
+──────────── 顺序与坑 ────────────
+- 聚能临时威力与本次攻击 extra_might 分层存储；响应减威力最低值仍由攻击计算统一 clamp。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_002 装备；对其使用聚能。
+    操作：完成聚能。
+    断言：该实例本回合 might_delta==3，攻击选择快照威力为15（未计其他加成）。
+场景b：
+  前置：敌方以名称含“热能”的武器攻击；本方手中有攻击牌。
+    操作：响应窗口选择本牌。
+    断言：弃1攻击牌；attack.extra_might==-5；响应来源为weapon_002且不记迎击。
+场景c：
+  前置：手中无攻击牌或攻击已被其他响应效果响应。
+    操作：打开ATTACK_AT窗口。
+    断言：effect_096不可用；不出现或置灰；attack不变。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] 聚能+3是否每层叠加。智能体选择：每次对此牌使用聚能均叠加 +3。候选：无论聚能层数只额外 +3。▶ 回答：____________________
+[歧义2] “本回合”在非本方回合获得聚能时的结束点。智能体选择：到当前活动回合结束清除。候选：到本牌所属机甲下个回合结束。▶ 回答：____________________
+[歧义3] 与 effect_094 相同：只弃实体攻击行动牌，且不计作迎击。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 003] 破甲狼爪  （类型:近战  威力:15 范围:1 耐久:3 金币:3  牌堆数量:1）
+机制族：C.命中后额外损伤
+═══════════════════════════════════════════════════════════
+效果文本：此牌发动的攻击命中后可额外设置2损伤。
+effect_ids：["equipment_effect_097"]
+
+──────────── 效果拆解（equipment_effect_097）────────────
+display_name：命中后可使本次攻击损伤标记+2
+机制族：C.命中后额外损伤
+优先级：10
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听 "attack" 的 ATTACK_AFTER。权威生命周期中此时“命中与伤害/损伤数已计算，但主损伤尚未实际放置”，因此采用 MODIFY_ATTACK_MARKERS，把2枚并入随后统一的损伤变动动作。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"ATTACK_SOURCE_IS_SELF"},  # 有效武器是本牌实例
+  {"op": &"PAYLOAD_ATTACK_HIT"}  # 本次攻击命中
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [
+    {"label": "额外设置2损伤", "actions": [
+      {"type": &"MODIFY_ATTACK_MARKERS", "params": {"delta": 2}}  # attack.record.damage_markers += 2，随后与主损伤一起放置
+    ]}
+  ]}}
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：输入：attack_id、weapon_instance_id、attack_hit；输出：damage_markers +2。弹窗由攻击方当前人类玩家操作；取消不改 record。
+
+实现预告：
+  - 复用：复用 ATTACK_SOURCE_IS_SELF、PAYLOAD_ATTACK_HIT、CHOOSE_ONE、MODIFY_ATTACK_MARKERS。
+  - 新增/扩展：无需新增。测试需确认 ATTACK_AFTER 发生在损伤放置前，窗口完成后才进入 step7。
+
+该效果歧义点：
+  [歧义1] “额外设置2损伤”的实现。智能体选择：MODIFY_ATTACK_MARKERS(+2)，并入本次攻击的统一损伤放置（理由：生命周期明确 ATTACK_AFTER 在主放置前）。候选：ATTACK_SETTLE 后另起 PLACE_DAMAGE_TOKENS。▶ 回答：____________________
+  [歧义2] “可”语义。智能体选择：攻击方可取消。候选：强制增加。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_003.effect_ids = ["equipment_effect_097"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 需新增/扩展汇总：无需新增。测试需确认 ATTACK_AFTER 发生在损伤放置前，窗口完成后才进入 step7。
+
+──────────── 顺序与坑 ────────────
+- ATTACK_AFTER 在主损伤放置前，故采用 MODIFY_ATTACK_MARKERS，不得按旧草案假设“主损伤已放完”。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_003 装备；敌方在范围内；攻击命中。
+    操作：ATTACK_AFTER 选择“额外设置2损伤”。
+    断言：attack.record.damage_markers==基础损伤标记+2；随后损伤变动只创建1次统一放置。
+场景b：
+  前置：同上。
+    操作：弹窗取消。
+    断言：damage_markers保持基础值；攻击继续ATTACK_SETTLE。
+场景c：
+  前置：攻击未命中或使用另一武器。
+    操作：结算攻击。
+    断言：effect_097不弹窗，damage_markers不增加。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] “额外设置2损伤”的实现。智能体选择：MODIFY_ATTACK_MARKERS(+2)，并入本次攻击的统一损伤放置（理由：生命周期明确 ATTACK_AFTER 在主放置前）。候选：ATTACK_SETTLE 后另起 PLACE_DAMAGE_TOKENS。▶ 回答：____________________
+[歧义2] “可”语义。智能体选择：攻击方可取消。候选：强制增加。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 004] 流星钢锤  （类型:近战  威力:18 范围:1 耐久:3 金币:3  牌堆数量:1）
+机制族：E.形态切换
+═══════════════════════════════════════════════════════════
+效果文本：我方回合中或此牌发动的攻击被响应后，可以使此牌威力-5，范围+2，或恢复此牌原本数值。
+effect_ids：["equipment_effect_098", "equipment_effect_099"]
+
+──────────── 效果拆解（equipment_effect_098）────────────
+display_name：流星钢锤主阶段切换形态
+机制族：E.形态切换
+优先级：10
+模式：DIRECT
+植入：设置到武器槽后在装备面板/skill_bar 暴露“发动”入口；点击后创建 effect_fire 动作。备用区不显示按钮，离场立即移除入口。
+触发/查询：装备面板发动按钮 -> effect_fire。仅本牌所属机甲自己的主阶段可发动；弹出“延伸形态/原始形态”选择。状态持久存于武器实例，直到再次切换、恢复或离场。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"IS_OWNER_MAIN_PHASE"},  # 当前为本牌所属机甲主阶段
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [
+    {"label": "威力-5，范围+2", "condition": {"op": &"WEAPON_MODE_NOT_EQUALS", "params": {"mode": &"extended"}}, "actions": [
+      {"type": &"SET_WEAPON_MODE", "params": {"mode": &"extended"}}  # 保存实例模式；查询值时应用 might-5/range+2
+    ]},
+    {"label": "恢复原本数值", "condition": {"op": &"WEAPON_MODE_EQUALS", "params": {"mode": &"extended"}}, "actions": [
+      {"type": &"SET_WEAPON_MODE", "params": {"mode": &"normal"}}  # 清除形态修正，回到印刷值与其他修正后的结果
+    ]}
+  ]}}
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：extended 模式的派生公式：effective_might = normal_effective_might -5；effective_range = normal_effective_range +2。模式不直接覆盖聚能、损伤等其他修正。
+
+实现预告：
+  - 复用：复用 CHOOSE_ONE；查询层仿部件派生值范式。
+  - 新增/扩展：需新增条件 WEAPON_MODE_EQUALS/NOT_EQUALS(mode)，原子 SET_WEAPON_MODE(mode)，以及武器查询 helper apply_weapon_mode_modifier(card_instance_id, stats)。登记 ConditionChecker.gd、ActionService.gd、GeneratedEquipmentEffects.gd。
+
+该效果歧义点：
+  [歧义1] 模式状态持久化。智能体选择：存于武器牌实例 runtime_state["mode"]，跨回合保留，离场清除。候选：只持续本回合。▶ 回答：____________________
+  [歧义2] “恢复原本数值”是否清除聚能等临时加成。智能体选择：只清除本牌形态的 -5/+2，不清除其他来源修正。候选：强制回到牌面18/1。▶ 回答：____________________
+
+──────────── 效果拆解（equipment_effect_099）────────────
+display_name：流星钢锤攻击被响应后切换形态
+机制族：E.形态切换
+优先级：10
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听 "attack" 的 ATTACK_AT。响应窗口关闭后 regular listener 执行；若本牌攻击已被响应，攻击方可立即切换为延伸形态或恢复原始形态。该切换发生在命中距离复核之前。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"ATTACK_SOURCE_IS_SELF"},
+  {"op": &"ATTACK_WAS_RESPONDED"}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [
+    {"label": "威力-5，范围+2", "actions": [{"type": &"SET_WEAPON_MODE", "params": {"mode": &"extended", "refresh_parent_attack": true}}]},
+    {"label": "恢复原本数值", "actions": [{"type": &"SET_WEAPON_MODE", "params": {"mode": &"normal", "refresh_parent_attack": true}}]}
+  ]}}
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：切换后同步本次 attack.record 的基础武器值差量；不得重新叠加已写入 extra_might/extra_range 的行动牌或聚能修正。
+
+实现预告：
+  - 复用：复用 ATTACK_SOURCE_IS_SELF、ATTACK_WAS_RESPONDED、CHOOSE_ONE；复用 effect_098 的模式存储。
+  - 新增/扩展：需扩展 SET_WEAPON_MODE 的 refresh_parent_attack 参数，或新增 REFRESH_ATTACK_STATS_FROM_WEAPON；实现时以 weapon_instance_id 重新计算基础值并只替换 base_might/base_range。
+
+该效果歧义点：
+  [歧义1] 被响应后切换是否影响当前这次攻击。智能体选择：影响当前攻击（理由：时点在命中复核前，文本将“攻击被响应后”作为即时发动窗口）。候选：只影响后续攻击。▶ 回答：____________________
+  [歧义2] 响应后可否在当前已是延伸形态时再次选延伸。智能体选择：UI只显示真正会改变状态的选项，另保留取消。候选：允许无效重复选择。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_004.effect_ids = ["equipment_effect_098", "equipment_effect_099"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 需新增/扩展汇总：需新增条件 WEAPON_MODE_EQUALS/NOT_EQUALS(mode)，原子 SET_WEAPON_MODE(mode)，以及武器查询 helper apply_weapon_mode_modifier(card_instance_id, stats)。登记 ConditionChecker.gd、ActionService.gd、GeneratedEquipmentEffects.gd。；需扩展 SET_WEAPON_MODE 的 refresh_parent_attack 参数，或新增 REFRESH_ATTACK_STATS_FROM_WEAPON；实现时以 weapon_instance_id 重新计算基础值并只替换 base_might/base_range。
+
+──────────── 顺序与坑 ────────────
+- 形态切换既改变后续武器查询，也可能改变当前被响应攻击；刷新当前attack时只替换基础值，不能重复叠加行动牌/聚能。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_004 装备且为本方主阶段，当前mode=normal。
+    操作：点击发动，选择“威力-5，范围+2”。
+    断言：runtime_state.mode==extended；有效威力13、范围3。
+场景b：
+  前置：mode=extended；用本牌攻击并被响应。
+    操作：ATTACK_AT后选择“恢复原本数值”。
+    断言：mode==normal；本次attack.base_might/base_range刷新为18/1且不重复叠加其他extra。
+场景c：
+  前置：用本牌攻击但未被响应，或本牌在备用区。
+    操作：推进到ATTACK_AT/点击面板。
+    断言：监听不弹窗；备用区无发动按钮。
+场景d：
+  前置：形态弹窗选择取消。
+    操作：取消。
+    断言：mode及本次attack记录均不变。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] 模式状态持久化。智能体选择：存于武器牌实例 runtime_state["mode"]，跨回合保留，离场清除。候选：只持续本回合。▶ 回答：____________________
+[歧义2] “恢复原本数值”是否清除聚能等临时加成。智能体选择：只清除本牌形态的 -5/+2，不清除其他来源修正。候选：强制回到牌面18/1。▶ 回答：____________________
+[歧义3] 被响应后切换是否影响当前这次攻击。智能体选择：影响当前攻击（理由：时点在命中复核前，文本将“攻击被响应后”作为即时发动窗口）。候选：只影响后续攻击。▶ 回答：____________________
+[歧义4] 响应后可否在当前已是延伸形态时再次选延伸。智能体选择：UI只显示真正会改变状态的选项，另保留取消。候选：允许无效重复选择。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 005] 扭转钢鞭  （类型:近战  威力:10 范围:3 耐久:3 金币:3  牌堆数量:1）
+机制族：F.弃目标牌
+═══════════════════════════════════════════════════════════
+效果文本：此牌发动的攻击命中后可弃置攻击目标2张行动牌。
+effect_ids：["equipment_effect_100"]
+
+──────────── 效果拆解（equipment_effect_100）────────────
+display_name：命中后可弃目标2张行动牌
+机制族：F.弃目标牌
+优先级：10
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听 "attack" 的 ATTACK_AFTER；命中已确定、主伤害尚未放置。攻击方选择是否发动，确认后创建弃置牌子动作，父 attack 与该时点暂停直至弃牌UI完成。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"ATTACK_SOURCE_IS_SELF"},
+  {"op": &"PAYLOAD_ATTACK_HIT"},
+  {"op": &"TARGET_HAS_ACTION_CARDS", "params": {"minimum": 1}}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [
+    {"label": "弃置目标2张行动牌", "actions": [
+      {"type": &"EXECUTE_DISCARD", "params": {"from_target": "$payload.target_id", "zone": &"action_hand", "count": 2, "count_mode": &"up_to", "choose": true, "chooser_id": "$binding_context.mech_id", "face_up": false, "reason": &"weapon_effect"}}  # 攻击方从目标未知手牌中选至多2张
+    ]}
+  ]}}
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：输入：攻击目标、目标手牌、攻击方；输出：所选牌进入行动弃牌堆。隐藏信息按弃置动作规则显示“未知”，但实例可被选择。
+
+实现预告：
+  - 复用：复用 EXECUTE_DISCARD、CHOOSE_ONE、攻击后命中条件。
+  - 新增/扩展：需新增或复用 TARGET_HAS_ACTION_CARDS；若无该 op，可用目标手牌计数检查。EXECUTE_DISCARD 的 count_mode=&"up_to" 需确认已支持。
+
+该效果歧义点：
+  [歧义1] 目标不足2张时。智能体选择：有几张弃几张，0张时不弹窗。候选：不足2张则不能发动。▶ 回答：____________________
+  [歧义2] 谁选择被弃牌。智能体选择：攻击方选择，未知牌仅显示背面。候选：目标自行选择。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_005.effect_ids = ["equipment_effect_100"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 需新增/扩展汇总：需新增或复用 TARGET_HAS_ACTION_CARDS；若无该 op，可用目标手牌计数检查。EXECUTE_DISCARD 的 count_mode=&"up_to" 需确认已支持。
+
+──────────── 顺序与坑 ────────────
+- 弃牌子动作会暂停父攻击；目标手牌不足按“至多2”处理，隐藏牌UI不得泄露牌面。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_005 攻击命中；目标有3张行动牌。
+    操作：ATTACK_AFTER选择发动，攻击方在弃牌UI选2张。
+    断言：两牌进入action_discard；父attack在UI确认前保持waiting_effect_action。
+场景b：
+  前置：目标仅1张行动牌。
+    操作：发动效果。
+    断言：仅该1张被弃；无越界；攻击正常继续。
+场景c：
+  前置：未命中、目标0手牌或使用其他武器。
+    操作：结算。
+    断言：不弹弃牌UI；目标手牌不变。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] 目标不足2张时。智能体选择：有几张弃几张，0张时不弹窗。候选：不足2张则不能发动。▶ 回答：____________________
+[歧义2] 谁选择被弃牌。智能体选择：攻击方选择，未知牌仅显示背面。候选：目标自行选择。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 006] 光束战戟  （类型:近战  威力:15 范围:3 耐久:3 金币:5  牌堆数量:2）
+机制族：C.命中后额外损伤
+═══════════════════════════════════════════════════════════
+效果文本：此牌发动的攻击产生的损伤如果全部设置于同一区域，则可以额外设置2损伤在该区域上。
+effect_ids：["equipment_effect_101"]
+
+──────────── 效果拆解（equipment_effect_101）────────────
+display_name：本次攻击损伤全在同一区域后，可在该区域额外放2损伤
+机制族：C.命中后额外损伤
+优先级：10
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听 "attack" 的 ATTACK_SETTLE。原因：权威生命周期中只有 step7 的损伤变动完成后才知道实际放置分布；attack record 必须保留本次攻击 damage_placement_log。满足全部攻击损伤落在同一 slot 后，攻击方可在该 slot 追加2枚。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"ATTACK_SOURCE_IS_SELF"},
+  {"op": &"PAYLOAD_ATTACK_HIT"},
+  {"op": &"ATTACK_MARKERS_ABOVE", "params": {"threshold": 1}},
+  {"op": &"DAMAGE_TOKENS_ALL_IN_SAME_SLOT"}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [
+    {"label": "在同一区域额外设置2损伤", "actions": [
+      {"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 2, "target_mech_id": "$payload.target_id", "target_slot": "$payload.single_damage_slot_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_extra_damage"}}  # 强制目标为本次唯一受损区域
+    ]}
+  ]}}
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：attack.record.damage_placement_log 仅统计本次攻击主损伤；single_damage_slot_id 为唯一 slot。追加损伤走标准耐久与破损链。
+
+实现预告：
+  - 复用：复用 ATTACK_SETTLE、DAMAGE_TOKENS_ALL_IN_SAME_SLOT、PLACE_DAMAGE_TOKENS。
+  - 新增/扩展：需保证 attack record 在 ATTACK_SETTLE 前保留逐枚放置结果；若现 damage_change 未回写 parent attack，新增回写字段 damage_placement_log/single_damage_slot_id。
+
+该效果歧义点：
+  [歧义1] “攻击产生的损伤”是否包含其他效果额外增加的损伤。智能体选择：包含已经并入 attack.record.damage_markers 的损伤；不包含独立 PLACE_DAMAGE_TOKENS 子动作。候选：只看基础威力产生的标记。▶ 回答：____________________
+  [歧义2] 攻击产生0损伤时是否视为“全部在同一区域”。智能体选择：不触发，要求至少1枚。候选：空集真而可触发。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_006.effect_ids = ["equipment_effect_101"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 需新增/扩展汇总：需保证 attack record 在 ATTACK_SETTLE 前保留逐枚放置结果；若现 damage_change 未回写 parent attack，新增回写字段 damage_placement_log/single_damage_slot_id。
+
+──────────── 顺序与坑 ────────────
+- 同区判定必须基于实际损伤放置日志，不能在ATTACK_AFTER提前判断。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_006 攻击命中并产生3损伤，全部实际放在同一slot。
+    操作：进入ATTACK_SETTLE并选择额外2。
+    断言：damage_placement_log distinct_slots==1；指定同slot再放2；该slot损伤+2。
+场景b：
+  前置：主损伤分布到2个slot。
+    操作：进入ATTACK_SETTLE。
+    断言：effect_101条件失败，不弹窗。
+场景c：
+  前置：产生0损伤或攻击未命中。
+    操作：结算。
+    断言：ATTACK_MARKERS_ABOVE失败，不触发。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] “攻击产生的损伤”是否包含其他效果额外增加的损伤。智能体选择：包含已经并入 attack.record.damage_markers 的损伤；不包含独立 PLACE_DAMAGE_TOKENS 子动作。候选：只看基础威力产生的标记。▶ 回答：____________________
+[歧义2] 攻击产生0损伤时是否视为“全部在同一区域”。智能体选择：不触发，要求至少1枚。候选：空集真而可触发。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 007] 热能战镰  （类型:近战  威力:15 范围:3 耐久:3 金币:5  牌堆数量:2）
+机制族：C.命中后额外损伤
+═══════════════════════════════════════════════════════════
+效果文本：此牌发动的攻击产生的损伤如果全部设置于同一区域，则可以额外设置2损伤在该区域上。
+effect_ids：["equipment_effect_101"]
+
+──────────── 效果拆解（equipment_effect_101）────────────
+拆解同 [武器牌 006] 的 equipment_effect_101（本次攻击损伤全在同一区域后，可在该区域额外放2损伤）。
+本牌实例独立注册/独立保存 runtime_state；conditions/actions 字面量、优先级、时点、UI与新增件完全复用，不因牌面威力/范围差异改变。
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_007.effect_ids = ["equipment_effect_101"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 共用机制：equipment_effect_101 复用自武器牌006。
+- 需新增/扩展汇总：需保证 attack record 在 ATTACK_SETTLE 前保留逐枚放置结果；若现 damage_change 未回写 parent attack，新增回写字段 damage_placement_log/single_damage_slot_id。
+
+──────────── 顺序与坑 ────────────
+- 与06共用effect_id，但每张实例各自注册、各自触发；两张同名装备并存时按装备座次。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_007 攻击的全部损伤落同一区域。
+    操作：ATTACK_SETTLE选择额外2。
+    断言：与weapon_006相同；额外2放同一slot；effect_id仍为equipment_effect_101。
+场景b：
+  前置：分散放置。
+    操作：结算。
+    断言：不触发。
+场景c：
+  前置：weapon_007 在备用区。
+    操作：其他武器攻击满足同区条件。
+    断言：本牌无listener，effect_101不触发。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] “攻击产生的损伤”是否包含其他效果额外增加的损伤。智能体选择：包含已经并入 attack.record.damage_markers 的损伤；不包含独立 PLACE_DAMAGE_TOKENS 子动作。候选：只看基础威力产生的标记。▶ 回答：____________________
+[歧义2] 攻击产生0损伤时是否视为“全部在同一区域”。智能体选择：不触发，要求至少1枚。候选：空集真而可触发。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 008] 断甲长刀  （类型:近战  威力:15 范围:3 耐久:4 金币:5  牌堆数量:1）
+机制族：C+D.额外损伤/自损伤后果
+═══════════════════════════════════════════════════════════
+效果文本：此牌发动的攻击命中后可额外设置2损伤，之后在此牌上设置1损伤。
+effect_ids：["equipment_effect_102"]
+
+──────────── 效果拆解（equipment_effect_102）────────────
+display_name：命中后可额外2损伤，之后本牌自损1
+机制族：C+D.额外损伤/自损伤后果
+优先级：10
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听 "attack" 的 ATTACK_AFTER。命中后弹可选项；只有玩家确认额外2损伤时，才按文本“之后”继续在本牌所在武器槽设置1损伤。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"ATTACK_SOURCE_IS_SELF"},
+  {"op": &"PAYLOAD_ATTACK_HIT"}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [
+    {"label": "额外2损伤并使此牌受1损伤", "actions": [
+      {"type": &"MODIFY_ATTACK_MARKERS", "params": {"delta": 2}},  # 主攻击待放损伤 +2
+      {"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 1, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_self_damage"}}  # 在本武器槽放1损伤
+    ]}
+  ]}}
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：动作顺序固定：先修改 attack.damage_markers，再执行自身损伤子动作；自身损伤UI/自动放置完成后，原 ATTACK_AFTER 才继续。若本牌因此耐尽，监听器注销，但已写入 attack 的+2仍保留。
+
+实现预告：
+  - 复用：复用 CHOOSE_ONE、MODIFY_ATTACK_MARKERS、PLACE_DAMAGE_TOKENS。
+  - 新增/扩展：PLACE_DAMAGE_TOKENS 需支持 target_card_instance_id 或精确 target_slot，确保不是让玩家改放到其他区域。
+
+该效果歧义点：
+  [歧义1] 自损伤是否只在选择额外2损伤后发生。智能体选择：是，因文本用“之后”连接在可选效果后。候选：命中必定自损1，无论是否选择额外损伤。▶ 回答：____________________
+  [歧义2] 本牌因自损伤破损时，已增加的2损伤是否继续。智能体选择：继续，父攻击 record 已完成修改。候选：因来源离场取消后续加成。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_008.effect_ids = ["equipment_effect_102"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 需新增/扩展汇总：PLACE_DAMAGE_TOKENS 需支持 target_card_instance_id 或精确 target_slot，确保不是让玩家改放到其他区域。
+
+──────────── 顺序与坑 ────────────
+- 自损伤可能使来源离场；已确认的+2必须保留，当前效果链不能因listener注销被回滚。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_008 命中且耐久剩余>1。
+    操作：ATTACK_AFTER选择发动。
+    断言：先attack.damage_markers+=2，再本武器槽损伤+1；两步完成后进入主损伤放置。
+场景b：
+  前置：命中后取消。
+    操作：取消CHOOSE_ONE。
+    断言：既不+2也不自损。
+场景c：
+  前置：选择发动且新增1损伤使本牌达到耐久。
+    操作：确认。
+    断言：weapon_008进入equipment_discard、slot.equipped_card==null、listener注销；attack仍保留+2并完成。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] 自损伤是否只在选择额外2损伤后发生。智能体选择：是，因文本用“之后”连接在可选效果后。候选：命中必定自损1，无论是否选择额外损伤。▶ 回答：____________________
+[歧义2] 本牌因自损伤破损时，已增加的2损伤是否继续。智能体选择：继续，父攻击 record 已完成修改。候选：因来源离场取消后续加成。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 009] 重型锤矛  （类型:近战  威力:18 范围:3 耐久:5 金币:5  牌堆数量:1）
+机制族：C.命中后额外损伤；D.自损伤代价/后果
+═══════════════════════════════════════════════════════════
+效果文本：此牌发动的攻击命中后可额外设置2损伤。此牌发动的攻击没有命中，则设置2损伤在此牌上。
+effect_ids：["equipment_effect_097", "equipment_effect_103"]
+
+──────────── 效果拆解（equipment_effect_097）────────────
+拆解同 [武器牌 003] 的 equipment_effect_097（命中后可使本次攻击损伤标记+2）。
+本牌实例独立注册/独立保存 runtime_state；conditions/actions 字面量、优先级、时点、UI与新增件完全复用，不因牌面威力/范围差异改变。
+
+──────────── 效果拆解（equipment_effect_103）────────────
+display_name：本牌攻击未命中时自损2
+机制族：D.自损伤代价/后果
+优先级：10
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听 "attack" 的 ATTACK_AFTER。攻击命中判定已写入 payload；仅未命中时强制在本牌武器槽设置2损伤。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"ATTACK_SOURCE_IS_SELF"},
+  {"op": &"PAYLOAD_ATTACK_MISS"}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 2, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_miss_self_damage"}}  # 未命中后强制自损2
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：未命中包括目标在命中复核时离开范围、攻击被无效且 record.attack_hit=false 等。损伤逐枚放置，达到耐久即弃置本牌，区域损伤保留。
+
+实现预告：
+  - 复用：复用 PAYLOAD_ATTACK_MISS、PLACE_DAMAGE_TOKENS。
+  - 新增/扩展：无需新增；需统一“无效攻击”的 attack_hit 值，避免识破类跳步后错误触发。
+
+该效果歧义点：
+  [歧义1] 被“无效攻击”直接跳到结算是否算未命中。智能体选择：算未命中并自损2，只要 payload.attack_hit=false。候选：无效攻击既非命中也非未命中，不触发。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_009.effect_ids = ["equipment_effect_097", "equipment_effect_103"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 共用机制：equipment_effect_097 复用自武器牌003。
+- 需新增/扩展汇总：无需新增。测试需确认 ATTACK_AFTER 发生在损伤放置前，窗口完成后才进入 step7。；无需新增；需统一“无效攻击”的 attack_hit 值，避免识破类跳步后错误触发。
+
+──────────── 顺序与坑 ────────────
+- 命中分支与未命中分支互斥；无效攻击的attack_hit口径需全局一致。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_009 命中。
+    操作：选择额外2。
+    断言：damage_markers+2；不触发miss自损。
+场景b：
+  前置：weapon_009 未命中。
+    操作：进入ATTACK_AFTER。
+    断言：本牌槽设置2损伤；effect_097不弹窗。
+场景c：
+  前置：使用其他武器未命中。
+    操作：结算。
+    断言：weapon_009损伤不变。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] “额外设置2损伤”的实现。智能体选择：MODIFY_ATTACK_MARKERS(+2)，并入本次攻击的统一损伤放置（理由：生命周期明确 ATTACK_AFTER 在主放置前）。候选：ATTACK_SETTLE 后另起 PLACE_DAMAGE_TOKENS。▶ 回答：____________________
+[歧义2] “可”语义。智能体选择：攻击方可取消。候选：强制增加。▶ 回答：____________________
+[歧义3] 被“无效攻击”直接跳到结算是否算未命中。智能体选择：算未命中并自损2，只要 payload.attack_hit=false。候选：无效攻击既非命中也非未命中，不触发。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 010] 拘束钩爪  （类型:近战  威力:10 范围:5 耐久:3 金币:5  牌堆数量:1）
+机制族：G.锁定
+═══════════════════════════════════════════════════════════
+效果文本：此牌发动的攻击命中后，可对该攻击目标施加锁定效果，此效果将持续到目标下一次被攻击命中时结束，且在效果持续期间，此牌不能攻击。
+effect_ids：["equipment_effect_104"]
+
+──────────── 效果拆解（equipment_effect_104）────────────
+display_name：命中后施加锁定；锁定期间本牌不能攻击
+机制族：G.锁定
+优先级：10
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听 "attack" 的 ATTACK_AFTER。命中后攻击方可对目标施加“weapon_lock”状态；状态绑定 target_id 与 source_weapon_instance_id，直到该目标下一次被任意攻击命中时移除。状态存在期间，攻击武器选择过滤本牌。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"ATTACK_SOURCE_IS_SELF"},
+  {"op": &"PAYLOAD_ATTACK_HIT"},
+  {"op": &"ATTACK_TARGET_ALIVE"}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [
+    {"label": "施加锁定", "actions": [
+      {"type": &"APPLY_OR_CHECK_LOCKED", "params": {"mode": &"apply", "target_id": "$payload.target_id", "source_weapon_instance_id": "$binding_context.card_instance_id", "until": &"target_next_attack_hit"}}  # 创建锁定状态并关联本牌
+    ]}
+  ]}}
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：状态内部监听任意 attack 的 ATTACK_AFTER：target_id 匹配且 PAYLOAD_ATTACK_HIT 时移除；攻击发起/武器选择阶段调用 is_weapon_attackable，本牌若关联状态仍存在则不可选。
+
+实现预告：
+  - 复用：复用 APPLY_OR_CHECK_LOCKED、ATTACK_AFTER、CHOOSE_ONE。
+  - 新增/扩展：需新增攻击校验 helper【WEAPON_BLOCKED_BY_LOCK_STATUS】或条件 WEAPON_IS_LOCKED_OUT；登记武器选择过滤与直攻免牌路径。锁定状态 UI 显示目标与来源武器。
+
+该效果歧义点：
+  [歧义1] “目标下一次被攻击命中”是否要求由本牌/本机甲命中。智能体选择：任意来源的下一次命中均结束（文本未限定来源）。候选：仅本牌或本牌所属机甲命中。▶ 回答：____________________
+  [歧义2] 锁定目标被毁灭、离场或状态目标不可用时。智能体选择：立即移除状态并解锁本牌。候选：状态保留到下一次合法命中。▶ 回答：____________________
+  [歧义3] 同一拘束钩爪再次命中其他目标。智能体选择：每个武器实例最多维持1个锁定；新锁定覆盖旧锁定。候选：可同时锁多个目标，导致本牌一直不能攻击直到全部解除。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_010.effect_ids = ["equipment_effect_104"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 需新增/扩展汇总：需新增攻击校验 helper【WEAPON_BLOCKED_BY_LOCK_STATUS】或条件 WEAPON_IS_LOCKED_OUT；登记武器选择过滤与直攻免牌路径。锁定状态 UI 显示目标与来源武器。
+
+──────────── 顺序与坑 ────────────
+- 所有攻击入口都必须调用同一武器可用性校验，否则直攻/闪击可能绕过“不能攻击”。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_010 命中目标A。
+    操作：ATTACK_AFTER选择施加锁定。
+    断言：目标A拥有weapon_lock状态，source_weapon_instance_id为本牌；武器选择器过滤weapon_010。
+场景b：
+  前置：目标A随后被任意武器命中。
+    操作：该攻击ATTACK_AFTER。
+    断言：锁定状态移除；weapon_010重新可选。
+场景c：
+  前置：首次命中后取消施加，或首次攻击未命中。
+    操作：结算。
+    断言：无锁定状态；本牌仍可攻击。
+场景d：
+  前置：锁定持续时尝试直攻/闪击复用本牌。
+    操作：进入攻击校验。
+    断言：所有入口统一失败，不能绕过过滤。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] “目标下一次被攻击命中”是否要求由本牌/本机甲命中。智能体选择：任意来源的下一次命中均结束（文本未限定来源）。候选：仅本牌或本牌所属机甲命中。▶ 回答：____________________
+[歧义2] 锁定目标被毁灭、离场或状态目标不可用时。智能体选择：立即移除状态并解锁本牌。候选：状态保留到下一次合法命中。▶ 回答：____________________
+[歧义3] 同一拘束钩爪再次命中其他目标。智能体选择：每个武器实例最多维持1个锁定；新锁定覆盖旧锁定。候选：可同时锁多个目标，导致本牌一直不能攻击直到全部解除。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 011] 光束斩舰刀  （类型:近战  威力:20 范围:3 耐久:5 金币:7  牌堆数量:2）
+机制族：D.自损伤后果；D.自损伤代价/后果
+═══════════════════════════════════════════════════════════
+效果文本：此牌发动的攻击命中后，在此牌上设置1损伤。此牌攻击时，可以使威力+3，攻击结算后在此牌上设置1损伤。
+effect_ids：["equipment_effect_105", "equipment_effect_106", "equipment_effect_107"]
+
+──────────── 效果拆解（equipment_effect_105）────────────
+display_name：本牌攻击命中后自损1
+机制族：D.自损伤后果
+优先级：10
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听 "attack" 的 ATTACK_AFTER；命中即强制在本牌上设置1损伤，与是否发动另一个攻击加成无关。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"ATTACK_SOURCE_IS_SELF"},
+  {"op": &"PAYLOAD_ATTACK_HIT"}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 1, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_hit_self_damage"}}
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：自损伤在 ATTACK_AFTER 时点内发生，早于主攻击对目标的 step7 损伤放置。即使本牌因此破损，当前攻击仍继续结算。
+
+实现预告：
+  - 复用：复用 ATTACK_SOURCE_IS_SELF、PAYLOAD_ATTACK_HIT、PLACE_DAMAGE_TOKENS。
+  - 新增/扩展：无需新增。
+
+该效果歧义点：
+  [歧义1] 命中但攻击产生0伤害/0损伤时是否自损。智能体选择：只看 attack_hit=true，仍自损。候选：必须至少造成1点伤害或1损伤。▶ 回答：____________________
+
+──────────── 效果拆解（equipment_effect_106）────────────
+display_name：光束斩舰刀攻击时可威力+3并记录后续自损
+机制族：D.自损伤代价/后果
+优先级：10
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听 "attack" 的 ATTACK_BEFORE。选择武器后、选择目标前，攻击方可使本次攻击威力+3；确认时在 attack scoped variable 写入 bonus_011_used=1，供 effect_107 在 ATTACK_SETTLE 检查。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"ATTACK_SOURCE_IS_SELF"}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [
+    {"label": "威力+3（结算后此牌受1损伤）", "actions": [
+      {"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": 3}},
+      {"type": &"INCREMENT_VARIABLE", "params": {"scope": &"attack", "variable_name": &"weapon_011_bonus_used", "delta": 1}}  # attack.record.variables 标记已选加成
+    ]}
+  ]}}
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：只改本次 attack.extra_might；不改武器基础威力。变量随 attack 清理。
+
+实现预告：
+  - 复用：复用 MODIFY_ATTACK_MIGHT、INCREMENT_VARIABLE、CHOOSE_ONE。
+  - 新增/扩展：需确认 VARIABLE_ABOVE 可读取 attack scoped variables；若现只读全局变量，新增 ATTACK_VARIABLE_ABOVE。
+
+该效果歧义点：
+  [歧义1] 取消攻击后是否仍自损。智能体选择：若在 ATTACK_BEFORE 选了加成后又从选目标界面取消，整个 attack 中断，effect_107 不到 ATTACK_SETTLE，因此不自损。候选：选择加成即支付自损承诺，取消也自损。▶ 回答：____________________
+
+──────────── 效果拆解（equipment_effect_107）────────────
+display_name：光束斩舰刀加成攻击结算后自损1
+机制族：D.自损伤代价/后果
+优先级：10
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听 "attack" 的 ATTACK_SETTLE；仅同一次攻击的 weapon_011_bonus_used>=1 时强制自损1。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"ATTACK_SOURCE_IS_SELF"},
+  {"op": &"VARIABLE_ABOVE", "params": {"scope": &"attack", "variable_name": &"weapon_011_bonus_used", "threshold": 0}}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 1, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_bonus_settle_self_damage"}}
+]
+
+依赖/限次：requires_effect=equipment_effect_106；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：执行于目标主伤害/损伤放置之后。若本牌已经因 effect_105 的命中自损而破损离场，则本 listener 已注销，无法再在牌上放损伤；需在攻击开始时捕获一次性 follow-up，或约定离场后跳过。
+
+实现预告：
+  - 复用：复用 ATTACK_SETTLE、VARIABLE_ABOVE、PLACE_DAMAGE_TOKENS。
+  - 新增/扩展：建议攻击选择本牌时为本次 attack 注册 ephemeral follow-up，确保 effect_107 是否执行由“本牌仍存在”规则明确控制。
+
+该效果歧义点：
+  [歧义1] 本牌在攻击结算前已因命中自损达到耐久并弃置，额外结算自损如何处理。智能体选择：牌已离场则不再设置这1损伤，但攻击正常完成。候选：损伤留在原武器区域。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_011.effect_ids = ["equipment_effect_105", "equipment_effect_106", "equipment_effect_107"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 需新增/扩展汇总：无需新增。；需确认 VARIABLE_ABOVE 可读取 attack scoped variables；若现只读全局变量，新增 ATTACK_VARIABLE_ABOVE。；建议攻击选择本牌时为本次 attack 注册 ephemeral follow-up，确保 effect_107 是否执行由“本牌仍存在”规则明确控制。
+
+──────────── 顺序与坑 ────────────
+- 命中自损与选择加成后的结算自损是两个独立来源，命中且选加成时合计2。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_011 攻击命中，并在ATTACK_BEFORE选择威力+3。
+    操作：完成攻击。
+    断言：attack.extra_might==3；ATTACK_AFTER自损1；ATTACK_SETTLE因变量再自损1，总自损2。
+场景b：
+  前置：命中但取消威力+3。
+    操作：完成攻击。
+    断言：只触发effect_105，自损1；weapon_011_bonus_used不存在。
+场景c：
+  前置：未命中且选择威力+3。
+    操作：完成攻击。
+    断言：不触发命中自损；结算自损1。
+场景d：
+  前置：选择加成后在目标选择界面取消攻击。
+    操作：取消。
+    断言：无ATTACK_SETTLE；按当前裁定不自损，攻击次数不扣。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] 命中但攻击产生0伤害/0损伤时是否自损。智能体选择：只看 attack_hit=true，仍自损。候选：必须至少造成1点伤害或1损伤。▶ 回答：____________________
+[歧义2] 取消攻击后是否仍自损。智能体选择：若在 ATTACK_BEFORE 选了加成后又从选目标界面取消，整个 attack 中断，effect_107 不到 ATTACK_SETTLE，因此不自损。候选：选择加成即支付自损承诺，取消也自损。▶ 回答：____________________
+[歧义3] 本牌在攻击结算前已因命中自损达到耐久并弃置，额外结算自损如何处理。智能体选择：牌已离场则不再设置这1损伤，但攻击正常完成。候选：损伤留在原武器区域。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 012] 热能双刃斧  （类型:近战  威力:20 范围:3 耐久:5 金币:7  牌堆数量:2）
+机制族：D.自损伤后果；D.自损伤代价/后果
+═══════════════════════════════════════════════════════════
+效果文本：此牌发动的攻击命中后，在此牌上设置1损伤。此牌攻击时，可以使范围+2，攻击结算后在此牌上设置1损伤。
+effect_ids：["equipment_effect_105", "equipment_effect_108", "equipment_effect_109"]
+
+──────────── 效果拆解（equipment_effect_105）────────────
+拆解同 [武器牌 011] 的 equipment_effect_105（本牌攻击命中后自损1）。
+本牌实例独立注册/独立保存 runtime_state；conditions/actions 字面量、优先级、时点、UI与新增件完全复用，不因牌面威力/范围差异改变。
+
+──────────── 效果拆解（equipment_effect_108）────────────
+display_name：热能双刃斧攻击时可范围+2并记录后续自损
+机制族：D.自损伤代价/后果
+优先级：10
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听 "attack" 的 ATTACK_BEFORE；攻击方可使本次攻击范围+2，并写 attack variable weapon_012_bonus_used=1。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"ATTACK_SOURCE_IS_SELF"}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [
+    {"label": "范围+2（结算后此牌受1损伤）", "actions": [
+      {"type": &"MODIFY_ATTACK_RANGE", "params": {"delta": 2, "min_value": 0}},
+      {"type": &"INCREMENT_VARIABLE", "params": {"scope": &"attack", "variable_name": &"weapon_012_bonus_used", "delta": 1}}
+    ]}
+  ]}}
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：只改 attack.extra_range，使后续目标选择按新范围校验。
+
+实现预告：
+  - 复用：复用 MODIFY_ATTACK_RANGE、INCREMENT_VARIABLE、CHOOSE_ONE。
+  - 新增/扩展：同 effect_106：确认 attack scoped variable 支持。
+
+该效果歧义点：
+  [歧义1] 取消攻击后是否自损。智能体选择：不自损，因为未到 ATTACK_SETTLE。候选：选择范围加成即承担自损。▶ 回答：____________________
+
+──────────── 效果拆解（equipment_effect_109）────────────
+display_name：热能双刃斧加成攻击结算后自损1
+机制族：D.自损伤代价/后果
+优先级：10
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听 "attack" 的 ATTACK_SETTLE；仅 weapon_012_bonus_used>=1 时自损1。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"ATTACK_SOURCE_IS_SELF"},
+  {"op": &"VARIABLE_ABOVE", "params": {"scope": &"attack", "variable_name": &"weapon_012_bonus_used", "threshold": 0}}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 1, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_bonus_settle_self_damage"}}
+]
+
+依赖/限次：requires_effect=equipment_effect_108；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：同 effect_107，仅变量名不同。
+
+实现预告：
+  - 复用：复用 effect_107 的实现。
+  - 新增/扩展：无额外新增。
+
+该效果歧义点：
+  [歧义1] 本牌提前离场时同 effect_107。智能体选择：离场则跳过结算自损。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_012.effect_ids = ["equipment_effect_105", "equipment_effect_108", "equipment_effect_109"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 共用机制：equipment_effect_105 复用自武器牌011。
+- 需新增/扩展汇总：无需新增。；同 effect_106：确认 attack scoped variable 支持。；无额外新增。
+
+──────────── 顺序与坑 ────────────
+- 范围加成必须在目标选择前生效；结算自损仅在该次攻击选过加成时触发。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_012 命中并选择范围+2。
+    操作：完成攻击。
+    断言：目标选择使用base range3+extra2；命中自损1、结算自损1。
+场景b：
+  前置：命中但取消范围加成。
+    操作：完成攻击。
+    断言：只自损1。
+场景c：
+  前置：未命中但选择范围+2。
+    操作：结算。
+    断言：仅effect_109自损1；effect_105不触发。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] 命中但攻击产生0伤害/0损伤时是否自损。智能体选择：只看 attack_hit=true，仍自损。候选：必须至少造成1点伤害或1损伤。▶ 回答：____________________
+[歧义2] 取消攻击后是否自损。智能体选择：不自损，因为未到 ATTACK_SETTLE。候选：选择范围加成即承担自损。▶ 回答：____________________
+[歧义3] 本牌提前离场时同 effect_107。智能体选择：离场则跳过结算自损。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 013] 闪回激光剑  （类型:近战  威力:20 范围:3 耐久:4 金币:7  牌堆数量:1）
+机制族：D.自损伤代价/后果
+═══════════════════════════════════════════════════════════
+效果文本：需要额外消耗2动力才能使用此牌攻击。此牌攻击时，可以再消耗4动力使此次攻击威力+3。
+effect_ids：["equipment_effect_110", "equipment_effect_111"]
+
+──────────── 效果拆解（equipment_effect_110）────────────
+display_name：使用闪回激光剑攻击必须额外消耗2动力
+机制族：D.自损伤代价/后果
+优先级：20
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：攻击武器选择阶段先调用额外成本预校验；本牌只有在所属机甲当前动力>=2时可选。选中后监听 ATTACK_BEFORE，以成本方式扣除2动力，优先级20保证先于可选的额外4动力加成。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"ATTACK_SOURCE_IS_SELF"},
+  {"op": &"OWNER_POWER_ABOVE_OR_EQUAL", "params": {"threshold": 2}}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[
+  {"cost_type": &"SPEND_POWER", "amount": 2, "optional": false}  # 选定本武器后必须支付；失败则取消父攻击
+]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：输入：本牌所属机甲当前动力；输出：current_power -=2。该扣除不是移动消耗，不创建移动动作。
+
+实现预告：
+  - 复用：复用 OWNER_POWER_ABOVE_OR_EQUAL、SPEND_POWER 成本。
+  - 新增/扩展：需将 weapon_extra_power_cost=2 接入武器选择可用性与直攻/闪击复用武器路径；成本支付失败必须 CANCEL_PARENT_ACTION，不能静默跳过。
+
+该效果歧义点：
+  [歧义1] 额外2动力何时支付。智能体选择：选中武器并确认攻击后在 ATTACK_BEFORE 支付；若之后取消目标，动力不返还。候选：目标确认后再支付，取消不扣。▶ 回答：____________________
+  [歧义2] 通过反击/闪击等效果再次使用该武器是否也支付2动力。智能体选择：每次 attack 只要有效武器是本牌都支付。候选：只有打出普通攻击牌时支付。▶ 回答：____________________
+
+──────────── 效果拆解（equipment_effect_111）────────────
+display_name：闪回激光剑攻击时可再耗4动力使威力+3
+机制族：D.自损伤代价/后果
+优先级：10
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听同一 attack 的 ATTACK_BEFORE，且在 effect_110 支付后执行。若剩余动力>=4，弹可选项；确认后支付4并使本次 attack.extra_might+3。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"ATTACK_SOURCE_IS_SELF"},
+  {"op": &"OWNER_POWER_ABOVE_OR_EQUAL", "params": {"threshold": 4}}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [
+    {"label": "再消耗4动力，威力+3", "actions": [
+      {"type": &"SPEND_POWER", "params": {"amount": 4}},  # current_power -=4
+      {"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": 3}}  # 本次攻击威力+3
+    ]}
+  ]}}
+]
+
+依赖/限次：requires_effect=equipment_effect_110；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：输入：effect_110 支付后的剩余动力；输出：再扣4，extra_might+3。UI由攻击方操作。
+
+实现预告：
+  - 复用：复用 SPEND_POWER、MODIFY_ATTACK_MIGHT、CHOOSE_ONE。
+  - 新增/扩展：requires_effect=equipment_effect_110；引擎需确保同一时点优先级20先完成，再检查本效果条件。
+
+该效果歧义点：
+  [歧义1] 只有总动力4但不足支付“2+4”时是否显示加成。智能体选择：先扣2，再按剩余动力>=4判断，因此初始至少6才可选。候选：两个成本并行检查。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_013.effect_ids = ["equipment_effect_110", "equipment_effect_111"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 需新增/扩展汇总：需将 weapon_extra_power_cost=2 接入武器选择可用性与直攻/闪击复用武器路径；成本支付失败必须 CANCEL_PARENT_ACTION，不能静默跳过。；requires_effect=equipment_effect_110；引擎需确保同一时点优先级20先完成，再检查本效果条件。
+
+──────────── 顺序与坑 ────────────
+- mandatory 2动力与optional 4动力在同一ATTACK_BEFORE串行；先付2再判断是否可付4。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_013 装备，当前动力6以上。
+    操作：选择本牌攻击；ATTACK_BEFORE先付2，再选择再付4。
+    断言：动力总计-6；attack.extra_might==3。
+场景b：
+  前置：当前动力仅2~5。
+    操作：选择本牌攻击。
+    断言：强制付2成功；可选+3不出现；攻击继续。
+场景c：
+  前置：当前动力<2。
+    操作：打开武器选择。
+    断言：本牌不可选；不会创建attack。
+场景d：
+  前置：反击/闪击指定本牌再攻击。
+    操作：进入ATTACK_BEFORE。
+    断言：同样强制支付2，不能绕过。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] 额外2动力何时支付。智能体选择：选中武器并确认攻击后在 ATTACK_BEFORE 支付；若之后取消目标，动力不返还。候选：目标确认后再支付，取消不扣。▶ 回答：____________________
+[歧义2] 通过反击/闪击等效果再次使用该武器是否也支付2动力。智能体选择：每次 attack 只要有效武器是本牌都支付。候选：只有打出普通攻击牌时支付。▶ 回答：____________________
+[歧义3] 只有总动力4但不足支付“2+4”时是否显示加成。智能体选择：先扣2，再按剩余动力>=4判断，因此初始至少6才可选。候选：两个成本并行检查。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 014] 等离子螺旋矛  （类型:近战  威力:24 范围:4 耐久:5 金币:10  牌堆数量:1）
+机制族：O.攻击次数追踪；A+O.聚能联动/攻击次数追踪
+═══════════════════════════════════════════════════════════
+效果文本：此牌每发动过1次攻击，威力-4。我方回合未使用此牌攻击则在回合结束时回复4威力。对此牌使用聚能时也可回复4威力。
+effect_ids：["equipment_effect_112", "equipment_effect_113", "equipment_effect_114"]
+
+──────────── 效果拆解（equipment_effect_112）────────────
+display_name：每次攻击结算后武器威力永久-4并标记本回合已用
+机制族：O.攻击次数追踪
+优先级：10
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听 "attack" 的 ATTACK_SETTLE。每当本牌实际发动一次攻击并进入结算时，当前持久威力修正-4；同时给武器实例添加 until_owner_turn_after_end 的 weapon_used_this_turn 状态。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"ATTACK_SOURCE_IS_SELF"}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"MODIFY_WEAPON_POWER", "params": {"target_card_instance_id": "$binding_context.card_instance_id", "delta": -4, "mode": &"increase", "duration": &"PERMANENT"}},  # 持久威力-4
+  {"type": &"ADD_STATUS", "params": {"status_type": &"weapon_used_this_turn", "target_card_instance_id": "$binding_context.card_instance_id", "duration": &"UNTIL_OWNER_TURN_AFTER_END", "refresh": true}}  # 本回合使用标记
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：weapon.current_might_modifier 累加 -4，可降到0以下还是最低0由武器查询统一 clamp。状态每个武器实例独立。
+
+实现预告：
+  - 复用：复用 MODIFY_WEAPON_POWER、ADD_STATUS、ATTACK_SETTLE。
+  - 新增/扩展：需确保“回复威力”有 printed_might 上限；查询层统一 max(0, printed + persistent + temporary)。
+
+该效果歧义点：
+  [歧义1] “每发动过1次攻击”计数点。智能体选择：每次 attack 进入 ATTACK_SETTLE 就-4，不要求命中。候选：ATTACK_BEFORE 一选中就-4，取消目标也算。▶ 回答：____________________
+  [歧义2] 威力能否降为负数。智能体选择：内部修正可继续为负，但对外有效威力最低0。候选：持久修正最低使威力到0。▶ 回答：____________________
+
+──────────── 效果拆解（equipment_effect_113）────────────
+display_name：我方回合未用本牌攻击则回合结束回复4威力
+机制族：O.攻击次数追踪
+优先级：10
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听 "turn" 的 TURN_END，仅本牌所属机甲的回合。若本武器没有 weapon_used_this_turn 状态，则回复4点持久威力，最多回到牌面原始威力。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"SOURCE_OWNER_IS_TURN_PLAYER"},
+  {"op": &"WEAPON_STATUS_ABSENT", "params": {"status_type": &"weapon_used_this_turn"}}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"MODIFY_WEAPON_POWER", "params": {"target_card_instance_id": "$binding_context.card_instance_id", "delta": 4, "mode": &"restore", "clamp_max": &"printed_might", "duration": &"PERMANENT"}}  # 持久威力向牌面值回复4
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：若当前已为印刷威力24则不超出；若因其他永久加成高于24，本“回复”不削减其他加成，只回补本机制产生的负修正。
+
+实现预告：
+  - 复用：复用 TURN_END、MODIFY_WEAPON_POWER。
+  - 新增/扩展：需新增/复用 SOURCE_OWNER_IS_TURN_PLAYER、WEAPON_STATUS_ABSENT；MODIFY_WEAPON_POWER 需区分本机制的独立 modifier bucket，避免误清其他来源。
+
+该效果歧义点：
+  [歧义1] “未使用此牌攻击”的口径。智能体选择：本牌本回合没有任何进入 ATTACK_SETTLE 的攻击，包括反击/闪击/直攻。候选：仅主动打攻击牌算使用。▶ 回答：____________________
+  [歧义2] 回复上限。智能体选择：最多回复到牌面24，不超过原值。候选：每次未用都无上限+4。▶ 回答：____________________
+
+──────────── 效果拆解（equipment_effect_114）────────────
+display_name：对此牌使用聚能时回复4威力
+机制族：A+O.聚能联动/攻击次数追踪
+优先级：10
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听聚能 effect_fire 的 EFFECT_FIRE_AFTER；目标为本武器时，回复4点由“每次攻击-4”造成的持久威力损失，最多回到牌面原始威力。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"ENERGY_TARGET_IS_SELF"}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"MODIFY_WEAPON_POWER", "params": {"target_card_instance_id": "$binding_context.card_instance_id", "delta": 4, "mode": &"restore", "clamp_max": &"printed_might", "duration": &"PERMANENT"}}
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：聚能状态本身仍按行动牌规则给下一次攻击 +4*层并在攻击/回合结束时清除；本效果是额外永久回复，不消耗聚能层。
+
+实现预告：
+  - 复用：复用 ENERGY_TARGET_IS_SELF、MODIFY_WEAPON_POWER。
+  - 新增/扩展：同 effect_093 的聚能目标 payload；持久 modifier bucket 与 effect_112 配对。
+
+该效果歧义点：
+  [歧义1] 聚能回复是否可超过原始威力。智能体选择：不可，最多回到24。候选：聚能每次永久+4。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_014.effect_ids = ["equipment_effect_112", "equipment_effect_113", "equipment_effect_114"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 需新增/扩展汇总：需确保“回复威力”有 printed_might 上限；查询层统一 max(0, printed + persistent + temporary)。；需新增/复用 SOURCE_OWNER_IS_TURN_PLAYER、WEAPON_STATUS_ABSENT；MODIFY_WEAPON_POWER 需区分本机制的独立 modifier bucket，避免误清其他来源。；同 effect_093 的聚能目标 payload；持久 modifier bucket 与 effect_112 配对。
+
+──────────── 顺序与坑 ────────────
+- 威力衰减为每武器实例独立持久modifier；“回复”只回补该机制的负修正，不覆盖其他来源。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_014 以任意来源发动1次攻击并结算。
+    操作：到ATTACK_SETTLE。
+    断言：persistent_might_modifier-=4；weapon_used_this_turn状态存在；有效威力24→20。
+场景b：
+  前置：本方回合未使用本牌且当前威力20。
+    操作：到TURN_END。
+    断言：回复4到24；不超过printed_might。
+场景c：
+  前置：本方回合已使用本牌。
+    操作：到TURN_END。
+    断言：effect_113不触发；威力保持衰减值。
+场景d：
+  前置：对本牌使用聚能且当前威力16。
+    操作：EFFECT_FIRE_AFTER。
+    断言：永久回复到20，聚能层仍存在。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] “每发动过1次攻击”计数点。智能体选择：每次 attack 进入 ATTACK_SETTLE 就-4，不要求命中。候选：ATTACK_BEFORE 一选中就-4，取消目标也算。▶ 回答：____________________
+[歧义2] 威力能否降为负数。智能体选择：内部修正可继续为负，但对外有效威力最低0。候选：持久修正最低使威力到0。▶ 回答：____________________
+[歧义3] “未使用此牌攻击”的口径。智能体选择：本牌本回合没有任何进入 ATTACK_SETTLE 的攻击，包括反击/闪击/直攻。候选：仅主动打攻击牌算使用。▶ 回答：____________________
+[歧义4] 回复上限。智能体选择：最多回复到牌面24，不超过原值。候选：每次未用都无上限+4。▶ 回答：____________________
+[歧义5] 聚能回复是否可超过原始威力。智能体选择：不可，最多回到24。候选：聚能每次永久+4。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 015] 高灼能双翼斧  （类型:近战  威力:24 范围:4 耐久:5 金币:10  牌堆数量:1）
+机制族：O.攻击次数追踪；A+O.聚能联动/攻击次数追踪
+═══════════════════════════════════════════════════════════
+效果文本：此牌每发动过1次攻击，威力-4。我方回合未使用此牌攻击则在回合结束时回复4威力。对此牌使用聚能时也可回复4威力。
+effect_ids：["equipment_effect_112", "equipment_effect_113", "equipment_effect_114"]
+
+──────────── 效果拆解（equipment_effect_112）────────────
+拆解同 [武器牌 014] 的 equipment_effect_112（每次攻击结算后武器威力永久-4并标记本回合已用）。
+本牌实例独立注册/独立保存 runtime_state；conditions/actions 字面量、优先级、时点、UI与新增件完全复用，不因牌面威力/范围差异改变。
+
+──────────── 效果拆解（equipment_effect_113）────────────
+拆解同 [武器牌 014] 的 equipment_effect_113（我方回合未用本牌攻击则回合结束回复4威力）。
+本牌实例独立注册/独立保存 runtime_state；conditions/actions 字面量、优先级、时点、UI与新增件完全复用，不因牌面威力/范围差异改变。
+
+──────────── 效果拆解（equipment_effect_114）────────────
+拆解同 [武器牌 014] 的 equipment_effect_114（对此牌使用聚能时回复4威力）。
+本牌实例独立注册/独立保存 runtime_state；conditions/actions 字面量、优先级、时点、UI与新增件完全复用，不因牌面威力/范围差异改变。
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_015.effect_ids = ["equipment_effect_112", "equipment_effect_113", "equipment_effect_114"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 共用机制：equipment_effect_112 复用自武器牌014；equipment_effect_113 复用自武器牌014；equipment_effect_114 复用自武器牌014。
+- 需新增/扩展汇总：需确保“回复威力”有 printed_might 上限；查询层统一 max(0, printed + persistent + temporary)。；需新增/复用 SOURCE_OWNER_IS_TURN_PLAYER、WEAPON_STATUS_ABSENT；MODIFY_WEAPON_POWER 需区分本机制的独立 modifier bucket，避免误清其他来源。；同 effect_093 的聚能目标 payload；持久 modifier bucket 与 effect_112 配对。
+
+──────────── 顺序与坑 ────────────
+- 与14共用三个effect_id；两张不同定义牌各自维护状态与modifier bucket。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_015 攻击两次。
+    操作：两次ATTACK_SETTLE。
+    断言：有效威力24→20→16；每实例独立计数。
+场景b：
+  前置：下一本方回合未使用。
+    操作：TURN_END。
+    断言：威力16→20。
+场景c：
+  前置：聚能一次。
+    操作：EFFECT_FIRE_AFTER。
+    断言：威力再回复4但不超过24。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] “每发动过1次攻击”计数点。智能体选择：每次 attack 进入 ATTACK_SETTLE 就-4，不要求命中。候选：ATTACK_BEFORE 一选中就-4，取消目标也算。▶ 回答：____________________
+[歧义2] 威力能否降为负数。智能体选择：内部修正可继续为负，但对外有效威力最低0。候选：持久修正最低使威力到0。▶ 回答：____________________
+[歧义3] “未使用此牌攻击”的口径。智能体选择：本牌本回合没有任何进入 ATTACK_SETTLE 的攻击，包括反击/闪击/直攻。候选：仅主动打攻击牌算使用。▶ 回答：____________________
+[歧义4] 回复上限。智能体选择：最多回复到牌面24，不超过原值。候选：每次未用都无上限+4。▶ 回答：____________________
+[歧义5] 聚能回复是否可超过原始威力。智能体选择：不可，最多回到24。候选：聚能每次永久+4。▶ 回答：____________________
+
+
+########################################################################
+第二组：远程武器（16-30）
+########################################################################
+
+═══════════════════════════════════════════════════════════
+[武器牌 016] 光束步枪  （类型:远程  威力:8 范围:4 耐久:3 金币:3  牌堆数量:1）
+机制族：A.聚能联动；B.被名响应
+═══════════════════════════════════════════════════════════
+效果文本：对此牌使用聚能时，本回合额外使此牌威力+3。机甲被名称带有光束的武器攻击时，可弃置1张攻击牌响应该攻击，使该攻击威力-5。
+effect_ids：["equipment_effect_095", "equipment_effect_094"]
+
+──────────── 效果拆解（equipment_effect_095）────────────
+拆解同 [武器牌 002] 的 equipment_effect_095（聚能后本回合威力+3）。
+本牌实例独立注册/独立保存 runtime_state；conditions/actions 字面量、优先级、时点、UI与新增件完全复用，不因牌面威力/范围差异改变。
+
+──────────── 效果拆解（equipment_effect_094）────────────
+拆解同 [武器牌 001] 的 equipment_effect_094（被光束名武器攻击时弃攻击牌响应，威力-5）。
+本牌实例独立注册/独立保存 runtime_state；conditions/actions 字面量、优先级、时点、UI与新增件完全复用，不因牌面威力/范围差异改变。
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_016.effect_ids = ["equipment_effect_095", "equipment_effect_094"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 共用机制：equipment_effect_095 复用自武器牌002；equipment_effect_094 复用自武器牌001。
+- 需新增/扩展汇总：同 effect_093：新增/复用 ENERGY_TARGET_IS_SELF，并保证临时武器修正不会在 _get_weapon_stats 与攻击选择步骤重复计入。；需确认 DISCARD_ACTION_CARD 成本支持 card_type=&"attack" 过滤；若现实现只支持任意行动牌，扩展其 params 过滤而不新造成本类型。
+
+──────────── 顺序与坑 ────────────
+- 与02共用聚能威力、与01共用光束响应；组合时JSON effect_ids顺序固定。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_016 对自身使用聚能。
+    操作：完成。
+    断言：本回合威力8→11。
+场景b：
+  前置：被名称含“光束”的武器攻击且有攻击牌。
+    操作：选择响应。
+    断言：弃1攻击牌，attack.extra_might=-5，不记迎击。
+场景c：
+  前置：被热能名武器攻击。
+    操作：打开窗口。
+    断言：effect_094不提供；武器效果不触发。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] 聚能+3是否每层叠加。智能体选择：每次对此牌使用聚能均叠加 +3。候选：无论聚能层数只额外 +3。▶ 回答：____________________
+[歧义2] “本回合”在非本方回合获得聚能时的结束点。智能体选择：到当前活动回合结束清除。候选：到本牌所属机甲下个回合结束。▶ 回答：____________________
+[歧义3] “攻击牌/攻击行动牌”是否包括虚拟攻击牌。智能体选择：只允许手牌中的实体攻击行动牌，虚拟牌与临时区牌不可支付。候选：任何声明为攻击类型的牌均可。▶ 回答：____________________
+[歧义4] 此响应是否计入迎击次数。智能体选择：仅把攻击标记为“已响应”，不写 target_used_counter_card，不消耗迎击牌相关次数（理由：文本明确为弃攻击牌响应）。候选：视同迎击。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 017] 热能机枪  （类型:远程  威力:8 范围:4 耐久:3 金币:3  牌堆数量:1）
+机制族：A.聚能联动；B.被名响应
+═══════════════════════════════════════════════════════════
+效果文本：对此牌使用聚能时，本回合额外使此牌范围+1。机甲被名称带有热能的武器攻击时，可弃置1张攻击行动牌响应该攻击，使该攻击威力-5。
+effect_ids：["equipment_effect_093", "equipment_effect_096"]
+
+──────────── 效果拆解（equipment_effect_093）────────────
+拆解同 [武器牌 001] 的 equipment_effect_093（聚能后本回合范围+1）。
+本牌实例独立注册/独立保存 runtime_state；conditions/actions 字面量、优先级、时点、UI与新增件完全复用，不因牌面威力/范围差异改变。
+
+──────────── 效果拆解（equipment_effect_096）────────────
+拆解同 [武器牌 002] 的 equipment_effect_096（被热能名武器攻击时弃攻击牌响应，威力-5）。
+本牌实例独立注册/独立保存 runtime_state；conditions/actions 字面量、优先级、时点、UI与新增件完全复用，不因牌面威力/范围差异改变。
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_017.effect_ids = ["equipment_effect_093", "equipment_effect_096"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 共用机制：equipment_effect_093 复用自武器牌001；equipment_effect_096 复用自武器牌002。
+- 需新增/扩展汇总：需新增条件 op【ENERGY_TARGET_IS_SELF】：读取 effect_fire.payload.energy_target_weapon_instance_id；登记 ConditionChecker.gd。聚能效果落码时需保证 effect_fire record 写入该字段。；无额外新增。
+
+──────────── 顺序与坑 ────────────
+- 与01共用聚能范围、与02共用热能响应。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_017 对自身使用聚能。
+    操作：完成。
+    断言：本回合范围4→5。
+场景b：
+  前置：被名称含“热能”的武器攻击。
+    操作：选择响应。
+    断言：弃1攻击牌，威力-5。
+场景c：
+  前置：本牌在备用区。
+    操作：聚能目标选择/响应窗口。
+    断言：不能被选为聚能目标且不注册响应。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] “聚能时”的时点。智能体选择：监听聚能 effect_fire 的 EFFECT_FIRE_AFTER（理由：目标与聚能层数均已落地，且不误触普通使用行动牌）。候选：监听 USE_ACTION_AT，或把 APPLY_ENERGY_TO_WEAPON 升级为有 AFTER 时点的子动作。▶ 回答：____________________
+[歧义2] 多次聚能是否叠加额外范围。智能体选择：每次聚能均叠加 +1，持续到当前活动回合结束。候选：同回合最多 +1。▶ 回答：____________________
+[歧义3] 与 effect_094 相同：只弃实体攻击行动牌，且不计作迎击。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 018] 光束霰弹枪  （类型:远程  威力:10 范围:3 耐久:3 金币:3  牌堆数量:1）
+机制族：C.命中后额外损伤
+═══════════════════════════════════════════════════════════
+效果文本：此牌发动的攻击命中后，倘若攻击目标与机甲当前位置相邻，则可额外设置2损伤。
+effect_ids：["equipment_effect_115"]
+
+──────────── 效果拆解（equipment_effect_115）────────────
+display_name：命中且目标与攻击方相邻时可额外2损伤
+机制族：C.命中后额外损伤
+优先级：10
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听 "attack" 的 ATTACK_AFTER。此时目标位置与攻击方当前位置均已确定；若六边形距离为1，攻击方可把2枚并入本次攻击损伤标记。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"ATTACK_SOURCE_IS_SELF"},
+  {"op": &"PAYLOAD_ATTACK_HIT"},
+  {"op": &"TARGET_IS_ADJACENT"}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [
+    {"label": "相邻：额外设置2损伤", "actions": [
+      {"type": &"MODIFY_ATTACK_MARKERS", "params": {"delta": 2}}
+    ]}
+  ]}}
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：相邻判断使用 ATTACK_AFTER 时的当前位置，不使用选择目标时的快照；若响应移动后双方不再相邻，则不触发。
+
+实现预告：
+  - 复用：复用 TARGET_IS_ADJACENT、MODIFY_ATTACK_MARKERS、CHOOSE_ONE。
+  - 新增/扩展：无需新增。
+
+该效果歧义点：
+  [歧义1] 相邻判断时机。智能体选择：命中复核后的 ATTACK_AFTER 当前坐标（可反映回避/反击移动）。候选：指定目标时的坐标。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_018.effect_ids = ["equipment_effect_115"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 需新增/扩展汇总：无需新增。
+
+──────────── 顺序与坑 ────────────
+- 相邻以ATTACK_AFTER最终位置判断，响应移动会改变条件。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_018 命中且ATTACK_AFTER双方六角距离1。
+    操作：选择额外2。
+    断言：attack.damage_markers+=2。
+场景b：
+  前置：指定时相邻但响应移动后距离>1。
+    操作：进入ATTACK_AFTER。
+    断言：TARGET_IS_ADJACENT失败，不弹窗。
+场景c：
+  前置：命中但取消。
+    操作：取消。
+    断言：无额外损伤。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] 相邻判断时机。智能体选择：命中复核后的 ATTACK_AFTER 当前坐标（可反映回避/反击移动）。候选：指定目标时的坐标。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 019] 热能爆弹枪  （类型:远程  威力:10 范围:3 耐久:3 金币:3  牌堆数量:1）
+机制族：C.命中后额外损伤
+═══════════════════════════════════════════════════════════
+效果文本：此牌发动的攻击命中后，倘若攻击目标与机甲当前位置相邻，则可额外设置2损伤。
+effect_ids：["equipment_effect_115"]
+
+──────────── 效果拆解（equipment_effect_115）────────────
+拆解同 [武器牌 018] 的 equipment_effect_115（命中且目标与攻击方相邻时可额外2损伤）。
+本牌实例独立注册/独立保存 runtime_state；conditions/actions 字面量、优先级、时点、UI与新增件完全复用，不因牌面威力/范围差异改变。
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_019.effect_ids = ["equipment_effect_115"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 共用机制：equipment_effect_115 复用自武器牌018。
+- 需新增/扩展汇总：无需新增。
+
+──────────── 顺序与坑 ────────────
+- 同18。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_019 命中且最终相邻。
+    操作：选择额外2。
+    断言：与weapon_018相同，effect_id=115。
+场景b：
+  前置：最终不相邻。
+    操作：结算。
+    断言：不触发。
+场景c：
+  前置：使用其他武器命中相邻目标。
+    操作：结算。
+    断言：weapon_019 listener条件ATTACK_SOURCE_IS_SELF失败。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] 相邻判断时机。智能体选择：命中复核后的 ATTACK_AFTER 当前坐标（可反映回避/反击移动）。候选：指定目标时的坐标。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 020] 火箭筒  （类型:远程  威力:8 范围:4 耐久:3 金币:3  牌堆数量:1）
+机制族：C.命中后额外损伤
+═══════════════════════════════════════════════════════════
+效果文本：此牌发动的攻击命中后可额外设置1损伤。
+effect_ids：["equipment_effect_116"]
+
+──────────── 效果拆解（equipment_effect_116）────────────
+display_name：命中后可额外1损伤
+机制族：C.命中后额外损伤
+优先级：10
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听 "attack" 的 ATTACK_AFTER；攻击方可使本次 attack.damage_markers+1。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"ATTACK_SOURCE_IS_SELF"},
+  {"op": &"PAYLOAD_ATTACK_HIT"}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [
+    {"label": "额外设置1损伤", "actions": [{"type": &"MODIFY_ATTACK_MARKERS", "params": {"delta": 1}}]}
+  ]}}
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：与 effect_097 相同范式，仅数值为1。
+
+实现预告：
+  - 复用：复用 effect_097 全部机制。
+  - 新增/扩展：无新增。
+
+该效果歧义点：
+  [歧义1] 实现路径同 effect_097。智能体选择：并入本次攻击统一放置。候选：结算后独立放1枚。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_020.effect_ids = ["equipment_effect_116"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 需新增/扩展汇总：无新增。
+
+──────────── 顺序与坑 ────────────
+- 额外1损伤与额外2损伤机制相同但数值不同，保留独立effect_id。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_020 命中。
+    操作：选择额外1。
+    断言：attack.damage_markers==基础+1。
+场景b：
+  前置：命中取消。
+    操作：取消。
+    断言：保持基础值。
+场景c：
+  前置：未命中。
+    操作：结算。
+    断言：不弹窗。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] 实现路径同 effect_097。智能体选择：并入本次攻击统一放置。候选：结算后独立放1枚。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 021] 光束狙击枪  （类型:远程  威力:10 范围:5 耐久:3 金币:5  牌堆数量:2）
+机制族：C.命中后额外损伤
+═══════════════════════════════════════════════════════════
+效果文本：此牌发动的攻击产生的损伤如果全部设置于同一区域，则可以额外设置2损伤在该区域上。
+effect_ids：["equipment_effect_101"]
+
+──────────── 效果拆解（equipment_effect_101）────────────
+拆解同 [武器牌 006] 的 equipment_effect_101（本次攻击损伤全在同一区域后，可在该区域额外放2损伤）。
+本牌实例独立注册/独立保存 runtime_state；conditions/actions 字面量、优先级、时点、UI与新增件完全复用，不因牌面威力/范围差异改变。
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_021.effect_ids = ["equipment_effect_101"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 共用机制：equipment_effect_101 复用自武器牌006。
+- 需新增/扩展汇总：需保证 attack record 在 ATTACK_SETTLE 前保留逐枚放置结果；若现 damage_change 未回写 parent attack，新增回写字段 damage_placement_log/single_damage_slot_id。
+
+──────────── 顺序与坑 ────────────
+- 同06/07；射程与牌面威力差异不影响effect实现。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_021 主损伤全部同slot。
+    操作：ATTACK_SETTLE选择额外2。
+    断言：在同slot追加2。
+场景b：
+  前置：主损伤分散。
+    操作：结算。
+    断言：不触发。
+场景c：
+  前置：0损伤。
+    操作：结算。
+    断言：不触发。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] “攻击产生的损伤”是否包含其他效果额外增加的损伤。智能体选择：包含已经并入 attack.record.damage_markers 的损伤；不包含独立 PLACE_DAMAGE_TOKENS 子动作。候选：只看基础威力产生的标记。▶ 回答：____________________
+[歧义2] 攻击产生0损伤时是否视为“全部在同一区域”。智能体选择：不触发，要求至少1枚。候选：空集真而可触发。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 022] 穿甲热能枪  （类型:远程  威力:10 范围:5 耐久:3 金币:5  牌堆数量:2）
+机制族：C.命中后额外损伤
+═══════════════════════════════════════════════════════════
+效果文本：此牌发动的攻击产生的损伤如果全部设置于同一区域，则可以额外设置2损伤在该区域上。
+effect_ids：["equipment_effect_101"]
+
+──────────── 效果拆解（equipment_effect_101）────────────
+拆解同 [武器牌 006] 的 equipment_effect_101（本次攻击损伤全在同一区域后，可在该区域额外放2损伤）。
+本牌实例独立注册/独立保存 runtime_state；conditions/actions 字面量、优先级、时点、UI与新增件完全复用，不因牌面威力/范围差异改变。
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_022.effect_ids = ["equipment_effect_101"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 共用机制：equipment_effect_101 复用自武器牌006。
+- 需新增/扩展汇总：需保证 attack record 在 ATTACK_SETTLE 前保留逐枚放置结果；若现 damage_change 未回写 parent attack，新增回写字段 damage_placement_log/single_damage_slot_id。
+
+──────────── 顺序与坑 ────────────
+- 同06/07/21。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_022 主损伤全部同slot。
+    操作：选择额外2。
+    断言：与weapon_021相同，共用effect_101。
+场景b：
+  前置：分散放置。
+    操作：结算。
+    断言：不触发。
+场景c：
+  前置：牌替换离场。
+    操作：再用其他武器攻击。
+    断言：listener已注销。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] “攻击产生的损伤”是否包含其他效果额外增加的损伤。智能体选择：包含已经并入 attack.record.damage_markers 的损伤；不包含独立 PLACE_DAMAGE_TOKENS 子动作。候选：只看基础威力产生的标记。▶ 回答：____________________
+[歧义2] 攻击产生0损伤时是否视为“全部在同一区域”。智能体选择：不触发，要求至少1枚。候选：空集真而可触发。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 023] 扩散轨道炮  （类型:远程  威力:12 范围:4 耐久:3 金币:5  牌堆数量:1）
+机制族：C.命中后额外损伤
+═══════════════════════════════════════════════════════════
+效果文本：此牌发动的攻击命中后，倘若攻击目标与机甲当前位置相邻，则可额外设置2损伤。
+effect_ids：["equipment_effect_115"]
+
+──────────── 效果拆解（equipment_effect_115）────────────
+拆解同 [武器牌 018] 的 equipment_effect_115（命中且目标与攻击方相邻时可额外2损伤）。
+本牌实例独立注册/独立保存 runtime_state；conditions/actions 字面量、优先级、时点、UI与新增件完全复用，不因牌面威力/范围差异改变。
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_023.effect_ids = ["equipment_effect_115"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 共用机制：equipment_effect_115 复用自武器牌018。
+- 需新增/扩展汇总：无需新增。
+
+──────────── 顺序与坑 ────────────
+- 同18/19。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_023 命中且最终相邻。
+    操作：选择额外2。
+    断言：attack.damage_markers+=2。
+场景b：
+  前置：最终距离>1。
+    操作：结算。
+    断言：不触发。
+场景c：
+  前置：未命中。
+    操作：结算。
+    断言：不触发。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] 相邻判断时机。智能体选择：命中复核后的 ATTACK_AFTER 当前坐标（可反映回避/反击移动）。候选：指定目标时的坐标。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 024] 密集导弹炮  （类型:远程  威力:9 范围:5 耐久:3 金币:5  牌堆数量:1）
+机制族：H.动力操纵
+═══════════════════════════════════════════════════════════
+效果文本：此牌发动攻击指定目标时，可以使目标当前动力-2，之后若目标机甲动力为0，则攻击命中可额外设置2损伤。
+effect_ids：["equipment_effect_117", "equipment_effect_118"]
+
+──────────── 效果拆解（equipment_effect_117）────────────
+display_name：指定目标时可使目标当前动力-2并记录已发动
+机制族：H.动力操纵
+优先级：20
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听 "attack" 的 ATTACK_PRE。目标已选、响应窗口尚未打开；攻击方可选择使目标 current_power-2。确认后写 attack scoped variable weapon_024_power_drain_used=1，供 effect_118 判断。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"ATTACK_SOURCE_IS_SELF"},
+  {"op": &"ATTACK_TARGET_ALIVE"}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [
+    {"label": "使目标当前动力-2", "actions": [
+      {"type": &"MODIFY_MECH_POWER", "params": {"target_id": "$payload.target_id", "delta": -2, "mode": &"current_only", "min_value": 0, "duration": &"PERMANENT"}},  # 直接减少当前可用动力，不改上限
+      {"type": &"INCREMENT_VARIABLE", "params": {"scope": &"attack", "variable_name": &"weapon_024_power_drain_used", "delta": 1}}
+    ]}
+  ]}}
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：目标动力最低0；该减少持续到其正常回复动力，不在本攻击后自动返还。优先级20使其早于普通优先级10的 ATTACK_PRE 装备效果。
+
+实现预告：
+  - 复用：复用 MODIFY_MECH_POWER、CHOOSE_ONE、INCREMENT_VARIABLE。
+  - 新增/扩展：需确认 MODIFY_MECH_POWER 支持 current_only/min_value；若只改总动力，扩展参数。
+
+该效果歧义点：
+  [歧义1] “当前动力-2”是否可降至负数。智能体选择：最低0。候选：允许负数。▶ 回答：____________________
+  [歧义2] 若攻击有多个目标。智能体选择：对当前逐目标 attack 子记录分别询问；本游戏该武器通常由单目标攻击使用。候选：一次选择一个目标。▶ 回答：____________________
+
+──────────── 效果拆解（equipment_effect_118）────────────
+display_name：已减动力且命中时，若目标动力为0则额外2损伤
+机制族：H.动力操纵
+优先级：10
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听同一 "attack" 的 ATTACK_AFTER。要求 effect_117 已选择发动、攻击命中、且目标此时 current_power==0；满足后可增加2损伤。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"ATTACK_SOURCE_IS_SELF"},
+  {"op": &"PAYLOAD_ATTACK_HIT"},
+  {"op": &"VARIABLE_ABOVE", "params": {"scope": &"attack", "variable_name": &"weapon_024_power_drain_used", "threshold": 0}},
+  {"op": &"TARGET_POWER_EQUALS", "params": {"value": 0}}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [
+    {"label": "目标动力为0：额外设置2损伤", "actions": [{"type": &"MODIFY_ATTACK_MARKERS", "params": {"delta": 2}}]}
+  ]}}
+]
+
+依赖/限次：requires_effect=equipment_effect_117；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：读取 ATTACK_AFTER 当下目标动力；目标在响应窗口获得动力后若不再为0，则不触发。
+
+实现预告：
+  - 复用：复用 VARIABLE_ABOVE、MODIFY_ATTACK_MARKERS、CHOOSE_ONE。
+  - 新增/扩展：需新增条件 TARGET_POWER_EQUALS(value)，登记 ConditionChecker.gd，读取 payload.target_id 的 current_power。
+
+该效果歧义点：
+  [歧义1] 目标原本就是0但玩家取消-2时是否可加2损伤。智能体选择：不可，必须先发动 effect_117（“之后若”）。候选：只要命中时为0即可。▶ 回答：____________________
+  [歧义2] 额外2是否可选。智能体选择：是，沿用“可额外设置”。候选：满足条件强制+2。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_024.effect_ids = ["equipment_effect_117", "equipment_effect_118"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 需新增/扩展汇总：需确认 MODIFY_MECH_POWER 支持 current_only/min_value；若只改总动力，扩展参数。；需新增条件 TARGET_POWER_EQUALS(value)，登记 ConditionChecker.gd，读取 payload.target_id 的 current_power。
+
+──────────── 顺序与坑 ────────────
+- -2动力是否发动必须用attack变量记录；不能只在命中时看到目标0就误触额外2。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_024 指定动力2的目标。
+    操作：ATTACK_PRE选择-2；攻击命中；ATTACK_AFTER选择额外2。
+    断言：目标current_power==0；attack variable已写；damage_markers+=2。
+场景b：
+  前置：目标动力3，选择-2后为1。
+    操作：攻击命中。
+    断言：effect_118条件失败，无额外2。
+场景c：
+  前置：目标原本0但取消-2。
+    操作：攻击命中。
+    断言：因变量不存在，不触发额外2。
+场景d：
+  前置：响应窗口中目标获得动力使0→4。
+    操作：进入ATTACK_AFTER。
+    断言：按当前动力读取，不触发额外2。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] “当前动力-2”是否可降至负数。智能体选择：最低0。候选：允许负数。▶ 回答：____________________
+[歧义2] 若攻击有多个目标。智能体选择：对当前逐目标 attack 子记录分别询问；本游戏该武器通常由单目标攻击使用。候选：一次选择一个目标。▶ 回答：____________________
+[歧义3] 目标原本就是0但玩家取消-2时是否可加2损伤。智能体选择：不可，必须先发动 effect_117（“之后若”）。候选：只要命中时为0即可。▶ 回答：____________________
+[歧义4] 额外2是否可选。智能体选择：是，沿用“可额外设置”。候选：满足条件强制+2。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 025] 超级火箭筒  （类型:远程  威力:10 范围:5 耐久:3 金币:5  牌堆数量:1）
+机制族：C.命中后额外损伤
+═══════════════════════════════════════════════════════════
+效果文本：此牌发动的攻击产生的损伤如果未设置于同一区域，则可额外再设置2损伤。
+effect_ids：["equipment_effect_119"]
+
+──────────── 效果拆解（equipment_effect_119）────────────
+display_name：本次攻击损伤未全在同一区域后，可额外2损伤
+机制族：C.命中后额外损伤
+优先级：10
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听 "attack" 的 ATTACK_SETTLE；主损伤放置完成后读取 damage_placement_log。若至少2枚攻击损伤分布在2个或以上区域，攻击方可再设置2损伤。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"ATTACK_SOURCE_IS_SELF"},
+  {"op": &"PAYLOAD_ATTACK_HIT"},
+  {"op": &"ATTACK_MARKERS_ABOVE", "params": {"threshold": 1}},
+  {"op": &"DAMAGE_TOKENS_NOT_ALL_IN_SAME_SLOT"}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [
+    {"label": "损伤分散：额外设置2损伤", "actions": [
+      {"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 2, "target_mech_id": "$payload.target_id", "target_slot": &"choose_by_executor", "executor_id": "$binding_context.mech_id", "reason": &"weapon_extra_damage"}}  # 另起损伤变动，由攻击方逐枚选择合法区域
+    ]}
+  ]}}
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：“未设置于同一区域”按 distinct(damage_placement_log.slot_id).size()>=2 判断；追加2枚不要求继续分散。
+
+实现预告：
+  - 复用：复用 PLACE_DAMAGE_TOKENS、ATTACK_SETTLE。
+  - 新增/扩展：需新增条件 DAMAGE_TOKENS_NOT_ALL_IN_SAME_SLOT，或给既有同区条件增加 expected=false；damage placement log 同 effect_101。
+
+该效果歧义点：
+  [歧义1] 只有1枚损伤时是否算“未设置于同一区域”。智能体选择：不算，1枚必然全在同一区域。候选：因未形成“全部同区”条件而触发。▶ 回答：____________________
+  [歧义2] 追加2枚由谁放置。智能体选择：作为武器额外损伤，由攻击方设置。候选：沿用原攻击是否被迎击的放置权。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_025.effect_ids = ["equipment_effect_119"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 需新增/扩展汇总：需新增条件 DAMAGE_TOKENS_NOT_ALL_IN_SAME_SLOT，或给既有同区条件增加 expected=false；damage placement log 同 effect_101。
+
+──────────── 顺序与坑 ────────────
+- “未同区”需要至少两枚且实际分布至少两区；追加2另起损伤动作。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_025 命中并产生至少2损伤，实际分到2个slot。
+    操作：ATTACK_SETTLE选择额外2。
+    断言：另起损伤变动，攻击方设置2枚；distinct_slots>=2。
+场景b：
+  前置：全部主损伤同slot。
+    操作：结算。
+    断言：不触发。
+场景c：
+  前置：只产生1损伤。
+    操作：结算。
+    断言：不触发。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] 只有1枚损伤时是否算“未设置于同一区域”。智能体选择：不算，1枚必然全在同一区域。候选：因未形成“全部同区”条件而触发。▶ 回答：____________________
+[歧义2] 追加2枚由谁放置。智能体选择：作为武器额外损伤，由攻击方设置。候选：沿用原攻击是否被迎击的放置权。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 026] 大型光束炮  （类型:远程  威力:14 范围:6 耐久:4 金币:7  牌堆数量:2）
+机制族：D.自损伤代价/派生值；D.自损伤代价/后果
+═══════════════════════════════════════════════════════════
+效果文本：此牌每设置有1损伤，则威力-2。此牌攻击时，可以在此牌上设置1损伤，回复全部威力，并使威力+2。
+effect_ids：["equipment_effect_120", "equipment_effect_121"]
+
+──────────── 效果拆解（equipment_effect_120）────────────
+display_name：每有1损伤，武器有效威力-2
+机制族：D.自损伤代价/派生值
+优先级：10
+模式：派生值型（不注册监听器，不创建常规 ActionEffect 时点监听）
+植入：派生值型，不注册时点监听器；仅在武器威力/范围查询点读取 binding_context.card_instance_id 对应实例并实时重算。
+触发/查询：派生值型，不监听时点。武器威力查询时读取本牌所在武器槽的损伤数 damage_tokens_on_card。
+
+触发条件 conditions（GDScript 字面量）：
+不适用（派生值型）
+
+目标规则 target_rules（GDScript 字面量）：
+不适用
+
+成本 costs（GDScript 字面量）：
+不适用
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+不适用
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：helper：get_weapon_damage_penalty(card_instance_id) -> -2 * self_damage_tokens。effective_might = max(0, printed_might + persistent_modifiers + temporary_modifiers - 2*self_damage_tokens)。统计口径只看本牌实例承受的损伤，不看武器区域遗留但不属于本牌的旧损伤；若当前数据模型只有区域损伤，则需明确装备牌承伤映射。
+
+实现预告：
+  - 复用：复用部件派生值接入范式；不创建 ActionEffect listener。
+  - 新增/扩展：需新增 GeneratedEquipmentEffects.get_weapon_might_by_self_damage(card_instance_id, printed_might) 并接入所有武器威力查询点、UI预览、攻击选择快照、范围预检。
+
+该效果歧义点：
+  [歧义1] 损伤统计口径。智能体选择：本牌当前承受/覆盖的损伤数；换装后旧区域损伤不继续惩罚新武器。候选：武器槽区域总损伤。▶ 回答：____________________
+  [歧义2] 有效威力最低值。智能体选择：最低0。候选：允许负数并在攻击计算时再归零。▶ 回答：____________________
+
+──────────── 效果拆解（equipment_effect_121）────────────
+display_name：大型光束炮攻击时可自损1并将本次威力回复至全值+2
+机制族：D.自损伤代价/后果
+优先级：10
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听 "attack" 的 ATTACK_BEFORE。攻击方可先在本牌上设置1损伤，再把本次 attack 的有效威力覆盖为“牌面基础威力14 + 2 + 其他非本牌损伤惩罚之外的合法攻击修正”。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"ATTACK_SOURCE_IS_SELF"}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [
+    {"label": "此牌受1损伤，回复全部威力并威力+2", "actions": [
+      {"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 1, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_self_damage"}},
+      {"type": &"SET_ATTACK_MIGHT_FROM_PRINTED_WEAPON", "params": {"weapon_instance_id": "$binding_context.card_instance_id", "bonus": 2, "ignore_self_damage_penalty": true, "preserve_external_extra_might": true}}  # 本次攻击恢复到14并额外+2
+    ]}
+  ]}}
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：输入顺序必须先自损再重算，避免新增损伤立即把“回复全部威力”抵消。仅本次 attack 生效，不永久移除本牌损伤。
+
+实现预告：
+  - 复用：复用 CHOOSE_ONE、PLACE_DAMAGE_TOKENS；查询 printed_might。
+  - 新增/扩展：需新增原子 SET_ATTACK_MIGHT_FROM_PRINTED_WEAPON(weapon_instance_id,bonus,ignore_self_damage_penalty,preserve_external_extra_might)，仿 SET_WEAPON_STATS/攻击快照刷新；登记 ActionService.gd。
+
+该效果歧义点：
+  [歧义1] “回复全部威力”是本次攻击覆盖还是永久恢复武器。智能体选择：仅本次攻击无视本牌损伤惩罚并额外+2（理由：永久恢复与仍在牌上的损伤派生公式冲突）。候选：清除本牌所有威力负修正。▶ 回答：____________________
+  [歧义2] 自损1导致本牌耐尽时是否仍获得全值+2。智能体选择：当前攻击已选定，仍完成威力覆盖并结算；本牌随后离场。候选：牌破损则效果中断。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_026.effect_ids = ["equipment_effect_120", "equipment_effect_121"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 需新增/扩展汇总：需新增 GeneratedEquipmentEffects.get_weapon_might_by_self_damage(card_instance_id, printed_might) 并接入所有武器威力查询点、UI预览、攻击选择快照、范围预检。；需新增原子 SET_ATTACK_MIGHT_FROM_PRINTED_WEAPON(weapon_instance_id,bonus,ignore_self_damage_penalty,preserve_external_extra_might)，仿 SET_WEAPON_STATS/攻击快照刷新；登记 ActionService.gd。
+
+──────────── 顺序与坑 ────────────
+- 派生威力与本次恢复覆盖不能双计；自损后再建立本次攻击威力覆盖。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_026 上有2损伤。
+    操作：查询UI与攻击武器值。
+    断言：有效威力14-4=10。
+场景b：
+  前置：攻击时选择自损1/全威力+2。
+    操作：先自损后重算。
+    断言：本次attack有效基础威力覆盖为16；牌上损伤变3；后续普通查询威力为8。
+场景c：
+  前置：取消选项。
+    操作：攻击。
+    断言：本次使用派生威力10；不新增自损。
+场景d：
+  前置：自损使牌耐尽。
+    操作：确认。
+    断言：牌弃置但当前attack按裁定仍以16结算。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] 损伤统计口径。智能体选择：本牌当前承受/覆盖的损伤数；换装后旧区域损伤不继续惩罚新武器。候选：武器槽区域总损伤。▶ 回答：____________________
+[歧义2] 有效威力最低值。智能体选择：最低0。候选：允许负数并在攻击计算时再归零。▶ 回答：____________________
+[歧义3] “回复全部威力”是本次攻击覆盖还是永久恢复武器。智能体选择：仅本次攻击无视本牌损伤惩罚并额外+2（理由：永久恢复与仍在牌上的损伤派生公式冲突）。候选：清除本牌所有威力负修正。▶ 回答：____________________
+[歧义4] 自损1导致本牌耐尽时是否仍获得全值+2。智能体选择：当前攻击已选定，仍完成威力覆盖并结算；本牌随后离场。候选：牌破损则效果中断。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 027] 热能加特林  （类型:远程  威力:15 范围:5 耐久:4 金币:7  牌堆数量:2）
+机制族：D.自损伤代价/派生值；C+D.额外损伤/自损伤代价
+═══════════════════════════════════════════════════════════
+效果文本：此牌每设置有1损伤，则威力-2。此牌攻击命中时，可以在此牌上设置2损伤，之后可额外设置3损伤。
+effect_ids：["equipment_effect_120", "equipment_effect_122"]
+
+──────────── 效果拆解（equipment_effect_120）────────────
+拆解同 [武器牌 026] 的 equipment_effect_120（每有1损伤，武器有效威力-2）。
+本牌实例独立注册/独立保存 runtime_state；conditions/actions 字面量、优先级、时点、UI与新增件完全复用，不因牌面威力/范围差异改变。
+
+──────────── 效果拆解（equipment_effect_122）────────────
+display_name：热能加特林命中时可自损2，之后额外3损伤
+机制族：C+D.额外损伤/自损伤代价
+优先级：10
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听 "attack" 的 ATTACK_AFTER。命中后攻击方可选择：先在本牌上设置2损伤，完成后再使本次 attack.damage_markers+3。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"ATTACK_SOURCE_IS_SELF"},
+  {"op": &"PAYLOAD_ATTACK_HIT"}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [
+    {"label": "此牌受2损伤，额外设置3损伤", "actions": [
+      {"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 2, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_self_damage"}},
+      {"type": &"MODIFY_ATTACK_MARKERS", "params": {"delta": 3}}  # 自损完成后，本次目标损伤+3
+    ]}
+  ]}}
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：父 attack 在自损放置UI完成前暂停。即使本牌因第1或第2枚自损破损，已选择的效果链仍继续执行+3。
+
+实现预告：
+  - 复用：复用 PLACE_DAMAGE_TOKENS、MODIFY_ATTACK_MARKERS、CHOOSE_ONE。
+  - 新增/扩展：无需新增；需保证当前 effect actions 已入队后，来源离场不取消同一已启动 effect。
+
+该效果歧义点：
+  [歧义1] 自损2是否为发动成本，无法完整承受时能否发动。智能体选择：可以，损伤照常使其破损，之后仍+3。候选：必须剩余耐久>2才可发动。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_027.effect_ids = ["equipment_effect_120", "equipment_effect_122"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 共用机制：equipment_effect_120 复用自武器牌026。
+- 需新增/扩展汇总：需新增 GeneratedEquipmentEffects.get_weapon_might_by_self_damage(card_instance_id, printed_might) 并接入所有武器威力查询点、UI预览、攻击选择快照、范围预检。；无需新增；需保证当前 effect actions 已入队后，来源离场不取消同一已启动 effect。
+
+──────────── 顺序与坑 ────────────
+- 自损2先于+3；来源破损后当前已启动效果仍继续。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_027 上有1损伤。
+    操作：查询。
+    断言：有效威力15-2=13。
+场景b：
+  前置：命中后选择自损2。
+    操作：ATTACK_AFTER完成。
+    断言：本牌损伤+2；attack.damage_markers+=3。
+场景c：
+  前置：命中后取消或攻击未命中。
+    操作：结算。
+    断言：无自损2、无额外3。
+场景d：
+  前置：自损途中牌破损。
+    操作：继续效果链。
+    断言：牌离场、listener注销；已选效果仍使damage_markers+3。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] 损伤统计口径。智能体选择：本牌当前承受/覆盖的损伤数；换装后旧区域损伤不继续惩罚新武器。候选：武器槽区域总损伤。▶ 回答：____________________
+[歧义2] 有效威力最低值。智能体选择：最低0。候选：允许负数并在攻击计算时再归零。▶ 回答：____________________
+[歧义3] 自损2是否为发动成本，无法完整承受时能否发动。智能体选择：可以，损伤照常使其破损，之后仍+3。候选：必须剩余耐久>2才可发动。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 028] 雷爆磁轨炮  （类型:远程  威力:14 范围:6 耐久:4 金币:7  牌堆数量:1）
+机制族：M.随机弃牌代价
+═══════════════════════════════════════════════════════════
+效果文本：此牌发动攻击时，随机弃置我方1张行动牌，若此即将被弃置的牌是我方的最后一张牌，则此次攻击威力+3。
+effect_ids：["equipment_effect_123", "equipment_effect_124"]
+
+──────────── 效果拆解（equipment_effect_123）────────────
+display_name：攻击时随机弃我方1张行动牌
+机制族：M.随机弃牌代价
+优先级：20
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听 "attack" 的 ATTACK_BEFORE。有效武器为本牌时，系统从攻击方当前手牌随机选1张行动牌并执行弃置动作；在弃置前把 hand_count_before 与 chosen_card_id 写入子动作/父attack。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"ATTACK_SOURCE_IS_SELF"},
+  {"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"count": 1}}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"RANDOM_DISCARD_ACTION_CARD", "params": {"owner_id": "$binding_context.mech_id", "count": 1, "reason": &"weapon_028_random_cost", "parent_attack_id": "$payload.action_id"}}  # 系统随机弃1张并记录弃前手牌数
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：攻击来源行动牌在 USE_ACTION_AT 已进入临时区，不属于随机池；随机池仅为剩余手牌。
+
+实现预告：
+  - 复用：复用弃置牌动作生命周期。
+  - 新增/扩展：需新增原子/复合动作 RANDOM_DISCARD_ACTION_CARD(count,owner_id,reason,parent_attack_id)，内部创建 EXECUTE_DISCARD(executor=system_random)，并将 was_last_action_card 写回 discard payload。
+
+该效果歧义点：
+  [歧义1] 手牌为0时能否使用本武器攻击。智能体选择：不能；武器选择阶段过滤本牌，因为强制弃牌无法支付。候选：可攻击但不弃牌。▶ 回答：____________________
+  [歧义2] 随机池是否包含刚打出的攻击牌。智能体选择：不包含，因为该牌已在临时区。候选：可随机弃掉攻击来源牌。▶ 回答：____________________
+
+──────────── 效果拆解（equipment_effect_124）────────────
+display_name：随机弃牌若为最后一张，则本次攻击威力+3
+机制族：M.随机弃牌代价
+优先级：10
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听 "discard" 的 DISCARD_AFTER；仅处理 reason=weapon_028_random_cost、parent_attack_id 指向本牌当前攻击、且 discard record.was_last_action_card=true 的子弃置。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"DISCARD_REASON_IS", "params": {"reason": &"weapon_028_random_cost"}},
+  {"op": &"DISCARD_PARENT_ATTACK_WEAPON_IS_SELF"},
+  {"op": &"LAST_ACTION_CARD_IN_HAND"}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"MODIFY_ATTACK_MIGHT", "params": {"target_attack_id": "$payload.parent_attack_id", "delta": 3}}  # 回写父attack.extra_might +=3
+]
+
+依赖/限次：requires_effect=equipment_effect_123；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：“最后一张”按弃置动作开始前 hand_count_before==1 判断；弃后手牌为0只是结果，不把原本2张弃1张误判为最后。
+
+实现预告：
+  - 复用：复用 DISCARD_AFTER、DISCARD_REASON_IS、LAST_ACTION_CARD_IN_HAND、MODIFY_ATTACK_MIGHT。
+  - 新增/扩展：需新增条件 DISCARD_PARENT_ATTACK_WEAPON_IS_SELF，或在 ATTACK_SOURCE_IS_SELF 支持 parent_attack_id 追溯。
+
+该效果歧义点：
+  [歧义1] “最后一张”判定时机。智能体选择：弃置前手牌恰好1张（文本“即将被弃置的牌是最后一张”）。候选：弃置后手牌为0。▶ 回答：____________________
+  [歧义2] 随机弃置被其他效果替换/取消时。智能体选择：实际未弃置则不+3。候选：只要抽中最后一张即加成。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_028.effect_ids = ["equipment_effect_123", "equipment_effect_124"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 需新增/扩展汇总：需新增原子/复合动作 RANDOM_DISCARD_ACTION_CARD(count,owner_id,reason,parent_attack_id)，内部创建 EXECUTE_DISCARD(executor=system_random)，并将 was_last_action_card 写回 discard payload。；需新增条件 DISCARD_PARENT_ATTACK_WEAPON_IS_SELF，或在 ATTACK_SOURCE_IS_SELF 支持 parent_attack_id 追溯。
+
+──────────── 顺序与坑 ────────────
+- 随机弃置必须走弃置生命周期并回写父attack；“最后一张”按弃前手牌数判定。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_028 攻击；打出攻击牌后手牌恰有1张。
+    操作：ATTACK_BEFORE随机弃该牌。
+    断言：牌进弃牌堆；discard.was_last_action_card=true；父attack.extra_might+=3。
+场景b：
+  前置：剩余手牌3张。
+    操作：随机弃1。
+    断言：hand_count_before==3；不加威力。
+场景c：
+  前置：打出攻击牌后手牌0张。
+    操作：武器选择。
+    断言：按当前裁定本牌不可选。
+场景d：
+  前置：随机弃置被取消/替换。
+    操作：结算子动作。
+    断言：未实际弃牌则effect_124不触发。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] 手牌为0时能否使用本武器攻击。智能体选择：不能；武器选择阶段过滤本牌，因为强制弃牌无法支付。候选：可攻击但不弃牌。▶ 回答：____________________
+[歧义2] 随机池是否包含刚打出的攻击牌。智能体选择：不包含，因为该牌已在临时区。候选：可随机弃掉攻击来源牌。▶ 回答：____________________
+[歧义3] “最后一张”判定时机。智能体选择：弃置前手牌恰好1张（文本“即将被弃置的牌是最后一张”）。候选：弃置后手牌为0。▶ 回答：____________________
+[歧义4] 随机弃置被其他效果替换/取消时。智能体选择：实际未弃置则不+3。候选：只要抽中最后一张即加成。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 029] 超米伽荣光炮  （类型:远程  威力:18 范围:7 耐久:5 金币:10  牌堆数量:1）
+机制族：I.武器冷却；A+I.聚能联动/武器冷却
+═══════════════════════════════════════════════════════════
+效果文本：此牌发动攻击后，直到下个我方回合结束不能再使用此牌发动攻击。对此牌使用聚能后允许再次发动攻击。
+effect_ids：["equipment_effect_125", "equipment_effect_126"]
+
+──────────── 效果拆解（equipment_effect_125）────────────
+display_name：攻击结算后设置武器冷却至下个我方回合结束
+机制族：I.武器冷却
+优先级：10
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听 "attack" 的 ATTACK_SETTLE。每次本牌完成一次攻击后，为武器实例写 cooldown 状态，截止点为“本牌所属机甲下一个回合的 TURN_AFTER_END”。状态存在时，所有攻击入口都不能选择本牌。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"ATTACK_SOURCE_IS_SELF"}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"SET_WEAPON_COOLDOWN", "params": {"target_card_instance_id": "$binding_context.card_instance_id", "clear_timing": &"NEXT_OWNER_TURN_AFTER_END", "refresh": true}}  # 写入冷却与截止回合序号
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：冷却记录存武器实例 runtime_state["cooldown_until_owner_turn_serial"]；若在本方回合攻击，需跨过下一次本方回合并在其结束后清除。
+
+实现预告：
+  - 复用：复用 ATTACK_SETTLE；状态范式仿 ADD_STATUS。
+  - 新增/扩展：需新增原子 SET_WEAPON_COOLDOWN(clear_timing,refresh)、条件 WEAPON_IS_ON_COOLDOWN、攻击选择过滤/直攻校验；登记 ActionService.gd、ConditionChecker.gd、attack validator。
+
+该效果歧义点：
+  [歧义1] “直到下个我方回合结束”包含下个我方回合本身。智能体选择：包含，因此下个我方回合内仍不能攻击，TURN_AFTER_END 后解除。候选：下个我方回合开始时解除。▶ 回答：____________________
+  [歧义2] 同一攻击因多目标/联合被视为几次。智能体选择：每个 attack action 结算写一次冷却。候选：每个目标分别写。▶ 回答：____________________
+
+──────────── 效果拆解（equipment_effect_126）────────────
+display_name：对此牌使用聚能后清除冷却
+机制族：A+I.聚能联动/武器冷却
+优先级：20
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听聚能 effect_fire 的 EFFECT_FIRE_AFTER；当聚能目标为本牌时立即清除其 cooldown，允许之后再次选择本牌攻击。优先级20确保在同一聚能时点先解除攻击限制，再执行其他普通聚能联动。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"ENERGY_TARGET_IS_SELF"},
+  {"op": &"WEAPON_IS_ON_COOLDOWN"}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"SET_WEAPON_COOLDOWN", "params": {"target_card_instance_id": "$binding_context.card_instance_id", "clear": true}}  # 删除冷却状态
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：清除冷却不消耗聚能层；聚能仍按行动牌规则存在并强化下一次攻击。
+
+实现预告：
+  - 复用：复用聚能触发范式；复用 effect_125 的 cooldown 原子。
+  - 新增/扩展：同 effect_125/093：需 WEAPON_IS_ON_COOLDOWN 与 ENERGY_TARGET_IS_SELF。
+
+该效果歧义点：
+  [歧义1] 聚能后“允许再次发动攻击”是否只允许1次。智能体选择：仅清除当前冷却；下一次攻击结算后会重新进入冷却。候选：本回合永久免冷却。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_029.effect_ids = ["equipment_effect_125", "equipment_effect_126"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 需新增/扩展汇总：需新增原子 SET_WEAPON_COOLDOWN(clear_timing,refresh)、条件 WEAPON_IS_ON_COOLDOWN、攻击选择过滤/直攻校验；登记 ActionService.gd、ConditionChecker.gd、attack validator。；同 effect_125/093：需 WEAPON_IS_ON_COOLDOWN 与 ENERGY_TARGET_IS_SELF。
+
+──────────── 顺序与坑 ────────────
+- 冷却截止点是下个我方回合结束；所有攻击路径统一过滤。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_029 发动攻击并结算。
+    操作：ATTACK_SETTLE。
+    断言：runtime cooldown存在，clear_timing=NEXT_OWNER_TURN_AFTER_END；本牌不可再选。
+场景b：
+  前置：冷却中对本牌使用聚能。
+    操作：EFFECT_FIRE_AFTER。
+    断言：cooldown清除；本牌可再次攻击；聚能层保留。
+场景c：
+  前置：未聚能，进入下个本方回合。
+    操作：整个回合尝试攻击，后到TURN_AFTER_END。
+    断言：回合内仍不可用；结束后自动解除。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] “直到下个我方回合结束”包含下个我方回合本身。智能体选择：包含，因此下个我方回合内仍不能攻击，TURN_AFTER_END 后解除。候选：下个我方回合开始时解除。▶ 回答：____________________
+[歧义2] 同一攻击因多目标/联合被视为几次。智能体选择：每个 attack action 结算写一次冷却。候选：每个目标分别写。▶ 回答：____________________
+[歧义3] 聚能后“允许再次发动攻击”是否只允许1次。智能体选择：仅清除当前冷却；下一次攻击结算后会重新进入冷却。候选：本回合永久免冷却。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 030] 核聚变神火炮  （类型:远程  威力:18 范围:7 耐久:5 金币:10  牌堆数量:1）
+机制族：I.武器冷却；A+I.聚能联动/武器冷却
+═══════════════════════════════════════════════════════════
+效果文本：此牌发动攻击后，直到下个我方回合结束不能再使用此牌发动攻击。对此牌使用聚能后允许再次发动攻击。
+effect_ids：["equipment_effect_125", "equipment_effect_126"]
+
+──────────── 效果拆解（equipment_effect_125）────────────
+拆解同 [武器牌 029] 的 equipment_effect_125（攻击结算后设置武器冷却至下个我方回合结束）。
+本牌实例独立注册/独立保存 runtime_state；conditions/actions 字面量、优先级、时点、UI与新增件完全复用，不因牌面威力/范围差异改变。
+
+──────────── 效果拆解（equipment_effect_126）────────────
+拆解同 [武器牌 029] 的 equipment_effect_126（对此牌使用聚能后清除冷却）。
+本牌实例独立注册/独立保存 runtime_state；conditions/actions 字面量、优先级、时点、UI与新增件完全复用，不因牌面威力/范围差异改变。
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_030.effect_ids = ["equipment_effect_125", "equipment_effect_126"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 共用机制：equipment_effect_125 复用自武器牌029；equipment_effect_126 复用自武器牌029。
+- 需新增/扩展汇总：需新增原子 SET_WEAPON_COOLDOWN(clear_timing,refresh)、条件 WEAPON_IS_ON_COOLDOWN、攻击选择过滤/直攻校验；登记 ActionService.gd、ConditionChecker.gd、attack validator。；同 effect_125/093：需 WEAPON_IS_ON_COOLDOWN 与 ENERGY_TARGET_IS_SELF。
+
+──────────── 顺序与坑 ────────────
+- 同29。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_030 攻击结算。
+    操作：ATTACK_SETTLE。
+    断言：与weapon_029相同进入冷却。
+场景b：
+  前置：冷却中聚能。
+    操作：完成聚能。
+    断言：解除冷却。
+场景c：
+  前置：牌在冷却中被替换。
+    操作：执行set_equipment。
+    断言：旧牌离场且状态随实例删除；新牌不继承冷却。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] “直到下个我方回合结束”包含下个我方回合本身。智能体选择：包含，因此下个我方回合内仍不能攻击，TURN_AFTER_END 后解除。候选：下个我方回合开始时解除。▶ 回答：____________________
+[歧义2] 同一攻击因多目标/联合被视为几次。智能体选择：每个 attack action 结算写一次冷却。候选：每个目标分别写。▶ 回答：____________________
+[歧义3] 聚能后“允许再次发动攻击”是否只允许1次。智能体选择：仅清除当前冷却；下一次攻击结算后会重新进入冷却。候选：本回合永久免冷却。▶ 回答：____________________
+
+
+########################################################################
+第三组：特殊武器（31-40）
+########################################################################
+
+═══════════════════════════════════════════════════════════
+[武器牌 031] 合金盾牌  （类型:特殊  威力:6 范围:1 耐久:4 金币:4  牌堆数量:2）
+机制族：K.盾牌吸收
+═══════════════════════════════════════════════════════════
+效果文本：可以将每次攻击或陷阱产生的全部损伤设置到此牌上。
+effect_ids：["equipment_effect_127"]
+
+──────────── 效果拆解（equipment_effect_127）────────────
+display_name：盾牌将攻击/陷阱全部损伤转移到自身，减伤0
+机制族：K.盾牌吸收
+优先级：20
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听 "damage_change" 的 DAMAGE_REDIRECT_WINDOW。仅当损伤目标为本牌所属机甲、来源为 attack 或 trap、待设置损伤>0时，向受损机甲玩家弹出可选转移。确认后将本次全部待放损伤改投本武器槽。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"SELF_MECH_IS_DAMAGE_TARGET"},
+  {"op": &"DAMAGE_SOURCE_IS_ATTACK_OR_TRAP"},
+  {"op": &"PAYLOAD_DAMAGE_TOKENS_ABOVE", "params": {"threshold": 0}}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"OFFER_DAMAGE_REDIRECT", "params": {"max_points": -1, "mode": &"all_or_nothing", "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "reduction": 0, "optional": true}}  # 将全部待放损伤改为盾牌槽
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：UI显示“将X损伤全部设置到合金盾牌”；确认后 parent damage_change 的 placement target 被替换。伤害HP不变，只转移损伤标记。
+
+实现预告：
+  - 复用：复用 DAMAGE_REDIRECT_WINDOW、OFFER_DAMAGE_REDIRECT。
+  - 新增/扩展：需新增条件 SELF_MECH_IS_DAMAGE_TARGET、DAMAGE_SOURCE_IS_ATTACK_OR_TRAP、PAYLOAD_DAMAGE_TOKENS_ABOVE；OFFER_DAMAGE_REDIRECT 需支持 all_or_nothing、精确装备实例、reduction。
+
+该效果歧义点：
+  [歧义1] 盾牌耐久不足时。智能体选择：仍把全部损伤指向该武器槽；牌在达到耐久时弃置，剩余损伤继续留在该区域（特殊效果优先于通常“换其他有牌区域”）。候选：只能吸收到破损为止，剩余回原目标分配。▶ 回答：____________________
+  [歧义2] 是否覆盖陷阱。智能体选择：覆盖，文本明确“攻击或陷阱”。▶ 回答：____________________
+  [歧义3] 多张盾牌/部件转移共存。智能体选择：按优先级与座次依次提供，首次确认后 parent 已全部改向，后续转移UI不再出现。候选：允许链式再次转移。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_031.effect_ids = ["equipment_effect_127"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 需新增/扩展汇总：需新增条件 SELF_MECH_IS_DAMAGE_TARGET、DAMAGE_SOURCE_IS_ATTACK_OR_TRAP、PAYLOAD_DAMAGE_TOKENS_ABOVE；OFFER_DAMAGE_REDIRECT 需支持 all_or_nothing、精确装备实例、reduction。
+
+──────────── 顺序与坑 ────────────
+- 盾牌只转移损伤标记，不减HP伤害；覆盖攻击和陷阱。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_031 装备；本机甲将承受攻击产生3损伤。
+    操作：DAMAGE_REDIRECT_WINDOW选择盾牌。
+    断言：parent damage_change全部3枚target_slot改为本武器槽；HP伤害不变。
+场景b：
+  前置：同一损伤窗口选择取消。
+    操作：取消。
+    断言：原损伤放置目标/执行者保持全局规则。
+场景c：
+  前置：陷阱产生2损伤。
+    操作：选择盾牌。
+    断言：2枚均放本盾牌槽。
+场景d：
+  前置：本牌在备用区。
+    操作：受到损伤。
+    断言：无转移选项。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] 盾牌耐久不足时。智能体选择：仍把全部损伤指向该武器槽；牌在达到耐久时弃置，剩余损伤继续留在该区域（特殊效果优先于通常“换其他有牌区域”）。候选：只能吸收到破损为止，剩余回原目标分配。▶ 回答：____________________
+[歧义2] 是否覆盖陷阱。智能体选择：覆盖，文本明确“攻击或陷阱”。▶ 回答：____________________
+[歧义3] 多张盾牌/部件转移共存。智能体选择：按优先级与座次依次提供，首次确认后 parent 已全部改向，后续转移UI不再出现。候选：允许链式再次转移。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 032] 投掷式飞弹  （类型:特殊  威力:7 范围:4 耐久:6 金币:3  牌堆数量:2）
+机制族：J.直攻免牌；D.自损伤后果
+═══════════════════════════════════════════════════════════
+效果文本：此牌发动攻击结算后会被设置1损伤。可直接使用此牌发动攻击(不需要攻击牌)。
+effect_ids：["equipment_effect_128", "equipment_effect_129"]
+
+──────────── 效果拆解（equipment_effect_128）────────────
+display_name：直接使用本牌发动不需要攻击牌的攻击
+机制族：J.直攻免牌
+优先级：10
+模式：DIRECT
+植入：设置到武器槽后在装备面板/skill_bar 暴露“发动”入口；点击后创建 effect_fire 动作。备用区不显示按钮，离场立即移除入口。
+触发/查询：装备面板“直接攻击”按钮 -> effect_fire。仅本牌所属机甲主阶段、攻击次数>0、本牌可攻击且范围内存在目标时可用。执行完整 attack 动作，武器固定为本牌，跳过武器选择但保留目标选择与取消。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"IS_OWNER_MAIN_PHASE"},
+  {"op": &"ATTACK_COUNT_ABOVE", "params": {"threshold": 0}},
+  {"op": &"WEAPON_CAN_ATTACK_AGAIN"},
+  {"op": &"WEAPON_HAS_ATTACKABLE_TARGET_IN_RANGE"}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"EXECUTE_ATTACK", "params": {"attacker_id": "$binding_context.mech_id", "weapon_instance_id": "$binding_context.card_instance_id", "target_count": 1, "skip_weapon_select": true, "choose_new_target": true, "source_action_card": null, "cardless_weapon_attack": true, "consume_turn_attack_count": true}}  # 创建完整attack，目标由当前操作人类玩家选择
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：该 attack 仍发出 ATTACK_BEFORE/PRE/AT/AFTER/SETTLE，触发聚能、武器效果、响应窗口与伤害流程；只是不创建 use_action_card 动作、不消耗攻击牌。
+
+实现预告：
+  - 复用：复用 EXECUTE_ATTACK、攻击可用条件。
+  - 新增/扩展：需扩展 EXECUTE_ATTACK 支持 weapon_instance_id/cardless_weapon_attack/consume_turn_attack_count；所有武器攻击校验（冷却、锁定、额外动力）必须同普通攻击路径复用。
+
+该效果歧义点：
+  [歧义1] 是否消耗本回合攻击次数。智能体选择：消耗1次（理由：仍是“发动攻击”，只是免攻击牌）。候选：免费额外攻击。▶ 回答：____________________
+  [歧义2] 是否走完整攻击时点链。智能体选择：完整走链。候选：直接结算武器伤害。▶ 回答：____________________
+  [歧义3] 目标选择取消后是否消耗次数。智能体选择：attack 在目标确认前中断，不消耗次数；次数在成功进入发动攻击/ATTACK_AT 后扣。候选：点击按钮即消耗。▶ 回答：____________________
+
+──────────── 效果拆解（equipment_effect_129）────────────
+display_name：本牌攻击结算后自损1
+机制族：D.自损伤后果
+优先级：10
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听 "attack" 的 ATTACK_SETTLE。只要有效武器是本牌，无论攻击来源为普通攻击牌、闪击、反击或直攻免牌，均在结算后在本牌上设置1损伤。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"ATTACK_SOURCE_IS_SELF"}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 1, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_attack_settle_self_damage"}}
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：发生在目标伤害与损伤全部放置之后。未命中也自损；目标选择阶段取消导致无 ATTACK_SETTLE，不自损。
+
+实现预告：
+  - 复用：复用 ATTACK_SETTLE、ATTACK_SOURCE_IS_SELF、PLACE_DAMAGE_TOKENS。
+  - 新增/扩展：无需新增。
+
+该效果歧义点：
+  [歧义1] 普通攻击牌使用本牌时是否也自损。智能体选择：是，文本“此牌发动攻击结算后”不限定直攻。候选：仅免牌直攻后自损。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_032.effect_ids = ["equipment_effect_128", "equipment_effect_129"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 需新增/扩展汇总：需扩展 EXECUTE_ATTACK 支持 weapon_instance_id/cardless_weapon_attack/consume_turn_attack_count；所有武器攻击校验（冷却、锁定、额外动力）必须同普通攻击路径复用。；无需新增。
+
+──────────── 顺序与坑 ────────────
+- 免牌攻击不创建use_action_card，但仍消耗攻击次数并走完整attack链。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_032 装备；本方主阶段攻击次数1且有目标，手中无攻击牌。
+    操作：点击直接攻击，选目标并完成。
+    断言：未创建use_action_card；完整attack时点均发生；turn_attack_count减1；ATTACK_SETTLE自损1。
+场景b：
+  前置：目标选择界面取消。
+    操作：取消attack。
+    断言：攻击次数不减；本牌不自损。
+场景c：
+  前置：使用普通攻击牌选择weapon_032。
+    操作：完成攻击。
+    断言：同样ATTACK_SETTLE自损1。
+场景d：
+  前置：攻击次数0或无目标。
+    操作：查看按钮。
+    断言：按钮不可用。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] 是否消耗本回合攻击次数。智能体选择：消耗1次（理由：仍是“发动攻击”，只是免攻击牌）。候选：免费额外攻击。▶ 回答：____________________
+[歧义2] 是否走完整攻击时点链。智能体选择：完整走链。候选：直接结算武器伤害。▶ 回答：____________________
+[歧义3] 目标选择取消后是否消耗次数。智能体选择：attack 在目标确认前中断，不消耗次数；次数在成功进入发动攻击/ATTACK_AT 后扣。候选：点击按钮即消耗。▶ 回答：____________________
+[歧义4] 普通攻击牌使用本牌时是否也自损。智能体选择：是，文本“此牌发动攻击结算后”不限定直攻。候选：仅免牌直攻后自损。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 033] 维修机械臂  （类型:特殊  威力:4 范围:3 耐久:4 金币:4  牌堆数量:2）
+机制族：L.维修/抽牌
+═══════════════════════════════════════════════════════════
+效果文本：我方回合1次，可以将1张行动牌当作维修打出，之后在此牌上设置2损伤。
+effect_ids：["equipment_effect_130"]
+
+──────────── 效果拆解（equipment_effect_130）────────────
+display_name：每回合1次，将1张行动牌当维修打出，之后本牌自损2
+机制族：L.维修/抽牌
+优先级：10
+模式：DIRECT
+植入：设置到武器槽后在装备面板/skill_bar 暴露“发动”入口；点击后创建 effect_fire 动作。备用区不显示按钮，离场立即移除入口。
+触发/查询：装备面板“机械臂维修”按钮 -> effect_fire；仅本方主阶段、手牌至少1张行动牌、场上自身或相邻1格存在非满状态机甲时可用。选择1张行动牌，声明为“维修”并执行完整 use_action_card/维修效果，成功结算后本牌自损2。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"IS_OWNER_MAIN_PHASE"},
+  {"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"count": 1}},
+  {"op": &"REPAIR_HAS_VALID_TARGET", "params": {"range": 1}}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"CHOOSE_MANY_CARDS", "params": {"filter": {"zone": &"action_hand", "owner_id": "$binding_context.mech_id"}, "min_count": 1, "max_count": 1, "label": "选择1张行动牌当作维修打出", "confirm_verb": "当作维修", "cancel_label": "取消", "per_card_actions": [
+    {"type": &"DECLARE_CARD_TYPE", "params": {"card_instance_id": "$selected_card_instance_id", "declared_card_def_id": &"action_repair", "duration": &"UNTIL_USE_ACTION_SETTLE"}},
+    {"type": &"EXECUTE_USE_ACTION_CARD", "params": {"card_instance_id": "$selected_card_instance_id", "acting_mech_id": "$binding_context.mech_id", "as_card_def_id": &"action_repair", "consume_original_card": true}}  # 完整执行维修目标/二选一流程
+  ]}},
+  {"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 2, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_repair_self_damage"}}  # 维修成功结算后自损2
+]
+
+依赖/限次：requires_effect=无；once_per_turn=once_per_turn_key=&"weapon_033_use"，once_per_turn_max=1（计数器按 binding_context.card_instance_id 分桶）；permanent_while_in_hand=false。
+值解析与执行顺序：父 effect_fire 在选牌、维修目标选择与维修分支UI完成前暂停。once_per_turn_key 应含 card_instance_id；取消选牌或维修目标则不计次数、不自损。
+
+实现预告：
+  - 复用：复用 CHOOSE_MANY_CARDS、DECLARE_CARD_TYPE、EXECUTE_USE_ACTION_CARD、维修牌既有逻辑、PLACE_DAMAGE_TOKENS。
+  - 新增/扩展：需扩展 EXECUTE_USE_ACTION_CARD 支持 as_card_def_id 与 consume_original_card；需条件 REPAIR_HAS_VALID_TARGET。确保原行动牌以原实例进入临时区并最终进弃牌堆，但效果按维修定义。
+
+该效果歧义点：
+  [歧义1] 任意行动牌能否包含SSR/迎击/攻击牌。智能体选择：任意手牌行动牌均可。候选：只限辅助牌。▶ 回答：____________________
+  [歧义2] 维修流程中玩家取消目标/选择时。智能体选择：整个机械臂效果取消，不自损、不计次，原牌回手。候选：一旦选牌即必须完成并自损。▶ 回答：____________________
+  [歧义3] “每回合1次”是每张机械臂实例还是每机甲同名共用。智能体选择：每张实例独立1次。候选：同名共用1次。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_033.effect_ids = ["equipment_effect_130"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 需新增/扩展汇总：需扩展 EXECUTE_USE_ACTION_CARD 支持 as_card_def_id 与 consume_original_card；需条件 REPAIR_HAS_VALID_TARGET。确保原行动牌以原实例进入临时区并最终进弃牌堆，但效果按维修定义。
+
+──────────── 顺序与坑 ────────────
+- 选中的原行动牌实例进入临时区/弃牌堆，效果按维修定义执行；取消需完整回滚。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_033 装备；手有行动牌；相邻有受损机甲。
+    操作：点击发动，选1张牌当维修，完成维修。
+    断言：原牌按action_repair效果执行并进弃牌堆；weapon_033自损2；once key计1。
+场景b：
+  前置：选牌或维修目标界面取消。
+    操作：取消。
+    断言：原牌回手；不自损；once key未消耗。
+场景c：
+  前置：无有效维修目标或无手牌。
+    操作：查看按钮。
+    断言：不可用。
+场景d：
+  前置：同回合再次点击。
+    操作：尝试。
+    断言：被once_per_turn阻止。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] 任意行动牌能否包含SSR/迎击/攻击牌。智能体选择：任意手牌行动牌均可。候选：只限辅助牌。▶ 回答：____________________
+[歧义2] 维修流程中玩家取消目标/选择时。智能体选择：整个机械臂效果取消，不自损、不计次，原牌回手。候选：一旦选牌即必须完成并自损。▶ 回答：____________________
+[歧义3] “每回合1次”是每张机械臂实例还是每机甲同名共用。智能体选择：每张实例独立1次。候选：同名共用1次。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 034] 手持推进器  （类型:特殊  威力:6 范围:1 耐久:4 金币:3  牌堆数量:2）
+机制族：H.动力操纵
+═══════════════════════════════════════════════════════════
+效果文本：我方回合或打出迎击牌时，可以使机甲在本回合动力+4，之后在此牌上设置1损伤。以上效果每回合只能使用1次。
+effect_ids：["equipment_effect_131", "equipment_effect_132"]
+
+──────────── 效果拆解（equipment_effect_131）────────────
+display_name：我方回合主动：本回合动力+4，之后本牌自损1
+机制族：H.动力操纵
+优先级：10
+模式：DIRECT
+植入：设置到武器槽后在装备面板/skill_bar 暴露“发动”入口；点击后创建 effect_fire 动作。备用区不显示按钮，离场立即移除入口。
+触发/查询：装备面板“推进”按钮 -> effect_fire；仅本方主阶段且本牌本回合组合效果未用。确认后先给机甲本回合动力+4，再自损1。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"IS_OWNER_MAIN_PHASE"}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"MODIFY_MECH_POWER", "params": {"target_id": "$binding_context.mech_id", "delta": 4, "mode": &"current_and_temporary_max", "duration": &"THIS_TURN"}},  # 当前动力与本回合临时上限均+4
+  {"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 1, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_power_boost_self_damage"}}
+]
+
+依赖/限次：requires_effect=无；once_per_turn=与 equipment_effect_132 共用 once_per_turn_key=&"weapon_034_boost"，once_per_turn_max=1（按 card_instance_id 分桶）；permanent_while_in_hand=false。
+值解析与执行顺序：动力+4持续到当前活动回合结束；先加动力后自损。即使本牌破损，已施加到机甲的本回合动力修正保留到时限结束。
+
+实现预告：
+  - 复用：复用 MODIFY_MECH_POWER、PLACE_DAMAGE_TOKENS。
+  - 新增/扩展：需确保 once key 与 effect_132 共用同一 card_instance_id；MODIFY_MECH_POWER 需支持 current_and_temporary_max。
+
+该效果歧义点：
+  [歧义1] 动力+4是只增加当前可用动力还是同时提高本回合上限。智能体选择：两者都+4，回合结束移除临时上限且不把当前动力降到负。候选：只回复/增加当前动力。▶ 回答：____________________
+  [歧义2] 非本方回合通过迎击触发时，“本回合”指当前攻击者回合。智能体选择：持续到当前活动回合结束。候选：持续到本牌所属机甲下回合结束。▶ 回答：____________________
+
+──────────── 效果拆解（equipment_effect_132）────────────
+display_name：打出迎击牌时可使本回合动力+4并自损1
+机制族：H.动力操纵
+优先级：10
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听 "use_action_card" 的 USE_ACTION_AT。持有者打出迎击牌、该牌已进入临时区时，若本牌本回合组合次数未用，弹可选项；确认后动力+4、自损1。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"USED_CARD_OWNER_IS_SELF"},
+  {"op": &"USED_COUNTER_CARD"}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [
+    {"label": "手持推进器：本回合动力+4并受1损伤", "actions": [
+      {"type": &"MODIFY_MECH_POWER", "params": {"target_id": "$binding_context.mech_id", "delta": 4, "mode": &"current_and_temporary_max", "duration": &"THIS_TURN"}},
+      {"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 1, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_power_boost_self_damage"}}
+    ]}
+  ]}}
+]
+
+依赖/限次：requires_effect=无；once_per_turn=与 equipment_effect_131 共用 once_per_turn_key=&"weapon_034_boost"，once_per_turn_max=1（按 card_instance_id 分桶）；permanent_while_in_hand=false。
+值解析与执行顺序：该窗口属于迎击牌 use_action_card 的 USE_ACTION_AT 监听，不是攻击响应窗口中的另一个响应；迎击已经被选用后才出现。
+
+实现预告：
+  - 复用：复用 USED_COUNTER_CARD、USED_CARD_OWNER_IS_SELF、CHOOSE_ONE、MODIFY_MECH_POWER。
+  - 新增/扩展：需让 once_per_turn manager 在玩家确认选项时才消耗次数；取消不消耗。与 effect_131 共用 key。
+
+该效果歧义点：
+  [歧义1] “打出迎击牌时”是否包括用机械臂等方式把其他牌声明为迎击。智能体选择：只要 USED_COUNTER_CARD 判定为迎击类型即可。候选：只限牌面原生迎击牌。▶ 回答：____________________
+  [歧义2] 同时装备两张手持推进器。智能体选择：每张实例各可弹一次，但响应时按装备座次串行；玩家可分别取消/发动。候选：所有同名共用一次。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_034.effect_ids = ["equipment_effect_131", "equipment_effect_132"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 需新增/扩展汇总：需确保 once key 与 effect_132 共用同一 card_instance_id；MODIFY_MECH_POWER 需支持 current_and_temporary_max。；需让 once_per_turn manager 在玩家确认选项时才消耗次数；取消不消耗。与 effect_131 共用 key。
+
+──────────── 顺序与坑 ────────────
+- 主动与迎击触发共用每实例once key；迎击时弹窗不是第二次攻击响应。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_034 装备；本方主阶段。
+    操作：点击发动。
+    断言：current_power与临时上限+4；本牌自损1；共享once key消耗。
+场景b：
+  前置：本回合尚未主动用，随后打出迎击牌。
+    操作：USE_ACTION_AT选择推进器效果。
+    断言：同样动力+4、自损1；不是第二次响应。
+场景c：
+  前置：已主动用后再打迎击。
+    操作：进入USE_ACTION_AT。
+    断言：effect_132不弹窗，因共享once key已满。
+场景d：
+  前置：迎击触发窗口取消。
+    操作：取消。
+    断言：不加动力、不自损、不计次。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] 动力+4是只增加当前可用动力还是同时提高本回合上限。智能体选择：两者都+4，回合结束移除临时上限且不把当前动力降到负。候选：只回复/增加当前动力。▶ 回答：____________________
+[歧义2] 非本方回合通过迎击触发时，“本回合”指当前攻击者回合。智能体选择：持续到当前活动回合结束。候选：持续到本牌所属机甲下回合结束。▶ 回答：____________________
+[歧义3] “打出迎击牌时”是否包括用机械臂等方式把其他牌声明为迎击。智能体选择：只要 USED_COUNTER_CARD 判定为迎击类型即可。候选：只限牌面原生迎击牌。▶ 回答：____________________
+[歧义4] 同时装备两张手持推进器。智能体选择：每张实例各可弹一次，但响应时按装备座次串行；玩家可分别取消/发动。候选：所有同名共用一次。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 035] 强合金盾牌  （类型:特殊  威力:8 范围:2 耐久:5 金币:5  牌堆数量:2）
+机制族：K.盾牌吸收
+═══════════════════════════════════════════════════════════
+效果文本：可以将每次攻击或陷阱产生的全部损伤设置到此牌上，并使此次设置的损伤-1。
+effect_ids：["equipment_effect_133"]
+
+──────────── 效果拆解（equipment_effect_133）────────────
+display_name：强合金盾牌全量吸收并使转移损伤-1
+机制族：K.盾牌吸收
+优先级：20
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：同 effect_127，监听 DAMAGE_REDIRECT_WINDOW；确认后先把待设置损伤总数减1（最低0），再将剩余全部改向本牌武器槽。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"SELF_MECH_IS_DAMAGE_TARGET"},
+  {"op": &"DAMAGE_SOURCE_IS_ATTACK_OR_TRAP"},
+  {"op": &"PAYLOAD_DAMAGE_TOKENS_ABOVE", "params": {"threshold": 0}}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"OFFER_DAMAGE_REDIRECT", "params": {"max_points": -1, "mode": &"all_or_nothing", "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "reduction": 1, "min_points": 0, "optional": true}}
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：例如本次2损伤，确认后改为1损伤放盾牌；本次1损伤则归0且不执行损伤放置。
+
+实现预告：
+  - 复用：复用 effect_127 的所有机制，仅 reduction=1。
+  - 新增/扩展：无额外新增。
+
+该效果歧义点：
+  [歧义1] “使此次设置的损伤-1”作用对象。智能体选择：作用于转移到盾牌的总量，再全量放盾牌。候选：原损伤先全放盾牌，之后移除1枚。▶ 回答：____________________
+  [歧义2] 减至0时是否仍算发生过损伤事件。智能体选择：damage_change 结算但不弹放置UI；相关“受到损伤”条件按最终0不触发。候选：仍视为受过1次损伤。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_035.effect_ids = ["equipment_effect_133"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 需新增/扩展汇总：无额外新增。
+
+──────────── 顺序与坑 ────────────
+- 减1作用于转移总量；确认后后续转移效果不应再次处理同一批损伤。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_035 装备；本次攻击将设3损伤。
+    操作：选择盾牌。
+    断言：最终2损伤全部放盾牌槽。
+场景b：
+  前置：本次仅1损伤。
+    操作：选择盾牌。
+    断言：最终0损伤，不打开放置UI。
+场景c：
+  前置：取消转移。
+    操作：取消。
+    断言：原3损伤不减。
+场景d：
+  前置：与另一转移装备同时存在。
+    操作：按优先级/座次执行。
+    断言：确认本盾牌后后续转移不再重复处理同一全量。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] “使此次设置的损伤-1”作用对象。智能体选择：作用于转移到盾牌的总量，再全量放盾牌。候选：原损伤先全放盾牌，之后移除1枚。▶ 回答：____________________
+[歧义2] 减至0时是否仍算发生过损伤事件。智能体选择：damage_change 结算但不弹放置UI；相关“受到损伤”条件按最终0不触发。候选：仍视为受过1次损伤。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 036] 投掷式机雷  （类型:特殊  威力:12 范围:4 耐久:6 金币:5  牌堆数量:2）
+机制族：J.直攻免牌；D.自损伤后果；J.直攻免牌/陷阱主动
+═══════════════════════════════════════════════════════════
+效果文本：此牌发动攻击结算后会被设置1损伤。可直接使用此牌发动攻击(不需要攻击牌)。我方回合1次，可以在此牌攻击范围内的格子上设置1陷阱，之后在此牌上设置1损伤。
+effect_ids：["equipment_effect_128", "equipment_effect_129", "equipment_effect_134"]
+
+──────────── 效果拆解（equipment_effect_128）────────────
+拆解同 [武器牌 032] 的 equipment_effect_128（直接使用本牌发动不需要攻击牌的攻击）。
+本牌实例独立注册/独立保存 runtime_state；conditions/actions 字面量、优先级、时点、UI与新增件完全复用，不因牌面威力/范围差异改变。
+
+──────────── 效果拆解（equipment_effect_129）────────────
+拆解同 [武器牌 032] 的 equipment_effect_129（本牌攻击结算后自损1）。
+本牌实例独立注册/独立保存 runtime_state；conditions/actions 字面量、优先级、时点、UI与新增件完全复用，不因牌面威力/范围差异改变。
+
+──────────── 效果拆解（equipment_effect_134）────────────
+display_name：每回合1次在武器范围内设置1陷阱，之后本牌自损1
+机制族：J.直攻免牌/陷阱主动
+优先级：10
+模式：DIRECT
+植入：设置到武器槽后在装备面板/skill_bar 暴露“发动”入口；点击后创建 effect_fire 动作。备用区不显示按钮，离场立即移除入口。
+触发/查询：装备面板“设置机雷”按钮 -> effect_fire；仅本方主阶段且本牌本回合未用。玩家选择武器有效范围内1个合法地图格，放置1陷阱标记，再自损1。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"IS_OWNER_MAIN_PHASE"},
+  {"op": &"WEAPON_HAS_VALID_TRAP_CELL"}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"CHOOSE_MAP_CELL_IN_WEAPON_RANGE"},
+  {"rule": &"TARGET_CELL_CAN_HOLD_TRAP"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"PLACE_OR_TRIGGER_TRAP", "params": {"mode": &"place", "cell_id": "$selected_cell_id", "count": 1, "source_mech_id": "$binding_context.mech_id", "source_card_instance_id": "$binding_context.card_instance_id"}},
+  {"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 1, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_trap_self_damage"}}
+]
+
+依赖/限次：requires_effect=无；once_per_turn=once_per_turn_key=&"weapon_036_trap"，once_per_turn_max=1（按 card_instance_id 分桶）；permanent_while_in_hand=false。
+值解析与执行顺序：选择格子窗口完成前父 effect_fire 暂停；取消不计次不自损。范围读取本牌当前有效范围，包括聚能/形态/派生修正。
+
+实现预告：
+  - 复用：复用 CHOOSE_MAP_CELL_IN_WEAPON_RANGE、PLACE_OR_TRIGGER_TRAP、PLACE_DAMAGE_TOKENS。
+  - 新增/扩展：需新增/复用 TARGET_CELL_CAN_HOLD_TRAP、WEAPON_HAS_VALID_TRAP_CELL；明确已有陷阱格是否可叠加或触发。
+
+该效果歧义点：
+  [歧义1] 可否在已有陷阱的格子叠加。智能体选择：不可，目标规则过滤已有陷阱格。候选：叠加多个陷阱。▶ 回答：____________________
+  [歧义2] 可否选择有机甲的格子。智能体选择：可以，只要地图规则允许陷阱标记与机甲共存；放置本身不立即爆炸。候选：只能空格。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_036.effect_ids = ["equipment_effect_128", "equipment_effect_129", "equipment_effect_134"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 共用机制：equipment_effect_128 复用自武器牌032；equipment_effect_129 复用自武器牌032。
+- 需新增/扩展汇总：需扩展 EXECUTE_ATTACK 支持 weapon_instance_id/cardless_weapon_attack/consume_turn_attack_count；所有武器攻击校验（冷却、锁定、额外动力）必须同普通攻击路径复用。；无需新增。；需新增/复用 TARGET_CELL_CAN_HOLD_TRAP、WEAPON_HAS_VALID_TRAP_CELL；明确已有陷阱格是否可叠加或触发。
+
+──────────── 顺序与坑 ────────────
+- 直攻与设置陷阱是两套独立能力；陷阱能力有独立每回合1次，攻击自损每次都触发。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_036 主阶段、攻击次数1、无攻击牌。
+    操作：直接攻击并结算。
+    断言：完整attack；次数-1；本牌自损1。
+场景b：
+  前置：本回合陷阱功能未用且范围内有合法格。
+    操作：点击设置机雷，选格确认。
+    断言：该cell新增1 trap；本牌自损1；trap once key计1。
+场景c：
+  前置：陷阱选格取消。
+    操作：取消。
+    断言：不放陷阱、不自损、不计次。
+场景d：
+  前置：普通攻击牌使用本牌。
+    操作：结算。
+    断言：仍自损1。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] 是否消耗本回合攻击次数。智能体选择：消耗1次（理由：仍是“发动攻击”，只是免攻击牌）。候选：免费额外攻击。▶ 回答：____________________
+[歧义2] 是否走完整攻击时点链。智能体选择：完整走链。候选：直接结算武器伤害。▶ 回答：____________________
+[歧义3] 目标选择取消后是否消耗次数。智能体选择：attack 在目标确认前中断，不消耗次数；次数在成功进入发动攻击/ATTACK_AT 后扣。候选：点击按钮即消耗。▶ 回答：____________________
+[歧义4] 普通攻击牌使用本牌时是否也自损。智能体选择：是，文本“此牌发动攻击结算后”不限定直攻。候选：仅免牌直攻后自损。▶ 回答：____________________
+[歧义5] 可否在已有陷阱的格子叠加。智能体选择：不可，目标规则过滤已有陷阱格。候选：叠加多个陷阱。▶ 回答：____________________
+[歧义6] 可否选择有机甲的格子。智能体选择：可以，只要地图规则允许陷阱标记与机甲共存；放置本身不立即爆炸。候选：只能空格。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 037] 多功能机械臂  （类型:特殊  威力:6 范围:3 耐久:5 金币:5  牌堆数量:1）
+机制族：L.维修/抽牌
+═══════════════════════════════════════════════════════════
+效果文本：我方回合1次，可以将1张行动牌当作维修打出或是弃置2张行动牌再抽2张行动牌，之后在此牌上设置2损伤。
+effect_ids：["equipment_effect_135"]
+
+──────────── 效果拆解（equipment_effect_135）────────────
+display_name：每回合1次：行动牌当维修，或弃2抽2；之后本牌自损2
+机制族：L.维修/抽牌
+优先级：10
+模式：DIRECT
+植入：设置到武器槽后在装备面板/skill_bar 暴露“发动”入口；点击后创建 effect_fire 动作。备用区不显示按钮，离场立即移除入口。
+触发/查询：装备面板“多功能机械臂”按钮 -> effect_fire。主阶段弹二选一：A选择1张行动牌当维修打出；B选择并弃置2张行动牌，弃置结算后抽2张。任一分支成功完成后自损2并消耗本回合次数。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"IS_OWNER_MAIN_PHASE"},
+  {"op": &"MULTI_ARM_HAS_AVAILABLE_OPTION"}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [
+    {"label": "将1张行动牌当作维修打出", "condition": {"op": &"REPAIR_BRANCH_AVAILABLE"}, "actions": [
+      {"type": &"CHOOSE_MANY_CARDS", "params": {"filter": {"zone": &"action_hand", "owner_id": "$binding_context.mech_id"}, "min_count": 1, "max_count": 1, "label": "选择维修素材", "confirm_verb": "打出", "cancel_label": "返回", "per_card_actions": [
+        {"type": &"DECLARE_CARD_TYPE", "params": {"card_instance_id": "$selected_card_instance_id", "declared_card_def_id": &"action_repair", "duration": &"UNTIL_USE_ACTION_SETTLE"}},
+        {"type": &"EXECUTE_USE_ACTION_CARD", "params": {"card_instance_id": "$selected_card_instance_id", "acting_mech_id": "$binding_context.mech_id", "as_card_def_id": &"action_repair", "consume_original_card": true}}
+      ]}}
+    ]},
+    {"label": "弃置2张行动牌，再抽2张", "condition": {"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"count": 2}}, "actions": [
+      {"type": &"EXECUTE_DISCARD", "params": {"from_target": "$binding_context.mech_id", "zone": &"action_hand", "count": 2, "choose": true, "chooser_id": "$binding_context.mech_id", "face_up": true, "reason": &"weapon_cycle"}},
+      {"type": &"DRAW_ACTION", "params": {"target_id": "$binding_context.mech_id", "count": 2, "reason": &"weapon_cycle"}}
+    ]}
+  ]}},
+  {"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 2, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_multi_arm_self_damage"}}
+]
+
+依赖/限次：requires_effect=无；once_per_turn=once_per_turn_key=&"weapon_037_use"，once_per_turn_max=1（按 card_instance_id 分桶）；permanent_while_in_hand=false。
+值解析与执行顺序：所有选择与子动作串行。若在分支内部取消，返回/终止且不执行末尾自损；若牌堆不足2张，按现抽牌规则抽尽可抽张数。
+
+实现预告：
+  - 复用：复用 CHOOSE_ONE、CHOOSE_MANY_CARDS、EXECUTE_DISCARD、DRAW_ACTION、维修复用链。
+  - 新增/扩展：需新增 MULTI_ARM_HAS_AVAILABLE_OPTION/REPAIR_BRANCH_AVAILABLE 条件；需要分支成功标志，确保末尾自损只在成功完成分支后执行。
+
+该效果歧义点：
+  [歧义1] 弃2抽2是否必须正好有2张。智能体选择：必须至少2张，且正好弃2。候选：不足2也可全弃再抽2。▶ 回答：____________________
+  [歧义2] 两分支的“之后自损2”在取消内层UI时。智能体选择：取消分支则不自损、不计次。候选：打开效果即计次并自损。▶ 回答：____________________
+  [歧义3] 抽牌堆不足时。智能体选择：按全局抽牌规则尽量抽取，不回滚弃牌。候选：不足2则该分支不可选。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_037.effect_ids = ["equipment_effect_135"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 需新增/扩展汇总：需新增 MULTI_ARM_HAS_AVAILABLE_OPTION/REPAIR_BRANCH_AVAILABLE 条件；需要分支成功标志，确保末尾自损只在成功完成分支后执行。
+
+──────────── 顺序与坑 ────────────
+- 二选一分支成功后才自损与计次；弃2与抽2必须串行。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_037 装备，有维修目标和1张牌。
+    操作：选择“当维修”，完成。
+    断言：所选牌按维修结算；本牌自损2；计次。
+场景b：
+  前置：手牌至少2张。
+    操作：选择“弃2抽2”，选择2张。
+    断言：两牌进弃牌堆；抽2；之后自损2。
+场景c：
+  前置：内层UI取消。
+    操作：取消。
+    断言：不自损、不计次。
+场景d：
+  前置：手牌1张且无维修目标。
+    操作：查看按钮。
+    断言：两个分支均不可用，按钮禁用。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] 弃2抽2是否必须正好有2张。智能体选择：必须至少2张，且正好弃2。候选：不足2也可全弃再抽2。▶ 回答：____________________
+[歧义2] 两分支的“之后自损2”在取消内层UI时。智能体选择：取消分支则不自损、不计次。候选：打开效果即计次并自损。▶ 回答：____________________
+[歧义3] 抽牌堆不足时。智能体选择：按全局抽牌规则尽量抽取，不回滚弃牌。候选：不足2则该分支不可选。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 038] 月神合金盾牌  （类型:特殊  威力:10 范围:3 耐久:6 金币:6  牌堆数量:1）
+机制族：K.盾牌吸收
+═══════════════════════════════════════════════════════════
+效果文本：可以将每次攻击或陷阱产生的全部损伤设置到此牌上，并使此次设置的损伤-2。
+effect_ids：["equipment_effect_136"]
+
+──────────── 效果拆解（equipment_effect_136）────────────
+display_name：月神合金盾牌全量吸收并使转移损伤-2
+机制族：K.盾牌吸收
+优先级：20
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：同 effect_127/133；确认后将待设置损伤总量减2（最低0），再全部改向本武器槽。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"SELF_MECH_IS_DAMAGE_TARGET"},
+  {"op": &"DAMAGE_SOURCE_IS_ATTACK_OR_TRAP"},
+  {"op": &"PAYLOAD_DAMAGE_TOKENS_ABOVE", "params": {"threshold": 0}}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"OFFER_DAMAGE_REDIRECT", "params": {"max_points": -1, "mode": &"all_or_nothing", "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "reduction": 2, "min_points": 0, "optional": true}}
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：例如陷阱2损伤可完全归0；攻击3损伤转为1损伤放盾牌。
+
+实现预告：
+  - 复用：复用 effect_127 全部机制，仅 reduction=2。
+  - 新增/扩展：无额外新增。
+
+该效果歧义点：
+  [歧义1] 减伤作用顺序同 effect_133。智能体选择：先减总量，再转移。候选：先转移后移除2。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_038.effect_ids = ["equipment_effect_136"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 需新增/扩展汇总：无额外新增。
+
+──────────── 顺序与坑 ────────────
+- 减2可把陷阱2损伤归零；damage_change仍需正常结算以释放父链。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_038 装备；陷阱将设2损伤。
+    操作：选择盾牌。
+    断言：reduction=2，最终0损伤。
+场景b：
+  前置：攻击将设5损伤。
+    操作：选择盾牌。
+    断言：最终3损伤全放本牌槽。
+场景c：
+  前置：取消。
+    操作：取消。
+    断言：不减伤、不转移。
+场景d：
+  前置：本牌自损达到耐久。
+    操作：完成放置。
+    断言：牌进入equipment_discard；区域损伤按裁定保留。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] 减伤作用顺序同 effect_133。智能体选择：先减总量，再转移。候选：先转移后移除2。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 039] 投掷式双子机雷  （类型:特殊  威力:14 范围:4 耐久:6 金币:6  牌堆数量:1）
+机制族：J.直攻免牌；D.自损伤后果；J.直攻免牌/陷阱主动
+═══════════════════════════════════════════════════════════
+效果文本：此牌攻击结算后会被设置1损伤。可直接使用此牌发动攻击(不需要攻击牌)。我方回合1次，可以在此牌范围内的2个格子上各设置1陷阱，之后在此牌上设置1损伤。
+effect_ids：["equipment_effect_128", "equipment_effect_129", "equipment_effect_137"]
+
+──────────── 效果拆解（equipment_effect_128）────────────
+拆解同 [武器牌 032] 的 equipment_effect_128（直接使用本牌发动不需要攻击牌的攻击）。
+本牌实例独立注册/独立保存 runtime_state；conditions/actions 字面量、优先级、时点、UI与新增件完全复用，不因牌面威力/范围差异改变。
+
+──────────── 效果拆解（equipment_effect_129）────────────
+拆解同 [武器牌 032] 的 equipment_effect_129（本牌攻击结算后自损1）。
+本牌实例独立注册/独立保存 runtime_state；conditions/actions 字面量、优先级、时点、UI与新增件完全复用，不因牌面威力/范围差异改变。
+
+──────────── 效果拆解（equipment_effect_137）────────────
+display_name：每回合1次在范围内2个格子各放1陷阱，之后本牌自损1
+机制族：J.直攻免牌/陷阱主动
+优先级：10
+模式：DIRECT
+植入：设置到武器槽后在装备面板/skill_bar 暴露“发动”入口；点击后创建 effect_fire 动作。备用区不显示按钮，离场立即移除入口。
+触发/查询：装备面板“双子机雷”按钮 -> effect_fire。主阶段选择武器有效范围内2个不同合法格子，分别设置1陷阱；两次放置全部完成后本牌自损1。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"IS_OWNER_MAIN_PHASE"},
+  {"op": &"WEAPON_HAS_VALID_TRAP_CELLS", "params": {"count": 2}}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"CHOOSE_TWO_DISTINCT_MAP_CELLS_IN_WEAPON_RANGE"},
+  {"rule": &"TARGET_CELL_CAN_HOLD_TRAP"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"CHOOSE_MANY_MAP_CELLS", "params": {"count": 2, "distinct": true, "range_source_weapon_instance_id": "$binding_context.card_instance_id", "cell_rule": &"TARGET_CELL_CAN_HOLD_TRAP", "label": "选择2个格子设置陷阱"}},
+  {"type": &"PLACE_OR_TRIGGER_TRAP", "params": {"mode": &"place_each", "cell_ids": "$selected_cell_ids", "count_each": 1, "source_mech_id": "$binding_context.mech_id", "source_card_instance_id": "$binding_context.card_instance_id"}},
+  {"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 1, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_trap_self_damage"}}
+]
+
+依赖/限次：requires_effect=无；once_per_turn=once_per_turn_key=&"weapon_039_trap"，once_per_turn_max=1（按 card_instance_id 分桶）；permanent_while_in_hand=false。
+值解析与执行顺序：选择器必须一次性确认2格，避免第一格已落地后第二格取消导致半完成。确认后再批量放置，最后自损。
+
+实现预告：
+  - 复用：复用 PLACE_OR_TRIGGER_TRAP、PLACE_DAMAGE_TOKENS；UI仿 CHOOSE_MANY_CARDS。
+  - 新增/扩展：需新增复杂交互 CHOOSE_MANY_MAP_CELLS(count,distinct,range_source,cell_rule) 与目标规则 CHOOSE_TWO_DISTINCT_MAP_CELLS_IN_WEAPON_RANGE。
+
+该效果歧义点：
+  [歧义1] 两个格子是否必须不同。智能体选择：必须不同（“2个格子上各设置1”）。候选：可在同一格叠2个。▶ 回答：____________________
+  [歧义2] 合法格不足2个时。智能体选择：按钮不可用。候选：可只放1个。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_039.effect_ids = ["equipment_effect_128", "equipment_effect_129", "equipment_effect_137"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 共用机制：equipment_effect_128 复用自武器牌032；equipment_effect_129 复用自武器牌032。
+- 需新增/扩展汇总：需扩展 EXECUTE_ATTACK 支持 weapon_instance_id/cardless_weapon_attack/consume_turn_attack_count；所有武器攻击校验（冷却、锁定、额外动力）必须同普通攻击路径复用。；无需新增。；需新增复杂交互 CHOOSE_MANY_MAP_CELLS(count,distinct,range_source,cell_rule) 与目标规则 CHOOSE_TWO_DISTINCT_MAP_CELLS_IN_WEAPON_RANGE。
+
+──────────── 顺序与坑 ────────────
+- 两格应一次性选择后批量提交，避免半完成。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_039 主阶段无攻击牌但有攻击次数。
+    操作：直接攻击。
+    断言：完整attack并自损1。
+场景b：
+  前置：范围内至少2个合法不同格。
+    操作：点击双子机雷，选择2格确认。
+    断言：两个cell各新增1 trap；本牌自损1；once key计1。
+场景c：
+  前置：只选1格后取消或合法格不足2。
+    操作：取消/查看按钮。
+    断言：不产生半完成；不放任何陷阱、不自损。
+场景d：
+  前置：普通攻击牌选择本牌。
+    操作：结算。
+    断言：仍自损1。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] 是否消耗本回合攻击次数。智能体选择：消耗1次（理由：仍是“发动攻击”，只是免攻击牌）。候选：免费额外攻击。▶ 回答：____________________
+[歧义2] 是否走完整攻击时点链。智能体选择：完整走链。候选：直接结算武器伤害。▶ 回答：____________________
+[歧义3] 目标选择取消后是否消耗次数。智能体选择：attack 在目标确认前中断，不消耗次数；次数在成功进入发动攻击/ATTACK_AT 后扣。候选：点击按钮即消耗。▶ 回答：____________________
+[歧义4] 普通攻击牌使用本牌时是否也自损。智能体选择：是，文本“此牌发动攻击结算后”不限定直攻。候选：仅免牌直攻后自损。▶ 回答：____________________
+[歧义5] 两个格子是否必须不同。智能体选择：必须不同（“2个格子上各设置1”）。候选：可在同一格叠2个。▶ 回答：____________________
+[歧义6] 合法格不足2个时。智能体选择：按钮不可用。候选：可只放1个。▶ 回答：____________________
+
+═══════════════════════════════════════════════════════════
+[武器牌 040] 质能全转换剑炮  （类型:特殊  威力:1 范围:1 耐久:5 金币:8  牌堆数量:1）
+机制族：N.质能转换
+═══════════════════════════════════════════════════════════
+效果文本：可以将此牌的威力变为机甲当前护甲数值*2，范围变为当前动力数值。此牌发动攻击结算完成后，弃置机甲所有正面朝上的部件装备牌。
+effect_ids：["equipment_effect_138", "equipment_effect_139"]
+
+──────────── 效果拆解（equipment_effect_138）────────────
+display_name：威力实时变为当前护甲×2，范围实时变为当前动力
+机制族：N.质能转换
+优先级：10
+模式：派生值型（不注册监听器，不创建常规 ActionEffect 时点监听）
+植入：派生值型，不注册时点监听器；仅在武器威力/范围查询点读取 binding_context.card_instance_id 对应实例并实时重算。
+触发/查询：派生值型，不注册监听器。任何武器威力/范围查询都实时读取本牌所属机甲当前总护甲与当前动力。
+
+触发条件 conditions（GDScript 字面量）：
+不适用（派生值型）
+
+目标规则 target_rules（GDScript 字面量）：
+不适用
+
+成本 costs（GDScript 字面量）：
+不适用
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+不适用
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：helper：get_weapon_040_stats(card_instance_id, mech_id) -> {"might": max(0, mech.get_armor()*2), "range": max(0, mech.current_power)}。该值替代牌面1/1，之后再叠加聚能、行动牌 attack extra_might/extra_range 等外部修正。护甲按当前所有部件区域与损伤后的总护甲；动力按当前可用动力，不是动力上限。
+
+实现预告：
+  - 复用：复用 MechState.get_armor/get_total_power 查询范式；接入武器查询与UI预览。
+  - 新增/扩展：需新增 GeneratedEquipmentEffects.get_energy_conversion_weapon_stats(card_instance_id)；所有攻击预检、最大范围预估、攻击快照、装备面板显示统一调用，避免一处用牌面1/1。
+
+该效果歧义点：
+  [歧义1] “可以将”是否表示可选切换。智能体选择：装备生效时始终按派生值实时替代（提示词机制目录明确列为派生值型）。候选：DIRECT按钮在1/1与转换值之间切换。▶ 回答：____________________
+  [歧义2] 范围取“当前动力”还是动力上限。智能体选择：当前可用动力。候选：当前总动力上限。▶ 回答：____________________
+  [歧义3] 护甲为负时威力。智能体选择：有效威力最低0。候选：允许负数后在攻击计算归零。▶ 回答：____________________
+
+──────────── 效果拆解（equipment_effect_139）────────────
+display_name：本牌攻击结算后弃置所有正面部件装备牌
+机制族：N.质能转换
+优先级：10
+模式：LISTEN
+植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
+触发/查询：监听 "attack" 的 ATTACK_SETTLE。目标伤害/损伤完成后，若有效武器为本牌，依次弃置本机甲头、躯干、双臂、双腿槽中所有正面设置的部件装备牌；武器槽与备用区不受影响。
+
+触发条件 conditions（GDScript 字面量）：
+[
+  {"op": &"ATTACK_SOURCE_IS_SELF"}
+]
+
+目标规则 target_rules（GDScript 字面量）：
+[
+  {"rule": &"NO_TARGET"}
+]
+
+成本 costs（GDScript 字面量）：
+[]
+
+动作 actions（GDScript 字面量；每行注释说明输入/输出）：
+[
+  {"type": &"DISCARD_ALL_FACE_UP_PARTS", "params": {"target_mech_id": "$binding_context.mech_id", "slot_kinds": [&"HEAD", &"TORSO", &"RIGHT_ARM", &"LEFT_ARM", &"RIGHT_LEG", &"LEFT_LEG"], "reason": &"weapon_040_conversion_cost", "preserve_slot_damage": true}}  # 批量执行标准装备弃置并注销各牌监听器
+]
+
+依赖/限次：requires_effect=无；once_per_turn=无；permanent_while_in_hand=false。
+值解析与执行顺序：弃置顺序固定按头→躯干→右臂→左臂→右腿→左腿，避免座次/字典顺序不稳定；每张牌走标准 discard 生命周期与离场诱发。父 attack 在全部弃置子动作完成前不清理。
+
+实现预告：
+  - 复用：复用装备弃置流程。
+  - 新增/扩展：需新增复合动作 DISCARD_ALL_FACE_UP_PARTS(target_mech_id,slot_kinds,reason,preserve_slot_damage)，内部串行 EXECUTE_DISCARD；登记 ActionService.gd。
+
+该效果歧义点：
+  [歧义1] 攻击未命中时是否仍弃置。智能体选择：仍弃置，只要本牌发动的攻击进入 ATTACK_SETTLE（文本未要求命中）。候选：仅命中后弃置。▶ 回答：____________________
+  [歧义2] 备用区背面部件是否弃置。智能体选择：不弃，文本限定“正面朝上的部件装备牌”。候选：所有部件牌，包括备用。▶ 回答：____________________
+  [歧义3] 本牌在结算前离场时。智能体选择：攻击开始时捕获一次性 settle follow-up，仍执行弃部件代价；候选：来源离场后监听注销，不再执行。▶ 回答：____________________
+
+──────────── 本牌实现预告 ────────────
+- JSON 同步：weapon_040.effect_ids = ["equipment_effect_138", "equipment_effect_139"]；权威效果文本与牌面数值按本节牌头同步。
+- slot_kind=WEAPON；正面设置后注册上述listener/按钮/helper，备用区不注册。
+- 需新增/扩展汇总：需新增 GeneratedEquipmentEffects.get_energy_conversion_weapon_stats(card_instance_id)；所有攻击预检、最大范围预估、攻击快照、装备面板显示统一调用，避免一处用牌面1/1。；需新增复合动作 DISCARD_ALL_FACE_UP_PARTS(target_mech_id,slot_kinds,reason,preserve_slot_damage)，内部串行 EXECUTE_DISCARD；登记 ActionService.gd。
+
+──────────── 顺序与坑 ────────────
+- 派生值必须覆盖所有查询入口；结算弃部件对命中无要求，并应串行走标准装备弃置。
+- 本牌因自损伤达到耐久时，走标准装备破损弃置：equipped_card=null、zone=equipment_discard、已注册listener/skill按钮注销；区域损伤按规则保留。
+- PvP路由：所有弹窗与选择器的owner_pid取当前效果执行者/响应者，不硬编码玩家序号；同优先级装备监听按座次。
+
+──────────── 测试场景 ────────────
+场景a：
+  前置：weapon_040 装备；机甲当前护甲8、当前动力5。
+    操作：查询装备面板并选择攻击。
+    断言：显示/快照威力16、范围5；不使用牌面1/1。
+场景b：
+  前置：攻击过程中护甲或动力在选择武器前变化。
+    操作：重新查询/开始新攻击。
+    断言：实时按新值重算；同一次attack选武器后按快照与合法修正执行。
+场景c：
+  前置：本牌攻击结算，不论命中与否。
+    操作：ATTACK_SETTLE。
+    断言：六个部件槽正面牌依固定顺序进入equipment_discard；武器槽和备用区不变；监听注销。
+场景d：
+  前置：目标选择阶段取消。
+    操作：取消attack。
+    断言：无ATTACK_SETTLE，不弃部件。
+
+歧义点（本牌汇总；回答行留空即同意智能体选择）：
+[歧义1] “可以将”是否表示可选切换。智能体选择：装备生效时始终按派生值实时替代（提示词机制目录明确列为派生值型）。候选：DIRECT按钮在1/1与转换值之间切换。▶ 回答：____________________
+[歧义2] 范围取“当前动力”还是动力上限。智能体选择：当前可用动力。候选：当前总动力上限。▶ 回答：____________________
+[歧义3] 护甲为负时威力。智能体选择：有效威力最低0。候选：允许负数后在攻击计算归零。▶ 回答：____________________
+[歧义4] 攻击未命中时是否仍弃置。智能体选择：仍弃置，只要本牌发动的攻击进入 ATTACK_SETTLE（文本未要求命中）。候选：仅命中后弃置。▶ 回答：____________________
+[歧义5] 备用区背面部件是否弃置。智能体选择：不弃，文本限定“正面朝上的部件装备牌”。候选：所有部件牌，包括备用。▶ 回答：____________________
+[歧义6] 本牌在结算前离场时。智能体选择：攻击开始时捕获一次性 settle follow-up，仍执行弃部件代价；候选：来源离场后监听注销，不再执行。▶ 回答：____________________
+
+
+========================================================================
+《effect_id 总览表》
+========================================================================
+[effect_id | 机制族+一句话语义 | 共用牌编号]
+equipment_effect_093 | A.聚能联动：聚能后本回合范围+1 | 01、17
+equipment_effect_094 | B.被名响应：被光束名武器攻击时弃攻击牌响应，威力-5 | 01、16
+equipment_effect_095 | A.聚能联动：聚能后本回合威力+3 | 02、16
+equipment_effect_096 | B.被名响应：被热能名武器攻击时弃攻击牌响应，威力-5 | 02、17
+equipment_effect_097 | C.命中后额外损伤：命中后可使本次攻击损伤标记+2 | 03、09
+equipment_effect_098 | E.形态切换：流星钢锤主阶段切换形态 | 04
+equipment_effect_099 | E.形态切换：流星钢锤攻击被响应后切换形态 | 04
+equipment_effect_100 | F.弃目标牌：命中后可弃目标2张行动牌 | 05
+equipment_effect_101 | C.命中后额外损伤：本次攻击损伤全在同一区域后，可在该区域额外放2损伤 | 06、07、21、22
+equipment_effect_102 | C+D.额外损伤/自损伤后果：命中后可额外2损伤，之后本牌自损1 | 08
+equipment_effect_103 | D.自损伤代价/后果：本牌攻击未命中时自损2 | 09
+equipment_effect_104 | G.锁定：命中后施加锁定；锁定期间本牌不能攻击 | 10
+equipment_effect_105 | D.自损伤后果：本牌攻击命中后自损1 | 11、12
+equipment_effect_106 | D.自损伤代价/后果：光束斩舰刀攻击时可威力+3并记录后续自损 | 11
+equipment_effect_107 | D.自损伤代价/后果：光束斩舰刀加成攻击结算后自损1 | 11
+equipment_effect_108 | D.自损伤代价/后果：热能双刃斧攻击时可范围+2并记录后续自损 | 12
+equipment_effect_109 | D.自损伤代价/后果：热能双刃斧加成攻击结算后自损1 | 12
+equipment_effect_110 | D.自损伤代价/后果：使用闪回激光剑攻击必须额外消耗2动力 | 13
+equipment_effect_111 | D.自损伤代价/后果：闪回激光剑攻击时可再耗4动力使威力+3 | 13
+equipment_effect_112 | O.攻击次数追踪：每次攻击结算后武器威力永久-4并标记本回合已用 | 14、15
+equipment_effect_113 | O.攻击次数追踪：我方回合未用本牌攻击则回合结束回复4威力 | 14、15
+equipment_effect_114 | A+O.聚能联动/攻击次数追踪：对此牌使用聚能时回复4威力 | 14、15
+equipment_effect_115 | C.命中后额外损伤：命中且目标与攻击方相邻时可额外2损伤 | 18、19、23
+equipment_effect_116 | C.命中后额外损伤：命中后可额外1损伤 | 20
+equipment_effect_117 | H.动力操纵：指定目标时可使目标当前动力-2并记录已发动 | 24
+equipment_effect_118 | H.动力操纵：已减动力且命中时，若目标动力为0则额外2损伤 | 24
+equipment_effect_119 | C.命中后额外损伤：本次攻击损伤未全在同一区域后，可额外2损伤 | 25
+equipment_effect_120 | D.自损伤代价/派生值：每有1损伤，武器有效威力-2 | 26、27
+equipment_effect_121 | D.自损伤代价/后果：大型光束炮攻击时可自损1并将本次威力回复至全值+2 | 26
+equipment_effect_122 | C+D.额外损伤/自损伤代价：热能加特林命中时可自损2，之后额外3损伤 | 27
+equipment_effect_123 | M.随机弃牌代价：攻击时随机弃我方1张行动牌 | 28
+equipment_effect_124 | M.随机弃牌代价：随机弃牌若为最后一张，则本次攻击威力+3 | 28
+equipment_effect_125 | I.武器冷却：攻击结算后设置武器冷却至下个我方回合结束 | 29、30
+equipment_effect_126 | A+I.聚能联动/武器冷却：对此牌使用聚能后清除冷却 | 29、30
+equipment_effect_127 | K.盾牌吸收：盾牌将攻击/陷阱全部损伤转移到自身，减伤0 | 31
+equipment_effect_128 | J.直攻免牌：直接使用本牌发动不需要攻击牌的攻击 | 32、36、39
+equipment_effect_129 | D.自损伤后果：本牌攻击结算后自损1 | 32、36、39
+equipment_effect_130 | L.维修/抽牌：每回合1次，将1张行动牌当维修打出，之后本牌自损2 | 33
+equipment_effect_131 | H.动力操纵：我方回合主动：本回合动力+4，之后本牌自损1 | 34
+equipment_effect_132 | H.动力操纵：打出迎击牌时可使本回合动力+4并自损1 | 34
+equipment_effect_133 | K.盾牌吸收：强合金盾牌全量吸收并使转移损伤-1 | 35
+equipment_effect_134 | J.直攻免牌/陷阱主动：每回合1次在武器范围内设置1陷阱，之后本牌自损1 | 36
+equipment_effect_135 | L.维修/抽牌：每回合1次：行动牌当维修，或弃2抽2；之后本牌自损2 | 37
+equipment_effect_136 | K.盾牌吸收：月神合金盾牌全量吸收并使转移损伤-2 | 38
+equipment_effect_137 | J.直攻免牌/陷阱主动：每回合1次在范围内2个格子各放1陷阱，之后本牌自损1 | 39
+equipment_effect_138 | N.质能转换：威力实时变为当前护甲×2，范围实时变为当前动力 | 40
+equipment_effect_139 | N.质能转换：本牌攻击结算后弃置所有正面部件装备牌 | 40
+
+========================================================================
+落码前统一新增件登记清单（去重）
+========================================================================
+1. 需新增条件 op【ENERGY_TARGET_IS_SELF】：读取 effect_fire.payload.energy_target_weapon_instance_id；登记 ConditionChecker.gd。聚能效果落码时需保证 effect_fire record 写入该字段。
+2. 需确认 DISCARD_ACTION_CARD 成本支持 card_type=&"attack" 过滤；若现实现只支持任意行动牌，扩展其 params 过滤而不新造成本类型。
+3. 同 effect_093：新增/复用 ENERGY_TARGET_IS_SELF，并保证临时武器修正不会在 _get_weapon_stats 与攻击选择步骤重复计入。
+4. 无额外新增。
+5. 无需新增。测试需确认 ATTACK_AFTER 发生在损伤放置前，窗口完成后才进入 step7。
+6. 需新增条件 WEAPON_MODE_EQUALS/NOT_EQUALS(mode)，原子 SET_WEAPON_MODE(mode)，以及武器查询 helper apply_weapon_mode_modifier(card_instance_id, stats)。登记 ConditionChecker.gd、ActionService.gd、GeneratedEquipmentEffects.gd。
+7. 需扩展 SET_WEAPON_MODE 的 refresh_parent_attack 参数，或新增 REFRESH_ATTACK_STATS_FROM_WEAPON；实现时以 weapon_instance_id 重新计算基础值并只替换 base_might/base_range。
+8. 需新增或复用 TARGET_HAS_ACTION_CARDS；若无该 op，可用目标手牌计数检查。EXECUTE_DISCARD 的 count_mode=&"up_to" 需确认已支持。
+9. 需保证 attack record 在 ATTACK_SETTLE 前保留逐枚放置结果；若现 damage_change 未回写 parent attack，新增回写字段 damage_placement_log/single_damage_slot_id。
+10. PLACE_DAMAGE_TOKENS 需支持 target_card_instance_id 或精确 target_slot，确保不是让玩家改放到其他区域。
+11. 无需新增；需统一“无效攻击”的 attack_hit 值，避免识破类跳步后错误触发。
+12. 需新增攻击校验 helper【WEAPON_BLOCKED_BY_LOCK_STATUS】或条件 WEAPON_IS_LOCKED_OUT；登记武器选择过滤与直攻免牌路径。锁定状态 UI 显示目标与来源武器。
+13. 无需新增。
+14. 需确认 VARIABLE_ABOVE 可读取 attack scoped variables；若现只读全局变量，新增 ATTACK_VARIABLE_ABOVE。
+15. 建议攻击选择本牌时为本次 attack 注册 ephemeral follow-up，确保 effect_107 是否执行由“本牌仍存在”规则明确控制。
+16. 同 effect_106：确认 attack scoped variable 支持。
+17. 需将 weapon_extra_power_cost=2 接入武器选择可用性与直攻/闪击复用武器路径；成本支付失败必须 CANCEL_PARENT_ACTION，不能静默跳过。
+18. requires_effect=equipment_effect_110；引擎需确保同一时点优先级20先完成，再检查本效果条件。
+19. 需确保“回复威力”有 printed_might 上限；查询层统一 max(0, printed + persistent + temporary)。
+20. 需新增/复用 SOURCE_OWNER_IS_TURN_PLAYER、WEAPON_STATUS_ABSENT；MODIFY_WEAPON_POWER 需区分本机制的独立 modifier bucket，避免误清其他来源。
+21. 同 effect_093 的聚能目标 payload；持久 modifier bucket 与 effect_112 配对。
+22. 无新增。
+23. 需确认 MODIFY_MECH_POWER 支持 current_only/min_value；若只改总动力，扩展参数。
+24. 需新增条件 TARGET_POWER_EQUALS(value)，登记 ConditionChecker.gd，读取 payload.target_id 的 current_power。
+25. 需新增条件 DAMAGE_TOKENS_NOT_ALL_IN_SAME_SLOT，或给既有同区条件增加 expected=false；damage placement log 同 effect_101。
+26. 需新增 GeneratedEquipmentEffects.get_weapon_might_by_self_damage(card_instance_id, printed_might) 并接入所有武器威力查询点、UI预览、攻击选择快照、范围预检。
+27. 需新增原子 SET_ATTACK_MIGHT_FROM_PRINTED_WEAPON(weapon_instance_id,bonus,ignore_self_damage_penalty,preserve_external_extra_might)，仿 SET_WEAPON_STATS/攻击快照刷新；登记 ActionService.gd。
+28. 无需新增；需保证当前 effect actions 已入队后，来源离场不取消同一已启动 effect。
+29. 需新增原子/复合动作 RANDOM_DISCARD_ACTION_CARD(count,owner_id,reason,parent_attack_id)，内部创建 EXECUTE_DISCARD(executor=system_random)，并将 was_last_action_card 写回 discard payload。
+30. 需新增条件 DISCARD_PARENT_ATTACK_WEAPON_IS_SELF，或在 ATTACK_SOURCE_IS_SELF 支持 parent_attack_id 追溯。
+31. 需新增原子 SET_WEAPON_COOLDOWN(clear_timing,refresh)、条件 WEAPON_IS_ON_COOLDOWN、攻击选择过滤/直攻校验；登记 ActionService.gd、ConditionChecker.gd、attack validator。
+32. 同 effect_125/093：需 WEAPON_IS_ON_COOLDOWN 与 ENERGY_TARGET_IS_SELF。
+33. 需新增条件 SELF_MECH_IS_DAMAGE_TARGET、DAMAGE_SOURCE_IS_ATTACK_OR_TRAP、PAYLOAD_DAMAGE_TOKENS_ABOVE；OFFER_DAMAGE_REDIRECT 需支持 all_or_nothing、精确装备实例、reduction。
+34. 需扩展 EXECUTE_ATTACK 支持 weapon_instance_id/cardless_weapon_attack/consume_turn_attack_count；所有武器攻击校验（冷却、锁定、额外动力）必须同普通攻击路径复用。
+35. 需扩展 EXECUTE_USE_ACTION_CARD 支持 as_card_def_id 与 consume_original_card；需条件 REPAIR_HAS_VALID_TARGET。确保原行动牌以原实例进入临时区并最终进弃牌堆，但效果按维修定义。
+36. 需确保 once key 与 effect_132 共用同一 card_instance_id；MODIFY_MECH_POWER 需支持 current_and_temporary_max。
+37. 需让 once_per_turn manager 在玩家确认选项时才消耗次数；取消不消耗。与 effect_131 共用 key。
+38. 需新增/复用 TARGET_CELL_CAN_HOLD_TRAP、WEAPON_HAS_VALID_TRAP_CELL；明确已有陷阱格是否可叠加或触发。
+39. 需新增 MULTI_ARM_HAS_AVAILABLE_OPTION/REPAIR_BRANCH_AVAILABLE 条件；需要分支成功标志，确保末尾自损只在成功完成分支后执行。
+40. 需新增复杂交互 CHOOSE_MANY_MAP_CELLS(count,distinct,range_source,cell_rule) 与目标规则 CHOOSE_TWO_DISTINCT_MAP_CELLS_IN_WEAPON_RANGE。
+41. 需新增 GeneratedEquipmentEffects.get_energy_conversion_weapon_stats(card_instance_id)；所有攻击预检、最大范围预估、攻击快照、装备面板显示统一调用，避免一处用牌面1/1。
+42. 需新增复合动作 DISCARD_ALL_FACE_UP_PARTS(target_mech_id,slot_kinds,reason,preserve_slot_damage)，内部串行 EXECUTE_DISCARD；登记 ActionService.gd。
+
+本文结束。
