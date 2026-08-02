@@ -85,9 +85,13 @@ func has_equipment() -> bool:
 
 
 ## 获取装备牌的耐久值（无装备返回0）
+## 备用区牌视为1耐久的白板装备（用户裁定：备用区牌仅持有者可见、无效果、1损伤即弃置），
+## 故 RESERVE 槽位固定返回 1，忽略牌面 printed durability。
 func get_equipment_durability() -> int:
 	if not _is_equipment_active() or not equipped_card.def is _EquipmentCardDef:
 		return 0
+	if slot_kind == &"RESERVE":
+		return 1
 	return equipped_card.def.durability
 
 

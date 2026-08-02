@@ -2651,7 +2651,8 @@ func test_thunder_suite18_structure() -> Variant:
 	var e074 = effects.get(&"equipment_effect_074")
 	if e074 == null or e074.mode != _TimingConst.MODE_DIRECT:
 		return "effect_074 应 DIRECT 占位（派生值）"
-	# effect_075：被攻击弃2牌护甲+5 + 远程威力-4（内层 CHOOSE_ONE 互斥条件自动选）
+	# effect_075：被攻击弃2牌护甲+5 + 远程威力-3（内层 CHOOSE_ONE 互斥条件自动选）
+	# 护甲+5 不指定 target_id（默认 payload.target_id=攻击目标=自身），远程威力-3（原-4，用户裁定改-3）
 	var e075 = effects.get(&"equipment_effect_075")
 	if e075 == null or e075.listen_timing != _TimingConst.ATTACK_PRE:
 		return "effect_075 应监听 ATTACK_PRE"
@@ -2659,9 +2660,13 @@ func test_thunder_suite18_structure() -> Variant:
 		return "effect_075 应含 OWNER_ACTION_HAND_ABOVE"
 	if not _action_has_param(e075, &"EXECUTE_STAT_MODIFY", &"value", 5):
 		return "effect_075 EXECUTE_STAT_MODIFY value 应=5(护甲)"
-	if not _action_has_param(e075, &"MODIFY_ATTACK_MIGHT", &"delta", -4):
-		return "effect_075 内层 CHOOSE_ONE 应含 MODIFY_ATTACK_MIGHT delta=-4(远程)"
-	# 复用 effect_055/058/026/027/048/019/032 存在
+	if not _action_has_param(e075, &"MODIFY_ATTACK_MIGHT", &"delta", -3):
+		return "effect_075 内层 CHOOSE_ONE 应含 MODIFY_ATTACK_MIGHT delta=-3(远程)"
+	# effect_092：轰雷右臂·损伤≥2动力+3（派生值 DIRECT 占位，替代原 048+019+032）
+	var e092 = effects.get(&"equipment_effect_092")
+	if e092 == null or e092.mode != _TimingConst.MODE_DIRECT:
+		return "effect_092 应 DIRECT 占位（派生值）"
+	# 复用 effect_055/058/026/027/048/019/032 存在（048/019/032 仍由超重甲右臂/机动右臂使用）
 	for eid in [&"equipment_effect_055", &"equipment_effect_058", &"equipment_effect_026", &"equipment_effect_027", &"equipment_effect_048", &"equipment_effect_019", &"equipment_effect_032"]:
 		if effects.get(eid) == null:
 			return "%s 应存在（复用）" % String(eid)
@@ -2671,7 +2676,7 @@ func test_thunder_suite18_structure() -> Variant:
 	var json_map: Dictionary = {
 		"part_103_轰雷装_头部": ["equipment_effect_055", "equipment_effect_074"],
 		"part_104_轰雷装_躯干": ["equipment_effect_075"],
-		"part_105_轰雷装_右臂": ["equipment_effect_048", "equipment_effect_019", "equipment_effect_032"],
+		"part_105_轰雷装_右臂": ["equipment_effect_092"],
 		"part_106_轰雷装_左臂": ["equipment_effect_058", "equipment_effect_074"],
 		"part_107_轰雷装_右腿": ["equipment_effect_026", "equipment_effect_074"],
 		"part_108_轰雷装_左腿": ["equipment_effect_027", "equipment_effect_074"],

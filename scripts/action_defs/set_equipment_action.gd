@@ -124,9 +124,11 @@ func _step_place_equip(action: Action) -> Dictionary:
 	card.mech_id = mech_id
 	card.zone = &"equipment_slot"
 
-	# 备用区装备 face_down（与 CardSetService legacy 行为一致）
-	if slot.slot_kind == &"RESERVE":
-		card.face_down = true
+	# 备用区装备 face_down（白板：仅持有者可见、无效果、1耐久）；设置到部件/武器区时翻面为
+	# face_up。从备用区重新设置到部件区时，牌此前 face_down=true 必须在此重置为 false，
+	# 否则 _register_equipment_effects 见 face_down 跳过 -> "设置时"效果（如王牌装头部 effect_033
+	# 抽行动牌）不注册 -> SET_EQUIP_AFTER 无监听器 -> 效果不触发。
+	card.face_down = (slot.slot_kind == &"RESERVE")
 
 	# 从装备手牌移除
 	var player = context.game_state.get_player_for_mech(mech_id)
@@ -220,6 +222,7 @@ func _is_derived_effect(effect_id: StringName) -> bool:
 		&"equipment_effect_021",  # 机动左腿·损伤≥2+动力
 		&"equipment_effect_046",  # 超重甲头部·总损伤<4免疫
 		&"equipment_effect_048",  # 超重甲右臂·损伤≥2动力+2
+		&"equipment_effect_092",  # 轰雷右臂·损伤≥2动力+3
 		&"equipment_effect_049",  # 超重甲臂/腿·此牌损伤<2免疫
 		&"equipment_effect_066",  # 联邦圣牛头·每联邦装备护甲+1(含自身)
 		&"equipment_effect_070",  # 帝国雄鹰头·每帝国装备动力+1(含自身)

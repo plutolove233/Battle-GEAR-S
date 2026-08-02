@@ -111,6 +111,8 @@ func place_damage_tokens(params: Dictionary) -> void:
 
 ## 返回可选槽位列表（给UI层使用）
 ## 有装备槽位存在时，空槽位不可放置
+## 备用区有装备牌时也属"有装备的区域"（规则书：所有损伤需优先设置在有装备牌的区域上），
+## 备用区牌视为1耐久白板装备，可承受损伤（1损伤即弃置）。
 func get_valid_damage_slots(target_id: StringName) -> Array[StringName]:
 	var gs: GameState = context.game_state
 	var mech: MechState = gs.mechs.get(target_id)
@@ -119,6 +121,7 @@ func get_valid_damage_slots(target_id: StringName) -> Array[StringName]:
 
 	var equipped_parts: Array[StringName] = []
 	var equipped_weapons: Array[StringName] = []
+	var equipped_reserve: Array[StringName] = []
 	var empty_parts: Array[StringName] = []
 	var empty_weapons: Array[StringName] = []
 
@@ -135,13 +138,18 @@ func get_valid_damage_slots(target_id: StringName) -> Array[StringName]:
 					equipped_weapons.append(slot_id)
 				else:
 					empty_weapons.append(slot_id)
+			&"RESERVE":
+				# 仅有装备牌的备用区可放置损伤（空备用区不参与，损伤打到空备用区无意义）
+				if slot.equipped_card != null:
+					equipped_reserve.append(slot_id)
 
 	# 规则：有装备槽位存在时，空槽位不可放置
-	var has_equipped: bool = not equipped_parts.is_empty() or not equipped_weapons.is_empty()
+	var has_equipped: bool = not equipped_parts.is_empty() or not equipped_weapons.is_empty() or not equipped_reserve.is_empty()
 	if has_equipped:
 		var result: Array[StringName] = []
 		result.append_array(equipped_parts)
 		result.append_array(equipped_weapons)
+		result.append_array(equipped_reserve)
 		return result
 	else:
 		var result: Array[StringName] = []
@@ -181,11 +189,12 @@ func check_and_handle_equipment_break(target_id: StringName, slot_id: StringName
 
 
 ## 为损伤标记选择目标槽位（AI自动放置）
-## 优先选择已装备的部件槽位，其次是武器槽位，最后是空槽位
+## 优先选择已装备的部件槽位，其次是武器槽位，再次是备用区（有牌），最后是空槽位
+## 优先级：已装备部件 > 已装备武器 > 已装备备用区 > 空部件 > 空武器 > 其他
 func _choose_slot_for_token(mech: MechState) -> StringName:
-	# 优先级：已装备部件 > 已装备武器 > 空部件 > 空武器 > 其他
 	var equipped_parts: Array[StringName] = []
 	var equipped_weapons: Array[StringName] = []
+	var equipped_reserve: Array[StringName] = []
 	var empty_parts: Array[StringName] = []
 	var empty_weapons: Array[StringName] = []
 	var other_slots: Array[StringName] = []
@@ -203,6 +212,12 @@ func _choose_slot_for_token(mech: MechState) -> StringName:
 					equipped_weapons.append(slot_id)
 				else:
 					empty_weapons.append(slot_id)
+			&"RESERVE":
+				# 有牌备用区属"有装备的区域"（1耐久白板）；空备用区归入其他（最低优先）
+				if slot.equipped_card != null:
+					equipped_reserve.append(slot_id)
+				else:
+					other_slots.append(slot_id)
 			_:
 				other_slots.append(slot_id)
 
@@ -212,6 +227,8 @@ func _choose_slot_for_token(mech: MechState) -> StringName:
 		return equipped_parts[(_r.randi() if _r != null else randi()) % equipped_parts.size()]
 	if not equipped_weapons.is_empty():
 		return equipped_weapons[(_r.randi() if _r != null else randi()) % equipped_weapons.size()]
+	if not equipped_reserve.is_empty():
+		return equipped_reserve[(_r.randi() if _r != null else randi()) % equipped_reserve.size()]
 	if not empty_parts.is_empty():
 		return empty_parts[(_r.randi() if _r != null else randi()) % empty_parts.size()]
 	if not empty_weapons.is_empty():

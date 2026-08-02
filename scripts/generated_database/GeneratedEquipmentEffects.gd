@@ -1263,6 +1263,23 @@ static func build_equipment_effects() -> Dictionary:
 	effects[heavy_rarm2.effect_id] = heavy_rarm2
 
 	# ═══════════════════════════════════════════
+	# 092 轰雷装·右臂：此牌上设置有损伤≥2时，此牌动力+3（派生值，仿 effect_048 但 +3）
+	# 轰雷右臂原 effect_ids=[048,019,032]（+2 + 主动弃牌+4 + 迎击弃牌+4），用户裁定改为仅 +3，
+	# 去除"弃置此牌加动力"效果。effect_048（超重甲右臂）仍为 +2，故另立 effect_092。
+	# ═══════════════════════════════════════════
+	var thunder_rarm := _ActionEffect.new()
+	thunder_rarm.effect_id = &"equipment_effect_092"
+	thunder_rarm.display_name = "轰雷装·右臂·损伤≥2动力+3"
+	thunder_rarm.mode = _TC.MODE_DIRECT  # 占位，实际实时重算
+	thunder_rarm.priority = 10
+	thunder_rarm.set_conditions([{"op": &"ALWAYS"}])
+	thunder_rarm.set_target_rules([{"rule": &"NO_TARGET"}])
+	thunder_rarm.set_costs([])
+	thunder_rarm.set_actions([])
+	thunder_rarm.description = "此牌上设置有损伤≥2时，动力+3（实时重算）。"
+	effects[thunder_rarm.effect_id] = thunder_rarm
+
+	# ═══════════════════════════════════════════
 	# 049 超重甲·臂/腿：此牌损伤<2免疫，≥2才扣甲（派生值，card_damage_immune_armor_amount 扩展）
 	# ═══════════════════════════════════════════
 	var heavy_limb_immune2 := _ActionEffect.new()
@@ -1967,12 +1984,12 @@ static func build_equipment_effects() -> Dictionary:
 	effects[thunder_immune.effect_id] = thunder_immune
 
 	# ═══════════════════════════════════════════
-	# 075 轰雷装·躯干：被指定为攻击目标时，可弃2行动牌，本回合护甲+5；若远程攻击则威力-4
+	# 075 轰雷装·躯干：被指定为攻击目标时，可弃2行动牌，本回合护甲+5；若远程攻击则威力-3
 	# 诱发型 -- 监听 ATTACK_PRE；内层 CHOOSE_ONE 非可选 + 互斥条件 -> 自动选（不弹窗）
 	# ═══════════════════════════════════════════
 	var thunder_torso := _ActionEffect.new()
 	thunder_torso.effect_id = &"equipment_effect_075"
-	thunder_torso.display_name = "轰雷装·躯干·被攻击弃2牌护甲+5远程威力-4"
+	thunder_torso.display_name = "轰雷装·躯干·被攻击弃2牌护甲+5远程威力-3"
 	thunder_torso.mode = _TC.MODE_LISTEN
 	thunder_torso.priority = 10
 	thunder_torso.listen_timing = _TC.ATTACK_PRE
@@ -1986,21 +2003,24 @@ static func build_equipment_effects() -> Dictionary:
 		{"cost_type": &"DISCARD_ACTION_CARD", "count": 2, "optional": true},
 	])
 	thunder_torso.set_actions([
-		{"type": &"EXECUTE_STAT_MODIFY", "params": {"target_id": "$binding_context.mech_id", "stat_type": &"armor", "value": 5, "method": &"add", "duration": &"THIS_TURN"}},
+		# 护甲+5：不指定 target_id，由 _extract_stat_mod_params 默认取 payload.target_id（攻击目标=自身）。
+		# 此前误用 "target_id":"$binding_context.mech_id" 未被解析（_extract_stat_mod_params 直接取字面字符串），
+		# 致 modify_armor 收到无效 mech_id -> 护甲未加。与 effect_047 超重甲躯干同形式（无 target_id）。
+		{"type": &"EXECUTE_STAT_MODIFY", "params": {"stat_type": &"armor", "value": 5, "method": &"add", "duration": &"THIS_TURN"}},
 		{
 			"type": &"CHOOSE_ONE",
 			"params": {
 				"optional": false,
 				"options": [
-					{"label": "远程攻击威力-4", "condition": [{"op": &"ATTACK_EFFECTIVE_WEAPON_KIND", "weapon_kind": &"远程"}], "actions": [
-						{"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": -4}},
+					{"label": "远程攻击威力-3", "condition": [{"op": &"ATTACK_EFFECTIVE_WEAPON_KIND", "weapon_kind": &"远程"}], "actions": [
+						{"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": -3}},
 					]},
 					{"label": "非远程：无额外修正", "condition": [{"op": &"ATTACK_EFFECTIVE_WEAPON_KIND_NOT", "weapon_kind": &"远程"}], "actions": []},
 				],
 			},
 		},
 	])
-	thunder_torso.description = "机甲被指定为攻击目标时，可弃置2张行动牌，使当前回合护甲+5，并且若此攻击是远程武器发出的，则其威力-4。"
+	thunder_torso.description = "机甲被指定为攻击目标时，可弃置2张行动牌，使当前回合护甲+5，并且若此攻击是远程武器发出的，则其威力-3。"
 	effects[thunder_torso.effect_id] = thunder_torso
 
 	# ═══════════════════════════════════════════
@@ -2702,6 +2722,9 @@ static func slot_damage_threshold_power_bonus(mech, slot_id: StringName) -> int:
 	# effect_048 超重甲·右臂：此牌损伤≥2时动力+2（阈值型，固定+2）
 	if _card_has_effect_id(card, &"equipment_effect_048") and any_damage >= 2:
 		return 2
+	# effect_092 轰雷·右臂：此牌损伤≥2时动力+3（阈值型，固定+3）
+	if _card_has_effect_id(card, &"equipment_effect_092") and any_damage >= 2:
+		return 3
 	return 0
 
 

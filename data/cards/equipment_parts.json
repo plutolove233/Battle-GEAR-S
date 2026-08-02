@@ -1666,7 +1666,7 @@
     "slot": "躯干",
     "rarity": "SR",
     "count": 1,
-    "effect_text": "机甲被指定为攻击目标时，可弃置2张行动牌，使当前回合护甲+5，并且若此攻击是远程武器发出的，则其威力-4。",
+    "effect_text": "机甲被指定为攻击目标时，可弃置2张行动牌，使当前回合护甲+5，并且若此攻击是远程武器发出的，则其威力-3。",
     "armor": 4,
     "power": 3,
     "durability": 5,
@@ -1682,15 +1682,13 @@
     "slot": "右臂",
     "rarity": "SR",
     "count": 1,
-    "effect_text": "此牌上设置有≥2枚损伤时，此牌动力+2。我方回合或使用迎击牌时，可以弃置此牌，使机甲本回合动力+4。",
+    "effect_text": "此牌上设置有损伤≥2时，此牌动力+3。",
     "armor": 6,
     "power": -1,
     "durability": 4,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_048",
-      "equipment_effect_019",
-      "equipment_effect_032"
+      "equipment_effect_092"
     ]
   },
   {

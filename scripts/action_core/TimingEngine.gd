@@ -2057,6 +2057,22 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 				var sub_params: Dictionary = sub_act_merged.get("params", {})
 				# 仅对需要目标机甲的动作注入 mech_ids（HP/损伤变动）
 				var sub_type: StringName = sub_act_merged.get("type", &"")
+				# 抽装备伪动作嵌套在 CHOOSE_ONE 分支内时（effect_065 王牌臂），execute_sub_action 无注册工厂
+				# 会静默失败，改走 _handle_draw_equipment_pseudo 内联处理（与顶层 action 同路径）。
+				var _ba_deis_ret: StringName = _handle_draw_equipment_pseudo(sub_type, sub_params, effect, payload, action)
+				if _ba_deis_ret == &"suspend":
+					# 挂起弹窗：剩余 branch_actions 存 _seq，待 resume 后续跑（无剩余则不存，与顶层一致）
+					var _ba_remaining: Array = branch_actions.slice(_ba_idx + 1)
+					if not _ba_remaining.is_empty():
+						action.record["_seq_effect_actions"] = {
+							"payload": payload,
+							"remaining": _ba_remaining,
+							"source_check": false,
+						}
+					return
+				if _ba_deis_ret == &"skip":
+					_ba_idx += 1
+					continue
 				if sub_type in [&"EXECUTE_HP_CHANGE", &"EXECUTE_DAMAGE_CHANGE", &"HEAL_HP", &"REMOVE_DAMAGE_TOKENS", &"DEAL_DAMAGE", &"PLACE_DAMAGE_TOKENS", &"MODIFY_DAMAGE_TOKENS"]:
 					if not sub_params.has("mech_ids"):
 						sub_params["mech_ids"] = [target_id_co]
@@ -2308,117 +2324,17 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 			})
 			SLog.log_raw("[TIMING] %s 挂起联合攻击选牌 effect=%s 候选=%d" % [String(action.action_id), String(effect.effect_id), uao_card_ids.size()])
 			return
-		# DRAW_EQUIPMENT_AND_IMMEDIATELY_SET：effect_005（联邦左臂/近战左腿）离场诱发。
-		# 抽1装备到手牌 -> 算合法空槽(类型兼容 PART/WEAPON，排除 reserve/event/pilot/占槽) ->
-		# 人类弹"立即设置"面板选槽(set_equipment)；AI 自动选首槽；取消/无合法槽则弃置抽到的牌(reason=effect_unset_discard)。
-		if act_type == &"DRAW_EQUIPMENT_AND_IMMEDIATELY_SET":
-			var deis_bind_ctx: Dictionary = payload.get("binding_context", {})
-			var deis_mech_id: StringName = deis_bind_ctx.get("mech_id", payload.get("mech_id", payload.get("source_mech_id", &"")))
-			var deis_player_id: StringName = deis_bind_ctx.get("player_id", &"")
-			var deis_drawn_id: StringName = &""
-			if deis_player_id != &"" and context != null and context.game_actions != null:
-				context.game_actions.draw_equipment_cards({"player_id": deis_player_id, "count": 1})
-				if context.game_state != null:
-					var deis_player = context.game_state.players.get(deis_player_id)
-					if deis_player != null and not deis_player.equipment_hand.is_empty():
-						deis_drawn_id = deis_player.equipment_hand[-1]
-			if deis_drawn_id == &"":
-				SLog.log_raw("[TIMING] %s DRAW_EQUIPMENT_AND_IMMEDIATELY_SET 牌堆为空，无牌可抽" % String(action.action_id))
-				continue
-			# 算合法设置槽位（与正常从手牌设置装备 UI 一致：PART->对应槽位+备用区，WEAPON->武器槽+备用区；含已占用槽允许替换）
-			var deis_valid_slots: Array = []
-			if context != null and context.game_state != null and deis_mech_id != &"":
-				var deis_mech = context.game_state.mechs.get(deis_mech_id)
-				var deis_card = context.game_state.get_card(deis_drawn_id)
-				if deis_mech != null and deis_card != null:
-					deis_valid_slots = _valid_set_slots_for_drawn_card(deis_mech, deis_card)
-			if deis_valid_slots.is_empty():
-				if context != null and context.deck_service != null:
-					context.deck_service.discard_card(deis_drawn_id, &"effect_unset_discard")
-				SLog.log_raw("[TIMING] %s DRAW_EQUIPMENT_AND_IMMEDIATELY_SET 无合法空槽，弃置抽到的牌 %s" % [String(action.action_id), String(deis_drawn_id)])
-				continue
-			# AI owner：自动选首槽（AI 暂不支持选区域，避免挂死）
-			if _is_ai_owner(deis_player_id, deis_mech_id):
-				_do_immediate_set_equipment(deis_mech_id, deis_player_id, deis_drawn_id, deis_valid_slots[0])
-				continue
-			# 人类：挂起弹"立即设置"面板
-			_pending_effect[action.action_id] = {
-				"effect": effect, "payload": payload, "phase": &"draw_equipment_set",
-				"drawn_card_id": deis_drawn_id, "mech_id": deis_mech_id,
-				"player_id": deis_player_id, "valid_slots": deis_valid_slots,
-			}
-			action.state = &"waiting_timing"
-			action_needs_input.emit(action.action_id, &"immediate_set_equipment", {
-				"action_id": action.action_id,
-				"effect_id": effect.effect_id,
-				"drawn_card_id": deis_drawn_id,
-				"valid_slots": deis_valid_slots,
-				"mech_id": deis_mech_id,
-				"player_id": deis_player_id,
-			})
-			SLog.log_raw("[TIMING] %s 挂起立即设置装备 effect=%s 候选槽=%d" % [String(action.action_id), String(effect.effect_id), deis_valid_slots.size()])
-			return
-		# DRAW_EQUIPMENT_AND_CHOOSE_SET_OR_SELL：effect_065 抽装备立即设置或卖出。
-		# 仿 DRAW_EQUIPMENT_AND_IMMEDIATELY_SET，增加卖出分支（sell_equipment 走标准卖出：按稀有度金币+2/turn计数）。
-		if act_type == &"DRAW_EQUIPMENT_AND_CHOOSE_SET_OR_SELL":
-			var dess_bind_ctx: Dictionary = payload.get("binding_context", {})
-			var dess_mech_id: StringName = dess_bind_ctx.get("mech_id", payload.get("mech_id", payload.get("source_mech_id", &"")))
-			var dess_player_id: StringName = dess_bind_ctx.get("player_id", &"")
-			var dess_drawn_id: StringName = &""
-			if dess_player_id != &"" and context != null and context.game_actions != null:
-				context.game_actions.draw_equipment_cards({"player_id": dess_player_id, "count": 1})
-				if context.game_state != null:
-					var dess_player = context.game_state.players.get(dess_player_id)
-					if dess_player != null and not dess_player.equipment_hand.is_empty():
-						dess_drawn_id = dess_player.equipment_hand[-1]
-			if dess_drawn_id == &"":
-				SLog.log_raw("[TIMING] %s DRAW_EQUIPMENT_AND_CHOOSE_SET_OR_SELL 牌堆为空" % String(action.action_id))
-				continue
-			var dess_valid_slots: Array = []
-			if context != null and context.game_state != null and dess_mech_id != &"":
-				var dess_mech = context.game_state.mechs.get(dess_mech_id)
-				var dess_card = context.game_state.get_card(dess_drawn_id)
-				if dess_mech != null and dess_card != null:
-					dess_valid_slots = _valid_set_slots_for_drawn_card(dess_mech, dess_card)
-			var dess_can_sell: bool = false
-			var dess_sell_price: int = 1
-			if context != null and context.game_state != null:
-				var dess_player = context.game_state.players.get(dess_player_id)
-				if dess_player != null:
-					dess_can_sell = dess_player.sell_equipment_count_this_turn < _GameConfig.SELL_EQUIPMENT_LIMIT_PER_TURN
-				var dess_card = context.game_state.get_card(dess_drawn_id)
-				if dess_card != null and dess_card.def != null:
-					var sp = dess_card.def.get("cost")
-					dess_sell_price = int(sp) if sp != null else 1
-			if dess_valid_slots.is_empty() and not dess_can_sell:
-				if context != null and context.deck_service != null:
-					context.deck_service.discard_card(dess_drawn_id, &"effect_unset_discard")
-				SLog.log_raw("[TIMING] %s DRAW_EQUIPMENT_AND_CHOOSE_SET_OR_SELL 无槽且卖出已满，弃置" % String(action.action_id))
-				continue
-			if _is_ai_owner(dess_player_id, dess_mech_id):
-				if dess_can_sell:
-					context.card_set_service.sell_equipment(dess_player_id, dess_drawn_id)
-				else:
-					_do_immediate_set_equipment(dess_mech_id, dess_player_id, dess_drawn_id, dess_valid_slots[0])
-				continue
-			_pending_effect[action.action_id] = {
-				"effect": effect, "payload": payload, "phase": &"draw_equipment_set",
-				"drawn_card_id": dess_drawn_id, "mech_id": dess_mech_id,
-				"player_id": dess_player_id, "valid_slots": dess_valid_slots,
-			}
-			action.state = &"waiting_timing"
-			action_needs_input.emit(action.action_id, &"immediate_set_equipment", {
-				"action_id": action.action_id,
-				"effect_id": effect.effect_id,
-				"drawn_card_id": dess_drawn_id,
-				"valid_slots": dess_valid_slots,
-				"mech_id": dess_mech_id,
-				"player_id": dess_player_id,
-				"allow_sell": dess_can_sell,
-				"sell_price": dess_sell_price,
-			})
-			SLog.log_raw("[TIMING] %s 挂起抽装备设置或卖出 effect=%s 槽=%d can_sell=%s" % [String(action.action_id), String(effect.effect_id), dess_valid_slots.size(), str(dess_can_sell)])
-			return
+		# DRAW_EQUIPMENT_AND_IMMEDIATELY_SET / DRAW_EQUIPMENT_AND_CHOOSE_SET_OR_SELL 伪动作：
+		# 抽装备立即设置(或卖出)。可作顶层 action（effect_005 联邦左臂/近战左腿离场诱发），也可嵌套在
+		# CHOOSE_ONE 分支内（effect_065 王牌臂外层 optional CHOOSE_ONE）。嵌套时走 execute_sub_action
+		# 无注册工厂会静默失败（"有选框但不生效"），故抽出 _handle_draw_equipment_pseudo 供此主循环
+		# 与 CHOOSE_ONE 分支循环共用。
+		var _deis_ret: StringName = _handle_draw_equipment_pseudo(act_type, act.get("params", {}), effect, payload, action)
+		if _deis_ret == &"suspend":
+			return  # 已挂起弹"立即设置/卖出"面板，结束 _execute_actions（与原内联 return 一致）
+		if _deis_ret == &"skip":
+			continue  # 牌堆空/无合法槽/AI 已自动处理，跳到下一动作
+		# _deis_ret == ¬_handled：非抽装备伪动作，继续后续判定
 		# REPEAT_SELF_DAMAGE_AND_FREE_MOVE：effect_084 响应攻击自损+免费移动，可继续发动（循环）。
 		# 每轮：fixed_slot 自损 + free_move 移动；轮末 __REPEAT_LOOP_CHECK__ 检查是否继续
 		# （来源牌仍在槽 + 此牌损伤<阈值 -> 弹"是否继续发动？"窗；确认则再排一轮，取消/不满足则结束）。
@@ -2464,6 +2380,86 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 					"remaining": _actions_list.slice(_act_idx + 1),
 				}
 				return
+
+
+## 处理 DRAW_EQUIPMENT_AND_IMMEDIATELY_SET / DRAW_EQUIPMENT_AND_CHOOSE_SET_OR_SELL 伪动作。
+## 这两个伪动作需 TimingEngine 上下文（挂起 _pending_effect + emit action_needs_input 弹"立即设置/卖出"
+## 面板），既可作顶层 action（effect_005 联邦左臂/近战左腿离场诱发），也可嵌套在 CHOOSE_ONE 分支内
+## （effect_065 王牌臂外层 optional CHOOSE_ONE）。嵌套时若走 execute_sub_action 会因无注册工厂而静默
+## 失败（"有选框但不生效"），故抽出供 _execute_actions 主循环与 CHOOSE_ONE 分支循环共用。
+## 返回: &"not_handled"(非此类动作) / &"skip"(已处理无需挂起:牌堆空/无槽/AI自动) / &"suspend"(已挂起弹窗)
+func _handle_draw_equipment_pseudo(act_type: StringName, act_params: Dictionary, effect, payload: Dictionary, action) -> StringName:
+	if act_type != &"DRAW_EQUIPMENT_AND_IMMEDIATELY_SET" and act_type != &"DRAW_EQUIPMENT_AND_CHOOSE_SET_OR_SELL":
+		return &"not_handled"
+	var allow_sell: bool = act_type == &"DRAW_EQUIPMENT_AND_CHOOSE_SET_OR_SELL"
+	var deis_bind_ctx: Dictionary = payload.get("binding_context", {})
+	var deis_mech_id: StringName = deis_bind_ctx.get("mech_id", payload.get("mech_id", payload.get("source_mech_id", &"")))
+	var deis_player_id: StringName = deis_bind_ctx.get("player_id", &"")
+	var deis_drawn_id: StringName = &""
+	if deis_player_id != &"" and context != null and context.game_actions != null:
+		context.game_actions.draw_equipment_cards({"player_id": deis_player_id, "count": 1})
+		if context.game_state != null:
+			var deis_player = context.game_state.players.get(deis_player_id)
+			if deis_player != null and not deis_player.equipment_hand.is_empty():
+				deis_drawn_id = deis_player.equipment_hand[-1]
+	if deis_drawn_id == &"":
+		SLog.log_raw("[TIMING] %s %s 牌堆为空，无牌可抽" % [String(action.action_id), String(act_type)])
+		return &"skip"
+	# 算合法设置槽位（PART->对应槽位+备用区，WEAPON->武器槽+备用区；含已占用槽允许替换）
+	var deis_valid_slots: Array = []
+	if context != null and context.game_state != null and deis_mech_id != &"":
+		var deis_mech = context.game_state.mechs.get(deis_mech_id)
+		var deis_card = context.game_state.get_card(deis_drawn_id)
+		if deis_mech != null and deis_card != null:
+			deis_valid_slots = _valid_set_slots_for_drawn_card(deis_mech, deis_card)
+	# 卖出分支（仅 CHOOSE_SET_OR_SELL）：sell_equipment 走标准卖出（按稀有度金币+2/turn计数）
+	var deis_can_sell: bool = false
+	var deis_sell_price: int = 1
+	if allow_sell and context != null and context.game_state != null:
+		var deis_player = context.game_state.players.get(deis_player_id)
+		if deis_player != null:
+			deis_can_sell = deis_player.sell_equipment_count_this_turn < _GameConfig.SELL_EQUIPMENT_LIMIT_PER_TURN
+		var deis_card_sc = context.game_state.get_card(deis_drawn_id)
+		if deis_card_sc != null and deis_card_sc.def != null:
+			var sp = deis_card_sc.def.get("cost")
+			deis_sell_price = int(sp) if sp != null else 1
+	if deis_valid_slots.is_empty() and not deis_can_sell:
+		if context != null and context.deck_service != null:
+			context.deck_service.discard_card(deis_drawn_id, &"effect_unset_discard")
+		SLog.log_raw("[TIMING] %s %s 无合法槽%s，弃置抽到的牌 %s" % [String(action.action_id), String(act_type), "且卖出已满" if allow_sell else "", String(deis_drawn_id)])
+		return &"skip"
+	# AI owner：自动决策（AI 暂不支持选区域/卖出弹窗，避免挂死）。能卖则卖，否则设首槽。
+	if _is_ai_owner(deis_player_id, deis_mech_id):
+		if allow_sell and deis_can_sell:
+			context.card_set_service.sell_equipment(deis_player_id, deis_drawn_id)
+		elif not deis_valid_slots.is_empty():
+			_do_immediate_set_equipment(deis_mech_id, deis_player_id, deis_drawn_id, deis_valid_slots[0])
+		else:
+			# 兜底（理论上上方已 return skip）：弃置抽到的牌
+			if context != null and context.deck_service != null:
+				context.deck_service.discard_card(deis_drawn_id, &"effect_unset_discard")
+		return &"skip"
+	# 人类：挂起弹"立即设置/卖出"面板
+	_pending_effect[action.action_id] = {
+		"effect": effect, "payload": payload, "phase": &"draw_equipment_set",
+		"drawn_card_id": deis_drawn_id, "mech_id": deis_mech_id,
+		"player_id": deis_player_id, "valid_slots": deis_valid_slots,
+	}
+	action.state = &"waiting_timing"
+	var _ui_input: Dictionary = {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"drawn_card_id": deis_drawn_id,
+		"valid_slots": deis_valid_slots,
+		"mech_id": deis_mech_id,
+		"player_id": deis_player_id,
+	}
+	if allow_sell:
+		_ui_input["allow_sell"] = deis_can_sell
+		_ui_input["sell_price"] = deis_sell_price
+	action_needs_input.emit(action.action_id, &"immediate_set_equipment", _ui_input)
+	SLog.log_raw("[TIMING] %s 挂起抽装备%s effect=%s 槽=%d can_sell=%s" % [String(action.action_id), "设置或卖出" if allow_sell else "立即设置", String(effect.effect_id), deis_valid_slots.size(), str(deis_can_sell)])
+	return &"suspend"
 
 
 ## 判断父动作 pending 列表末尾的子动作是否"未立即完成"（挂起等待输入/时点/更小子动作）。
