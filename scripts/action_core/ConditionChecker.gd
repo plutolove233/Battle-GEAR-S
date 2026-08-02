@@ -193,7 +193,9 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 			if wc_card != null:
 				if _is_weapon_on_cooldown(wc_card):
 					return false
-				if wc_card.get("lock_target_mech_id", &"") != &"":
+				# CardInstance 是 RefCounted，不支持 get(k, default) 两参，用直接字段访问
+				var wc_lock_tgt: StringName = wc_card.lock_target_mech_id if "lock_target_mech_id" in wc_card else &""
+				if wc_lock_tgt != &"":
 					return false
 			return true
 
@@ -1015,18 +1017,21 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 			return tac_player.action_hand.size() >= tac_min
 
 		&"ATTACK_COUNT_ABOVE":
-			# 本回合攻击次数 > threshold（effect_128 直攻免牌：攻击次数>0 才可用）
+			# 剩余攻击次数 > threshold（effect_128 直攻免牌：剩余>0 才可用）。
+			# 剩余 = max_attacks_per_turn - attack_count_this_turn。threshold=0 即 can_attack()。
 			var aca_threshold: int = int(condition.get("threshold", 0))
-			var aca_count: int = payload.get("attack_count_this_turn", 0)
-			# DIRECT 主动触发时 payload 无此字段，从 binding_context 机甲查
-			if not payload.has("attack_count_this_turn"):
-				var aca_mech_id: StringName = _equip_mech_id(binding, payload)
-				var aca_ctx = binding.context if binding != null else null
-				if aca_mech_id != &"" and aca_ctx != null and aca_ctx.get("game_state") != null:
-					var aca_mech = aca_ctx.game_state.mechs.get(aca_mech_id)
-					if aca_mech != null:
-						aca_count = int(aca_mech.attack_count_this_turn) if "attack_count_this_turn" in aca_mech else 0
-			return aca_count > aca_threshold
+			var aca_mech_id: StringName = _equip_mech_id(binding, payload)
+			var aca_ctx = binding.context if binding != null else null
+			if aca_mech_id == &"" or aca_ctx == null or aca_ctx.get("game_state") == null:
+				return false
+			var aca_mech = aca_ctx.game_state.mechs.get(aca_mech_id)
+			if aca_mech == null:
+				return false
+			if aca_threshold == 0 and aca_mech.has_method(&"can_attack"):
+				return aca_mech.can_attack()
+			var aca_used: int = int(aca_mech.attack_count_this_turn) if "attack_count_this_turn" in aca_mech else 0
+			var aca_max: int = int(aca_mech.get("max_attacks_per_turn", 1)) if aca_mech.get("max_attacks_per_turn") != null else 1
+			return (aca_max - aca_used) > aca_threshold
 
 		&"TARGET_IS_ADJACENT":
 			# 攻击目标与攻击方当前位置六边形相邻（距离1，effect_115 霰弹/爆弹/轨道炮）

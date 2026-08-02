@@ -319,3 +319,64 @@ func test_weapon_125_cooldown() -> Variant:
 	if int(card.cooldown_until_turn) <= int(gs.turn_number):
 		return "cooldown_until_turn 应>当前 turn_number"
 	return true
+
+
+## ⑧ effect_128：weapon_032 直攻免牌（DIRECT effect_fire -> EXECUTE_ATTACK cardless）
+func test_weapon_128_cardless_attack() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	_GenEquipEffects.set_aura_game_state(battle.context.game_state)
+	var cid: StringName = await _equip_weapon(battle, "weapon_032_投掷式飞弹")
+	if cid == &"":
+		return "装备 weapon_032 失败"
+	var gs = battle.context.game_state
+	var pm = gs.get_mech_for_player(&"player")
+	var em = gs.get_mech_for_player(&"enemy")
+	em.current_hp = 100
+	pm.position = {"q": 5, "r": 0}
+	em.position = {"q": 6, "r": 0}  # 距离1，在射程4内
+	_clear_enemy_hand(battle)
+	battle.context.action_ui_bridge.context = battle.context
+	# 确保主阶段 + 本方回合（DIRECT effect_128 前置）
+	gs.phase = &"MAIN"
+	gs.active_player_id = &"player"
+	pm.attack_count_this_turn = 0  # 确保有攻击次数
+	var used_before: int = int(pm.attack_count_this_turn)
+	# 触发 DIRECT effect_fire（模拟装备面板"发动"按钮）
+	var ef_result: Dictionary = battle.context.action_service.execute(&"effect_fire", {
+		"effect_id": &"equipment_effect_128",
+		"player_id": &"player",
+		"source_mech_id": pm.mech_id,
+		"card_instance_id": cid,
+		"phase": &"MAIN",
+		"source": {"card_instance_id": cid, "mech_id": pm.mech_id, "player_id": &"player", "effect_id": &"equipment_effect_128"},
+	})
+	var ef_id: StringName = ef_result.get("action_id", &"") if ef_result is Dictionary else &""
+	if ef_id == &"":
+		return "effect_fire 未发起"
+	await _pump_frames(5)
+	var ef_action = battle.context.action_registry.get_action(ef_id)
+	var ef_state: String = String(ef_action.state) if ef_action != null else "removed"
+	# 找 attack 子动作（cardless 直攻创建的 attack，waiting_input 选目标）。effect_fire 可能已
+	# 完成清理，故从 registry 全局查 type=attack 且 state=waiting_input 的最新动作。
+	var attack_id: StringName = &""
+	for a in battle.context.action_registry.get_actions_by_type(&"attack"):
+		if a.state == &"waiting_input":
+			attack_id = a.action_id
+			break
+	if attack_id == &"":
+		return "cardless 直攻未创建 attack 子动作（ef_state=%s）" % ef_state
+	# 驱动选目标（choose_new_target -> select_attack_target）
+	battle.context.action_engine.continue_action(attack_id, {"target_id": em.mech_id})
+	await _pump_frames(5)
+	_drive_damage_placement(battle, attack_id)
+	await _pump_frames(3)
+	# 攻击次数应 +1（cardless consume_turn_attack_count）
+	if int(pm.attack_count_this_turn) != used_before + 1:
+		return "cardless 直攻应消耗1次攻击次数，实际 used %d->%d" % [used_before, int(pm.attack_count_this_turn)]
+	# effect_129 自损1
+	var card = gs.get_card(cid)
+	if int(card.damage_tokens) != 1:
+		return "effect_129 应使 weapon_032 自损1，实际 %d" % int(card.damage_tokens)
+	return true
