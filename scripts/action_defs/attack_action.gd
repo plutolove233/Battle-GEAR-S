@@ -86,6 +86,12 @@ func _step_select_weapon(action: Action) -> Dictionary:
 		if attacker != null:
 			var weapon_stats: Dictionary = _get_weapon_stats(attacker, weapon_id)
 			result["weapon_id"] = weapon_id
+			# 虚拟武器（帝国的神莺·躯干）：标记攻击武器来源为本牌，使 effect_088 的
+			# ATTACK_SOURCE_IS_SELF(source_instance_id == payload.attack_weapon_instance_id) 命中，
+			# 触发"消耗全部动力+禁回"。仅虚拟武器写此键--全工程此前从无写入， ATTACK_SOURCE_IS_SELF
+			# 对 legacy 实体武器/部件效果恒为 false，此处不破坏既有行为。
+			if weapon_stats.get("is_virtual", false):
+				result["attack_weapon_instance_id"] = weapon_id
 			result["weapon_might"] = weapon_stats.get("might", 0)
 			# 武器射程 = 基础射程 + 狙击装·头部被动远程范围加成（effect_022/055，派生值实时重算）
 			# 存入 record 后，命中检查(L213)/选目标校验(L117)读 weapon_range+extra_range 自动含之。
@@ -432,6 +438,20 @@ func _get_weapon_stats(attacker, weapon_id: StringName) -> Dictionary:
 	# 从卡牌实例获取
 	var weapon_card = context.game_state.get_card(weapon_id)
 	if weapon_card and weapon_card.def:
+		# 虚拟武器（帝国的神莺·躯干 effect_087）：躯干装备牌可当作威力20范围6的远程武器使用，
+		# 不占武器槽。射程受狙击装·头部远程范围加成（派生值实时重算）。
+		# is_virtual 标志供 _step_select_weapon 写入 attack_weapon_instance_id（仅虚拟武器触发 effect_088）。
+		var vw = _GenEquipEffects.get_virtual_weapon_from_equipment(weapon_card)
+		if not vw.is_empty():
+			var vw_kind: StringName = vw.get("weapon_kind", &"远程")
+			return {
+				"might": int(vw.get("might", 20)),
+				# 基础射程；狙击装·头部远程加成由 _step_select_weapon 统一加（与实体武器一致，避免双计）。
+				"range_value": int(vw.get("range_value", 6)),
+				"weapon_kind": vw_kind,
+				"weapon_name": StringName(vw.get("display_name", &"")),
+				"is_virtual": true,
+			}
 		return {
 			"might": weapon_card.def.might if "might" in weapon_card.def else 0,
 			"range_value": weapon_card.def.range_value if "range_value" in weapon_card.def else 1,

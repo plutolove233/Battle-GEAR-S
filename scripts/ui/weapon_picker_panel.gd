@@ -5,6 +5,8 @@
 extends PanelContainer
 class_name WeaponPickerPanel
 
+const _GenEquipEffects = preload("res://scripts/generated_database/GeneratedEquipmentEffects.gd")
+
 ## 确认选择了一把武器
 signal weapon_selected(weapon_id: StringName)
 ## 取消武器选择
@@ -145,16 +147,25 @@ func _refresh() -> void:
 			else:
 				btn.add_theme_color_override("font_color", Color.CYAN)
 		else:
-			# 普通装备武器
+			# 普通装备武器 / 虚拟武器（帝国的神莺·躯干 effect_087）
 			var card = gs.cards.get(wid)
 			if not card or not card.def:
 				continue
 			btn = Button.new()
-			btn.text = "%s [威力:%d 射程:%d]" % [
-				card.def.display_name,
-				card.def.might,
-				card.def.range_value,
-			]
+			var vw = _GenEquipEffects.get_virtual_weapon_from_equipment(card)
+			if not vw.is_empty():
+				# 虚拟武器：躯干当远程武器用，不占武器槽
+				btn.text = "%s(虚拟武器) [威力:%d 射程:%d]" % [
+					String(vw.get("display_name", card.def.display_name)),
+					int(vw.get("might", 20)),
+					int(vw.get("range_value", 6)),
+				]
+			else:
+				btn.text = "%s [威力:%d 射程:%d]" % [
+					card.def.display_name,
+					card.def.might,
+					card.def.range_value,
+				]
 			btn.custom_minimum_size = Vector2(260, 36)
 			btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 			if wid == _selected_weapon_id:

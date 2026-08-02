@@ -1704,24 +1704,15 @@ func _on_action_card_clicked(card_id: StringName) -> void:
 		return
 
 	# 检查攻击牌是否有可用目标（规则10：若最大范围内没有任何目标，该攻击牌也无法使用）
+	# 含虚拟武器（神莺躯干）：只有虚拟武器能打到目标时攻击牌同样可用。
 	if action_type == "攻击":
 		var mech = gs.get_mech_for_player(local_player_id)
 		if mech:
-			var weapon_ids: Array[StringName] = mech.get_weapon_ids()
+			var weapon_ids: Array[StringName] = _get_all_usable_weapon_ids(mech, true)
 			var has_valid_target: bool = false
 			for wid in weapon_ids:
-				# 基础武器虚拟ID 不在 cards 里，用统一辅助取真实射程
-				var weapon_range: int = _get_weapon_range(mech, wid)
-				# 检查是否有在范围内的目标
-				var reachable: Array[Dictionary] = _RangeCalculator.get_weapon_reachable_hexes(
-					mech.position, weapon_range, gs.map_state.cells
-				)
-				for hex in reachable:
-					var target_mech_id: StringName = _find_mech_at_hex(hex)
-					if target_mech_id != &"" and target_mech_id != mech.mech_id:
-						has_valid_target = true
-						break
-				if has_valid_target:
+				if _weapon_has_attackable_target(mech, wid):
+					has_valid_target = true
 					break
 			if not has_valid_target:
 				battle.log.append({"message": "没有可攻击的目标", "details": {}})
@@ -2757,7 +2748,13 @@ func _show_popup(popup_type: StringName, params: Dictionary) -> void:
 				var gs = battle.context.game_state
 				var attacker_mech = gs.mechs.get(attacker_id)
 				if attacker_mech:
-					var weapon_ids: Array[StringName] = attacker_mech.get_weapon_ids()
+					# 含虚拟武器（神莺躯干，攻击需 power>0）；只列范围内有可攻击目标的武器
+					# （范围内无目标的武器不出现，复用攻击牌预检查逻辑）。
+					var all_weapons: Array[StringName] = _get_all_usable_weapon_ids(attacker_mech, true)
+					var weapon_ids: Array[StringName] = []
+					for wid in all_weapons:
+						if _weapon_has_attackable_target(attacker_mech, wid):
+							weapon_ids.append(wid)
 					weapon_picker_panel.configure(battle.context, weapon_ids, "── 选择武器 ──", attacker_mech)
 					weapon_picker_panel.visible = true
 		&"attack_target_select":
@@ -2907,7 +2904,8 @@ func _show_popup(popup_type: StringName, params: Dictionary) -> void:
 				var wc_mech_id: StringName = params.get("mech_id", params.get("source_mech_id", &""))
 				var wc_mech = battle.context.game_state.mechs.get(wc_mech_id)
 				if wc_mech:
-					var weapon_ids: Array[StringName] = wc_mech.get_weapon_ids()
+					# 聚能弹窗包括我方所有武器（含虚拟武器神莺躯干）；聚能不是攻击，不要求 power>0、不过滤目标。
+					var weapon_ids: Array[StringName] = _get_all_usable_weapon_ids(wc_mech, false)
 					weapon_picker_panel.configure(battle.context, weapon_ids, "── 选择要聚能的武器 ──", wc_mech)
 					weapon_picker_panel.visible = true
 					_show_cancel_button(true)
@@ -3417,8 +3415,12 @@ func _enter_attack_mode(attack_card_id: StringName) -> void:
 	if not mech:
 		return
 
-	# 获取武器列表
-	var weapon_ids: Array[StringName] = mech.get_weapon_ids()
+	# 获取武器列表（含虚拟武器神莺躯干，攻击需 power>0；只列范围内有可攻击目标的武器）
+	var all_weapons: Array[StringName] = _get_all_usable_weapon_ids(mech, true)
+	var weapon_ids: Array[StringName] = []
+	for wid in all_weapons:
+		if _weapon_has_attackable_target(mech, wid):
+			weapon_ids.append(wid)
 	if weapon_ids.is_empty():
 		battle.log.append({"message": "没有可用武器", "details": {}})
 		return
@@ -3429,7 +3431,7 @@ func _enter_attack_mode(attack_card_id: StringName) -> void:
 	if weapon_ids.size() == 1:
 		_on_weapon_selected(weapon_ids[0])
 	else:
-		# 有2把武器，显示选择面板
+		# 有多把武器，显示选择面板
 		weapon_picker_panel.configure(battle.context, weapon_ids, "── 选择武器 ──", mech)
 		weapon_picker_panel.visible = true
 		_show_cancel_button(true)
@@ -4464,7 +4466,8 @@ func _enter_support_weapon_select(card_id: StringName) -> void:
 	if mech == null:
 		_support_weapon_select_card_id = &""
 		return
-	var weapon_ids: Array[StringName] = mech.get_weapon_ids()
+	# 聚能：含虚拟武器（神莺躯干），不要求 power>0（聚能不是攻击，动力限制只针对"发动攻击"）
+	var weapon_ids: Array[StringName] = _get_all_usable_weapon_ids(mech, false)
 	if weapon_ids.is_empty():
 		battle.log.append({"message": "没有可用武器", "details": {}})
 		_support_weapon_select_card_id = &""
@@ -4807,16 +4810,68 @@ func _get_weapon_range(mech, weapon_id: StringName) -> int:
 		base_range = int(base_weapon.get("range_value", 1))
 		weapon_kind = base_weapon.get("weapon_kind", &"")
 	else:
-		# 实体武器牌
+		# 实体武器牌 / 虚拟武器（帝国的神莺·躯干 effect_087）
 		var gs = battle.context.game_state if (battle != null and battle.context != null) else null
 		var weapon_card = gs.get_card(weapon_id) if gs != null else null
 		if weapon_card and weapon_card.def:
-			base_range = int(weapon_card.def.range_value)
-			weapon_kind = weapon_card.def.weapon_kind if "weapon_kind" in weapon_card.def else &""
+			# 虚拟武器：躯干当远程武器用，射程受狙击装·头部远程加成
+			var vw = _GenEquipEffects.get_virtual_weapon_from_equipment(weapon_card)
+			if not vw.is_empty():
+				base_range = int(vw.get("range_value", 6))
+				weapon_kind = vw.get("weapon_kind", &"远程")
+			else:
+				base_range = int(weapon_card.def.range_value)
+				weapon_kind = weapon_card.def.weapon_kind if "weapon_kind" in weapon_card.def else &""
 		else:
 			return 1
 	# 狙击装·头部被动远程范围加成（effect_022 +1 / effect_055 +2，派生值实时重算）
 	return base_range + _GenEquipEffects.get_passive_weapon_range_bonus(mech, weapon_kind)
+
+
+## 获取机甲所有可用作武器的ID列表（实体武器 + 虚拟武器）
+## 实体武器：weapon_1/weapon_2 槽（含基础武器虚拟ID frame_base_weapon_N）
+## 虚拟武器：帝国的神莺·躯干 effect_087（躯干装备牌当远程武器用，ID=躯干牌instance_id，
+##   不占武器槽；face_down/disabled 时 is_equipment_active 判定不通过自动排除--"效果被无效
+##   则不能当武器"）。攻击和聚能都适用。
+## require_power_for_virtual=true（攻击用）时，虚拟武器需当前动力>0才列入：
+##   effect_088 cost SPEND_POWER(ALL_CURRENT) 需 power>=1，power=0 时虚拟武器攻击无法发动。
+##   聚能(false)不限制（聚能不是攻击，动力限制只针对"发动攻击"）。
+func _get_all_usable_weapon_ids(mech, require_power_for_virtual: bool) -> Array[StringName]:
+	var result: Array[StringName] = []
+	if mech == null:
+		return result
+	result.append_array(mech.get_weapon_ids())
+	# 动力0时攻击不能用虚拟武器（聚能不限制）
+	if require_power_for_virtual and int(mech.power) <= 0:
+		return result
+	if mech.slots == null:
+		return result
+	for sid in mech.slots:
+		var slot = mech.slots[sid]
+		if slot == null:
+			continue
+		var card = slot.equipped_card
+		var vw = _GenEquipEffects.get_virtual_weapon_from_equipment(card)
+		if not vw.is_empty():
+			result.append(card.instance_id)
+	return result
+
+
+## 武器射程内是否有可攻击目标（复用攻击牌预检查逻辑，规则10）
+## 用于攻击武器选择弹窗过滤：范围内无目标的武器不列入弹窗。
+func _weapon_has_attackable_target(mech, weapon_id: StringName) -> bool:
+	if battle == null or battle.context == null or mech == null:
+		return false
+	var gs = battle.context.game_state
+	var weapon_range: int = _get_weapon_range(mech, weapon_id)
+	var reachable: Array[Dictionary] = _RangeCalculator.get_weapon_reachable_hexes(
+		mech.position, weapon_range, gs.map_state.cells if gs.map_state else {}
+	)
+	for hex in reachable:
+		var target_mech_id: StringName = _find_mech_at_hex(hex)
+		if target_mech_id != &"" and target_mech_id != mech.mech_id:
+			return true
+	return false
 
 
 func _find_mech_at_hex(hex: Dictionary) -> StringName:
