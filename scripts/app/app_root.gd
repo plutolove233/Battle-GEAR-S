@@ -1382,6 +1382,10 @@ func _show_battle() -> void:
 	popup_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
 	popup_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(popup_overlay)
+	# 弹窗按钮/选项与深色弹窗背景(_POPUP_BG)区分：popup_overlay 套一个仅覆盖 Button 样式的
+	# 本地 Theme，级联到所有弹窗面板及其动态创建的按钮；只定义 Button 项，Label/Scroll 等回退
+	# 原主题不受影响。各按钮自身的 add_theme_*_override（选中高亮/字体色）仍优先于此 Theme。
+	popup_overlay.theme = _build_popup_button_theme()
 	# 模态弹窗遮罩：弹窗显示时全屏暗色遮罩，挡住棋盘/取消按钮/下层面板，
 	# 仅顶层弹窗（popup_overlay 内，位于遮罩之上）可交互。位置保持在 popup_overlay 之下。
 	_popup_stack.clear()
@@ -2496,7 +2500,7 @@ func _get_all_mech_hexes() -> Array[Dictionary]:
 ## 迎击移动(回避/疾行/反击)期间，获取攻击方能攻击到的所有格子(红色闪烁用)。
 ## 从 active_actions 中找到等待效果动作完成的 attack 动作，取其 attacker_id 与 weapon_range，
 # 用 BFS 算武器可达范围。攻击方在迎击移动期间不动，范围固定，按 "attacker_id,range,pos" 缓存。
-func _get_evade_attacker_range_hexes(_defender_mech_id: StringName) -> Array[Dictionary]:
+func _get_evade_attacker_range_hexes(defender_mech_id: StringName) -> Array[Dictionary]:
 	if battle == null or battle.context == null:
 		_evade_range_hexes = []
 		_evade_range_attacker_key = ""
@@ -2506,17 +2510,22 @@ func _get_evade_attacker_range_hexes(_defender_mech_id: StringName) -> Array[Dic
 	if action_registry == null:
 		return _evade_range_hexes
 
-	# 找到等待中的 attack 动作（迎击移动期间它处于 waiting_sub_action，等迎击牌 use_action_card 完成）
+	# 找到正在威胁 defender 的 attack 动作（record.target_id == defender_mech_id）。
+	# 链路场景（A 攻 B -> B 反击 A -> A 回避）：A 的原始攻击(#1, target=B)与 B 的反击
+	# (#2, target=A)同时处于 waiting_effect_action；旧实现取"第一个 waiting 的 attack"=#1，
+	# 红格显示 A 自己的攻击范围（错）。应取 target_id == 回避方(#2)的攻击，显示 B 的反击范围。
+	# 反击移动场景（B 反击时自身移动）：mover=B 即 #1 的 target，取 #1 显示 A 的威胁范围（正确）。
+	# 取最后一个匹配项=最新创建的攻击=当前正在响应的攻击（active_actions 按创建序插入）。
 	var attack_action = null
 	for aid: StringName in action_registry.active_actions:
 		var act = action_registry.get_action(aid)
 		if act == null:
 			continue
 		if act.action_type == &"attack" and (act.state == &"waiting_effect_action" or act.state == &"waiting_timing"):
-			attack_action = act
-			break
+			if act.record.get("target_id", &"") == defender_mech_id:
+				attack_action = act
 	if attack_action == null:
-		# 没有等待中的攻击动作（异常/非迎击移动场景），返回空，不标红
+		# 没有威胁 defender 的等待中攻击（异常/非迎击移动场景），返回空，不标红
 		return []
 
 	var attacker_id: StringName = attack_action.record.get("attacker_id", &"")
@@ -2646,6 +2655,52 @@ func _apply_popup_accent(popup_type: StringName, panel: Control) -> void:
 		sb.set_content_margin_all(12)
 		_popup_stylebox_cache[accent] = sb
 	panel.add_theme_stylebox_override("panel", sb)
+
+
+## 构建弹窗按钮专用 Theme：仅覆盖 Button 的 normal/hover/pressed/disabled/focus 样式与字体色，
+## 使弹窗内按钮/选项带独立底色+描边，与弹窗深色背景(_POPUP_BG≈0.08)区分，避免同色难辨。
+## 设到 popup_overlay 上级联到所有弹窗；只定义 Button 项，其余控件回退项目/默认主题。
+func _build_popup_button_theme() -> Theme:
+	var t := Theme.new()
+	var border := Color(0.40, 0.43, 0.50)
+	var border_hover := Color(0.62, 0.66, 0.74)
+	var cr := 4
+	var cm := 8
+	var sb_normal := StyleBoxFlat.new()
+	sb_normal.bg_color = Color(0.18, 0.19, 0.23)
+	sb_normal.border_color = border
+	sb_normal.set_border_width_all(1)
+	sb_normal.set_corner_radius_all(cr)
+	sb_normal.set_content_margin_all(cm)
+	var sb_hover := StyleBoxFlat.new()
+	sb_hover.bg_color = Color(0.26, 0.28, 0.33)
+	sb_hover.border_color = border_hover
+	sb_hover.set_border_width_all(2)
+	sb_hover.set_corner_radius_all(cr)
+	sb_hover.set_content_margin_all(cm)
+	var sb_pressed := StyleBoxFlat.new()
+	sb_pressed.bg_color = Color(0.12, 0.13, 0.16)
+	sb_pressed.border_color = border
+	sb_pressed.set_border_width_all(1)
+	sb_pressed.set_corner_radius_all(cr)
+	sb_pressed.set_content_margin_all(cm)
+	var sb_disabled := StyleBoxFlat.new()
+	sb_disabled.bg_color = Color(0.12, 0.13, 0.15)
+	sb_disabled.border_color = Color(0.24, 0.25, 0.28)
+	sb_disabled.set_border_width_all(1)
+	sb_disabled.set_corner_radius_all(cr)
+	sb_disabled.set_content_margin_all(cm)
+	t.set_stylebox("normal", "Button", sb_normal)
+	t.set_stylebox("hover", "Button", sb_hover)
+	t.set_stylebox("pressed", "Button", sb_pressed)
+	t.set_stylebox("disabled", "Button", sb_disabled)
+	# focus 用空样式覆盖，去掉 Godot 默认虚线聚焦框（鼠标驱动游戏，无需键盘聚焦框；空样式不遮挡 hover）
+	t.set_stylebox("focus", "Button", StyleBoxEmpty.new())
+	t.set_color("font_color", "Button", Color(0.92, 0.93, 0.95))
+	t.set_color("font_hover_color", "Button", Color(1.0, 1.0, 1.0))
+	t.set_color("font_pressed_color", "Button", Color(0.85, 0.86, 0.88))
+	t.set_color("font_disabled_color", "Button", Color(0.50, 0.51, 0.54))
+	return t
 
 
 ## 当前可见的弹窗面板列表（板选类无面板，不在此列）
