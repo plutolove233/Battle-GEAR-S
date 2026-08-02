@@ -1238,6 +1238,15 @@ func _extract_single_move_params(action_def: Dictionary, payload: Dictionary, pa
 		move_mech = payload.get("mech_id", &"")
 	if move_mech == &"":
 		move_mech = payload.get("attacker_id", &"")
+	# 装备离场诱发效果（effect_064 近战右腿等）：payload 是 discard_card 动作 record，
+	# 无顶层 source_mech_id/mech_id，机甲只在 binding_context.mech_id（permanent listener 注入）
+	# 或 parent_action.source.mech_id。RESTORE_POWER 经 _resolve_atomic_params 自动注入 source_mech_id，
+	# 但 EXECUTE_SINGLE_MOVE 走 _extract_single_move_params 不注入 -> 缺 mech_id 致移动静默失效。
+	if move_mech == &"":
+		var _sm_bind_ctx: Dictionary = payload.get("binding_context", {}) if payload != null else {}
+		move_mech = _sm_bind_ctx.get("mech_id", &"")
+	if move_mech == &"" and parent_action != null and parent_action.source is Dictionary:
+		move_mech = parent_action.source.get("mech_id", parent_action.source.get("source_mech_id", &""))
 	result["mech_id"] = move_mech
 	result["available_power"] = params.get("available_power", 0)
 	result["power_fraction"] = params.get("power_fraction", 0.0)

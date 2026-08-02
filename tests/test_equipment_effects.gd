@@ -1277,6 +1277,12 @@ func _action_has_param_in_list(actions: Array, act_type: StringName, param_key: 
 		elif act.get("type", &"") == &"CHOOSE_INTEGER":
 			if _action_has_param_in_list(act.get("params", {}).get("actions", []), act_type, param_key, expected):
 				return true
+		elif act.get("type", &"") == &"CHOOSE_MANY_CARDS":
+			var cm_p: Dictionary = act.get("params", {})
+			if _action_has_param_in_list(cm_p.get("post_actions", []), act_type, param_key, expected):
+				return true
+			if _action_has_param_in_list(cm_p.get("per_card_actions", []), act_type, param_key, expected):
+				return true
 	return false
 
 
@@ -1652,15 +1658,17 @@ func test_red_owl_suite10_structure() -> Variant:
 		return "effect_040 应含 OWNER_ACTION_HAND_ABOVE"
 	if e040.once_per_turn_key != &"red_owl_torso_card_power":
 		return "effect_040 once_per_turn_key 应 red_owl_torso_card_power"
-	# CHOOSE_INTEGER 含 max_value_expr + bind_as
-	var has_ci = false
+	# CHOOSE_MANY_CARDS source=OWNER_ACTION_HAND 列全部行动牌多选弃置
+	var has_cmc = false
 	for act in e040.actions:
-		if act is Dictionary and act.get("type") == &"CHOOSE_INTEGER":
-			has_ci = true
-			if String(act.get("params", {}).get("bind_as", "")) != "n":
-				return "effect_040 CHOOSE_INTEGER bind_as 应 n"
-	if not has_ci:
-		return "effect_040 应含 CHOOSE_INTEGER"
+		if act is Dictionary and act.get("type") == &"CHOOSE_MANY_CARDS":
+			has_cmc = true
+			if String(act.get("params", {}).get("source", "")) != "OWNER_ACTION_HAND":
+				return "effect_040 CHOOSE_MANY_CARDS source 应 OWNER_ACTION_HAND"
+			if bool(act.get("params", {}).get("discard_selected", false)) != true:
+				return "effect_040 CHOOSE_MANY_CARDS discard_selected 应 true"
+	if not has_cmc:
+		return "effect_040 应含 CHOOSE_MANY_CARDS"
 	# effect_041：LISTEN USE_ACTION_AT 迎击金币换动力（共享 once）
 	var e041 = effects.get(&"equipment_effect_041")
 	if e041 == null or e041.listen_timing != _TimingConst.USE_ACTION_AT:
@@ -1717,7 +1725,7 @@ func test_red_owl_suite10_structure() -> Variant:
 	return true
 
 
-## 测试：effect_040 弃牌换动力（CHOOSE_INTEGER 选 n=2，弃2张行动牌，动力+4）
+## 测试：effect_040 弃牌换动力（CHOOSE_MANY_CARDS 多选2张，弃2张行动牌，动力+4）
 func test_red_owl_torso_card_for_power() -> Variant:
 	var battle := _new_battle()
 	if battle == null or battle.context == null:
@@ -1726,7 +1734,7 @@ func test_red_owl_torso_card_for_power() -> Variant:
 	gs.players.get(&"player").is_human = true
 	var player = gs.players.get(&"player")
 	var mech = gs.get_mech_for_player(&"player")
-	# 确保手牌 >=4 张行动牌（OWNER_ACTION_HAND_ABOVE threshold=1 需 >1；弃2张后留>=1）
+	# 确保手牌 >=4 张行动牌（弃2张后留>=2）
 	_ensure_n_action_cards_in_hand(battle, 4)
 	var torso_id: StringName = _ensure_equipment_in_hand(battle, "part_056_帝国的赤枭_躯干")
 	if torso_id == &"":
@@ -1746,34 +1754,23 @@ func test_red_owl_torso_card_for_power() -> Variant:
 		"phase": &"MAIN", "source": src,
 	})
 	await _pump_frames(3)
-	# effect_fire 应挂起在 CHOOSE_INTEGER
+	# effect_fire 应挂起在 CHOOSE_MANY_CARDS（select_thrust_cards 多选窗）
 	var ef_action = null
 	for a in battle.context.action_registry.get_actions_by_type(&"effect_fire"):
 		if a.state == &"waiting_timing":
 			ef_action = a
 			break
 	if ef_action == null:
-		return "effect_040 未挂起在 CHOOSE_INTEGER"
-	# 选 n=2（弃2张，动力+2*2=4）
-	battle.context.timing_engine.resume_pending_effect(ef_action.action_id, {"chosen_value": 2})
-	await _pump_frames(3)
-	# 找到 discard_card 选牌子动作（waiting_input，executor=player 人类路径）
-	var discard_action = null
-	for a in battle.context.action_registry.get_actions_by_type(&"discard_card"):
-		if a.state == &"waiting_input":
-			discard_action = a
-			break
-	if discard_action == null:
-		return "effect_040 未创建 discard_card 选牌子动作（CHOOSE_INTEGER 串行/挂起未生效？）"
-	# 玩家选2张牌弃置（注入 determined_card_ids，仿 app_root._on_discard_selection_completed）
+		return "effect_040 未挂起在 CHOOSE_MANY_CARDS"
+	# 多选2张牌弃置
 	var sel: Array = player.action_hand.slice(0, 2)
-	battle.context.action_engine.continue_action(discard_action.action_id, {"determined_card_ids": sel})
+	battle.context.timing_engine.resume_pending_effect(ef_action.action_id, {"selected_card_ids": sel})
 	await _pump_frames(6)
-	# 断言：弃2张，动力+4（STAT_MODIFY 由 _continue_seq 在弃牌子动作完成后续跑）
+	# 断言：弃2张，动力+4（每张+2 THIS_TURN）
 	if player.action_hand.size() != hand_before - 2:
 		return "应弃2张行动牌（%d->%d），实际 %d" % [hand_before, hand_before - 2, player.action_hand.size()]
 	if mech.power != power_before + 4:
-		return "应动力+4（2n=4），实际 %d -> %d" % [power_before, mech.power]
+		return "应动力+4（每张+2），实际 %d -> %d" % [power_before, mech.power]
 	return true
 
 
@@ -1791,7 +1788,7 @@ func _ensure_n_action_cards_in_hand(battle: BattleState, n: int) -> void:
 			c.owner_player_id = &"player"
 
 
-## 测试：effect_071 弃牌换移动（CHOOSE_INTEGER 选 n=2，弃2张行动牌，免费移动2格）
+## 测试：effect_071 多选弃牌换移动（CHOOSE_MANY_CARDS 选2张，弃2张行动牌，免费移动2格）
 func test_eagle_torso_card_for_move() -> Variant:
 	var battle := _new_battle()
 	if battle == null or battle.context == null:
@@ -1826,29 +1823,21 @@ func test_eagle_torso_card_for_move() -> Variant:
 			ef_action = a
 			break
 	if ef_action == null:
-		return "effect_071 未挂起在 CHOOSE_INTEGER"
-	# 选 n=2（弃2张，免费移动2格）
-	battle.context.timing_engine.resume_pending_effect(ef_action.action_id, {"chosen_value": 2})
-	await _pump_frames(3)
-	# ① 先弹弃牌选牌窗（CHOOSE_INTEGER 串行：EXECUTE_DISCARD 在前）
-	var discard_action = null
-	for a in battle.context.action_registry.get_actions_by_type(&"discard_card"):
-		if a.state == &"waiting_input":
-			discard_action = a
-			break
-	if discard_action == null:
-		return "effect_071 未创建 discard_card 选牌子动作"
+		return "effect_071 未挂起在 CHOOSE_MANY_CARDS"
+	# 多选2张牌弃置 -> 弃2张 + post_actions 创建 single_move（max_cells=2, free_move）
 	var sel: Array = player.action_hand.slice(0, 2)
-	battle.context.action_engine.continue_action(discard_action.action_id, {"determined_card_ids": sel})
+	battle.context.timing_engine.resume_pending_effect(ef_action.action_id, {"selected_card_ids": sel})
 	await _pump_frames(5)
-	# ② 弃牌完成后串行续跑 EXECUTE_SINGLE_MOVE，弹选格窗
+	# 弃牌完成后串行续跑 EXECUTE_SINGLE_MOVE（post_actions），弹选格窗
 	var move_action = null
 	for a in battle.context.action_registry.get_actions_by_type(&"single_move"):
 		if a.state == &"waiting_input":
 			move_action = a
 			break
 	if move_action == null:
-		return "effect_071 弃牌后未串行创建 single_move 选格子动作（_seq 续跑未生效？）"
+		return "effect_071 弃牌后未创建 single_move 选格子动作（post_actions 未生效？）"
+	if int(move_action.record.get("max_cells", 0)) != 2:
+		return "single_move max_cells 应=2(弃牌数)，实际 %d" % int(move_action.record.get("max_cells", 0))
 	battle.context.action_engine.continue_action(move_action.action_id, {"target_cell": "7,0"})
 	await _pump_frames(6)
 	# 断言：弃2张 + 移动到 (7,0)
@@ -2576,17 +2565,17 @@ func test_eagle_suite17_structure() -> Variant:
 	var e070 = effects.get(&"equipment_effect_070")
 	if e070 == null or e070.mode != _TimingConst.MODE_DIRECT:
 		return "effect_070 应 DIRECT 占位（派生值）"
-	# effect_071：弃牌换移动（DIRECT + CHOOSE_INTEGER + EXECUTE_SINGLE_MOVE free_move max_cells_expr）
+	# effect_071：弃牌换移动（DIRECT + CHOOSE_MANY_CARDS 多选 + post_actions EXECUTE_SINGLE_MOVE free_move）
 	var e071 = effects.get(&"equipment_effect_071")
 	if e071 == null or e071.mode != _TimingConst.MODE_DIRECT:
 		return "effect_071 应 DIRECT"
 	if e071.once_per_turn_key == &"":
 		return "effect_071 应有 once_per_turn_key"
-	if not _action_has_param(e071, &"EXECUTE_SINGLE_MOVE", &"max_cells_expr", "$choice.n"):
-		return "effect_071 EXECUTE_SINGLE_MOVE max_cells_expr 应=$choice.n"
+	if not _action_has_param(e071, &"EXECUTE_SINGLE_MOVE", &"max_cells_expr", "$choice.count"):
+		return "effect_071 EXECUTE_SINGLE_MOVE max_cells_expr 应=$choice.count"
 	if not _action_has_param(e071, &"EXECUTE_SINGLE_MOVE", &"free_move", true):
 		return "effect_071 EXECUTE_SINGLE_MOVE free_move 应=true"
-	# effect_072：迎击路径金币换移动（LISTEN USE_ACTION_AT，与071共享once）
+	# effect_072：迎击路径弃牌换移动（LISTEN USE_ACTION_AT，与071共享once）
 	var e072 = effects.get(&"equipment_effect_072")
 	if e072 == null or e072.listen_timing != _TimingConst.USE_ACTION_AT:
 		return "effect_072 应监听 USE_ACTION_AT"
@@ -3174,3 +3163,225 @@ func test_damage_power_recalc_sync() -> Variant:
 	if mech.max_power != leg_max_before + 2:
 		return "机动右腿2损伤(逐点)max_power 应+2，实际+%d" % [mech.max_power - leg_max_before]
 	return true
+
+
+## 测试：高机动装左右腿 effect_021 经真实损伤放置路径(place_one_damage_token)
+## 放1个损伤时 max_power 与 power 都应+1（用户报：1损伤只升上限不升数值，2损伤才都升）。
+## 覆盖满动力(power==max)与已消耗动力(power<max)两种情形。
+func test_hm_leg_damage_power_via_real_path() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	var mech = battle.context.game_state.get_mech_for_player(&"player")
+	var rleg_id: StringName = _ensure_equipment_in_hand(battle, "part_071_高机动装_右腿")
+	if rleg_id == &"":
+		return "找不到高机动右腿装备牌"
+	battle.context.card_set_service.set_equipment(&"player", rleg_id, &"右腿")
+	await _pump_frames(3)
+	var rleg_slot = mech.slots.get(&"右腿")
+	if rleg_slot == null or rleg_slot.equipped_card == null:
+		return "高机动右腿未设置"
+
+	# ── 情形A：满动力下放1损伤 ──
+	# 确保满动力
+	mech.power = mech.max_power
+	var max0: int = mech.max_power
+	var pwr0: int = mech.power
+	# 真实路径：PvP damage_place op 调用的就是 place_one_damage_token（传 mech_id）
+	battle.context.damage_token_service.place_one_damage_token(mech.mech_id, &"右腿")
+	if mech.max_power != max0 + 1:
+		return "A1: 高机动右腿1损伤后 max_power 应+1，实际+%d" % [mech.max_power - max0]
+	if mech.power != pwr0 + 1:
+		return "A2: 高机动右腿1损伤后 power 应+1(满动力)，实际+%d (max=%d power=%d)" % [mech.power - pwr0, mech.max_power, mech.power]
+
+	# ── 情形B：已消耗动力下再放1损伤(共2) ──
+	# 模拟已移动消耗：把 power 降到 max 以下
+	mech.power = mech.max_power - 3
+	var max1: int = mech.max_power
+	var pwr1: int = mech.power
+	battle.context.damage_token_service.place_one_damage_token(mech.mech_id, &"右腿")
+	if mech.max_power != max1 + 1:
+		return "B1: 高机动右腿2损伤后 max_power 应再+1，实际+%d" % [mech.max_power - max1]
+	if mech.power != pwr1 + 1:
+		return "B2: 高机动右腿2损伤后 power 应+1(已消耗动力)，实际+%d (max=%d power=%d)" % [mech.power - pwr1, mech.max_power, mech.power]
+	return true
+
+
+## 测试：高机动装腿 effect_021 走 F3 开发模式真实路径（直接 region+card 双计 + recalc，
+## 不走 place_one_damage_token 的 hook/损坏检查），核对 max_power/power/get_total_power 三者一致。
+## 用户报：F3 加1损伤只升上限不升数值。本测试复现该路径以定位。
+func test_hm_leg_dev_mode_path() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	var mech = battle.context.game_state.get_mech_for_player(&"player")
+	var rleg_id: StringName = _ensure_equipment_in_hand(battle, "part_071_高机动装_右腿")
+	if rleg_id == &"":
+		return "找不到高机动右腿装备牌"
+	battle.context.card_set_service.set_equipment(&"player", rleg_id, &"右腿")
+	await _pump_frames(3)
+	var slot = mech.slots.get(&"右腿")
+	if slot == null or slot.equipped_card == null:
+		return "高机动右腿未设置"
+	# 满动力
+	mech.power = mech.max_power
+	var max0: int = mech.max_power
+	var pwr0: int = mech.power
+	var tot0: int = mech.get_total_power()
+	# ── F3 dev 路径：直接双计 + recalc（与 app_root._apply_dev_edit add_region_damage 一致）──
+	slot.region_damage_tokens += 1
+	slot.equipped_card.damage_tokens += 1
+	mech.recalc_power_limits()
+	# 三者都应 +1
+	if mech.get_total_power() != tot0 + 1:
+		return "dev路径: get_total_power 应+1，实际+%d" % [mech.get_total_power() - tot0]
+	if mech.max_power != max0 + 1:
+		return "dev路径: max_power 应+1，实际+%d (get_total_power=%d)" % [mech.max_power - max0, mech.get_total_power()]
+	if mech.power != pwr0 + 1:
+		return "dev路径: power 应+1，实际+%d (max=%d power=%d tot=%d)" % [mech.power - pwr0, mech.max_power, mech.power, mech.get_total_power()]
+	# 再加1损伤(共2)
+	mech.power = mech.max_power  # 重置满动力
+	var max1: int = mech.max_power
+	var pwr1: int = mech.power
+	slot.region_damage_tokens += 1
+	slot.equipped_card.damage_tokens += 1
+	mech.recalc_power_limits()
+	if mech.max_power != max1 + 1:
+		return "dev路径2损伤: max_power 应+1，实际+%d" % [mech.max_power - max1]
+	if mech.power != pwr1 + 1:
+		return "dev路径2损伤: power 应+1，实际+%d (max=%d power=%d)" % [mech.power - pwr1, mech.max_power, mech.power]
+	return true
+
+
+## 测试：近战特装右腿 effect_064 离场 -> CHOOSE_ONE 选"回复3+移动" -> EXECUTE_SINGLE_MOVE
+## 应创建 single_move 子动作并请求 select_move_target（mech_id 解析正确）。
+## 用户报：回复动力生效但"用当前动力移动"不生效。根因疑为 _extract_single_move_params
+## 在装备离场效果上下文里解析不到 mech_id（payload 无 source_mech_id，只在 binding_context）。
+func test_melee_rleg_leave_move_creates_single_move() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	var gs = battle.context.game_state
+	gs.players.get(&"player").is_human = true
+	var mech = gs.get_mech_for_player(&"player")
+	var rleg_id: StringName = _ensure_equipment_in_hand(battle, "part_083_近战特装_右腿")
+	if rleg_id == &"":
+		return "找不到近战特装右腿"
+	battle.context.card_set_service.set_equipment(&"player", rleg_id, &"右腿")
+	await _pump_frames(3)
+	# 给机甲留些动力供移动
+	mech.power = maxi(mech.power, 3)
+	var power_before: int = mech.power
+	# 弃置近战右腿 -> DISCARD_AFTER 触发 effect_064（CHOOSE_ONE optional 回复3+移动）
+	battle.context.deck_service.discard_card(rleg_id, &"equipment_replace")
+	await _pump_frames(8)
+	# 找到挂起的 discard_card 动作（应挂在 effect_064 的 CHOOSE_ONE）
+	var discard_action_id: StringName = &""
+	for a in battle.context.action_registry.get_actions_by_type(&"discard_card"):
+		discard_action_id = a.action_id
+		break
+	if discard_action_id == &"":
+		return "未找到 discard_card 动作（effect_064 未挂起？）"
+	# 选"回复3动力并用当前所有动力移动"（option 0）
+	battle.context.timing_engine.resume_pending_effect(discard_action_id, {"chosen_option_index": 0})
+	await _pump_frames(6)
+	# RESTORE_POWER 应已生效（+3，clamp 到 max_power）
+	if mech.power != clampi(power_before + 3, 0, mech.max_power):
+		return "RESTORE_POWER 应+3，实际 %d -> %d (max=%d)" % [power_before, mech.power, mech.max_power]
+	# EXECUTE_SINGLE_MOVE 应创建 single_move 子动作，挂起在 select_move_target
+	var sm_action = null
+	for a in battle.context.action_registry.get_actions_by_type(&"single_move"):
+		sm_action = a
+		break
+	if sm_action == null:
+		return "effect_064 未创建 single_move 子动作（移动未生效）"
+	if String(sm_action.record.get("mech_id", &"")) == &"":
+		return "single_move mech_id 为空（_extract_single_move_params 未解析到机甲）"
+	if String(sm_action.record.get("mech_id", &"")) != String(mech.mech_id):
+		return "single_move mech_id 应=玩家机甲，实际: %s" % String(sm_action.record.get("mech_id", &""))
+	# 清理：取消 single_move 避免残留
+	battle.context.action_engine.cancel_action(sm_action.action_id)
+	await _pump_frames(3)
+	return true
+
+
+## 测试：帝国赤枭躯干 effect_040 CHOOSE_MANY_CARDS 多选弃牌换动力
+## 列出全部行动牌 -> 选2张 -> 弃置2张 + 本回合动力+4；取消不发动不消耗；选0张消耗1次。
+const _CardInstance = preload("res://scripts/runtime/CardInstance.gd")
+func test_red_owl_torso_multidiscard_power() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	var gs = battle.context.game_state
+	gs.players.get(&"player").is_human = true
+	gs.active_player_id = &"player"
+	var mech = gs.get_mech_for_player(&"player")
+	var db = battle.context.card_database
+	# 装备赤枭躯干（effect_040/041）
+	var torso_id: StringName = _ensure_equipment_in_hand(battle, "part_056_帝国的赤枭_躯干")
+	if torso_id == &"":
+		return "找不到赤枭躯干"
+	battle.context.card_set_service.set_equipment(&"player", torso_id, &"躯干")
+	await _pump_frames(3)
+	# 清空手牌并加3张行动牌
+	var player = gs.players.get(&"player")
+	for cid in player.action_hand.duplicate():
+		var c = gs.get_card(cid)
+		if c: c.zone = &"discard"
+	player.action_hand.clear()
+	var card_a := _add_action_card(battle, db, "action_001_进攻")
+	var card_b := _add_action_card(battle, db, "action_001_进攻")
+	var card_c := _add_action_card(battle, db, "action_001_进攻")
+	if card_a == &"" or card_b == &"" or card_c == &"":
+		return "加行动牌失败"
+	# 记录初始动力
+	mech.power = 5
+	mech.max_power = 10
+	var pwr0: int = mech.power
+	# 主动触发 effect_040
+	var ef_res = battle.context.action_service.execute(&"effect_fire", {
+		"effect_id": &"equipment_effect_040",
+		"source": {"card_instance_id": torso_id, "mech_id": mech.mech_id, "player_id": &"player"},
+	})
+	await _pump_frames(5)
+	var ef_id: StringName = ef_res.get("action_id", &"") if ef_res is Dictionary else &""
+	if ef_id == &"":
+		return "effect_fire 未创建动作"
+	# 选 card_a + card_b（2张）
+	battle.context.timing_engine.resume_pending_effect(ef_id, {"selected_card_ids": [card_a, card_b]})
+	await _pump_frames(6)
+	# 应弃置2张（手牌只剩 card_c），动力+4（THIS_TURN，允许超上限）
+	if player.action_hand.size() != 1 or not player.action_hand.has(card_c):
+		return "应弃置2张牌，剩余手牌=%s" % str(player.action_hand)
+	if mech.power != pwr0 + 4:
+		return "应+4动力，实际 %d -> %d" % [pwr0, mech.power]
+	# once_per_turn 应已标记：再次触发应被跳过（不再弹窗）
+	var ef2 = battle.context.action_service.execute(&"effect_fire", {
+		"effect_id": &"equipment_effect_040",
+		"source": {"card_instance_id": torso_id, "mech_id": mech.mech_id, "player_id": &"player"},
+	})
+	await _pump_frames(4)
+	# 第二次不应挂起多选窗（once_per_turn 已用）
+	var still_pending := false
+	for a in battle.context.action_registry.get_actions_by_type(&"effect_fire"):
+		if a.state == &"waiting_timing":
+			still_pending = true
+	if still_pending:
+		return "第二次 effect_040 应被 once_per_turn 跳过，不应再弹窗"
+	return true
+
+
+## 辅助：加一张行动牌到玩家手牌，返回 instance_id
+func _add_action_card(battle, db, card_def_id: String) -> StringName:
+	var gs = battle.context.game_state
+	var def = db.get_card(card_def_id) if db != null else null
+	if def == null:
+		return &""
+	var mech = gs.get_mech_for_player(&"player")
+	var inst = _CardInstance.new(gs.next_id("card"), def)
+	inst.owner_player_id = &"player"
+	inst.mech_id = mech.mech_id if mech else &""
+	inst.zone = &"action_hand"
+	gs.cards[inst.instance_id] = inst
+	gs.players.get(&"player").action_hand.append(inst.instance_id)
+	return inst.instance_id

@@ -1282,6 +1282,7 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 		var per_card_actions: Array = cm_params.get("per_card_actions", [])
 		var cm_selected: Array = input_data.get("selected_card_ids", [])
 		var cm_discard_selected: bool = bool(cm_params.get("discard_selected", true))
+		var cm_discard_reason: StringName = cm_params.get("discard_reason", &"ACTION_CARD_PLAYED")
 		action.record.erase("_choose_many_shown")
 		if not input_data.get("cancelled", false):
 			for sel_cid in cm_selected:
@@ -1291,7 +1292,46 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 					if context != null and context.action_service != null:
 						context.action_service.execute_sub_action(sub_act, payload, action)
 				if cm_discard_selected and context != null and context.action_service != null:
-					context.action_service.execute_sub_action({"type": &"EXECUTE_DISCARD", "params": {"card_ids": [sel_cid], "reason": &"ACTION_CARD_PLAYED"}}, payload, action)
+					context.action_service.execute_sub_action({"type": &"EXECUTE_DISCARD", "params": {"card_ids": [sel_cid], "reason": cm_discard_reason}}, payload, action)
+			# 标记每回合1次（赤枭躯干 effect_040/041：确认即消耗次数，含选0张=弃0+0动力；
+			# 取消路径不至此，不消耗。无 once_per_turn_key 的效果为 no-op）
+			_mark_once_per_turn_used(effect, payload)
+			# post_actions：选牌完成后执行一次（雄鹰躯干 effect_071/072 按弃牌数移动）。
+			# $choice.count = 选中牌数。预解析 *_expr/$binding_context/$choice 后串行执行
+			# （仿 CHOOSE_INTEGER）。选0张时跳过（如雄鹰弃0=移0格，无事发生）。
+			var cm_post_actions: Array = cm_params.get("post_actions", [])
+			if not cm_post_actions.is_empty() and not cm_selected.is_empty():
+				var cm_choice_full: Dictionary = payload.get("choice", {})
+				cm_choice_full["count"] = cm_selected.size()
+				payload["choice"] = cm_choice_full
+				var cm_resolved_post: Array = []
+				for cm_sub: Dictionary in cm_post_actions:
+					var cm_merged: Dictionary = cm_sub.duplicate(true)
+					var cm_sp: Dictionary = cm_merged.get("params", {})
+					var cm_erase: Array = []
+					for cm_k in cm_sp:
+						if String(cm_k).ends_with("_expr"):
+							var cm_base: String = String(cm_k).trim_suffix("_expr")
+							cm_sp[cm_base] = _eval_expr(String(cm_sp[cm_k]), payload, cm_choice_full)
+							cm_erase.append(cm_k)
+						elif context != null and context.action_service != null:
+							cm_sp[cm_k] = context.action_service._resolve_atomic_value(cm_sp[cm_k], payload, action)
+					for cm_k in cm_erase:
+						cm_sp.erase(cm_k)
+					cm_merged["params"] = cm_sp
+					cm_resolved_post.append(cm_merged)
+				for cm_i: int in range(cm_resolved_post.size()):
+					var cm_act: Dictionary = cm_resolved_post[cm_i]
+					if context != null and context.action_service != null:
+						context.action_service.execute_sub_action(cm_act, payload, action)
+					if _last_created_sub_action_paused(action):
+						var cm_remaining: Array = cm_resolved_post.slice(cm_i + 1)
+						if not cm_remaining.is_empty():
+							action.record["_seq_effect_actions"] = {
+								"payload": payload,
+								"remaining": cm_remaining,
+							}
+						break
 		payload.erase("chosen_card")
 		SLog.log_effect(effect.effect_id, action.source, action.action_id, String(action.action_type), {"status": "resuming_after_target", "input": input_data})
 		# 子动作挂起/未完成 -> 等 _after_sub_action_finished 恢复；否则恢复迎击牌 use_action_card 继续 effect1
@@ -2188,6 +2228,15 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 							var hand_card = context.game_state.get_card(hand_cid)
 							if hand_card != null and hand_card.def != null and String(hand_card.def.card_id) == String(cm_card_def_id):
 								cm_card_ids.append(hand_cid)
+			# OWNER_ACTION_HAND：列出持有者所有行动牌（赤枭躯干 effect_040/041 弃牌换动力）
+			# 不按 card_def_id 过滤，整手行动牌供多选弃置。
+			if cm_source == &"OWNER_ACTION_HAND":
+				cm_card_ids.clear()
+				if cm_player_id != &"" and context != null and context.game_state != null:
+					var cm_player = context.game_state.players.get(cm_player_id)
+					if cm_player != null:
+						for hand_cid: StringName in cm_player.action_hand:
+							cm_card_ids.append(hand_cid)
 			if cm_card_ids.is_empty():
 				continue  # 无牌可选，跳过
 			# 仅人类玩家弹多选窗；AI 暂不支持（跳过=选0，避免挂死）

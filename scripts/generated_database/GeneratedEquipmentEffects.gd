@@ -1133,12 +1133,14 @@ static func build_equipment_effects() -> Dictionary:
 	effects[red_owl_lleg.effect_id] = red_owl_lleg
 
 	# ═══════════════════════════════════════════
-	# 040 帝国赤枭·躯干：每回合1次，主阶段可消耗2n金币本回合动力+n（DIRECT 主动）
-	# CHOOSE_INTEGER 选 n（max=floor(金币/2)），花 2n 金币动力+n。与 effect_041 共享 once。
+	# 040 帝国赤枭·躯干：每回合1次，主阶段可弃置X张行动牌（X可0），本回合动力+2X
+	# CHOOSE_MANY_CARDS source=OWNER_ACTION_HAND：列出持有者全部行动牌供多选（全选/部分/全不选）。
+	# 确认=弃置选中牌+每张+2本回合动力（选0张=弃0+0动力，仍消耗每回合1次）；取消=不发动不消耗。
+	# 与 effect_041 共享 once_per_turn_key。per_card_actions 用原子 MODIFY_MECH_POWER（_resolve_atomic_params 解析 $binding_context）。
 	# ═══════════════════════════════════════════
 	var red_owl_torso_direct := _ActionEffect.new()
 	red_owl_torso_direct.effect_id = &"equipment_effect_040"
-	red_owl_torso_direct.display_name = "帝国赤枭·躯干·金币换动力(主阶段)"
+	red_owl_torso_direct.display_name = "帝国赤枭·躯干·弃牌换动力(主阶段)"
 	red_owl_torso_direct.mode = _TC.MODE_DIRECT
 	red_owl_torso_direct.priority = 10
 	red_owl_torso_direct.once_per_turn_key = &"red_owl_torso_card_power"
@@ -1149,25 +1151,27 @@ static func build_equipment_effects() -> Dictionary:
 	red_owl_torso_direct.set_target_rules([{"rule": &"NO_TARGET"}])
 	red_owl_torso_direct.set_costs([])
 	red_owl_torso_direct.set_actions([{
-		"type": &"CHOOSE_INTEGER",
+		"type": &"CHOOSE_MANY_CARDS",
 		"params": {
-			"optional": true,
-			"label": "选择n：弃置n张行动牌，本回合动力+2n",
-			"min_value": 1,
-			"max_value_expr": "$binding_context.owner_action_hand_count",
-			"bind_as": "n",
-			"actions": [
-				{"type": &"EXECUTE_DISCARD", "params": {"count_expr": "$choice.n", "executor": "$binding_context.player_id", "reason": &"effect_discard"}},
-				{"type": &"EXECUTE_STAT_MODIFY", "params": {"target_id": "$binding_context.mech_id", "stat_type": &"power", "value_expr": "2 * $choice.n", "method": &"add", "duration": &"THIS_TURN"}},
+			"source": &"OWNER_ACTION_HAND",
+			"min_count": 0,
+			"max_count": 0,
+			"discard_selected": true,
+			"discard_reason": &"effect_discard",
+			"label": "选择要弃置的行动牌（每张+2本回合动力）",
+			"confirm_verb": "弃置",
+			"cancel_label": "不弃置",
+			"per_card_actions": [
+				{"type": &"MODIFY_MECH_POWER", "params": {"mech_id": "$binding_context.mech_id", "delta": 2, "duration": &"THIS_TURN"}},
 			],
 		},
 	}])
-	red_owl_torso_direct.description = "每回合1次，可以弃置n数量的行动牌(n为整数)，当前回合动力+2n。"
+	red_owl_torso_direct.description = "每回合1次，可以弃置X数量的行动牌（X最低为1），当前回合动力+2倍X。"
 	effects[red_owl_torso_direct.effect_id] = red_owl_torso_direct
 
 	# ═══════════════════════════════════════════
-	# 041 帝国赤枭·躯干：使用迎击牌时可消耗2n金币本回合动力+n（与040共享once）
-	# LISTEN USE_ACTION_AT，CHOOSE_INTEGER 选 n。与主阶段共享每回合1次。
+	# 041 帝国赤枭·躯干：使用迎击牌时可弃置X张行动牌本回合动力+2X（与040共享once）
+	# LISTEN USE_ACTION_AT，CHOOSE_MANY_CARDS source=OWNER_ACTION_HAND。与主阶段共享每回合1次。
 	# ═══════════════════════════════════════════
 	var red_owl_torso_counter := _ActionEffect.new()
 	red_owl_torso_counter.effect_id = &"equipment_effect_041"
@@ -1185,20 +1189,22 @@ static func build_equipment_effects() -> Dictionary:
 	red_owl_torso_counter.set_target_rules([{"rule": &"NO_TARGET"}])
 	red_owl_torso_counter.set_costs([])
 	red_owl_torso_counter.set_actions([{
-		"type": &"CHOOSE_INTEGER",
+		"type": &"CHOOSE_MANY_CARDS",
 		"params": {
-			"optional": true,
-			"label": "弃置n张行动牌，本回合动力+2n",
-			"min_value": 1,
-			"max_value_expr": "$binding_context.owner_action_hand_count",
-			"bind_as": "n",
-			"actions": [
-				{"type": &"EXECUTE_DISCARD", "params": {"count_expr": "$choice.n", "executor": "$binding_context.player_id", "reason": &"effect_discard"}},
-				{"type": &"EXECUTE_STAT_MODIFY", "params": {"target_id": "$binding_context.mech_id", "stat_type": &"power", "value_expr": "2 * $choice.n", "method": &"add", "duration": &"THIS_TURN"}},
+			"source": &"OWNER_ACTION_HAND",
+			"min_count": 0,
+			"max_count": 0,
+			"discard_selected": true,
+			"discard_reason": &"effect_discard",
+			"label": "选择要弃置的行动牌（每张+2本回合动力）",
+			"confirm_verb": "弃置",
+			"cancel_label": "不弃置",
+			"per_card_actions": [
+				{"type": &"MODIFY_MECH_POWER", "params": {"mech_id": "$binding_context.mech_id", "delta": 2, "duration": &"THIS_TURN"}},
 			],
 		},
 	}])
-	red_owl_torso_counter.description = "使用迎击牌时，可弃置n张行动牌当前回合动力+2n（与主阶段共享每回合1次）。"
+	red_owl_torso_counter.description = "使用迎击牌时，可弃置X张行动牌当前回合动力+2X（与主阶段共享每回合1次）。"
 	effects[red_owl_torso_counter.effect_id] = red_owl_torso_counter
 
 	# ═══════════════════════════════════════════
@@ -1842,8 +1848,9 @@ static func build_equipment_effects() -> Dictionary:
 	effects[eagle_head.effect_id] = eagle_head
 
 	# ═══════════════════════════════════════════
-	# 071 帝国的雄鹰·躯干：每回合1次，主阶段可弃置n张行动牌移动n格(无视动力)（DIRECT）
-	# CHOOSE_INTEGER 选 n（max=行动手牌数），弃 n 张行动牌 + 免费移动 n 格。与 effect_072 共享 once。
+	# 071 帝国的雄鹰·躯干：每回合1次，主阶段可弃置X张行动牌移动X格(无视动力)（DIRECT）
+	# CHOOSE_MANY_CARDS source=OWNER_ACTION_HAND：多选弃牌，post_actions 按弃牌数($choice.count)免费移动。
+	# 确认=弃置选中牌+移动等量格（选0张=弃0+不移动，仍消耗每回合1次）；取消=不发动不消耗。与072共享once。
 	# ═══════════════════════════════════════════
 	var eagle_torso_direct := _ActionEffect.new()
 	eagle_torso_direct.effect_id = &"equipment_effect_071"
@@ -1859,16 +1866,19 @@ static func build_equipment_effects() -> Dictionary:
 	eagle_torso_direct.set_target_rules([{"rule": &"NO_TARGET"}])
 	eagle_torso_direct.set_costs([])
 	eagle_torso_direct.set_actions([{
-		"type": &"CHOOSE_INTEGER",
+		"type": &"CHOOSE_MANY_CARDS",
 		"params": {
-			"optional": true,
-			"label": "选择n：弃置n张行动牌，无视动力移动n格",
-			"min_value": 1,
-			"max_value_expr": "$binding_context.owner_action_hand_count",
-			"bind_as": "n",
-			"actions": [
-				{"type": &"EXECUTE_DISCARD", "params": {"count_expr": "$choice.n", "executor": "$binding_context.player_id", "reason": &"effect_discard"}},
-				{"type": &"EXECUTE_SINGLE_MOVE", "params": {"target_mech_id": "$binding_context.mech_id", "max_cells_expr": "$choice.n", "free_move": true, "loop_until_cancel": false}},
+			"source": &"OWNER_ACTION_HAND",
+			"min_count": 0,
+			"max_count": 0,
+			"discard_selected": true,
+			"discard_reason": &"effect_discard",
+			"label": "选择要弃置的行动牌（每张弃置可无视动力移动1格）",
+			"confirm_verb": "弃置并移动",
+			"cancel_label": "不弃置",
+			"per_card_actions": [],
+			"post_actions": [
+				{"type": &"EXECUTE_SINGLE_MOVE", "params": {"mech_id": "$binding_context.mech_id", "max_cells_expr": "$choice.count", "free_move": true, "loop_until_cancel": false}},
 			],
 		},
 	}])
@@ -1876,8 +1886,8 @@ static func build_equipment_effects() -> Dictionary:
 	effects[eagle_torso_direct.effect_id] = eagle_torso_direct
 
 	# ═══════════════════════════════════════════
-	# 072 帝国的雄鹰·躯干：使用迎击牌时可消耗2n金币移动n格(无视动力)（与071共享once）
-	# LISTEN USE_ACTION_AT
+	# 072 帝国的雄鹰·躯干：使用迎击牌时可弃置X张行动牌移动X格(无视动力)（与071共享once）
+	# LISTEN USE_ACTION_AT，CHOOSE_MANY_CARDS source=OWNER_ACTION_HAND + post_actions 移动。
 	# ═══════════════════════════════════════════
 	var eagle_torso_counter := _ActionEffect.new()
 	eagle_torso_counter.effect_id = &"equipment_effect_072"
@@ -1896,16 +1906,19 @@ static func build_equipment_effects() -> Dictionary:
 	eagle_torso_counter.set_target_rules([{"rule": &"NO_TARGET"}])
 	eagle_torso_counter.set_costs([])
 	eagle_torso_counter.set_actions([{
-		"type": &"CHOOSE_INTEGER",
+		"type": &"CHOOSE_MANY_CARDS",
 		"params": {
-			"optional": true,
-			"label": "选择n：弃置n张行动牌，无视动力移动n格",
-			"min_value": 1,
-			"max_value_expr": "$binding_context.owner_action_hand_count",
-			"bind_as": "n",
-			"actions": [
-				{"type": &"EXECUTE_DISCARD", "params": {"count_expr": "$choice.n", "executor": "$binding_context.player_id", "reason": &"effect_discard"}},
-				{"type": &"EXECUTE_SINGLE_MOVE", "params": {"target_mech_id": "$binding_context.mech_id", "max_cells_expr": "$choice.n", "free_move": true, "loop_until_cancel": false}},
+			"source": &"OWNER_ACTION_HAND",
+			"min_count": 0,
+			"max_count": 0,
+			"discard_selected": true,
+			"discard_reason": &"effect_discard",
+			"label": "选择要弃置的行动牌（每张弃置可无视动力移动1格）",
+			"confirm_verb": "弃置并移动",
+			"cancel_label": "不弃置",
+			"per_card_actions": [],
+			"post_actions": [
+				{"type": &"EXECUTE_SINGLE_MOVE", "params": {"mech_id": "$binding_context.mech_id", "max_cells_expr": "$choice.count", "free_move": true, "loop_until_cancel": false}},
 			],
 		},
 	}])
