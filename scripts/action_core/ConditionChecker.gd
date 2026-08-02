@@ -60,8 +60,19 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 			return owner_id == attack.get("target_player_id", &"")
 
 		&"IS_OWNER_MAIN_PHASE":
-			var phase: StringName = payload.get("phase", &"")
-			return phase == &"MAIN"
+			# payload.phase 优先（时点 fire 时携带）；DIRECT 主动效果 payload 无 phase 时
+			# 回退查 game_state.phase == MAIN 且当前回合 == 持有者。
+			var iomp_phase: StringName = payload.get("phase", &"")
+			if iomp_phase == &"MAIN":
+				return true
+			var iomp_ctx = binding.context if binding != null else null
+			if iomp_ctx == null or iomp_ctx.get("game_state") == null:
+				return false
+			var iomp_gs = iomp_ctx.game_state
+			if iomp_gs.phase != &"MAIN":
+				return false
+			var iomp_owner: StringName = _equip_player_id(binding, payload)
+			return iomp_owner != &"" and iomp_gs.active_player_id == iomp_owner
 
 		&"IS_OWNER_TURN":
 			# 装备所属玩家 == 当前回合玩家（持有者回合内可主动触发，DIRECT 主动按钮用）。

@@ -153,19 +153,31 @@ func _refresh() -> void:
 				continue
 			btn = Button.new()
 			var vw = _GenEquipEffects.get_virtual_weapon_from_equipment(card)
+			var eff_stats: Dictionary = _GenEquipEffects.get_effective_weapon_stats(card)
+			var wname: String = String(eff_stats.get("weapon_name", card.def.display_name))
+			# 冷却/锁定标记（effect_125/104）
+			var wstat_tag: String = ""
+			if bool(card.counters.get("cooldown_active", false)) if "counters" in card else false:
+				wstat_tag = " [冷却中]"
+			elif card.get("lock_target_mech_id", &"") != &"":
+				wstat_tag = " [锁定中]"
 			if not vw.is_empty():
-				# 虚拟武器：躯干当远程武器用，不占武器槽
-				btn.text = "%s(虚拟武器) [威力:%d 射程:%d]" % [
-					String(vw.get("display_name", card.def.display_name)),
-					int(vw.get("might", 20)),
-					int(vw.get("range_value", 6)),
+				btn.text = "%s(虚拟武器) [威力:%d 射程:%d]%s" % [
+					wname,
+					int(eff_stats.get("might", 20)),
+					int(eff_stats.get("range_value", 6)),
+					wstat_tag,
 				]
 			else:
-				btn.text = "%s [威力:%d 射程:%d]" % [
-					card.def.display_name,
-					card.def.might,
-					card.def.range_value,
+				btn.text = "%s [威力:%d 射程:%d]%s" % [
+					wname,
+					int(eff_stats.get("might", 0)),
+					int(eff_stats.get("range_value", 1)),
+					wstat_tag,
 				]
+			# 冷却/锁定武器禁选
+			if wstat_tag != "":
+				btn.disabled = true
 			btn.custom_minimum_size = Vector2(260, 36)
 			btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 			if wid == _selected_weapon_id:

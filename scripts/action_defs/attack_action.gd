@@ -196,6 +196,13 @@ func _step_execute_attack(action: Action) -> Dictionary:
 	# 若该步骤因任何路径被重跑，无条件重置 responded/counter_attacked=false 会抹掉
 	# 迎击窗口写入的真实响应状态，导致命中/结算误判、攻击被"结算两次"。
 	var result: Dictionary = {}
+	# cardless 直攻免牌（effect_128）：消耗本回合攻击次数（普通攻击牌在 use_action_card 已扣）。
+	# 仅在首次进入 ATTACK_AT 时扣（_execute_attack_ran 守卫已防重跑）。
+	if bool(action.record.get("cardless_weapon_attack", false)) and bool(action.record.get("consume_turn_attack_count", true)):
+		var ct_attacker_id: StringName = action.record.get("attacker_id", &"")
+		var ct_mech = context.game_state.mechs.get(ct_attacker_id) if ct_attacker_id != &"" else null
+		if ct_mech != null:
+			ct_mech.attack_count_this_turn += 1
 	if not action.record.has("responded"):
 		result["responded"] = false
 	if not action.record.has("response_source"):

@@ -273,7 +273,8 @@ func _create_action(action_type: StringName, params: Dictionary) -> Action:
 				&"from_target", &"from_attacker", &"from_player_id", &"to_player_id",
 				&"choose", &"face_up", &"determined_card_ids", &"selected_action_card_ids", &"phase",
 				&"max_cells", &"free_move", &"adjacent_only",
-				&"target_slot_id", &"target_mech_id", &"fixed_slot", &"exclude_slot_id"]
+				&"target_slot_id", &"target_mech_id", &"fixed_slot", &"exclude_slot_id",
+				&"cardless_weapon_attack", &"consume_turn_attack_count", &"skip_weapon_select", &"weapon_instance_id"]
 			for key: String in params:
 				if key in record_keys:
 					action.record[key] = params[key]
@@ -1312,6 +1313,29 @@ func _extract_attack_params(action_def: Dictionary, payload: Dictionary, parent_
 		result["target_id"] = &""  # counter_strike 不锁定目标：清空上方 fallback 的 payload.target_id
 		result["skip_target_select"] = false
 		# target_id 留空 → _step_select_target 走 select_attack_target 流程，范围内任选
+	# effect_128 直攻免牌：weapon_instance_id 指定武器，不创建 use_action_card/不消耗攻击牌，
+	# 默认消耗本回合攻击次数。params 用 $binding_context.mech_id/card_instance_id，需解析。
+	if params.get("cardless_weapon_attack", false):
+		var cw_attacker = params.get("attacker_id", &"")
+		if String(cw_attacker).begins_with("$"):
+			cw_attacker = _resolve_atomic_value(cw_attacker, payload, parent_action)
+		if cw_attacker != &"":
+			result["attacker_id"] = cw_attacker
+		var cw_weapon = params.get("weapon_instance_id", params.get("weapon_id", &""))
+		if String(cw_weapon).begins_with("$"):
+			cw_weapon = _resolve_atomic_value(cw_weapon, payload, parent_action)
+		result["weapon_id"] = cw_weapon
+		result["attack_card_id"] = &""  # 免攻击牌
+		result["skip_weapon_select"] = true
+		var cw_bind: Dictionary = payload.get("binding_context", {})
+		if cw_bind.get("player_id", &"") != &"":
+			result["source"]["player_id"] = cw_bind["player_id"]
+		if cw_bind.get("mech_id", &"") != &"":
+			result["source"]["mech_id"] = cw_bind["mech_id"]
+		if cw_bind.get("card_instance_id", &"") != &"":
+			result["source"]["card_instance_id"] = cw_bind["card_instance_id"]
+		result["cardless_weapon_attack"] = true
+		result["consume_turn_attack_count"] = bool(params.get("consume_turn_attack_count", true))
 	return result
 
 
