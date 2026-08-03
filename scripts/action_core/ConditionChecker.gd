@@ -451,13 +451,16 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 
 		&"VARIABLE_ABOVE":
 			# 自定义命名变量 X > threshold
-			var variable_name: StringName = condition.get("variable_name", &"")
-			var threshold: int = int(condition.get("threshold", 0))
+			# 字段可置于 condition 顶层或 condition.params 下（历史不一致：w107/109/118/124 用 params，
+			# effect_081 等用顶层）。统一两者都支持：params 优先，回退顶层。
+			var _va_params: Dictionary = condition.get("params", condition)
+			var variable_name: StringName = _va_params.get("variable_name", condition.get("variable_name", &""))
+			var threshold: int = int(_va_params.get("threshold", condition.get("threshold", 0)))
 			if variable_name == &"":
 				return false
 			# attack 作用域变量：存于 attack.record["variables"][name]（INCREMENT_VARIABLE scope=attack 写入），
 			# attack 各时点 payload = record.duplicate()，故 payload.variables 可读。
-			var va_scope: StringName = condition.get("scope", &"")
+			var va_scope: StringName = _va_params.get("scope", condition.get("scope", &""))
 			if va_scope == &"attack":
 				var atk_vars: Dictionary = payload.get("variables", {}) if payload != null else {}
 				return int(atk_vars.get(variable_name, 0)) > threshold

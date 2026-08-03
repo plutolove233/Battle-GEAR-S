@@ -219,9 +219,10 @@ func _step_execute_attack(action: Action) -> Dictionary:
 ## 记录：本次攻击是否命中、是否被迎击牌响应
 ## 如果攻击被否定（识破），跳过此步骤及后续伤害步骤
 func _step_check_hit(action: Action) -> Dictionary:
-	# 被否定则跳过
+	# 被否定则跳过（按 effect_103 拆解歧义1 智能体选择：无效攻击 attack_hit=false 算未命中，
+	# payload.miss=true 使重型锤矛 effect_103 等未命中监听能触发）
 	if action.negated:
-		return {"hit": false, "negated": true}
+		return {"hit": false, "miss": true, "negated": true}
 
 	var result: Dictionary = {}
 	var attacker_id: StringName = action.record.get("attacker_id", &"")
@@ -238,6 +239,8 @@ func _step_check_hit(action: Action) -> Dictionary:
 		hit = _RangeCalculator.is_in_weapon_range(attacker.position, target.position, weapon_range, map_cells)
 
 	result["hit"] = hit
+	# 未命中标志（effect_103 重型锤矛「没命中则自损2」等监听 PAYLOAD_ATTACK_MISS 读 payload.miss）
+	result["miss"] = not hit
 	return result
 
 

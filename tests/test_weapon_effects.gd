@@ -843,3 +843,197 @@ func test_weapon_127_shield_redirect() -> Variant:
 		return "effect_127 应将损伤转移到盾牌槽，weapon_1 region_damage=%d" % shield_region
 	return true
 
+
+## effect_102/102b：weapon_008 断甲长刀 命中后+2，之后(ATTACK_SETTLE)自损1
+## 验证「之后」：+2 在 ATTACK_AFTER 写入 extra_markers、step⑦ 放到目标后，自损1 才在 ATTACK_SETTLE 落点
+func test_weapon_102_plus2_then_settle_self_damage() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	_GenEquipEffects.set_aura_game_state(battle.context.game_state)
+	var cid: StringName = await _equip_weapon(battle, "weapon_008_断甲长刀")
+	if cid == &"":
+		return "装备 weapon_008 失败"
+	var gs = battle.context.game_state
+	var pm = gs.get_mech_for_player(&"player")
+	var em = gs.get_mech_for_player(&"enemy")
+	em.current_hp = 100
+	pm.position = {"q": 5, "r": 0}
+	em.position = {"q": 6, "r": 0}  # 距离1，在射程3内
+	_clear_enemy_hand(battle)
+	battle.context.action_ui_bridge.context = battle.context
+	var atk_card: StringName = _ensure_attack_card_in_hand(battle)
+	if atk_card == &"":
+		return "玩家无攻击牌"
+	var atk_result: Dictionary = battle.execute_attack_action(&"player", &"enemy", cid, atk_card)
+	var attack_id: StringName = atk_result.get("action_id", &"") if atk_result is Dictionary else &""
+	if attack_id == &"":
+		return "攻击未发起"
+	await _pump_frames(5)
+	# effect_102 在 ATTACK_AFTER 弹 CHOOSE_ONE（optional），选"额外设置2损伤"
+	var wait_info: Dictionary = battle.context.action_ui_bridge.get_waiting_action_info()
+	if String(wait_info.get("input_type", &"")) != &"choose_one_effect":
+		var atk_c = battle.context.action_registry.get_action(attack_id)
+		var em_pre: int = int(atk_c.record.get("extra_markers", 0)) if atk_c != null else -1
+		_drive_damage_placement(battle, attack_id)
+		await _pump_frames(3)
+		return "effect_102 未弹 choose_one_effect（wait=%s）extra_markers=%d" % [String(wait_info.get("input_type", &"")), em_pre]
+	battle.context.timing_engine.resume_pending_effect(attack_id, {"chosen_option_index": 0})
+	await _pump_frames(3)
+	# extra_markers 应=2（+2 已写入，尚未放到目标）
+	var atk2 = battle.context.action_registry.get_action(attack_id)
+	if atk2 != null and int(atk2.record.get("extra_markers", 0)) != 2:
+		return "effect_102 应使 extra_markers=2，实际 %d" % int(atk2.record.get("extra_markers", 0))
+	# 变量 weapon_008_plus2_used 应=1（INCREMENT_VARIABLE 写入，供 102b 在 ATTACK_SETTLE 检查）
+	var vars2: Dictionary = atk2.record.get("variables", {}) if atk2 != null else {}
+	if int(vars2.get("weapon_008_plus2_used", 0)) != 1:
+		return "INCREMENT_VARIABLE 应写 weapon_008_plus2_used=1，实际 %d" % int(vars2.get("weapon_008_plus2_used", 0))
+	# 「之后」关键断言：ATTACK_AFTER 阶段本牌尚不应自损（自损在 ATTACK_SETTLE）
+	var card_pre = gs.get_card(cid)
+	if int(card_pre.damage_tokens) != 0:
+		return "ATTACK_AFTER 阶段本牌不应自损（应在 ATTACK_SETTLE），实际 damage_tokens=%d" % int(card_pre.damage_tokens)
+	# 驱动损伤放置（step⑦ 把 +2 放到目标），之后 ATTACK_SETTLE 触发 102b 自损1
+	_drive_damage_placement(battle, attack_id)
+	await _pump_frames(5)
+	var card = gs.get_card(cid)
+	if int(card.damage_tokens) != 1:
+		# 诊断：effect_102b 是否注册到 ATTACK_SETTLE / 变量是否写入
+		var has_102b := false
+		var pl_settle = battle.context.timing_engine.permanent_listeners
+		if pl_settle.has(&"ATTACK_SETTLE"):
+			for entry in pl_settle[&"ATTACK_SETTLE"]:
+				var e = entry.get("effect") if entry is Dictionary else null
+				if e and e.effect_id == &"equipment_effect_102b":
+					has_102b = true
+		var atk3 = battle.context.action_registry.get_action(attack_id)
+		var vars: Dictionary = atk3.record.get("variables", {}) if atk3 != null else {}
+		var var_val: int = int(vars.get("weapon_008_plus2_used", 0))
+		var atk_state: String = String(atk3.state) if atk3 != null else "removed"
+		return "effect_102b 应在 ATTACK_SETTLE 自损1，实际 damage_tokens=%d | 102b注册=%s 变量=%d atk_state=%s" % [int(card.damage_tokens), str(has_102b), var_val, atk_state]
+	return true
+
+
+## effect_103：weapon_009 重型锤矛 攻击未命中则本牌自损2
+## 构造 miss：玩家攻击敌方，ATTACK_AT 响应窗口打开后手动把敌方移出射程，再跳过响应 -> check_hit 未命中
+func test_weapon_103_miss_self_damage() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	_GenEquipEffects.set_aura_game_state(battle.context.game_state)
+	var cid: StringName = await _equip_weapon(battle, "weapon_009_重型锤矛")
+	if cid == &"":
+		return "装备 weapon_009 失败"
+	var gs = battle.context.game_state
+	var pm = gs.get_mech_for_player(&"player")
+	var em = gs.get_mech_for_player(&"enemy")
+	em.current_hp = 100
+	pm.position = {"q": 5, "r": 0}
+	em.position = {"q": 6, "r": 0}  # 距离1，在射程内；回避移3步到q9（距离4>3）出范围
+	em.power = 10  # 回避需消耗动力
+	# 给敌方手牌塞一张回避（作为 AVAILABILITY 监听打开 ATTACK_AT 响应窗口）
+	var ep = gs.players.get(&"enemy")
+	var evade_cid: StringName = &""
+	for c_id in ep.action_hand:
+		var c = gs.get_card(c_id)
+		if c and c.def and c.def.card_id == "action_008_回避":
+			evade_cid = c_id
+			break
+	if evade_cid == &"":
+		for pile in [gs.deck_state.action_deck, gs.deck_state.action_discard_pile]:
+			for i in range(pile.size()):
+				var c = gs.get_card(pile[i])
+				if c and c.def and c.def.card_id == "action_008_回避":
+					evade_cid = pile[i]
+					pile.remove_at(i)
+					ep.action_hand.append(evade_cid)
+					c.zone = &"action_hand"
+					c.owner_player_id = &"enemy"
+					battle.context.register_hand_card_availability(evade_cid)
+					break
+			if evade_cid != &"":
+				break
+	if evade_cid == &"":
+		return "敌方无回避牌用于打开响应窗口"
+	battle.context.action_ui_bridge.context = battle.context
+	var atk_card: StringName = _ensure_attack_card_in_hand(battle)
+	if atk_card == &"":
+		return "玩家无攻击牌"
+	var atk_result: Dictionary = battle.execute_attack_action(&"player", &"enemy", cid, atk_card)
+	var attack_id: StringName = atk_result.get("action_id", &"") if atk_result is Dictionary else &""
+	if attack_id == &"":
+		return "攻击未发起"
+	await _pump_frames(8)
+	# 敌方(AI)自动用回避响应，移出射程 -> check_hit 未命中 -> effect_103 自损2
+	var card = gs.get_card(cid)
+	if int(card.damage_tokens) != 2:
+		var atk_d = battle.context.action_registry.get_action(attack_id)
+		var atk_state_d: String = String(atk_d.state) if atk_d != null else "removed"
+		var hit_d: bool = bool(atk_d.record.get("hit", false)) if atk_d != null else false
+		return "effect_103 未命中应自损2，实际 damage_tokens=%d | hit=%s atk_state=%s enemy_q=%d" % [int(card.damage_tokens), str(hit_d), atk_state_d, int(em.position.get("q", 0))]
+	return true
+
+
+## effect_100：weapon_005 扭转钢鞭 命中后弃置攻击目标2张行动牌
+func test_weapon_100_discard_2_target_action_cards() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	_GenEquipEffects.set_aura_game_state(battle.context.game_state)
+	var cid: StringName = await _equip_weapon(battle, "weapon_005_扭转钢鞭")
+	if cid == &"":
+		return "装备 weapon_005 失败"
+	var gs = battle.context.game_state
+	var pm = gs.get_mech_for_player(&"player")
+	var em = gs.get_mech_for_player(&"enemy")
+	em.current_hp = 100
+	pm.position = {"q": 5, "r": 0}
+	em.position = {"q": 6, "r": 0}  # 距离1，在射程3内
+	# 确保敌方手牌至少2张行动牌
+	var ep = gs.players.get(&"enemy")
+	while ep.action_hand.size() < 2:
+		if gs.deck_state.action_deck.is_empty():
+			break
+		var did: StringName = gs.deck_state.action_deck.pop_back()
+		ep.action_hand.append(did)
+		var dc = gs.get_card(did)
+		if dc != null:
+			dc.zone = &"action_hand"
+			dc.owner_player_id = &"enemy"
+	if ep.action_hand.size() < 2:
+		return "敌方行动牌不足2张，无法测试"
+	var enemy_hand_before: int = ep.action_hand.size()
+	battle.context.action_ui_bridge.context = battle.context
+	var atk_card: StringName = _ensure_attack_card_in_hand(battle)
+	if atk_card == &"":
+		return "玩家无攻击牌"
+	var atk_result: Dictionary = battle.execute_attack_action(&"player", &"enemy", cid, atk_card)
+	var attack_id: StringName = atk_result.get("action_id", &"") if atk_result is Dictionary else &""
+	if attack_id == &"":
+		return "攻击未发起"
+	await _pump_frames(5)
+	# effect_100 在 ATTACK_AFTER 弹 CHOOSE_ONE（optional），选"弃置目标2张行动牌"
+	var wait_info: Dictionary = battle.context.action_ui_bridge.get_waiting_action_info()
+	if String(wait_info.get("input_type", &"")) != &"choose_one_effect":
+		_drive_damage_placement(battle, attack_id)
+		await _pump_frames(3)
+		return "effect_100 未弹 choose_one_effect，wait=%s" % str(wait_info)
+	battle.context.timing_engine.resume_pending_effect(attack_id, {"chosen_option_index": 0})
+	await _pump_frames(3)
+	# 应弹 select_discard_cards（弃攻击目标2张行动牌，暗牌）
+	var wait2: Dictionary = battle.context.action_ui_bridge.get_waiting_action_info()
+	if String(wait2.get("input_type", &"")) != &"select_discard_cards":
+		return "effect_100 确认后未弹 select_discard_cards，wait=%s" % str(wait2)
+	var input_params: Dictionary = wait2.get("input_params", {})
+	var discard_pid: StringName = input_params.get("discard_player_id", &"")
+	if String(discard_pid) != "enemy":
+		return "弃牌对象应为 enemy（攻击目标），实际 %s" % String(discard_pid)
+	# 选敌方手牌前2张弃置
+	var chosen: Array = ep.action_hand.slice(0, 2)
+	battle.context.action_ui_bridge.on_ui_confirmed({"determined_card_ids": chosen})
+	await _pump_frames(5)
+	# 驱动主攻击损伤放置
+	_drive_damage_placement(battle, attack_id)
+	await _pump_frames(3)
+	if ep.action_hand.size() != enemy_hand_before - 2:
+		return "敌方手牌应-2，前=%d 后=%d" % [enemy_hand_before, ep.action_hand.size()]
+	return true

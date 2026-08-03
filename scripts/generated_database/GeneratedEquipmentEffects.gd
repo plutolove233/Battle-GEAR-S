@@ -2586,7 +2586,7 @@ static func build_equipment_effects() -> Dictionary:
 	w100.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"PAYLOAD_ATTACK_HIT"}, {"op": &"TARGET_HAS_ACTION_CARDS", "params": {"minimum": 1}}])
 	w100.set_target_rules([{"rule": &"NO_TARGET"}])
 	w100.set_costs([])
-	w100.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "弃置目标2张行动牌", "actions": [{"type": &"EXECUTE_DISCARD", "params": {"from_target": "$payload.target_id", "zone": &"action_hand", "count": 2, "count_mode": &"up_to", "choose": true, "chooser_id": "$binding_context.mech_id", "face_up": false, "reason": &"weapon_effect"}}]}]}}])
+	w100.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "弃置目标2张行动牌", "actions": [{"type": &"EXECUTE_DISCARD", "params": {"from_target": true, "count": 2, "choose": true, "face_up": false, "reason": &"weapon_effect"}}]}]}}])
 	w100.description = "此牌发动的攻击命中后可弃置攻击目标2张行动牌。"
 	effects[w100.effect_id] = w100
 
@@ -2605,10 +2605,14 @@ static func build_equipment_effects() -> Dictionary:
 	w101.description = "此牌发动的攻击产生的损伤如果全部设置于同一区域，则可以额外设置2损伤在该区域上。"
 	effects[w101.effect_id] = w101
 
-	# 102 命中后可额外2损伤，之后本牌自损1（08断甲长刀）
+	# 102 命中后可额外2损伤（08断甲长刀）--「之后」自损1 拆到 effect_102b(ATTACK_SETTLE)
+	# 规则书：命中后可额外设置2损伤，之后在此牌上设置1损伤。「之后」= +2 放到目标身上完成
+	# （step⑦）后才自损，保证效果先正常推进；即使自损致本牌破损，+2 已写入 attack record 保留。
+	# 当前时点只 +2 并记 weapon_008_plus2_used 变量；自损在 ATTACK_SETTLE（+2 放置后）由 102b 执行。
+	# 镜像 w106/w107（光束斩舰刀「结算后自损1」）的「之后」范式。
 	var w102 := _ActionEffect.new()
 	w102.effect_id = &"equipment_effect_102"
-	w102.display_name = "命中后可额外2损伤，之后本牌自损1"
+	w102.display_name = "命中后可额外2损伤"
 	w102.mode = _TC.MODE_LISTEN
 	w102.priority = 10
 	w102.listen_timing = _TC.ATTACK_AFTER
@@ -2616,12 +2620,28 @@ static func build_equipment_effects() -> Dictionary:
 	w102.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"PAYLOAD_ATTACK_HIT"}])
 	w102.set_target_rules([{"rule": &"NO_TARGET"}])
 	w102.set_costs([])
-	w102.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "额外2损伤并使此牌受1损伤", "actions": [
+	w102.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "额外设置2损伤", "actions": [
 		{"type": &"MODIFY_ATTACK_MARKERS", "params": {"delta": 2}},
-		{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 1, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_self_damage"}},
+		{"type": &"INCREMENT_VARIABLE", "params": {"scope": &"attack", "variable_name": &"weapon_008_plus2_used", "delta": 1}},
 	]}]}}])
-	w102.description = "此牌发动的攻击命中后可额外设置2损伤，之后在此牌上设置1损伤。"
+	w102.description = "此牌发动的攻击命中后可额外设置2损伤。"
 	effects[w102.effect_id] = w102
+
+	# 102b 断甲长刀「之后」自损1：effect_102 选了+2后，在 ATTACK_SETTLE（+2 已放置到目标后）本牌自损1
+	var w102b := _ActionEffect.new()
+	w102b.effect_id = &"equipment_effect_102b"
+	w102b.display_name = "额外2损伤之后本牌自损1"
+	w102b.mode = _TC.MODE_LISTEN
+	w102b.priority = 10
+	w102b.listen_timing = _TC.ATTACK_SETTLE
+	w102b.listen_action_type = &"attack"
+	w102b.requires_effect = &"equipment_effect_102"
+	w102b.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"VARIABLE_ABOVE", "scope": &"attack", "variable_name": &"weapon_008_plus2_used", "threshold": 0}])
+	w102b.set_target_rules([{"rule": &"NO_TARGET"}])
+	w102b.set_costs([])
+	w102b.set_actions([{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 1, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_self_damage"}}])
+	w102b.description = "额外2损伤发动完成后，在此牌上设置1损伤（之后）。"
+	effects[w102b.effect_id] = w102b
 
 	# 103 本牌攻击未命中时自损2（09重型锤矛）
 	var w103 := _ActionEffect.new()

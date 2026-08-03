@@ -122,6 +122,9 @@ func _step_determine_cards(action: Action) -> Dictionary:
 		var _hand_owner = context.game_state.players.get(_hand_owner_pid) if (_hand_owner_pid != &"" and context != null and context.game_state != null) else null
 		if _hand_owner == null or _hand_owner.action_hand.is_empty():
 			return {"determined_card_ids": []}
+		# 实际可弃数 = min(指定数, 手牌数)。扭转钢鞭 effect_100 count=2 但目标可能仅1张行动牌：
+		# 按拆解歧义1「有几张弃几张」，UI 强制精确 count 张，若不减会 confirm disabled 卡死。
+		var _eff_count: int = min(count, _hand_owner.action_hand.size())
 		return {
 			"need_input": true,
 			"input_type": &"select_discard_cards",
@@ -129,7 +132,7 @@ func _step_determine_cards(action: Action) -> Dictionary:
 				"action_id": action.action_id,
 				"mode": &"need_input",
 				"executor": executor,
-				"count": count,
+				"count": _eff_count,
 				"face_up": action.record.get("face_up", true),
 				"discard_player_id": action.record.get("player_id", &""),
 				"action_verb": &"discard",
