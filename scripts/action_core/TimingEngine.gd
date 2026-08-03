@@ -2008,7 +2008,10 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 				var available_indices: Array[int] = []
 				for i in range(options.size()):
 					var opt_ci: Dictionary = options[i] if options[i] is Dictionary else {}
-					var opt_conds: Array = opt_ci.get("condition", [])
+					var opt_conds = opt_ci.get("condition", [])
+					# condition 可为单个 dict（如 effect_098/135 option condition），包装成 array
+					if opt_conds is Dictionary:
+						opt_conds = [opt_conds] if not opt_conds.is_empty() else []
 					if opt_conds.is_empty() or _ConditionChecker.check_all(bind_co, payload, opt_conds):
 						available_indices.append(i)
 				# 仅1个可用 -> 自动选（不弹窗）；0个 -> 跳过此 CHOOSE_ONE；多个 -> 挂起弹窗

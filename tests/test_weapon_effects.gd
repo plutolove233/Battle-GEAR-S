@@ -530,3 +530,60 @@ func test_weapon_104_lock_target() -> Variant:
 	await _pump_frames(3)
 	return true
 
+
+## ⑫ effect_098：weapon_004 流星钢锤主阶段切形态（DIRECT effect_fire + CHOOSE_ONE + SET_WEAPON_MODE）
+func test_weapon_098_mode_switch() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	_GenEquipEffects.set_aura_game_state(battle.context.game_state)
+	var cid: StringName = await _equip_weapon(battle, "weapon_004_流星钢锤")
+	if cid == &"":
+		return "装备 weapon_004 失败"
+	var gs = battle.context.game_state
+	var pm = gs.get_mech_for_player(&"player")
+	gs.phase = &"MAIN"
+	gs.active_player_id = &"player"
+	battle.context.action_ui_bridge.context = battle.context
+	var card = gs.get_card(cid)
+	# 初始 normal：威力18范围1
+	var s0: Dictionary = _GenEquipEffects.get_effective_weapon_stats(card)
+	if int(s0.get("might", -1)) != 18 or int(s0.get("range_value", -1)) != 1:
+		return "weapon_004 normal 应 18/1，实际 %d/%d" % [int(s0.get("might", -1)), int(s0.get("range_value", -1))]
+	# 触发 DIRECT effect_098（主阶段切形态）
+	var ef_result: Dictionary = battle.context.action_service.execute(&"effect_fire", {
+		"effect_id": &"equipment_effect_098",
+		"player_id": &"player", "source_mech_id": pm.mech_id, "card_instance_id": cid, "phase": &"MAIN",
+		"source": {"card_instance_id": cid, "mech_id": pm.mech_id, "player_id": &"player", "effect_id": &"equipment_effect_098"},
+	})
+	var ef_id: StringName = ef_result.get("action_id", &"") if ef_result is Dictionary else &""
+	if ef_id == &"":
+		return "effect_098 effect_fire 未发起"
+	await _pump_frames(5)
+	# 诊断：effect_098 注册 + effect_fire 状态
+	var has_e98 := false
+	var e98_eff = null
+	var e98_bind: Dictionary = {}
+	for tl in battle.context.timing_engine.permanent_listeners:
+		for entry in battle.context.timing_engine.permanent_listeners[tl]:
+			var e = entry.get("effect") if entry is Dictionary else null
+			if e and e.effect_id == &"equipment_effect_098":
+				has_e98 = true
+				e98_eff = e
+				e98_bind = entry.get("binding_context", {}) if entry is Dictionary else {}
+	var can_trig98: bool = battle.context.timing_engine.can_trigger_active_effect(e98_eff, e98_bind) if e98_eff != null else false
+	var ef_a98 = battle.context.action_registry.get_action(ef_id)
+	# CHOOSE_ONE 选"威力-5范围+2"（option 0 = extended）
+	var wait_info: Dictionary = battle.context.action_ui_bridge.get_waiting_action_info()
+	if String(wait_info.get("input_type", &"")) != &"choose_one_effect":
+		return "effect_098 应弹 choose_one_effect，实际 %s registered=%s can_trig=%s ef_state=%s" % [String(wait_info.get("input_type", &"")), str(has_e98), str(can_trig98), String(ef_a98.state) if ef_a98 != null else "removed"]
+	battle.context.timing_engine.resume_pending_effect(ef_id, {"chosen_option_index": 0})
+	await _pump_frames(3)
+	# extended：威力13范围3
+	if String(card.weapon_mode) != "extended":
+		return "weapon_004 应切到 extended，实际 %s" % String(card.weapon_mode)
+	var s1: Dictionary = _GenEquipEffects.get_effective_weapon_stats(card)
+	if int(s1.get("might", -1)) != 13 or int(s1.get("range_value", -1)) != 3:
+		return "weapon_004 extended 应 13/3，实际 %d/%d" % [int(s1.get("might", -1)), int(s1.get("range_value", -1))]
+	return true
+
