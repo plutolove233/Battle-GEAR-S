@@ -300,25 +300,9 @@ func _step_apply_damage(action: Action) -> Dictionary:
 	if not hit:
 		return result
 
-	# 拘束钩爪 effect_104：目标被任意攻击命中时，解除锁定此目标的所有武器（"下一次被攻击命中时结束"）
-	# 跳过本攻击武器：effect_104 在 ATTACK_AFTER 刚设的锁不应被同一攻击的 _step_apply_damage 立即清除。
-	var clear_lock_target: StringName = action.record.get("target_id", &"")
-	var this_attack_weapon: StringName = action.record.get("weapon_id", action.record.get("attack_weapon_instance_id", &""))
-	if clear_lock_target != &"" and context.game_state != null:
-		for m_id in context.game_state.mechs:
-			var m = context.game_state.mechs[m_id]
-			if m == null:
-				continue
-			for wid in m.get_weapon_ids():
-				if String(wid).begins_with("frame_base_weapon"):
-					continue
-				if wid == this_attack_weapon:
-					continue  # 跳过本攻击武器（刚设锁的）
-				var wcard = context.game_state.get_card(wid)
-				if wcard != null:
-					var wlt: StringName = wcard.lock_target_mech_id if "lock_target_mech_id" in wcard else &""
-					if wlt == clear_lock_target:
-						wcard.lock_target_mech_id = &""
+	# 拘束钩爪 effect_104 的锁定解除现由 LOCKED 状态机制处理：lock_status_clear_on_hit 在
+	# 持有者下次命中该目标时移除 LOCKED 状态，GameActions.remove_status 同步清 lock_target_mech_id。
+	# 此处不再按"任意攻击命中"清除（旧逻辑会误清他人命中导致的锁定）。
 
 	var damage: int = action.record.get("damage", 0)
 	var markers: int = action.record.get("markers", 0)

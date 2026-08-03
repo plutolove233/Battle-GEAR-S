@@ -977,11 +977,8 @@ func place_damage_tokens(params: Dictionary) -> void:
 			)
 
 		context.game_state.place_one_damage_token(target_id, slot_id)
-		# 记录逐枚放置 slot 到临时日志，供 damage_change_action._step_settle 回写父 attack
-		# 的 damage_placement_log（effect_101/119 同区/非同区判定）
-		if not context.game_state.temp_values.has("last_damage_placement_log"):
-			context.game_state.temp_values["last_damage_placement_log"] = []
-		context.game_state.temp_values["last_damage_placement_log"].append(String(slot_id))
+		# 放置日志已由 GameState.place_one_damage_token 统一记录（guard flag），
+		# 此处不再重复追加，避免双计。
 
 		context.effect_engine.fire_hook(&"ON_AFTER_DAMAGE_TOKEN_PLACED", {
 			"target_id": target_id,
@@ -1623,10 +1620,50 @@ func remove_status(params: Dictionary) -> void:
 	for status in removed:
 		# 注销该状态关联的所有监听器，确保状态效果不再触发
 		_unregister_status_listeners(status)
+		# 拘束钩爪 effect_104：LOCKED 状态被移除时（持有者命中解除 / 弃置解除），
+		# 清除施加该锁定的武器 card.lock_target_mech_id 缓存，使本牌恢复可攻击。
+		if String(status.get("type", &"")) == "LOCKED":
+			_clear_weapon_lock_for_status(status)
 		context.effect_engine.fire_hook(&"ON_STATUS_REMOVED", {
 			"target_id": target_id,
 			"status": status
 		})
+
+
+## 拘束钩爪 effect_104：清除施加某 LOCKED 状态的武器的 lock_target_mech_id 缓存。
+## status.source_card_id = 施锁武器实例；清除后本牌恢复可攻击（WEAPON_IS_LOCKED_OUT 校验状态存活）。
+func _clear_weapon_lock_for_status(status: Dictionary) -> void:
+	if context == null or context.game_state == null:
+		return
+	var src_card_id: StringName = status.get("source_card_id", &"")
+	if src_card_id == &"":
+		return
+	var wcard = context.game_state.get_card(src_card_id)
+	if wcard != null and "lock_target_mech_id" in wcard:
+		wcard.lock_target_mech_id = &""
+
+
+## 拘束钩爪 effect_104：本牌弃置/替换（离开机甲区域）时，移除其施加的 LOCKED 状态并清缓存。
+## 锁定持续到持有者下次命中或本牌离场；离场时立即解除，符合「此牌弃置则其施加的效果也解除」。
+func remove_locked_status_by_source_card(src_card_id: StringName) -> void:
+	if src_card_id == &"" or context == null or context.game_state == null:
+		return
+	var wcard = context.game_state.get_card(src_card_id)
+	if wcard == null or not ("lock_target_mech_id" in wcard):
+		return
+	var lock_tgt: StringName = wcard.lock_target_mech_id
+	if lock_tgt != &"" and context.game_state.mechs.has(lock_tgt):
+		var mech = context.game_state.mechs[lock_tgt]
+		if mech != null:
+			var to_remove: Array = []
+			for s in mech.statuses:
+				if String(s.get("type", &"")) == "LOCKED" and String(s.get("source_card_id", &"")) == String(src_card_id):
+					to_remove.append(s)
+			for s in to_remove:
+				mech.statuses.erase(s)
+				_unregister_status_listeners(s)
+				context.effect_engine.fire_hook(&"ON_STATUS_REMOVED", {"target_id": lock_tgt, "status": s})
+	wcard.lock_target_mech_id = &""
 
 
 ## 减少状态持续时间，到期自动移除

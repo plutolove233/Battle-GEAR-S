@@ -32,12 +32,10 @@ func place_one_token_at_slot(mech_id: StringName, slot_id: StringName) -> void:
 		"slot_id": String(slot_id),
 	})
 
-	# ── 添加区域损伤标记 ──
-	slot.region_damage_tokens += 1
-
-	# ── 如果槽位有装备，也添加装备损伤标记 ──
-	if slot.equipped_card != null:
-		slot.equipped_card.damage_tokens += 1
+	# ── 区域 + 装备损伤 + 重算动力 + 放置日志（统一走 GameState.place_one_damage_token）──
+	# 与 place_damage_tokens_on_slot / GameActions.place_damage_tokens 一致汇聚到同一函数，
+	# 保证 effect_101/119 的 damage_placement_log 在所有放置路径下都被填充。
+	gs.place_one_damage_token(mech_id, slot_id)
 
 	# ── 触发放置后钩子 ──
 	_fire_hook(_EffectConst.HOOK_DAMAGE_DEALT, {
@@ -49,8 +47,6 @@ func place_one_token_at_slot(mech_id: StringName, slot_id: StringName) -> void:
 	# ── 检查装备是否损坏 ──
 	if slot.equipped_card != null:
 		context.equipment_break_service.check_equipment_broken(mech_id, slot_id)
-	# 损伤变化后重算动力上限（effect_016/021/048 派生动力随损伤变，max_power 需同步）
-	mech.recalc_power_limits()
 
 
 ## 放置多个损伤标记（AI自动放置模式）
@@ -80,12 +76,8 @@ func place_damage_tokens(params: Dictionary) -> void:
 
 		var slot: MechSlotState = mech.slots[target_slot_id]
 
-		# ── 添加区域损伤标记 ──
-		slot.region_damage_tokens += 1
-
-		# ── 如果槽位有装备，也添加装备损伤标记 ──
-		if slot.equipped_card != null:
-			slot.equipped_card.damage_tokens += 1
+		# ── 区域 + 装备损伤 + 重算动力 + 放置日志（统一走 GameState.place_one_damage_token）──
+		gs.place_one_damage_token(mech_id, target_slot_id)
 
 		# ── 触发放置后钩子 ──
 		_fire_hook(_EffectConst.HOOK_DAMAGE_DEALT, {

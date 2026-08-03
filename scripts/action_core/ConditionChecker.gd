@@ -25,6 +25,7 @@ class_name ConditionChecker
 ## Preloaded references for cross-file custom types
 const _EffectBinding = preload("res://scripts/action_core/EffectBinding.gd")
 const _RangeCalculator = preload("res://scripts/battle/RangeCalculator.gd")
+const _HexGrid = preload("res://scripts/battle/hex_grid.gd")
 const _GenEquipEffects = preload("res://scripts/generated_database/GeneratedEquipmentEffects.gd")
 
 
@@ -193,9 +194,7 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 			if wc_card != null:
 				if _is_weapon_on_cooldown(wc_card):
 					return false
-				# CardInstance 是 RefCounted，不支持 get(k, default) 两参，用直接字段访问
-				var wc_lock_tgt: StringName = wc_card.lock_target_mech_id if "lock_target_mech_id" in wc_card else &""
-				if wc_lock_tgt != &"":
+				if _weapon_lock_active(wc_card, wc_ctx.game_state, wc_weapon_id):
 					return false
 			return true
 
@@ -924,20 +923,14 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 			return _is_weapon_on_cooldown(wic_card)
 
 		&"WEAPON_IS_LOCKED_OUT":
-			# 拘束钩爪 effect_104 锁定期间本牌不能攻击
+			# 拘束钩爪 effect_104 锁定期间本牌不能攻击（校验 LOCKED 状态存活）
 			var wil_card_id: StringName = _equip_card_instance_id(binding, payload)
 			var wil_card = _get_card(binding, wil_card_id)
 			if wil_card == null:
 				return false
-			var lock_tgt: StringName = wil_card.lock_target_mech_id if "lock_target_mech_id" in wil_card else &""
-			if lock_tgt == &"":
-				return false
-			# 锁定目标离场/被毁则自动解锁
 			var wil_ctx = binding.context if binding != null else null
-			if wil_ctx == null or wil_ctx.get("game_state") == null:
-				return true
-			var lock_mech = wil_ctx.game_state.mechs.get(lock_tgt)
-			return lock_mech != null and not lock_mech.destroyed
+			var wil_gs = wil_ctx.game_state if wil_ctx != null else null
+			return _weapon_lock_active(wil_card, wil_gs, wil_card_id)
 
 		&"WEAPON_STATUS_ABSENT":
 			# 武器无某状态（effect_113：未用 weapon_used_this_turn 才回复威力）。状态存 card.counters。
@@ -1241,13 +1234,37 @@ static func _is_weapon_on_cooldown(card) -> bool:
 	return bool(card.counters.get("cooldown_active", false))
 
 
+## 拘束钩爪 effect_104：武器是否处于锁定禁攻状态。
+## 以目标身上 source_card_id=本武器 的 LOCKED 状态为权威；lock_target_mech_id 仅为缓存。
+## 状态已被移除（命中解除/弃置解除）或目标离场时，清缓存并返回 false（恢复可攻击）。
+static func _weapon_lock_active(card, gs, card_id: StringName) -> bool:
+	if card == null:
+		return false
+	var lock_tgt: StringName = card.lock_target_mech_id if "lock_target_mech_id" in card else &""
+	if lock_tgt == &"":
+		return false
+	if gs == null:
+		return true
+	var lock_mech = gs.mechs.get(lock_tgt)
+	if lock_mech == null or lock_mech.destroyed:
+		card.lock_target_mech_id = &""
+		return false
+	var has_lock := false
+	for s in lock_mech.statuses:
+		if String(s.get("type", &"")) == "LOCKED" and String(s.get("source_card_id", &"")) == String(card_id):
+			has_lock = true
+			break
+	if not has_lock:
+		card.lock_target_mech_id = &""
+		return false
+	return true
+
+
 ## 六边形轴向距离（pos = {q, r}）
+## 六边形距离。本项目(q,r)实为 odd-q offset 伪装成 axial（见 hex_grid.gd），
+## 故必须走 _HexGrid.distance（odd-q->cube），旧 axial 公式会对奇偶列给出错误距离。
 static func _hex_distance(a: Dictionary, b: Dictionary) -> int:
-	var aq: int = int(a.get("q", 0))
-	var ar: int = int(a.get("r", 0))
-	var bq: int = int(b.get("q", 0))
-	var br: int = int(b.get("r", 0))
-	return (absi(aq - bq) + absi(aq + ar - bq - br) + absi(ar - br)) / 2
+	return _HexGrid.distance(a, b)
 
 
 ## 是否存在合法维修目标：自身或相邻 range 格内、非满状态机甲

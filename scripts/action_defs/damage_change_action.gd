@@ -35,8 +35,11 @@ func _step_extract_info(action: Action) -> Dictionary:
 	# 暴露 total_points（= value）供 DAMAGE_REDIRECT_WINDOW 的转移效果读取
 	var value: int = action.record.get("value", 0)
 	action.record["total_points"] = value
-	# 清空上一次的逐枚放置临时日志，供本动作 _step_settle 回写父 attack damage_placement_log
+	# 开启放置日志记录（guard flag），并清空上一次的逐枚放置临时日志，
+	# 供本动作 _step_settle 回写父 attack damage_placement_log（effect_101/119 同区/非同区判定）。
+	# flag 在 _step_settle 关闭，使 effect_101 在 ATTACK_SETTLE 追加的 +2 损伤不计入日志。
 	if context != null and context.game_state != null:
+		context.game_state.temp_values["logging_damage_placement"] = true
 		context.game_state.temp_values["last_damage_placement_log"] = []
 	# fixed_slot：直接置X点到指定 slot（规则2），不开损伤转移窗（050歧义2 fixed_slot 不可转移）。
 	# 把 offer_redirect step 的 timing_point 置空，_execute_step 阶段3 不 fire DAMAGE_REDIRECT_WINDOW。
@@ -176,4 +179,5 @@ func _step_settle(action: Action) -> Dictionary:
 				if distinct.size() == 1:
 					parent_atk.record["single_damage_slot_id"] = StringName(String(log_arr[0]))
 		context.game_state.temp_values["last_damage_placement_log"] = []
+		context.game_state.temp_values["logging_damage_placement"] = false
 	return {}

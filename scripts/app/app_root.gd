@@ -1711,6 +1711,10 @@ func _on_action_card_clicked(card_id: StringName) -> void:
 			var weapon_ids: Array[StringName] = _get_all_usable_weapon_ids(mech, true)
 			var has_valid_target: bool = false
 			for wid in weapon_ids:
+				# 冷却中/锁定中的武器不能攻击（effect_125/104），不计入可用目标检查
+				var w_card = gs.cards.get(wid) if gs else null
+				if w_card != null and not String(wid).begins_with("frame_base_weapon") and _weapon_attack_blocked(gs, w_card):
+					continue
 				if _weapon_has_attackable_target(mech, wid):
 					has_valid_target = true
 					break
@@ -1773,9 +1777,9 @@ func _enter_weapon_slot_select(card_id: StringName) -> void:
 	var mech = gs.get_mech_for_player(&"player")
 	if not mech:
 		return
-	# 显示当前两个武器槽的装备，让玩家选择替换哪个
+	# 显示当前两个武器槽的装备，让玩家选择替换哪个（冷却中/锁定中的武器也可替换）
 	var weapon_ids: Array[StringName] = mech.get_weapon_ids()
-	weapon_picker_panel.configure(battle.context, weapon_ids, "── 选择要替换的武器 ──", mech)
+	weapon_picker_panel.configure(battle.context, weapon_ids, "── 选择要替换的武器 ──", mech, true)
 	weapon_picker_panel.visible = true
 	battle.log.append({"message": "选择要替换的武器槽", "details": {}})
 	_show_cancel_button(true)
@@ -2750,9 +2754,13 @@ func _show_popup(popup_type: StringName, params: Dictionary) -> void:
 				if attacker_mech:
 					# 含虚拟武器（神莺躯干，攻击需 power>0）；只列范围内有可攻击目标的武器
 					# （范围内无目标的武器不出现，复用攻击牌预检查逻辑）。
+					# 冷却中/锁定中的武器不出现（effect_125/104，"不会出现在攻击时的选框"）。
 					var all_weapons: Array[StringName] = _get_all_usable_weapon_ids(attacker_mech, true)
 					var weapon_ids: Array[StringName] = []
 					for wid in all_weapons:
+						var w_card = gs.cards.get(wid) if gs else null
+						if w_card != null and not String(wid).begins_with("frame_base_weapon") and _weapon_attack_blocked(gs, w_card):
+							continue
 						if _weapon_has_attackable_target(attacker_mech, wid):
 							weapon_ids.append(wid)
 					weapon_picker_panel.configure(battle.context, weapon_ids, "── 选择武器 ──", attacker_mech)
@@ -2905,8 +2913,9 @@ func _show_popup(popup_type: StringName, params: Dictionary) -> void:
 				var wc_mech = battle.context.game_state.mechs.get(wc_mech_id)
 				if wc_mech:
 					# 聚能弹窗包括我方所有武器（含虚拟武器神莺躯干）；聚能不是攻击，不要求 power>0、不过滤目标。
+					# 冷却中/锁定中的武器仍可选（对此类武器聚能可解除不能攻击状态，effect_126/104）。
 					var weapon_ids: Array[StringName] = _get_all_usable_weapon_ids(wc_mech, false)
-					weapon_picker_panel.configure(battle.context, weapon_ids, "── 选择要聚能的武器 ──", wc_mech)
+					weapon_picker_panel.configure(battle.context, weapon_ids, "── 选择要聚能的武器 ──", wc_mech, true)
 					weapon_picker_panel.visible = true
 					_show_cancel_button(true)
 					battle.log.append({"message": "聚能：选择1把武器施加聚能状态（或点取消放弃）", "details": {}})
@@ -4477,7 +4486,8 @@ func _enter_support_weapon_select(card_id: StringName) -> void:
 	if weapon_ids.size() == 1:
 		_on_support_weapon_selected(weapon_ids[0])
 		return
-	weapon_picker_panel.configure(battle.context, weapon_ids, "── 选择要聚能的武器 ──", mech)
+	# 冷却中/锁定中的武器仍可选（聚能可解除不能攻击状态）
+	weapon_picker_panel.configure(battle.context, weapon_ids, "── 选择要聚能的武器 ──", mech, true)
 	weapon_picker_panel.visible = true
 	_show_cancel_button(true)
 	battle.log.append({"message": "辅助牌武器选择：选择1把武器", "details": {}})
@@ -4855,6 +4865,30 @@ func _get_all_usable_weapon_ids(mech, require_power_for_virtual: bool) -> Array[
 		if not vw.is_empty():
 			result.append(card.instance_id)
 	return result
+
+
+## 武器是否处于不能攻击状态（冷却中 effect_125 / 锁定中 effect_104）。
+## 攻击选框与攻击牌前置检查排除这类武器（"不会出现在攻击时的选框"）；聚能选框保留可选。
+## 锁定以目标身上 source_card_id=本武器 的 LOCKED 状态为权威，缓存失效则清并放行。
+func _weapon_attack_blocked(gs, card) -> bool:
+	if card == null:
+		return false
+	if "counters" in card and bool(card.counters.get("cooldown_active", false)):
+		return true
+	var lock_tgt: StringName = card.lock_target_mech_id if "lock_target_mech_id" in card else &""
+	if lock_tgt == &"":
+		return false
+	if gs == null:
+		return true
+	var lock_mech = gs.mechs.get(lock_tgt)
+	if lock_mech == null or lock_mech.destroyed:
+		card.lock_target_mech_id = &""
+		return false
+	for s in lock_mech.statuses:
+		if String(s.get("type", &"")) == "LOCKED" and String(s.get("source_card_id", &"")) == String(card.instance_id):
+			return true
+	card.lock_target_mech_id = &""
+	return false
 
 
 ## 武器射程内是否有可攻击目标（复用攻击牌预检查逻辑，规则10）

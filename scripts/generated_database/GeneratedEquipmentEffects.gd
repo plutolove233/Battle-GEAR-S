@@ -2595,10 +2595,13 @@ static func build_equipment_effects() -> Dictionary:
 	w101.effect_id = &"equipment_effect_101"
 	w101.display_name = "本次攻击损伤全在同一区域后，可在该区域额外放2损伤"
 	w101.mode = _TC.MODE_LISTEN
-	w101.priority = 10
+	# priority=30：高于反击 effect2(20)与闪击 effect2，在 ATTACK_SETTLE 最先触发。
+	# 本效果是「本次攻击损伤」的延续（+2 落在已放置损伤的同一区域），属本次攻击结算，
+	# 必须在反击/闪击发起新一轮攻击子动作之前完成，否则会被反击链阻塞到所有新攻击结束后才弹窗。
+	w101.priority = 30
 	w101.listen_timing = _TC.ATTACK_SETTLE
 	w101.listen_action_type = &"attack"
-	w101.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"PAYLOAD_ATTACK_HIT"}, {"op": &"ATTACK_MARKERS_ABOVE", "params": {"threshold": 1}}, {"op": &"DAMAGE_TOKENS_ALL_IN_SAME_SLOT"}])
+	w101.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"PAYLOAD_ATTACK_HIT"}, {"op": &"DAMAGE_TOKENS_ALL_IN_SAME_SLOT"}])
 	w101.set_target_rules([{"rule": &"NO_TARGET"}])
 	w101.set_costs([])
 	w101.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "在同一区域额外设置2损伤", "actions": [{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 2, "target_mech_id": "$payload.target_id", "target_slot": "$payload.single_damage_slot_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_extra_damage"}}]}]}}])
@@ -2669,8 +2672,15 @@ static func build_equipment_effects() -> Dictionary:
 	w104.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"PAYLOAD_ATTACK_HIT"}, {"op": &"ATTACK_TARGET_ALIVE"}])
 	w104.set_target_rules([{"rule": &"NO_TARGET"}])
 	w104.set_costs([])
-	w104.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "施加锁定", "actions": [{"type": &"SET_WEAPON_LOCK", "params": {"weapon_id": "$binding_context.card_instance_id", "target_id": "$payload.target_id", "mode": &"apply"}}]}]}}])
-	w104.description = "命中后可施加锁定，持续到目标下一次被攻击命中，期间此牌不能攻击。"
+	# 施加真实 LOCKED 状态到目标（复用「锁定」行动牌状态：显示+封锁目标对持有者的迎击响应），
+	# duration=UNTIL_HIT 持久（不随回合结束解除），由 lock_status_clear_on_hit 在持有者下次命中该目标时移除；
+	# source_card_id=本武器，供本牌弃置时精确移除其施加的锁定。同时 SET_WEAPON_LOCK 设 lock_target_mech_id
+	# 缓存，使本牌在锁定持续期间不能攻击（WEAPON_IS_LOCKED_OUT 校验状态存活）。
+	w104.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "施加锁定", "actions": [
+		{"type": &"APPLY_OR_CHECK_LOCKED", "params": {"mode": &"apply", "target_id": "$payload.target_id", "source_card_id": "$binding_context.card_instance_id", "source_player_id": "$binding_context.player_id", "duration": &"UNTIL_HIT"}},
+		{"type": &"SET_WEAPON_LOCK", "params": {"weapon_id": "$binding_context.card_instance_id", "target_id": "$payload.target_id", "mode": &"apply"}}
+	]}]}}])
+	w104.description = "命中后可施加锁定，持续到持有者下次命中该目标，期间此牌不能攻击。"
 	effects[w104.effect_id] = w104
 
 	# 105 本牌攻击命中后自损1（11光束斩舰刀/12热能双刃斧）
@@ -2838,10 +2848,10 @@ static func build_equipment_effects() -> Dictionary:
 	w114.description = "对此牌使用聚能时也可回复4威力。"
 	effects[w114.effect_id] = w114
 
-	# 115 命中且目标与攻击方相邻时可额外2损伤（18/19/23）
+	# 115 命中且目标与攻击方相邻时额外2损伤（18/19/23）——自动触发（无需玩家选择）
 	var w115 := _ActionEffect.new()
 	w115.effect_id = &"equipment_effect_115"
-	w115.display_name = "命中且目标与攻击方相邻时可额外2损伤"
+	w115.display_name = "命中且目标与攻击方相邻时额外2损伤"
 	w115.mode = _TC.MODE_LISTEN
 	w115.priority = 10
 	w115.listen_timing = _TC.ATTACK_AFTER
@@ -2849,8 +2859,9 @@ static func build_equipment_effects() -> Dictionary:
 	w115.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"PAYLOAD_ATTACK_HIT"}, {"op": &"TARGET_IS_ADJACENT"}])
 	w115.set_target_rules([{"rule": &"NO_TARGET"}])
 	w115.set_costs([])
-	w115.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "相邻：额外设置2损伤", "actions": [{"type": &"MODIFY_ATTACK_MARKERS", "params": {"delta": 2}}]}]}}])
-	w115.description = "命中且目标与机甲当前位置相邻，则可额外设置2损伤。"
+	# 命中且相邻则自动 +2 损伤标记（条件满足即生效，不弹选择窗）
+	w115.set_actions([{"type": &"MODIFY_ATTACK_MARKERS", "params": {"delta": 2}}])
+	w115.description = "命中且目标与机甲当前位置相邻，则额外设置2损伤。"
 	effects[w115.effect_id] = w115
 
 	# 116 命中后可额外1损伤（20火箭筒）

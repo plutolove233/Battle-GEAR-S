@@ -266,4 +266,7 @@ func _step_settle(action: Action) -> Dictionary:
 			var s_card = context.game_state.get_card(card_id) if context.game_state != null else null
 			if s_card != null and s_card.def != null and s_card.def.card_kind == &"equipment":
 				context.timing_engine.unregister_permanent_listeners_for_card(card_id)
+				# 拘束钩爪 effect_104：武器离场时移除其施加的 LOCKED 状态（此牌弃置则锁定解除）
+				if context.game_actions != null and context.game_actions.has_method("remove_locked_status_by_source_card"):
+					context.game_actions.remove_locked_status_by_source_card(card_id)
 	return {}

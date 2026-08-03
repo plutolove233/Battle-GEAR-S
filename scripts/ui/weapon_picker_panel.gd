@@ -22,6 +22,8 @@ var _mech = null  # type: MechState
 var _selected_weapon_id: StringName = &""
 ## 当前可选武器ID列表
 var _current_weapon_ids: Array[StringName] = []
+## 是否允许选择冷却中/锁定中的武器（聚能选框=true；攻击选框=false 禁选/由调用方排除）
+var _allow_blocked: bool = false
 
 ## 内部布局
 var _vbox: VBoxContainer
@@ -30,11 +32,12 @@ var _title_label: Label
 var _confirm_btn: Button
 
 
-## 配置面板：显示可选武器列表
-func configure(game_context, weapon_ids: Array[StringName], title: String = "── 选择武器 ──", mech = null) -> void:
+## 配置面板：显示可选武器列表。allow_blocked=true 时冷却/锁定武器仍可选（聚能用）。
+func configure(game_context, weapon_ids: Array[StringName], title: String = "── 选择武器 ──", mech = null, allow_blocked: bool = false) -> void:
 	_context = game_context
 	_title_text = title
 	_mech = mech
+	_allow_blocked = allow_blocked
 	_selected_weapon_id = &""
 	_current_weapon_ids = weapon_ids
 	_ensure_layout()
@@ -175,8 +178,8 @@ func _refresh() -> void:
 					int(eff_stats.get("range_value", 1)),
 					wstat_tag,
 				]
-			# 冷却/锁定武器禁选
-			if wstat_tag != "":
+			# 冷却/锁定武器禁选（攻击选框；聚能选框 allow_blocked=true 仍可选）
+			if wstat_tag != "" and not _allow_blocked:
 				btn.disabled = true
 			btn.custom_minimum_size = Vector2(260, 36)
 			btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER

@@ -319,6 +319,15 @@ func place_one_damage_token(mech_id: StringName, slot_id: StringName) -> void:
 		slot.equipped_card.damage_tokens += 1
 	# 损伤变化后重算动力上限（effect_016/021/048 派生动力随损伤变，max_power 需同步）
 	mech.recalc_power_limits()
+	# 记录逐枚放置 slot 到临时日志，供 damage_change_action._step_settle 回写父 attack
+	# 的 damage_placement_log（effect_101 同区 / effect_119 非同区判定）。
+	# 仅在 damage_change 期间记录（guard flag），避免 effect_101 自身追加的 +2 损伤
+	# （在 ATTACK_SETTLE，damage_change 已结算）污染日志。所有放置路径
+	# （人类逐点/自动/转移/固定/effect 追加）最终都汇聚到此函数，故集中记录。
+	if bool(temp_values.get("logging_damage_placement", false)):
+		if not temp_values.has("last_damage_placement_log"):
+			temp_values["last_damage_placement_log"] = []
+		temp_values["last_damage_placement_log"].append(String(slot_id))
 
 
 ## ── 光环系统 ──
