@@ -772,3 +772,73 @@ func test_repair_target_validation() -> Variant:
 		return "全部满状态时应无可维修目标（实际 %s）" % str(host._has_repairable_target())
 	await _free_app_root(host)
 	return true
+
+
+# ═══════════════════════════════════════════
+# 武器效果 PvP 弹窗路由：weapon_003 命中后 CHOOSE_ONE 应路由给攻击方（player）。
+# host(local=player) 本端弹；client(local=enemy) 拦截不弹（等对方 ui_confirmed）。
+# ═══════════════════════════════════════════
+
+func test_pvp_weapon_choose_one_routed_to_attacker() -> Variant:
+	var seed_val := 555
+	var host = await _build_pvp_app_root(seed_val, &"player")
+	var client = await _build_pvp_app_root(seed_val, &"enemy")
+	if host == null or client == null:
+		await _free_app_root(host); await _free_app_root(client)
+		return "建局失败"
+	var hg = host.battle.context.game_state
+	hg.active_player_id = &"player"
+	client.battle.context.game_state.active_player_id = &"player"
+	var pm = hg.get_mech_for_player(&"player")
+	var em = hg.get_mech_for_player(&"enemy")
+	pm.position = {"q": 5, "r": 0}
+	em.position = {"q": 6, "r": 0}
+	client.battle.context.game_state.get_mech_for_player(&"player").position = {"q": 5, "r": 0}
+	client.battle.context.game_state.get_mech_for_player(&"enemy").position = {"q": 6, "r": 0}
+	# 双端加 weapon_003 装备并设置到 weapon_1
+	var wcid: StringName = await _dev_add_card_both(host, client, &"add_equipment_card", &"player", "weapon_003_破甲狼爪")
+	if wcid == &"":
+		await _free_app_root(host); await _free_app_root(client)
+		return "双端加 weapon_003 失败"
+	host._net_exec("set_equipment", {"player_id": &"player", "card_instance_id": wcid, "slot_id": &"weapon_1"})
+	await _pump(3)
+	client._apply_remote_input("set_equipment", {"player_id": &"player", "card_instance_id": wcid, "slot_id": &"weapon_1"})
+	await _pump(3)
+	# 双端加攻击牌
+	var attack_cid: StringName = await _dev_add_card_both(host, client, &"add_action_card", &"player", "action_001_进攻")
+	if attack_cid == &"":
+		await _free_app_root(host); await _free_app_root(client)
+		return "双端加进攻牌失败"
+	# 打攻击牌 -> 选武器 weapon_003 -> 选目标 -> 迎击 pass
+	host._net_exec("play_action_card", {"player_id": &"player", "card_instance_id": attack_cid})
+	await _pump(3)
+	client._apply_remote_input("play_action_card", {"player_id": &"player", "card_instance_id": attack_cid})
+	await _pump(3)
+	host._net_exec("ui_confirmed", {"data": {"weapon_id": wcid}})
+	await _pump(3)
+	client._apply_remote_input("ui_confirmed", {"data": {"weapon_id": wcid}})
+	await _pump(3)
+	host._net_exec("ui_confirmed", {"data": {"target_id": em.mech_id}})
+	await _pump(3)
+	client._apply_remote_input("ui_confirmed", {"data": {"target_id": em.mech_id}})
+	await _pump(3)
+	var resp_action_id: StringName = _wait_action_id(host)
+	host._net_exec("respond_attack", {"action_id": resp_action_id, "pass": true})
+	await _pump(3)
+	client._apply_remote_input("respond_attack", {"action_id": resp_action_id, "pass": true})
+	await _pump(3)
+	# ATTACK_AFTER 弹 CHOOSE_ONE（effect_097 命中+2）。host(local=player) 应弹 choose_one_effect
+	var host_wait: StringName = _wait_input_type(host)
+	if host_wait != &"choose_one_effect":
+		await _free_app_root(host); await _free_app_root(client)
+		return "host 攻击命中后应弹 choose_one_effect（effect_097），实际 %s" % String(host_wait)
+	# 弹窗路由：_popup_owner 应=player（攻击方/装备持有方）
+	var hwi: Dictionary = host.battle.context.action_ui_bridge.get_waiting_action_info()
+	var host_owner: StringName = host._popup_owner(&"choose_one_effect", hwi.get("input_params", {}))
+	var client_owner: StringName = client._popup_owner(&"choose_one_effect", hwi.get("input_params", {}))
+	await _free_app_root(host); await _free_app_root(client)
+	if host_owner != &"player":
+		return "host 端武器 CHOOSE_ONE 弹窗归属错误：期望 player（本端弹），实际 %s" % String(host_owner)
+	if client_owner != &"player":
+		return "client 端武器 CHOOSE_ONE 弹窗归属错误：期望 player（本端不弹），实际 %s" % String(client_owner)
+	return true
