@@ -3070,10 +3070,12 @@ static func build_equipment_effects() -> Dictionary:
 	w129.description = "此牌发动攻击结算后会被设置1损伤。"
 	effects[w129.effect_id] = w129
 
-	# 130 每回合1次，将1张行动牌当维修打出，之后本牌自损2（33维修机械臂）
+	# 130 每回合1次，将1张行动牌当维修打出（33维修机械臂）--「之后」自损2拆到 effect_130b(EFFECT_FIRE_SETTLE)
+	# 规则书：将1张行动牌当作维修打出，之后在此牌上设置2损伤。「之后」= 维修发动完成后才自损（结构分离）。
+	# INCREMENT_VARIABLE 置 per_card_actions 内：仅玩家选了牌(未取消)才设变量，effect_130b 据此触发。
 	var w130 := _ActionEffect.new()
 	w130.effect_id = &"equipment_effect_130"
-	w130.display_name = "每回合1次，将1张行动牌当维修打出，之后本牌自损2"
+	w130.display_name = "每回合1次，将1张行动牌当维修打出"
 	w130.mode = _TC.MODE_DIRECT
 	w130.priority = 10
 	w130.once_per_turn_key = &"weapon_033_use"
@@ -3085,16 +3087,33 @@ static func build_equipment_effects() -> Dictionary:
 		{"type": &"CHOOSE_MANY_CARDS", "params": {"filter": {"zone": &"action_hand", "owner_id": "$binding_context.mech_id"}, "min_count": 1, "max_count": 1, "label": "选择1张行动牌当作维修打出", "confirm_verb": "当作维修", "cancel_label": "取消", "per_card_actions": [
 			{"type": &"DECLARE_CARD_TYPE", "params": {"card_instance_id": "$selected_card_instance_id", "declared_card_def_id": &"action_013_维修", "duration": &"UNTIL_USE_ACTION_SETTLE"}},
 			{"type": &"EXECUTE_USE_ACTION_CARD", "params": {"card_instance_id": "$selected_card_instance_id", "acting_mech_id": "$binding_context.mech_id", "as_card_def_id": &"action_013_维修", "consume_original_card": true}},
+			{"type": &"INCREMENT_VARIABLE", "params": {"scope": &"attack", "variable_name": &"weapon_033_used", "delta": 1}},
 		]}},
-		{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 2, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_repair_self_damage"}},
 	])
-	w130.description = "我方回合1次，可以将1张行动牌当作维修打出，之后在此牌上设置2损伤。"
+	w130.description = "我方回合1次，可以将1张行动牌当作维修打出。"
 	effects[w130.effect_id] = w130
 
-	# 131 我方回合主动：本回合动力+4，之后本牌自损1（34手持推进器）
+	# 130b 维修机械臂「之后」自损2：effect_130 维修发动完成后，在 EFFECT_FIRE_SETTLE 本牌自损2
+	var w130b := _ActionEffect.new()
+	w130b.effect_id = &"equipment_effect_130b"
+	w130b.display_name = "维修打出之后本牌自损2"
+	w130b.mode = _TC.MODE_LISTEN
+	w130b.priority = 10
+	w130b.listen_timing = _TC.EFFECT_FIRE_SETTLE
+	w130b.listen_action_type = &"effect_fire"
+	w130b.requires_effect = &"equipment_effect_130"
+	w130b.set_conditions([{"op": &"VARIABLE_ABOVE", "params": {"scope": &"attack", "variable_name": &"weapon_033_used", "threshold": 0}}])
+	w130b.set_target_rules([{"rule": &"NO_TARGET"}])
+	w130b.set_costs([])
+	w130b.set_actions([{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 2, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_repair_self_damage"}}])
+	w130b.description = "维修打出完成后，在此牌上设置2损伤（之后）。"
+	effects[w130b.effect_id] = w130b
+
+	# 131 我方回合主动：本回合动力+4（34手持推进器）--「之后」自损1拆到 effect_131b(EFFECT_FIRE_SETTLE)
+	# 规则书：动力+4，之后在此牌上设置1损伤。「之后」= 动力+4 发动完成后才自损（结构分离，非同批次）。
 	var w131 := _ActionEffect.new()
 	w131.effect_id = &"equipment_effect_131"
-	w131.display_name = "我方回合主动：本回合动力+4，之后本牌自损1"
+	w131.display_name = "我方回合主动：本回合动力+4"
 	w131.mode = _TC.MODE_DIRECT
 	w131.priority = 10
 	w131.once_per_turn_key = &"weapon_034_boost"
@@ -3104,15 +3123,30 @@ static func build_equipment_effects() -> Dictionary:
 	w131.set_costs([])
 	w131.set_actions([
 		{"type": &"MODIFY_MECH_POWER", "params": {"target_id": "$binding_context.mech_id", "delta": 4, "mode": &"current_and_temporary_max", "duration": &"THIS_TURN"}},
-		{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 1, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_power_boost_self_damage"}},
 	])
-	w131.description = "我方回合可以使机甲在本回合动力+4，之后在此牌上设置1损伤。"
+	w131.description = "我方回合可以使机甲在本回合动力+4。"
 	effects[w131.effect_id] = w131
 
-	# 132 打出迎击牌时可使本回合动力+4并自损1（34）
+	# 131b 手持推进器「之后」自损1：effect_131 发动完成后，在 EFFECT_FIRE_SETTLE 本牌自损1
+	var w131b := _ActionEffect.new()
+	w131b.effect_id = &"equipment_effect_131b"
+	w131b.display_name = "动力+4之后本牌自损1"
+	w131b.mode = _TC.MODE_LISTEN
+	w131b.priority = 10
+	w131b.listen_timing = _TC.EFFECT_FIRE_SETTLE
+	w131b.listen_action_type = &"effect_fire"
+	w131b.requires_effect = &"equipment_effect_131"
+	w131b.set_target_rules([{"rule": &"NO_TARGET"}])
+	w131b.set_costs([])
+	w131b.set_actions([{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 1, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_power_boost_self_damage"}}])
+	w131b.description = "动力+4发动完成后，在此牌上设置1损伤（之后）。"
+	effects[w131b.effect_id] = w131b
+
+	# 132 打出迎击牌时可使本回合动力+4（34）--「之后」自损1拆到 effect_132b(USE_ACTION_SETTLE)
+	# 规则书：打出迎击牌时动力+4，之后在此牌上设置1损伤。「之后」= 动力+4 发动完成后才自损（结构分离）。
 	var w132 := _ActionEffect.new()
 	w132.effect_id = &"equipment_effect_132"
-	w132.display_name = "打出迎击牌时可使本回合动力+4并自损1"
+	w132.display_name = "打出迎击牌时可使本回合动力+4"
 	w132.mode = _TC.MODE_LISTEN
 	w132.priority = 10
 	w132.listen_timing = _TC.USE_ACTION_AT
@@ -3122,12 +3156,28 @@ static func build_equipment_effects() -> Dictionary:
 	w132.set_conditions([{"op": &"USED_CARD_OWNER_IS_SELF"}, {"op": &"USED_COUNTER_CARD"}])
 	w132.set_target_rules([{"rule": &"NO_TARGET"}])
 	w132.set_costs([])
-	w132.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "手持推进器：本回合动力+4并受1损伤", "actions": [
+	w132.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "手持推进器：本回合动力+4", "actions": [
 		{"type": &"MODIFY_MECH_POWER", "params": {"target_id": "$binding_context.mech_id", "delta": 4, "mode": &"current_and_temporary_max", "duration": &"THIS_TURN"}},
-		{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 1, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_power_boost_self_damage"}},
+		{"type": &"INCREMENT_VARIABLE", "params": {"scope": &"attack", "variable_name": &"weapon_034_boost_used", "delta": 1}},
 	]}]}}])
-	w132.description = "打出迎击牌时，可以使机甲在本回合动力+4，之后在此牌上设置1损伤。"
+	w132.description = "打出迎击牌时，可以使机甲在本回合动力+4。"
 	effects[w132.effect_id] = w132
+
+	# 132b 手持推进器(迎击)「之后」自损1：动力+4 发动完成后，在 USE_ACTION_SETTLE 本牌自损1
+	var w132b := _ActionEffect.new()
+	w132b.effect_id = &"equipment_effect_132b"
+	w132b.display_name = "迎击动力+4之后本牌自损1"
+	w132b.mode = _TC.MODE_LISTEN
+	w132b.priority = 10
+	w132b.listen_timing = _TC.USE_ACTION_SETTLE
+	w132b.listen_action_type = &"use_action_card"
+	w132b.requires_effect = &"equipment_effect_132"
+	w132b.set_conditions([{"op": &"VARIABLE_ABOVE", "params": {"scope": &"attack", "variable_name": &"weapon_034_boost_used", "threshold": 0}}])
+	w132b.set_target_rules([{"rule": &"NO_TARGET"}])
+	w132b.set_costs([])
+	w132b.set_actions([{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 1, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_power_boost_self_damage"}}])
+	w132b.description = "迎击动力+4发动完成后，在此牌上设置1损伤（之后）。"
+	effects[w132b.effect_id] = w132b
 
 	# 133 强合金盾牌全量吸收并使转移损伤-1（35）
 	var w133 := _ActionEffect.new()
@@ -3144,10 +3194,11 @@ static func build_equipment_effects() -> Dictionary:
 	w133.description = "可以将每次攻击或陷阱产生的全部损伤设置到此牌上，并使此次设置的损伤-1。"
 	effects[w133.effect_id] = w133
 
-	# 134 每回合1次在武器范围内设置1陷阱，之后本牌自损1（36投掷式机雷）
+	# 134 每回合1次在武器范围内设置1陷阱（36投掷式机雷）--「之后」自损1拆到 effect_134b(EFFECT_FIRE_SETTLE)
+	# 规则书：设置1陷阱，之后在此牌上设置1损伤。「之后」= 陷阱放置完成后才自损（结构分离）。
 	var w134 := _ActionEffect.new()
 	w134.effect_id = &"equipment_effect_134"
-	w134.display_name = "每回合1次在武器范围内设置1陷阱，之后本牌自损1"
+	w134.display_name = "每回合1次在武器范围内设置1陷阱"
 	w134.mode = _TC.MODE_DIRECT
 	w134.priority = 10
 	w134.once_per_turn_key = &"weapon_036_trap"
@@ -3157,15 +3208,33 @@ static func build_equipment_effects() -> Dictionary:
 	w134.set_costs([])
 	w134.set_actions([
 		{"type": &"PLACE_OR_TRIGGER_TRAP", "params": {"mode": &"place", "cell_id": "$selected_cell_id", "count": 1, "source_mech_id": "$binding_context.mech_id", "source_card_instance_id": "$binding_context.card_instance_id"}},
-		{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 1, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_trap_self_damage"}},
+		{"type": &"INCREMENT_VARIABLE", "params": {"scope": &"attack", "variable_name": &"weapon_036_trap_used", "delta": 1}},
 	])
-	w134.description = "我方回合1次，可以在此牌攻击范围内的格子上设置1陷阱，之后在此牌上设置1损伤。"
+	w134.description = "我方回合1次，可以在此牌攻击范围内的格子上设置1陷阱。"
 	effects[w134.effect_id] = w134
 
-	# 135 每回合1次：行动牌当维修，或弃2抽2；之后本牌自损2（37多功能机械臂）
+	# 134b 投掷式机雷「之后」自损1：陷阱放置完成后，在 EFFECT_FIRE_SETTLE 本牌自损1
+	var w134b := _ActionEffect.new()
+	w134b.effect_id = &"equipment_effect_134b"
+	w134b.display_name = "设置陷阱之后本牌自损1"
+	w134b.mode = _TC.MODE_LISTEN
+	w134b.priority = 10
+	w134b.listen_timing = _TC.EFFECT_FIRE_SETTLE
+	w134b.listen_action_type = &"effect_fire"
+	w134b.requires_effect = &"equipment_effect_134"
+	w134b.set_conditions([{"op": &"VARIABLE_ABOVE", "params": {"scope": &"attack", "variable_name": &"weapon_036_trap_used", "threshold": 0}}])
+	w134b.set_target_rules([{"rule": &"NO_TARGET"}])
+	w134b.set_costs([])
+	w134b.set_actions([{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 1, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_trap_self_damage"}}])
+	w134b.description = "设置陷阱完成后，在此牌上设置1损伤（之后）。"
+	effects[w134b.effect_id] = w134b
+
+	# 135 每回合1次：行动牌当维修，或弃2抽2（37多功能机械臂）--「之后」自损2拆到 effect_135b(EFFECT_FIRE_SETTLE)
+	# 规则书：维修或弃2抽2，之后在此牌上设置2损伤。「之后」= 效果发动完成后才自损（结构分离）。
+	# 两分支各设 weapon_037_used 变量，effect_135b 据此触发（取消 CHOOSE_ONE 则不设变量->不自损）。
 	var w135 := _ActionEffect.new()
 	w135.effect_id = &"equipment_effect_135"
-	w135.display_name = "每回合1次：行动牌当维修，或弃2抽2；之后本牌自损2"
+	w135.display_name = "每回合1次：行动牌当维修，或弃2抽2"
 	w135.mode = _TC.MODE_DIRECT
 	w135.priority = 10
 	w135.once_per_turn_key = &"weapon_037_use"
@@ -3178,16 +3247,33 @@ static func build_equipment_effects() -> Dictionary:
 			{"label": "将1张行动牌当作维修打出", "condition": {"op": &"REPAIR_BRANCH_AVAILABLE"}, "actions": [{"type": &"CHOOSE_MANY_CARDS", "params": {"filter": {"zone": &"action_hand", "owner_id": "$binding_context.mech_id"}, "min_count": 1, "max_count": 1, "label": "选择维修素材", "confirm_verb": "打出", "cancel_label": "返回", "per_card_actions": [
 				{"type": &"DECLARE_CARD_TYPE", "params": {"card_instance_id": "$selected_card_instance_id", "declared_card_def_id": &"action_013_维修", "duration": &"UNTIL_USE_ACTION_SETTLE"}},
 				{"type": &"EXECUTE_USE_ACTION_CARD", "params": {"card_instance_id": "$selected_card_instance_id", "acting_mech_id": "$binding_context.mech_id", "as_card_def_id": &"action_013_维修", "consume_original_card": true}},
+				{"type": &"INCREMENT_VARIABLE", "params": {"scope": &"attack", "variable_name": &"weapon_037_used", "delta": 1}},
 			]}}]},
 			{"label": "弃置2张行动牌，再抽2张", "condition": {"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"count": 2}}, "actions": [
-				{"type": &"EXECUTE_DISCARD", "params": {"from_target": "$binding_context.mech_id", "zone": &"action_hand", "count": 2, "choose": true, "chooser_id": "$binding_context.mech_id", "face_up": true, "reason": &"weapon_cycle"}},
+				{"type": &"EXECUTE_DISCARD", "params": {"from_target": false, "count": 2, "face_up": true, "reason": &"weapon_cycle"}},
 				{"type": &"DRAW_ACTION", "params": {"target_id": "$binding_context.mech_id", "count": 2, "reason": &"weapon_cycle"}},
+				{"type": &"INCREMENT_VARIABLE", "params": {"scope": &"attack", "variable_name": &"weapon_037_used", "delta": 1}},
 			]},
 		]}},
-		{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 2, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_multi_arm_self_damage"}},
 	])
-	w135.description = "我方回合1次，可以将1张行动牌当作维修打出或是弃置2张行动牌再抽2张，之后在此牌上设置2损伤。"
+	w135.description = "我方回合1次，可以将1张行动牌当作维修打出或是弃置2张行动牌再抽2张。"
 	effects[w135.effect_id] = w135
+
+	# 135b 多功能机械臂「之后」自损2：维修/弃抽发动完成后，在 EFFECT_FIRE_SETTLE 本牌自损2
+	var w135b := _ActionEffect.new()
+	w135b.effect_id = &"equipment_effect_135b"
+	w135b.display_name = "维修/弃抽之后本牌自损2"
+	w135b.mode = _TC.MODE_LISTEN
+	w135b.priority = 10
+	w135b.listen_timing = _TC.EFFECT_FIRE_SETTLE
+	w135b.listen_action_type = &"effect_fire"
+	w135b.requires_effect = &"equipment_effect_135"
+	w135b.set_conditions([{"op": &"VARIABLE_ABOVE", "params": {"scope": &"attack", "variable_name": &"weapon_037_used", "threshold": 0}}])
+	w135b.set_target_rules([{"rule": &"NO_TARGET"}])
+	w135b.set_costs([])
+	w135b.set_actions([{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 2, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_multi_arm_self_damage"}}])
+	w135b.description = "维修/弃抽完成后，在此牌上设置2损伤（之后）。"
+	effects[w135b.effect_id] = w135b
 
 	# 136 月神合金盾牌全量吸收并使转移损伤-2（38）
 	var w136 := _ActionEffect.new()
@@ -3204,10 +3290,11 @@ static func build_equipment_effects() -> Dictionary:
 	w136.description = "可以将每次攻击或陷阱产生的全部损伤设置到此牌上，并使此次设置的损伤-2。"
 	effects[w136.effect_id] = w136
 
-	# 137 每回合1次在范围内2个格子各放1陷阱，之后本牌自损1（39投掷式双子机雷）
+	# 137 每回合1次在范围内2个格子各放1陷阱（39投掷式双子机雷）--「之后」自损1拆到 effect_137b(EFFECT_FIRE_SETTLE)
+	# 规则书：2个格子各设置1陷阱，之后在此牌上设置1损伤。「之后」= 陷阱放置完成后才自损（结构分离）。
 	var w137 := _ActionEffect.new()
 	w137.effect_id = &"equipment_effect_137"
-	w137.display_name = "每回合1次在范围内2个格子各放1陷阱，之后本牌自损1"
+	w137.display_name = "每回合1次在范围内2个格子各放1陷阱"
 	w137.mode = _TC.MODE_DIRECT
 	w137.priority = 10
 	w137.once_per_turn_key = &"weapon_039_trap"
@@ -3218,10 +3305,26 @@ static func build_equipment_effects() -> Dictionary:
 	w137.set_actions([
 		{"type": &"CHOOSE_MANY_MAP_CELLS", "params": {"count": 2, "distinct": true, "range_source_weapon_instance_id": "$binding_context.card_instance_id", "cell_rule": &"TARGET_CELL_CAN_HOLD_TRAP", "label": "选择2个格子设置陷阱"}},
 		{"type": &"PLACE_OR_TRIGGER_TRAP", "params": {"mode": &"place_each", "cell_ids": "$selected_cell_ids", "count_each": 1, "source_mech_id": "$binding_context.mech_id", "source_card_instance_id": "$binding_context.card_instance_id"}},
-		{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 1, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_trap_self_damage"}},
+		{"type": &"INCREMENT_VARIABLE", "params": {"scope": &"attack", "variable_name": &"weapon_039_trap_used", "delta": 1}},
 	])
-	w137.description = "我方回合1次，可以在此牌范围内的2个格子上各设置1陷阱，之后在此牌上设置1损伤。"
+	w137.description = "我方回合1次，可以在此牌范围内的2个格子上各设置1陷阱。"
 	effects[w137.effect_id] = w137
+
+	# 137b 投掷式双子机雷「之后」自损1：2陷阱放置完成后，在 EFFECT_FIRE_SETTLE 本牌自损1
+	var w137b := _ActionEffect.new()
+	w137b.effect_id = &"equipment_effect_137b"
+	w137b.display_name = "设置2陷阱之后本牌自损1"
+	w137b.mode = _TC.MODE_LISTEN
+	w137b.priority = 10
+	w137b.listen_timing = _TC.EFFECT_FIRE_SETTLE
+	w137b.listen_action_type = &"effect_fire"
+	w137b.requires_effect = &"equipment_effect_137"
+	w137b.set_conditions([{"op": &"VARIABLE_ABOVE", "params": {"scope": &"attack", "variable_name": &"weapon_039_trap_used", "threshold": 0}}])
+	w137b.set_target_rules([{"rule": &"NO_TARGET"}])
+	w137b.set_costs([])
+	w137b.set_actions([{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 1, "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "executor_id": "$binding_context.mech_id", "reason": &"weapon_trap_self_damage"}}])
+	w137b.description = "设置2陷阱完成后，在此牌上设置1损伤（之后）。"
+	effects[w137b.effect_id] = w137b
 
 	# 138 威力实时变为当前护甲×2，范围实时变为当前动力（40）派生值型——不注册监听器
 	var w138 := _ActionEffect.new()

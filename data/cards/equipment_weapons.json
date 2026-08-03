@@ -580,7 +580,8 @@
     "durability": 4,
     "cost": 4,
     "effect_ids": [
-      "equipment_effect_130"
+      "equipment_effect_130",
+      "equipment_effect_130b"
     ]
   },
   {
@@ -598,7 +599,9 @@
     "cost": 3,
     "effect_ids": [
       "equipment_effect_131",
-      "equipment_effect_132"
+      "equipment_effect_132",
+      "equipment_effect_131b",
+      "equipment_effect_132b"
     ]
   },
   {
@@ -634,7 +637,8 @@
     "effect_ids": [
       "equipment_effect_128",
       "equipment_effect_129",
-      "equipment_effect_134"
+      "equipment_effect_134",
+      "equipment_effect_134b"
     ]
   },
   {
@@ -651,7 +655,8 @@
     "durability": 5,
     "cost": 5,
     "effect_ids": [
-      "equipment_effect_135"
+      "equipment_effect_135",
+      "equipment_effect_135b"
     ]
   },
   {
@@ -687,7 +692,8 @@
     "effect_ids": [
       "equipment_effect_128",
       "equipment_effect_129",
-      "equipment_effect_137"
+      "equipment_effect_137",
+      "equipment_effect_137b"
     ]
   },
   {

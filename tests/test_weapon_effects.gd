@@ -1037,3 +1037,99 @@ func test_weapon_100_discard_2_target_action_cards() -> Variant:
 	if ep.action_hand.size() != enemy_hand_before - 2:
 		return "敌方手牌应-2，前=%d 后=%d" % [enemy_hand_before, ep.action_hand.size()]
 	return true
+
+
+## effect_131/131b：weapon_034 手持推进器 主阶段动力+4，之后(EFFECT_FIRE_SETTLE)自损1
+## 验证「之后」结构分离：动力+4 在 execute_effect 步，自损1 在 settle 步（不同批次）
+func test_weapon_131_power_boost_then_settle_self_damage() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	_GenEquipEffects.set_aura_game_state(battle.context.game_state)
+	var cid: StringName = await _equip_weapon(battle, "weapon_034_手持推进器")
+	if cid == &"":
+		return "装备 weapon_034 失败"
+	var gs = battle.context.game_state
+	var pm = gs.get_mech_for_player(&"player")
+	gs.phase = &"MAIN"
+	gs.active_player_id = &"player"
+	battle.context.action_ui_bridge.context = battle.context
+	var card = gs.get_card(cid)
+	var power_before: int = int(pm.power)
+	# 触发 DIRECT effect_131（主阶段动力+4）
+	var ef_result: Dictionary = battle.context.action_service.execute(&"effect_fire", {
+		"effect_id": &"equipment_effect_131",
+		"player_id": &"player", "source_mech_id": pm.mech_id, "card_instance_id": cid, "phase": &"MAIN",
+		"source": {"card_instance_id": cid, "mech_id": pm.mech_id, "player_id": &"player", "effect_id": &"equipment_effect_131"},
+	})
+	var ef_id: StringName = ef_result.get("action_id", &"") if ef_result is Dictionary else &""
+	if ef_id == &"":
+		return "effect_131 effect_fire 未发起"
+	await _pump_frames(5)
+	# 动力+4 应已生效（execute_effect 步完成）
+	if int(pm.power) != power_before + 4:
+		return "effect_131 应使动力+4，前=%d 后=%d" % [power_before, int(pm.power)]
+	# effect_131b 在 EFFECT_FIRE_SETTLE 自损1（settle 步在 execute_effect 之后）
+	if int(card.damage_tokens) != 1:
+		var ef_a = battle.context.action_registry.get_action(ef_id)
+		return "effect_131b 应在 EFFECT_FIRE_SETTLE 自损1，实际 damage_tokens=%d ef_state=%s" % [int(card.damage_tokens), String(ef_a.state) if ef_a != null else "removed"]
+	return true
+
+
+## 「之后」代价损伤结构分离校验：各武器 effect_Xb 定义正确（时点/requires_effect），
+## 主效果不再含 PLACE_DAMAGE_TOKENS，且 JSON effect_ids 含 b
+func test_weapon_after_self_damage_split_registered() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	var all_effects: Dictionary = _GenEquipEffects.build_equipment_effects()
+	# 从 battle 的 CardDatabaseLoader 取 JSON effect_ids 映射
+	var cdb_loader = battle.context.card_database.loader
+	var eid_map: Dictionary = cdb_loader.get_effect_ids_map() if cdb_loader != null and cdb_loader.has_method(&"get_effect_ids_map") else {}
+	# (card_def_id, 主effect_id, b_effect_id, 期望时点)
+	var cases: Array = [
+		["weapon_033_维修机械臂", &"equipment_effect_130", &"equipment_effect_130b", &"EFFECT_FIRE_SETTLE"],
+		["weapon_034_手持推进器", &"equipment_effect_131", &"equipment_effect_131b", &"EFFECT_FIRE_SETTLE"],
+		["weapon_034_手持推进器", &"equipment_effect_132", &"equipment_effect_132b", &"USE_ACTION_SETTLE"],
+		["weapon_036_投掷式机雷", &"equipment_effect_134", &"equipment_effect_134b", &"EFFECT_FIRE_SETTLE"],
+		["weapon_037_多功能机械臂", &"equipment_effect_135", &"equipment_effect_135b", &"EFFECT_FIRE_SETTLE"],
+		["weapon_039_投掷式双子机雷", &"equipment_effect_137", &"equipment_effect_137b", &"EFFECT_FIRE_SETTLE"],
+	]
+	for case in cases:
+		var card_def_id: String = case[0]
+		var main_id: StringName = case[1]
+		var b_id: StringName = case[2]
+		var expect_timing: StringName = case[3]
+		var b_eff = all_effects.get(b_id)
+		if b_eff == null:
+			return "%s 未定义" % String(b_id)
+		if b_eff.listen_timing != expect_timing:
+			return "%s 时点应为 %s，实际 %s" % [String(b_id), String(expect_timing), String(b_eff.listen_timing)]
+		if b_eff.requires_effect != main_id:
+			return "%s requires_effect 应为 %s，实际 %s" % [String(b_id), String(main_id), String(b_eff.requires_effect)]
+		var main_eff = all_effects.get(main_id)
+		if main_eff == null:
+			return "%s 未定义" % String(main_id)
+		if _actions_contain_place_damage(main_eff.actions):
+			return "%s 仍含 PLACE_DAMAGE_TOKENS（应已拆到 %s）" % [String(main_id), String(b_id)]
+		# JSON effect_ids 应含 b
+		var ids: Array = eid_map.get(card_def_id, [])
+		if not ids.has(b_id):
+			return "JSON %s.effect_ids 未含 %s" % [card_def_id, String(b_id)]
+	return true
+
+
+func _actions_contain_place_damage(actions: Array) -> bool:
+	for a in actions:
+		if a is Dictionary:
+			if String(a.get("type", &"")) == &"PLACE_DAMAGE_TOKENS":
+				return true
+			var params: Dictionary = a.get("params", {})
+			var options: Array = params.get("options", [])
+			for opt in options:
+				if opt is Dictionary and _actions_contain_place_damage(opt.get("actions", [])):
+					return true
+			var per_card: Array = params.get("per_card_actions", [])
+			if _actions_contain_place_damage(per_card):
+				return true
+	return false

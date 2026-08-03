@@ -528,13 +528,14 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 				context.timing_engine.fire_timing(&"EFFECT_FIRE_AFTER", parent_action)
 				parent_action.state = _saved_state
 
-	# INCREMENT_VARIABLE scope=attack：写父 attack 动作 record["variables"][name]，
-	# 供同 attack 的 ATTACK_SETTLE 时点经 VARIABLE_ABOVE(scope=attack) 读取（effect_106/108/117）。
-	# parent 非 attack 时回退全局 game_state.variables（原 increment_variable 行为）。
+	# INCREMENT_VARIABLE scope=attack：写父动作 record["variables"][name]，
+	# 供同动作后续时点经 VARIABLE_ABOVE(scope=attack) 读取（effect_106/108/117 及武器「之后」自损
+	# effect_102b/130b/131b/134b/135b/137b 等）。parent 可为 attack 或 effect_fire 等（不限定 action_type，
+	# payload = record.duplicate() 故 payload.variables 可读）。
 	if act_type == &"INCREMENT_VARIABLE":
 		var iv_params: Dictionary = action_def.get("params", {})
 		var iv_scope: StringName = iv_params.get("scope", &"")
-		if iv_scope == &"attack" and parent_action != null and parent_action.action_type == &"attack":
+		if iv_scope == &"attack" and parent_action != null:
 			var iv_name: StringName = iv_params.get("variable_name", &"")
 			var iv_delta: int = int(iv_params.get("delta", 1))
 			if iv_name != &"":
