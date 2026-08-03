@@ -168,7 +168,7 @@ func end_turn(player_id: StringName) -> Dictionary:
 		context.deck_service.discard_card(unset_card, &"turn_cleanup")
 
 	# ── 7. 清理 THIS_TURN 持续时间的效果 ──
-	_clean_this_turn_durations()
+	_clean_this_turn_durations(player_id)
 
 	# ── 7.5 清理 temp_zone 残留牌 ──
 	# 兜底：行动牌使用中（如反击2效果2监听 ATTACK_SETTLE 未触发前留 temp_zone）若因
@@ -215,7 +215,7 @@ func _fire_timing(timing: StringName, payload: Dictionary = {}) -> void:
 
 
 ## 清理持续时间为 THIS_TURN 的效果
-func _clean_this_turn_durations() -> void:
+func _clean_this_turn_durations(turn_player_id: StringName = &"") -> void:
 	var gs: GameState = context.game_state
 	for mech_id: StringName in gs.mechs:
 		var mech: MechState = gs.mechs[mech_id]
@@ -246,11 +246,13 @@ func _clean_this_turn_durations() -> void:
 		if card.effect_negated:
 			card.effect_negated = false
 		# 武器装备牌临时修正/标记清理（effect_093/095/112/113/125）
-		# THIS_OWNER_TURN/THIS_TURN 的 might/range_modifiers 清除（聚能临时加成）
+		# THIS_TURN 每回合末清；THIS_OWNER_TURN（聚能临时加成）仅在卡牌归属 == 当前结束回合玩家时清
+		# （"到所属玩家回合结束"语义，原代码漏清致永续）。
+		var card_owner: StringName = card.owner_player_id if "owner_player_id" in card else &""
 		if card.get("might_modifiers") != null and not card.might_modifiers.is_empty():
-			card.might_modifiers = card.might_modifiers.filter(func(m): return not (m is Dictionary and _is_this_turn_duration(m.get("duration", &""))) if m is Dictionary else true)
+			card.might_modifiers = card.might_modifiers.filter(func(m): return not _should_clear_weapon_mod(m, card_owner, turn_player_id))
 		if card.get("range_modifiers") != null and not card.range_modifiers.is_empty():
-			card.range_modifiers = card.range_modifiers.filter(func(m): return not (m is Dictionary and _is_this_turn_duration(m.get("duration", &""))) if m is Dictionary else true)
+			card.range_modifiers = card.range_modifiers.filter(func(m): return not _should_clear_weapon_mod(m, card_owner, turn_player_id))
 		# weapon_used_this_turn 标记清除（effect_112 设，effect_113 在 TURN_END fire 后此处清）
 		if card.get("counters") != null and card.counters.get("weapon_used_this_turn", false):
 			card.counters["weapon_used_this_turn"] = false
@@ -272,6 +274,20 @@ func _is_this_turn_duration(d) -> bool:
 		return String(d) == "THIS_TURN"
 	if t != TYPE_INT:
 		push_warning("[TurnService] status duration 非预期类型 %d: %s" % [t, str(d)])
+	return false
+
+
+## 武器修正项（might/range_modifiers）是否应在回合末清除。
+## THIS_TURN：每回合末清；THIS_OWNER_TURN：仅当卡牌归属 == 当前结束回合玩家时清
+## （聚能 effect_093/095 临时加成"到所属玩家回合结束"，原 _is_this_turn_duration 漏匹配致永续）。
+func _should_clear_weapon_mod(m, card_owner_id: StringName, turn_player_id: StringName) -> bool:
+	if not (m is Dictionary):
+		return false
+	var d: String = String(m.get("duration", &""))
+	if d == "THIS_TURN":
+		return true
+	if d == "THIS_OWNER_TURN" and turn_player_id != &"" and String(card_owner_id) == String(turn_player_id):
+		return true
 	return false
 
 

@@ -568,6 +568,32 @@ func test_weapon_093_energy_range_no_stack() -> Variant:
 	return true
 
 
+## ⑩c effect_093 修正回合末清除：聚能后结束持有者回合 -> 范围加成消失（THIS_OWNER_TURN 原永续bug）
+func test_weapon_093_modifier_clears_on_turn_end() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	_GenEquipEffects.set_aura_game_state(battle.context.game_state)
+	var cid: StringName = await _equip_weapon(battle, "weapon_001_光束军刀")
+	if cid == &"":
+		return "装备 weapon_001 失败"
+	var gs = battle.context.game_state
+	var card = gs.get_card(cid)
+	if not await _trigger_energy_charge_on(battle, cid):
+		return "聚能触发失败"
+	var range1: int = int(_GenEquipEffects.get_effective_weapon_stats(card).get("range_value", 0))
+	if range1 != 4:
+		return "聚能后范围应=4（2+2），实际 %d" % range1
+	# 结束玩家回合 -> THIS_OWNER_TURN 修正应清除（原 bug：永续不清）
+	gs.active_player_id = &"player"
+	battle.context.turn_service.end_turn(&"player")
+	await _pump_frames(3)
+	var range2: int = int(_GenEquipEffects.get_effective_weapon_stats(card).get("range_value", 0))
+	if range2 != 2:
+		return "回合末范围加成应清除恢复2，实际 %d（THIS_OWNER_TURN 未清）" % range2
+	return true
+
+
 ## ⑪ effect_104：weapon_010 拘束钩爪命中后施加锁定（CHOOSE_ONE -> SET_WEAPON_LOCK）
 func test_weapon_104_lock_target() -> Variant:
 	var battle := _new_battle()
