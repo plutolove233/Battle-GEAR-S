@@ -671,3 +671,70 @@ func test_weapon_115_adjacent_extra_markers() -> Variant:
 	await _pump_frames(3)
 	return true
 
+
+## ⑮ effect_127：weapon_031 合金盾牌将攻击损伤全转移到自身（enemy 攻击 player）
+func test_weapon_127_shield_redirect() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	_GenEquipEffects.set_aura_game_state(battle.context.game_state)
+	var cid: StringName = await _equip_weapon(battle, "weapon_031_合金盾牌")
+	if cid == &"":
+		return "装备 weapon_031 失败"
+	var gs = battle.context.game_state
+	var pm = gs.get_mech_for_player(&"player")
+	var em = gs.get_mech_for_player(&"enemy")
+	pm.current_hp = 100
+	em.current_hp = 100
+	# enemy 攻击 player（相邻）
+	pm.position = {"q": 5, "r": 0}
+	em.position = {"q": 6, "r": 0}
+	# 清 player 手牌（避免 player 迎击）
+	var pl = gs.players.get(&"player")
+	if pl != null:
+		for c in pl.action_hand.duplicate():
+			battle.context.timing_engine.unregister_listeners_for_card(c)
+		pl.action_hand.clear()
+	battle.context.action_ui_bridge.context = battle.context
+	# enemy 武器 + 攻击牌
+	var enemy_weapons: Array = em.get_weapon_ids()
+	if enemy_weapons.is_empty():
+		return "enemy 无武器"
+	var enemy_weapon: StringName = enemy_weapons[0]
+	var ep = gs.players.get(&"enemy")
+	if ep == null:
+		return "enemy 玩家不存在"
+	var enemy_atk: StringName = &""
+	for c in ep.action_hand:
+		var cc = gs.get_card(c)
+		if cc and cc.def and cc.def.action_type == &"攻击":
+			enemy_atk = c
+			break
+	if enemy_atk == &"":
+		for c in gs.deck_state.action_deck:
+			var cc = gs.get_card(c)
+			if cc and cc.def and cc.def.action_type == &"攻击":
+				enemy_atk = c
+				gs.deck_state.action_deck.erase(c)
+				ep.action_hand.append(c)
+				cc.zone = &"action_hand"
+				break
+	if enemy_atk == &"":
+		return "enemy 无攻击牌"
+	var atk_result: Dictionary = battle.execute_attack_action(&"enemy", &"player", enemy_weapon, enemy_atk)
+	var attack_id: StringName = atk_result.get("action_id", &"") if atk_result is Dictionary else &""
+	if attack_id == &"":
+		return "enemy 攻击未发起"
+	await _pump_frames(5)
+	# 驱动损伤放置（盾牌 all_or_nothing 自动转移全到 weapon_1 槽）
+	_drive_damage_placement(battle, attack_id)
+	await _pump_frames(3)
+	# 盾牌槽（weapon_1）应有损伤
+	var shield_slot = pm.slots.get(&"weapon_1")
+	if shield_slot == null:
+		return "weapon_1 槽不存在"
+	var shield_region: int = int(shield_slot.region_damage_tokens)
+	if shield_region <= 0:
+		return "effect_127 应将损伤转移到盾牌槽，weapon_1 region_damage=%d" % shield_region
+	return true
+
