@@ -833,9 +833,12 @@ func test_pvp_weapon_choose_one_routed_to_attacker() -> Variant:
 		await _free_app_root(host); await _free_app_root(client)
 		return "host 攻击命中后应弹 choose_one_effect（effect_097），实际 %s" % String(host_wait)
 	# 弹窗路由：_popup_owner 应=player（攻击方/装备持有方）
+	# 注意：choose_one_effect 是 input_type；ActionUIBridge 会翻译成 popup_type effect_choice
+	# 再 emit request_ui_popup，故 _popup_owner 实际收到的是 effect_choice（与 test_equipment_choice
+	# 既有模式一致），不能传 choose_one_effect（不在 _popup_owner match 列表会返回空）。
 	var hwi: Dictionary = host.battle.context.action_ui_bridge.get_waiting_action_info()
-	var host_owner: StringName = host._popup_owner(&"choose_one_effect", hwi.get("input_params", {}))
-	var client_owner: StringName = client._popup_owner(&"choose_one_effect", hwi.get("input_params", {}))
+	var host_owner: StringName = host._popup_owner(&"effect_choice", hwi.get("input_params", {}))
+	var client_owner: StringName = client._popup_owner(&"effect_choice", hwi.get("input_params", {}))
 	await _free_app_root(host); await _free_app_root(client)
 	if host_owner != &"player":
 		return "host 端武器 CHOOSE_ONE 弹窗归属错误：期望 player（本端弹），实际 %s" % String(host_owner)
