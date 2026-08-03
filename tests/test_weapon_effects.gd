@@ -489,6 +489,85 @@ func test_weapon_093_energy_range_bonus() -> Variant:
 	return true
 
 
+## 触发聚能并选指定武器（从手牌/牌堆/弃牌堆找 action_014_聚能）。返回是否成功。
+func _trigger_energy_charge_on(battle: BattleState, weapon_cid: StringName) -> bool:
+	var gs = battle.context.game_state
+	var pm = gs.get_mech_for_player(&"player")
+	gs.phase = &"MAIN"
+	gs.active_player_id = &"player"
+	battle.context.action_ui_bridge.context = battle.context
+	var energy_card: StringName = &""
+	for c in gs.players.get(&"player").action_hand:
+		var cc = gs.get_card(c)
+		if cc and cc.def and cc.def.card_id == "action_014_聚能":
+			energy_card = c
+			break
+	if energy_card == &"":
+		for c in gs.deck_state.action_deck.duplicate():
+			var cc = gs.get_card(c)
+			if cc and cc.def and cc.def.card_id == "action_014_聚能":
+				gs.deck_state.action_deck.erase(c)
+				gs.players.get(&"player").action_hand.append(c)
+				cc.zone = &"action_hand"
+				energy_card = c
+				break
+	if energy_card == &"":
+		for c in gs.deck_state.action_discard_pile.duplicate():
+			var cc = gs.get_card(c)
+			if cc and cc.def and cc.def.card_id == "action_014_聚能":
+				gs.deck_state.action_discard_pile.erase(c)
+				gs.players.get(&"player").action_hand.append(c)
+				cc.zone = &"action_hand"
+				energy_card = c
+				break
+	if energy_card == &"":
+		return false
+	var uc_result: Dictionary = battle.context.action_service.execute(&"use_action_card", {
+		"card_instance_id": energy_card, "player_id": &"player", "mech_id": pm.mech_id,
+	})
+	var ef_id: StringName = uc_result.get("action_id", &"") if uc_result is Dictionary else &""
+	if ef_id == &"":
+		return false
+	await _pump_frames(5)
+	battle.context.timing_engine.resume_pending_effect(ef_id, {"selected_weapon_id": weapon_cid})
+	await _pump_frames(5)
+	return true
+
+
+## ⑩b effect_093 不可叠加：同回合多次聚能只加一次范围+2
+func test_weapon_093_energy_range_no_stack() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	_GenEquipEffects.set_aura_game_state(battle.context.game_state)
+	var cid: StringName = await _equip_weapon(battle, "weapon_001_光束军刀")
+	if cid == &"":
+		return "装备 weapon_001 失败"
+	var gs = battle.context.game_state
+	var card = gs.get_card(cid)
+	# 第一次聚能：范围 2->4
+	if not await _trigger_energy_charge_on(battle, cid):
+		return "第一次聚能触发失败"
+	var range1: int = int(_GenEquipEffects.get_effective_weapon_stats(card).get("range_value", 0))
+	if range1 != 4:
+		return "第一次聚能后范围应=4（2+2），实际 %d" % range1
+	# 第二次聚能（同回合同武器）：不可叠加，范围应仍=4（不是6）
+	if not await _trigger_energy_charge_on(battle, cid):
+		return "第二次聚能触发失败"
+	var range2: int = int(_GenEquipEffects.get_effective_weapon_stats(card).get("range_value", 0))
+	if range2 != 4:
+		return "第二次聚能后范围应仍=4（不可叠加），实际 %d" % range2
+	# 聚能状态本身可叠加（stacks=2，攻击时威力+8），但 effect_093 范围加成不叠加
+	var stacks := 0
+	for s: Dictionary in gs.get_mech_for_player(&"player").statuses:
+		if s.get("type", &"") == &"ENERGY_CHARGE" and s.get("weapon_id", &"") == cid:
+			stacks = int(s.get("stacks", 1))
+			break
+	if stacks != 2:
+		return "聚能状态应叠加 stacks=2，实际 %d" % stacks
+	return true
+
+
 ## ⑪ effect_104：weapon_010 拘束钩爪命中后施加锁定（CHOOSE_ONE -> SET_WEAPON_LOCK）
 func test_weapon_104_lock_target() -> Variant:
 	var battle := _new_battle()

@@ -2459,8 +2459,9 @@ static func build_equipment_effects() -> Dictionary:
 	w093.set_conditions([{"op": &"ENERGY_TARGET_IS_SELF"}])
 	w093.set_target_rules([{"rule": &"NO_TARGET"}])
 	w093.set_costs([])
+	w093.once_per_turn_key = &"equipment_effect_093"  # 不可叠加：本回合多次聚能只加一次范围+2
 	w093.set_actions([{"type": &"SET_WEAPON_STATS", "params": {"target_card_instance_id": "$binding_context.card_instance_id", "might_delta": 0, "range_delta": 2, "duration": &"THIS_OWNER_TURN", "stack": true}}])
-	w093.description = "对此牌使用聚能时，本回合额外使此牌范围+2。"
+	w093.description = "对此牌使用聚能时，本回合额外使此牌范围+2(不可叠加)。"
 	effects[w093.effect_id] = w093
 
 	# 094 被光束名武器攻击时弃行动牌响应，威力-5（01光束军刀/16光束步枪）
@@ -2497,8 +2498,9 @@ static func build_equipment_effects() -> Dictionary:
 	w095.set_conditions([{"op": &"ENERGY_TARGET_IS_SELF"}])
 	w095.set_target_rules([{"rule": &"NO_TARGET"}])
 	w095.set_costs([])
+	w095.once_per_turn_key = &"equipment_effect_095"  # 不可叠加：本回合多次聚能只加一次威力+4
 	w095.set_actions([{"type": &"SET_WEAPON_STATS", "params": {"target_card_instance_id": "$binding_context.card_instance_id", "might_delta": 4, "range_delta": 0, "duration": &"THIS_OWNER_TURN", "stack": true}}])
-	w095.description = "对此牌使用聚能时，本回合额外使此牌威力+4。"
+	w095.description = "对此牌使用聚能时，本回合额外使此牌威力+4(不可叠加)。"
 	effects[w095.effect_id] = w095
 
 	# 096 被热能名武器攻击时弃行动牌响应，威力-5（02热能战斧/17热能机枪）
