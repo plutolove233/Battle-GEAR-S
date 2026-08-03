@@ -160,10 +160,18 @@ func _refresh() -> void:
 			var wname: String = String(eff_stats.get("weapon_name", card.def.display_name))
 			# 冷却/锁定标记（effect_125/104）
 			var wstat_tag: String = ""
+			var power_insufficient: bool = false
 			if bool(card.counters.get("cooldown_active", false)) if "counters" in card else false:
 				wstat_tag = " [冷却中]"
 			elif (card.lock_target_mech_id if "lock_target_mech_id" in card else &"") != &"":
 				wstat_tag = " [锁定中]"
+			# 攻击必耗动力前置（effect_110 闪回激光剑）：仅攻击选框（非聚能选框）校验，
+			# 持有者当前动力 < 必耗量则禁选。聚能选框（allow_blocked=true）不攻击，不受此限。
+			if not _allow_blocked and _mech != null:
+				var atk_power_cost: int = _GenEquipEffects.get_weapon_attack_power_cost(card, _context)
+				if atk_power_cost > 0 and _mech.power < atk_power_cost:
+					power_insufficient = true
+					wstat_tag += " [动力不足]"
 			if not vw.is_empty():
 				btn.text = "%s(虚拟武器) [威力:%d 射程:%d]%s" % [
 					wname,
@@ -178,8 +186,8 @@ func _refresh() -> void:
 					int(eff_stats.get("range_value", 1)),
 					wstat_tag,
 				]
-			# 冷却/锁定武器禁选（攻击选框；聚能选框 allow_blocked=true 仍可选）
-			if wstat_tag != "" and not _allow_blocked:
+			# 冷却/锁定/动力不足武器禁选（攻击选框；聚能选框 allow_blocked=true 仍可选冷却/锁定）
+			if (wstat_tag != "" or power_insufficient) and not _allow_blocked:
 				btn.disabled = true
 			btn.custom_minimum_size = Vector2(260, 36)
 			btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER

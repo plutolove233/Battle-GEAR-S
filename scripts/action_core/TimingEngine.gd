@@ -223,6 +223,10 @@ func fire_timing(timing: StringName, action) -> void:
 			effect_payload = payload.duplicate()
 			effect_payload["binding_context"] = bind_ctx
 		_execute_effect(effect, effect_payload, action)
+		# 必耗 cost 不可支付时 _execute_effect 已取消本动作（如 effect_110 闪回激光剑动力不足）：
+		# 不再继续触发后续监听器，立即返回。
+		if action.state == &"cancelled":
+			return
 		# 该 listener 创建了挂起的子动作（need_input/等更小子动作）：把本动作切
 		# waiting_effect_action 并暂存剩余 listeners，等子动作完成后补跑。
 		# 用 _last_created_sub_action_paused（检查 pending[-1] state）而非 pending 非空：
@@ -970,6 +974,13 @@ func _execute_effect(effect: ActionEffect, payload: Dictionary, action) -> void:
 
 	# 费用检查
 	if not _check_costs(effect, payload, action):
+		# 必耗 cost（optional=false，如 effect_110 闪回激光剑「攻击必耗2动力」）支付失败：
+		# 不能静默跳过让父攻击继续（否则不付动力也能攻击）。取消父攻击动作（含反击/闪击复用本武器路径）。
+		if _effect_has_mandatory_cost(effect):
+			SLog.log_effect(effect.effect_id, action.source, action.action_id, String(action.action_type), {"status": "cancelled_parent", "reason": "mandatory_cost_not_payable"})
+			SLog.log_raw("[TIMING] %s 必耗 cost 不可支付，取消父动作 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+			_cancel_parent_action_for_mandatory_cost(action, effect)
+			return
 		SLog.log_effect(effect.effect_id, action.source, action.action_id, String(action.action_type), {"status": "skipped", "reason": "costs_not_payable"})
 		return
 
@@ -2035,6 +2046,30 @@ func _pay_costs(effect: ActionEffect, payload: Dictionary, action) -> void:
 		return
 	var binding = _make_binding_from_effect(effect, action, payload)
 	_CostChecker.pay_all(binding, payload, effect.costs, context)
+
+
+## 效果是否含必耗（optional != true）费用。必耗费用不可静默跳过：
+## 支付失败时必须取消父动作（如 effect_110 闪回激光剑攻击必耗2动力，动力不足则不能攻击）。
+func _effect_has_mandatory_cost(effect: ActionEffect) -> bool:
+	if effect == null or effect.costs.is_empty():
+		return false
+	for cost in effect.costs:
+		if cost.get("cost_type", &"") == &"":
+			continue
+		if not cost.get("optional", false):
+			return true
+	return false
+
+
+## 必耗费用不可支付时取消父动作（含反击/闪击复用本武器路径）。
+## 沿 parent 链找到触发本效果的祖先动作（通常是 attack）并取消；若无 parent 直接取消本动作。
+func _cancel_parent_action_for_mandatory_cost(action, effect: ActionEffect) -> void:
+	if context == null or context.action_engine == null:
+		return
+	# effect 是某 attack 动作 ATTACK_BEFORE 的 permanent listener；action 即该 attack。
+	# 直接取消该动作（_run_step_loop 会检测 cancelled 并停止推进后续步骤）。
+	if action != null:
+		context.action_engine.cancel_action(action.action_id)
 
 
 ## 执行动作列表

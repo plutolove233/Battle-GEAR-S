@@ -2767,6 +2767,9 @@ static func build_equipment_effects() -> Dictionary:
 	effects[w109.effect_id] = w109
 
 	# 110 使用闪回激光剑攻击必须额外消耗2动力（13）
+	# 不设 OWNER_POWER_ABOVE_OR_EQUAL 条件：必耗 cost(SPEND_POWER 2, optional=false) 即为闸门，
+	# cost 支付失败(动力<2)由 TimingEngine._execute_effect 取消父攻击动作(不能静默跳过)。
+	# 武器选框动力预校验由 get_weapon_attack_power_cost(读 cost) 提供，与本条件无关。
 	var w110 := _ActionEffect.new()
 	w110.effect_id = &"equipment_effect_110"
 	w110.display_name = "使用闪回激光剑攻击必须额外消耗2动力"
@@ -2774,7 +2777,7 @@ static func build_equipment_effects() -> Dictionary:
 	w110.priority = 20
 	w110.listen_timing = _TC.ATTACK_BEFORE
 	w110.listen_action_type = &"attack"
-	w110.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"OWNER_POWER_ABOVE_OR_EQUAL", "params": {"threshold": 2}}])
+	w110.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}])
 	w110.set_target_rules([{"rule": &"NO_TARGET"}])
 	w110.set_costs([{"cost_type": &"SPEND_POWER", "amount": 2, "optional": false}])
 	w110.set_actions([])
@@ -2794,7 +2797,7 @@ static func build_equipment_effects() -> Dictionary:
 	w111.set_target_rules([{"rule": &"NO_TARGET"}])
 	w111.set_costs([])
 	w111.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "再消耗4动力，威力+3", "actions": [
-		{"type": &"SPEND_POWER", "params": {"amount": 4}},
+		{"type": &"SPEND_POWER", "params": {"amount": 4, "mech_id": "$binding_context.mech_id"}},
 		{"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": 3}},
 	]}]}}])
 	w111.description = "此牌攻击时，可以再消耗4动力使此次攻击威力+3。"
@@ -2851,7 +2854,7 @@ static func build_equipment_effects() -> Dictionary:
 	# 115 命中且目标与攻击方相邻时额外2损伤（18/19/23）——自动触发（无需玩家选择）
 	var w115 := _ActionEffect.new()
 	w115.effect_id = &"equipment_effect_115"
-	w115.display_name = "命中且目标与攻击方相邻时额外2损伤"
+	w115.display_name = "命中且目标与攻击方相邻时可额外2损伤"
 	w115.mode = _TC.MODE_LISTEN
 	w115.priority = 10
 	w115.listen_timing = _TC.ATTACK_AFTER
@@ -2860,8 +2863,8 @@ static func build_equipment_effects() -> Dictionary:
 	w115.set_target_rules([{"rule": &"NO_TARGET"}])
 	w115.set_costs([])
 	# 命中且相邻则自动 +2 损伤标记（条件满足即生效，不弹选择窗）
-	w115.set_actions([{"type": &"MODIFY_ATTACK_MARKERS", "params": {"delta": 2}}])
-	w115.description = "命中且目标与机甲当前位置相邻，则额外设置2损伤。"
+	w115.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "相邻：额外设置2损伤", "actions": [{"type": &"MODIFY_ATTACK_MARKERS", "params": {"delta": 2}}]}]}}])
+	w115.description = "此牌发动的攻击命中后，倘若攻击目标与机甲当前位置相邻，则可额外设置2损伤。"
 	effects[w115.effect_id] = w115
 
 	# 116 命中后可额外1损伤（20火箭筒）
@@ -2891,7 +2894,9 @@ static func build_equipment_effects() -> Dictionary:
 	w117.set_target_rules([{"rule": &"NO_TARGET"}])
 	w117.set_costs([])
 	w117.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "使目标当前动力-2", "actions": [
-		{"type": &"MODIFY_MECH_POWER", "params": {"target_id": "$payload.target_id", "delta": -2, "mode": &"current_only", "min_value": 0, "duration": &"PERMANENT"}},
+		# 直接减少目标当前可用动力（mode=current_only，clamp≥0），不改上限、不注册状态、不计入 power_spent_this_turn。
+		# 不是持续效果：减去的动力在目标下回合开始正常回复动力时自然恢复。duration 留空确保不注册 POWER_MODIFIER 状态。
+		{"type": &"MODIFY_MECH_POWER", "params": {"target_id": "$payload.target_id", "delta": -2, "mode": &"current_only", "min_value": 0}},
 		{"type": &"INCREMENT_VARIABLE", "params": {"scope": &"attack", "variable_name": &"weapon_024_power_drain_used", "delta": 1}},
 	]}]}}])
 	w117.description = "此牌发动攻击指定目标时，可以使目标当前动力-2。"
@@ -2913,19 +2918,23 @@ static func build_equipment_effects() -> Dictionary:
 	w118.description = "若目标机甲动力为0，则攻击命中可额外设置2损伤。"
 	effects[w118.effect_id] = w118
 
-	# 119 本次攻击损伤未全在同一区域后，可额外2损伤（25超级火箭筒）
+	# 119 本次攻击损伤未全在同一区域后，可额外再设置2损伤（25超级火箭筒）
+	# priority=30：高于反击 effect2(20)与闪击 effect2，在 ATTACK_SETTLE 最先触发（与 effect_101 同范式），
+	# 避免被反击链阻塞到所有新攻击结束后才弹窗。额外2损伤由持有者（攻击方）逐枚选择位置（损伤设置面板）。
 	var w119 := _ActionEffect.new()
 	w119.effect_id = &"equipment_effect_119"
-	w119.display_name = "本次攻击损伤未全在同一区域后，可额外2损伤"
+	w119.display_name = "本次攻击损伤未全在同一区域后，可额外再设置2损伤（由我方指定位置）"
 	w119.mode = _TC.MODE_LISTEN
-	w119.priority = 10
+	w119.priority = 30
 	w119.listen_timing = _TC.ATTACK_SETTLE
 	w119.listen_action_type = &"attack"
 	w119.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"PAYLOAD_ATTACK_HIT"}, {"op": &"ATTACK_MARKERS_ABOVE", "params": {"threshold": 1}}, {"op": &"DAMAGE_TOKENS_NOT_ALL_IN_SAME_SLOT"}])
 	w119.set_target_rules([{"rule": &"NO_TARGET"}])
 	w119.set_costs([])
-	w119.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "损伤分散：额外设置2损伤", "actions": [{"type": &"PLACE_DAMAGE_TOKENS", "params": {"count": 2, "target_mech_id": "$payload.target_id", "target_slot": &"choose_by_executor", "executor_id": "$binding_context.mech_id", "reason": &"weapon_extra_damage"}}]}]}}])
-	w119.description = "此牌发动的攻击产生的损伤如果未设置于同一区域，则可额外再设置2损伤。"
+	# 用 EXECUTE_DAMAGE_CHANGE（与主攻击损伤同理）弹损伤设置面板，由持有者（攻击方 executor）逐枚指定位置。
+	# mech_ids 由 _execute_actions 注入为 [payload.target_id]；executor 解析 $binding_context.player_id = 持有者。
+	w119.set_actions([{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [{"label": "损伤分散：额外设置2损伤", "actions": [{"type": &"EXECUTE_DAMAGE_CHANGE", "params": {"value": 2, "method": &"increase", "executor": "$binding_context.player_id", "reason": &"weapon_extra_damage"}}]}]}}])
+	w119.description = "此牌发动的攻击产生的损伤如果未设置于同一区域，则可额外再设置2损伤(由我方指定位置)。"
 	effects[w119.effect_id] = w119
 
 	# 120 每有1损伤，武器有效威力-2（26/27）派生值型——不注册监听器
@@ -3582,6 +3591,48 @@ static func get_global_faction_equipment_aura_bonus(queried_card, faction: Strin
 ## 装备牌虚拟武器（effect_087 帝国的神莺·躯干）：本牌可当作威力20范围6的远程武器。
 ## 由武器选择面板/攻击可用性预检调用（current_power>0 才可选）。返回虚拟武器条目，非本牌返回 {}。
 ## 注意：武器选择面板与攻击武器解析的接入待实机/F3 补（当前 effect_087 为权限型占位）。
+## ── 装备效果定义缓存（避免武器选框等高频查询反复 build_equipment_effects）──
+## ActionEffect 为静态定义（运行期不修改字段），缓存安全。首次查询后复用。
+static var _effects_cache: Dictionary = {}
+
+## 取全部装备效果定义（带缓存）。武器选框动力预校验等高频路径用此而非直接 build。
+static func get_all_effects() -> Dictionary:
+	if _effects_cache.is_empty():
+		_effects_cache = build_equipment_effects()
+	return _effects_cache
+
+
+## 武器「攻击必耗动力」前置量（effect_110 闪回激光剑：选武器时若持有者动力 < 此值则禁选）。
+## 扫描牌的 LISTEN(ATTACK_BEFORE) 效果中所有非可选 SPEND_POWER cost，返回总消耗量。
+## 通用：未来同类「攻击必耗动力」武器只需照 effect_110 范式定义，无需改本函数。
+static func get_weapon_attack_power_cost(card, context = null) -> int:
+	if card == null or card.def == null:
+		return 0
+	var card_def_id: StringName = card.def.card_id if "card_id" in card.def else &""
+	if card_def_id == &"":
+		return 0
+	var effect_ids: Array = get_effects_for_card(card_def_id, context)
+	if effect_ids.is_empty():
+		return 0
+	var all_effects: Dictionary = get_all_effects()
+	var total: int = 0
+	for eid in effect_ids:
+		var eff = all_effects.get(eid)
+		if eff == null:
+			continue
+		if eff.mode != _TC.MODE_LISTEN:
+			continue
+		if eff.listen_timing != _TC.ATTACK_BEFORE:
+			continue
+		for cost in eff.costs:
+			if cost.get("cost_type", &"") != &"SPEND_POWER":
+				continue
+			if cost.get("optional", false):
+				continue
+			total += int(cost.get("amount", 0))
+	return total
+
+
 static func get_virtual_weapon_from_equipment(card) -> Dictionary:
 	if not is_equipment_active(card):
 		return {}

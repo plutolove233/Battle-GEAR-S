@@ -157,6 +157,17 @@ func _drive_damage_placement(battle: BattleState, attack_id: StringName) -> void
 		ae.notify_effect_action_completed(dc_id, attack_id)
 
 
+## 驱动 effect 的 CHOOSE_ONE(optional) 弹窗：确认选 index 0（如 effect_115 相邻+2）。
+## 返回 "" 成功；非空则错误信息。调用方需 await。
+func _drive_choose_one_confirm(battle, attack_id: StringName) -> String:
+	var wait_info: Dictionary = battle.context.action_ui_bridge.get_waiting_action_info()
+	if String(wait_info.get("input_type", &"")) != &"choose_one_effect":
+		return "应弹 choose_one_effect，实际 %s" % String(wait_info.get("input_type", &""))
+	battle.context.timing_engine.resume_pending_effect(attack_id, {"chosen_option_index": 0})
+	await _pump_frames(3)
+	return ""
+
+
 ## ① 47 个武器 effect 定义齐全（093-139）
 func test_weapon_effects_defined() -> Variant:
 	var effects: Dictionary = _GenEquipEffects.build_equipment_effects()
@@ -488,11 +499,14 @@ func test_weapon_115_adjacent_extra() -> Variant:
 	if attack_id == &"":
 		return "攻击未发起"
 	await _pump_frames(5)
-	# effect_115 自动触发（无 CHOOSE_ONE）：相邻命中则 extra_markers=2
+	# effect_115 弹 CHOOSE_ONE（optional「可」）：相邻命中后玩家选「相邻：额外设置2损伤」
+	var coe_b: String = await _drive_choose_one_confirm(battle, attack_id)
+	if coe_b != "":
+		return "effect_115 相邻应弹 CHOOSE_ONE: %s" % coe_b
 	var atk2 = battle.context.action_registry.get_action(attack_id)
 	var em_val: int = int(atk2.record.get("extra_markers", 0)) if atk2 != null else -1
 	if em_val != 2:
-		return "effect_115 相邻应自动使 extra_markers=2，实际 %d" % em_val
+		return "effect_115 确认后应 extra_markers=2，实际 %d" % em_val
 	_drive_damage_placement(battle, attack_id)
 	await _pump_frames(3)
 	return true
@@ -527,10 +541,13 @@ func test_weapon_115_adjacent_oddq_distance() -> Variant:
 	if attack_id == &"":
 		return "攻击未发起（目标可能在地图外/不可达，检查地形）"
 	await _pump_frames(5)
+	var coe_b2: String = await _drive_choose_one_confirm(battle, attack_id)
+	if coe_b2 != "":
+		return "effect_115 odd-q相邻应弹 CHOOSE_ONE: %s" % coe_b2
 	var atk2 = battle.context.action_registry.get_action(attack_id)
 	var em_val: int = int(atk2.record.get("extra_markers", 0)) if atk2 != null else -1
 	if em_val != 2:
-		return "effect_115 odd-q相邻应自动 extra_markers=2，实际 %d（若=0 说明用了错误 axial 公式）" % em_val
+		return "effect_115 odd-q相邻确认后应 extra_markers=2，实际 %d（若=0 说明用了错误 axial 公式）" % em_val
 	_drive_damage_placement(battle, attack_id)
 	await _pump_frames(3)
 	return true
@@ -635,13 +652,17 @@ func test_weapon_115_via_use_card_with_response_window() -> Variant:
 	var empty_sel: Array[Dictionary] = []
 	battle.context.timing_engine.handle_response_selection(attack_a.action_id, empty_sel)
 	await _pump_frames(3)
-	# effect_115 自动触发（无 CHOOSE_ONE）：响应窗口跳过后相邻命中则 extra_markers=2
-	var atk2 = battle.context.action_registry.get_action(attack_a.action_id)
-	if atk2 != null and int(atk2.record.get("extra_markers", 0)) != 2:
+	# effect_115 弹 CHOOSE_ONE（optional「可」）：响应窗口跳过后相邻命中，玩家确认额外+2
+	var coe_d: String = await _drive_choose_one_confirm(battle, attack_a.action_id)
+	if coe_d != "":
 		var atk_diag = battle.context.action_registry.get_action(attack_a.action_id)
 		var hit_v: bool = bool(atk_diag.record.get("hit", false)) if atk_diag != null else false
 		_drive_damage_placement(battle, attack_a.action_id)
-		return "响应窗口跳过后 effect_115 相邻应自动 extra_markers=2，实际 %d hit=%s" % [int(atk2.record.get("extra_markers", 0)), str(hit_v)]
+		return "响应窗口跳过后 effect_115 相邻应弹 CHOOSE_ONE: %s hit=%s" % [coe_d, str(hit_v)]
+	var atk2 = battle.context.action_registry.get_action(attack_a.action_id)
+	if atk2 != null and int(atk2.record.get("extra_markers", 0)) != 2:
+		_drive_damage_placement(battle, attack_a.action_id)
+		return "effect_115 确认后应 extra_markers=2，实际 %d" % int(atk2.record.get("extra_markers", 0))
 	_drive_damage_placement(battle, attack_a.action_id)
 	await _pump_frames(3)
 	return true
@@ -1171,10 +1192,13 @@ func test_weapon_115_adjacent_extra_markers() -> Variant:
 	if attack_id == &"":
 		return "攻击未发起"
 	await _pump_frames(5)
-	# effect_115 自动触发（无 CHOOSE_ONE）：相邻命中则 extra_markers=2
+	# effect_115 弹 CHOOSE_ONE（optional「可」）：相邻命中后玩家确认额外+2
+	var coe_14: String = await _drive_choose_one_confirm(battle, attack_id)
+	if coe_14 != "":
+		return "effect_115 相邻应弹 CHOOSE_ONE: %s" % coe_14
 	var atk2 = battle.context.action_registry.get_action(attack_id)
 	if atk2 != null and int(atk2.record.get("extra_markers", 0)) != 2:
-		return "effect_115 相邻应自动使 extra_markers=2，实际 %d" % int(atk2.record.get("extra_markers", 0))
+		return "effect_115 确认后应 extra_markers=2，实际 %d" % int(atk2.record.get("extra_markers", 0))
 	_drive_damage_placement(battle, attack_id)
 	await _pump_frames(3)
 	return true
@@ -1799,4 +1823,343 @@ func test_weapon_101_fires_before_counter() -> Variant:
 		var sub = ar.get_action(aid)
 		if sub != null and sub.action_type == &"attack":
 			return "effect_101 未先触发：反击攻击B 已提前创建"
+	return true
+
+
+## ─────────── effect_110/111 闪回激光剑：动力消耗检查 ───────────
+
+## effect_110/111 正向：power=10，攻击确认 effect_111，应扣 2(110)+4(111)=6，extra_might=3
+func test_weapon_110_111_full_power_cost() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	_GenEquipEffects.set_aura_game_state(battle.context.game_state)
+	var cid: StringName = await _equip_weapon(battle, "weapon_013_闪回激光剑")
+	if cid == &"":
+		return "装备 weapon_013 失败"
+	var gs = battle.context.game_state
+	var pm = gs.get_mech_for_player(&"player")
+	var em = gs.get_mech_for_player(&"enemy")
+	em.current_hp = 100
+	pm.position = {"q": 5, "r": 0}
+	em.position = {"q": 6, "r": 0}
+	_clear_enemy_hand(battle)
+	battle.context.action_ui_bridge.context = battle.context
+	pm.power = 10
+	var atk_card: StringName = _ensure_attack_card_in_hand(battle)
+	if atk_card == &"":
+		return "玩家无攻击牌"
+	var atk_result: Dictionary = battle.execute_attack_action(&"player", &"enemy", cid, atk_card)
+	var attack_id: StringName = atk_result.get("action_id", &"") if atk_result is Dictionary else &""
+	if attack_id == &"":
+		return "攻击未发起"
+	await _pump_frames(6)
+	# effect_111 弹 CHOOSE_ONE（effect_110 已在 ATTACK_BEFORE 扣2，power 10->8）
+	var coe: String = await _drive_choose_one_confirm(battle, attack_id)
+	if coe != "":
+		return "effect_111 应弹 CHOOSE_ONE: %s power=%d" % [coe, pm.power]
+	var atk2 = battle.context.action_registry.get_action(attack_id)
+	var em_val: int = int(atk2.record.get("extra_might", 0)) if atk2 != null else -1
+	if em_val != 3:
+		return "effect_111 确认后应 extra_might=3，实际 %d" % em_val
+	if pm.power != 4:
+		return "应扣 2+4=6 动力(10->4)，实际 power=%d" % pm.power
+	_drive_damage_placement(battle, attack_id)
+	await _pump_frames(3)
+	return true
+
+
+## effect_110 动力不足(<2)：攻击应被取消（不能攻击）
+func test_weapon_110_insufficient_power_cancels() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	_GenEquipEffects.set_aura_game_state(battle.context.game_state)
+	var cid: StringName = await _equip_weapon(battle, "weapon_013_闪回激光剑")
+	if cid == &"":
+		return "装备 weapon_013 失败"
+	var gs = battle.context.game_state
+	var pm = gs.get_mech_for_player(&"player")
+	var em = gs.get_mech_for_player(&"enemy")
+	em.current_hp = 100
+	pm.position = {"q": 5, "r": 0}
+	em.position = {"q": 6, "r": 0}
+	_clear_enemy_hand(battle)
+	battle.context.action_ui_bridge.context = battle.context
+	pm.power = 1  # 不足2
+	var atk_card: StringName = _ensure_attack_card_in_hand(battle)
+	if atk_card == &"":
+		return "玩家无攻击牌"
+	var atk_result: Dictionary = battle.execute_attack_action(&"player", &"enemy", cid, atk_card)
+	var attack_id: StringName = atk_result.get("action_id", &"") if atk_result is Dictionary else &""
+	if attack_id == &"":
+		return "攻击未发起"
+	await _pump_frames(6)
+	# 攻击应被取消（effect_110 必耗2动力不可支付），动作被清理 -> get_action 返回 null
+	var atk2 = battle.context.action_registry.get_action(attack_id)
+	if atk2 != null and atk2.state != &"cancelled":
+		return "动力不足应取消攻击，实际 state=%s power=%d" % [String(atk2.state), pm.power]
+	if pm.power != 1:
+		return "取消后动力不应扣，实际 power=%d" % pm.power
+	return true
+
+
+## effect_111 动力不足4：effect_110 扣2后无 effect_111 弹窗
+func test_weapon_111_no_popup_low_power() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	_GenEquipEffects.set_aura_game_state(battle.context.game_state)
+	var cid: StringName = await _equip_weapon(battle, "weapon_013_闪回激光剑")
+	if cid == &"":
+		return "装备 weapon_013 失败"
+	var gs = battle.context.game_state
+	var pm = gs.get_mech_for_player(&"player")
+	var em = gs.get_mech_for_player(&"enemy")
+	em.current_hp = 100
+	pm.position = {"q": 5, "r": 0}
+	em.position = {"q": 6, "r": 0}
+	_clear_enemy_hand(battle)
+	battle.context.action_ui_bridge.context = battle.context
+	pm.power = 3  # 够2不够4
+	var atk_card: StringName = _ensure_attack_card_in_hand(battle)
+	if atk_card == &"":
+		return "玩家无攻击牌"
+	var atk_result: Dictionary = battle.execute_attack_action(&"player", &"enemy", cid, atk_card)
+	var attack_id: StringName = atk_result.get("action_id", &"") if atk_result is Dictionary else &""
+	if attack_id == &"":
+		return "攻击未发起"
+	await _pump_frames(6)
+	# effect_110 扣2(3->1)，effect_111 条件 power>=4 失败 -> 不弹 CHOOSE_ONE，直接进损伤设置
+	var wait_info: Dictionary = battle.context.action_ui_bridge.get_waiting_action_info()
+	if String(wait_info.get("input_type", &"")) == &"choose_one_effect":
+		_drive_damage_placement(battle, attack_id)
+		return "effect_111 power=1<4 不应弹 CHOOSE_ONE"
+	if pm.power != 1:
+		return "effect_110 应扣2(3->1)，实际 power=%d" % pm.power
+	_drive_damage_placement(battle, attack_id)
+	await _pump_frames(3)
+	return true
+
+
+## ─────────── effect_117/118 密集导弹炮：目标动力操纵 ───────────
+
+## effect_117/118 正向：目标动力2，effect_117 -2 -> 0，effect_118 +2损伤标记
+func test_weapon_117_118_power_drain_zero() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	_GenEquipEffects.set_aura_game_state(battle.context.game_state)
+	var cid: StringName = await _equip_weapon(battle, "weapon_024_密集导弹炮")
+	if cid == &"":
+		return "装备 weapon_024 失败"
+	var gs = battle.context.game_state
+	var pm = gs.get_mech_for_player(&"player")
+	var em = gs.get_mech_for_player(&"enemy")
+	em.current_hp = 100
+	pm.position = {"q": 5, "r": 0}
+	em.position = {"q": 6, "r": 0}
+	_clear_enemy_hand(battle)
+	battle.context.action_ui_bridge.context = battle.context
+	em.power = 2  # 目标动力2
+	pm.power = 10
+	var atk_card: StringName = _ensure_attack_card_in_hand(battle)
+	if atk_card == &"":
+		return "玩家无攻击牌"
+	var atk_result: Dictionary = battle.execute_attack_action(&"player", &"enemy", cid, atk_card)
+	var attack_id: StringName = atk_result.get("action_id", &"") if atk_result is Dictionary else &""
+	if attack_id == &"":
+		return "攻击未发起"
+	await _pump_frames(6)
+	# effect_117(ATTACK_PRE) 弹 CHOOSE_ONE：选「使目标当前动力-2」
+	var coe1: String = await _drive_choose_one_confirm(battle, attack_id)
+	if coe1 != "":
+		return "effect_117 应弹 CHOOSE_ONE: %s" % coe1
+	if em.power != 0:
+		return "effect_117 应使目标动力 2->0，实际 %d" % em.power
+	await _pump_frames(4)
+	# effect_118(ATTACK_AFTER) 弹 CHOOSE_ONE：目标动力0 -> 额外+2损伤标记
+	var coe2: String = await _drive_choose_one_confirm(battle, attack_id)
+	if coe2 != "":
+		_drive_damage_placement(battle, attack_id)
+		return "effect_118 应弹 CHOOSE_ONE: %s" % coe2
+	var atk2 = battle.context.action_registry.get_action(attack_id)
+	var em_val: int = int(atk2.record.get("extra_markers", 0)) if atk2 != null else -1
+	if em_val != 2:
+		return "effect_118 确认后应 extra_markers=2，实际 %d" % em_val
+	_drive_damage_placement(battle, attack_id)
+	await _pump_frames(3)
+	return true
+
+
+## effect_117 动力不减上限/不计消耗：目标动力3，-2后=1（非0），effect_118 不触发；持有者动力不变
+func test_weapon_117_drain_no_spent_no_cap() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	_GenEquipEffects.set_aura_game_state(battle.context.game_state)
+	var cid: StringName = await _equip_weapon(battle, "weapon_024_密集导弹炮")
+	if cid == &"":
+		return "装备 weapon_024 失败"
+	var gs = battle.context.game_state
+	var pm = gs.get_mech_for_player(&"player")
+	var em = gs.get_mech_for_player(&"enemy")
+	em.current_hp = 100
+	pm.position = {"q": 5, "r": 0}
+	em.position = {"q": 6, "r": 0}
+	_clear_enemy_hand(battle)
+	battle.context.action_ui_bridge.context = battle.context
+	em.power = 3
+	var em_max_before: int = int(em.max_power) if "max_power" in em else 0
+	pm.power = 10
+	var pm_spent_before: int = int(pm.power_spent_this_turn) if "power_spent_this_turn" in pm else 0
+	var atk_card: StringName = _ensure_attack_card_in_hand(battle)
+	if atk_card == &"":
+		return "玩家无攻击牌"
+	var atk_result: Dictionary = battle.execute_attack_action(&"player", &"enemy", cid, atk_card)
+	var attack_id: StringName = atk_result.get("action_id", &"") if atk_result is Dictionary else &""
+	if attack_id == &"":
+		return "攻击未发起"
+	await _pump_frames(6)
+	var coe1: String = await _drive_choose_one_confirm(battle, attack_id)
+	if coe1 != "":
+		return "effect_117 应弹 CHOOSE_ONE: %s" % coe1
+	if em.power != 1:
+		return "effect_117 应使目标动力 3->1，实际 %d" % em.power
+	# max_power 不变（不减上限）
+	var em_max_after: int = int(em.max_power) if "max_power" in em else 0
+	if em_max_after != em_max_before:
+		return "effect_117 不应改上限，max %d->%d" % [em_max_before, em_max_after]
+	# 不计入持有者消耗（pm.power_spent_this_turn 不变）
+	var pm_spent_after: int = int(pm.power_spent_this_turn) if "power_spent_this_turn" in pm else 0
+	if pm_spent_after != pm_spent_before:
+		return "effect_117 不应计入持有者 power_spent，%d->%d" % [pm_spent_before, pm_spent_after]
+	await _pump_frames(4)
+	# 目标动力1（非0）-> effect_118 不触发，无第二个 CHOOSE_ONE
+	var wait_info: Dictionary = battle.context.action_ui_bridge.get_waiting_action_info()
+	if String(wait_info.get("input_type", &"")) == &"choose_one_effect":
+		_drive_damage_placement(battle, attack_id)
+		return "effect_118 目标动力1!=0 不应弹 CHOOSE_ONE"
+	_drive_damage_placement(battle, attack_id)
+	await _pump_frames(3)
+	return true
+
+
+## ─────────── effect_119 超级火箭筒：损伤分散额外2损伤 ───────────
+
+## effect_119 正向：主损伤分散到2区，弹 CHOOSE_ONE，确认后持有者额外设置2损伤
+func test_weapon_119_scatter_extra_damage() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	_GenEquipEffects.set_aura_game_state(battle.context.game_state)
+	var cid: StringName = await _equip_weapon(battle, "weapon_025_超级火箭筒")
+	if cid == &"":
+		return "装备 weapon_025 失败"
+	var gs = battle.context.game_state
+	var pm = gs.get_mech_for_player(&"player")
+	var em = gs.get_mech_for_player(&"enemy")
+	em.current_hp = 100
+	# 清空敌方装备使护甲0，保证 weapon_025(威力10) 产生2枚损伤(10/5=2)便于分散
+	for slot_id in em.slots.keys():
+		var s = em.slots[slot_id]
+		if s != null:
+			s.equipped_card = null
+			s.base_armor = 0
+			s.armor_modifier = 0
+	pm.position = {"q": 5, "r": 0}
+	em.position = {"q": 6, "r": 0}
+	_clear_enemy_hand(battle)
+	battle.context.action_ui_bridge.context = battle.context
+	var atk_card: StringName = _ensure_attack_card_in_hand(battle)
+	if atk_card == &"":
+		return "玩家无攻击牌"
+	var atk_result: Dictionary = battle.execute_attack_action(&"player", &"enemy", cid, atk_card)
+	var attack_id: StringName = atk_result.get("action_id", &"") if atk_result is Dictionary else &""
+	if attack_id == &"":
+		return "攻击未发起"
+	await _pump_frames(5)
+	# 主损伤2枚分散：1头部 + 1躯干
+	var ae = battle.context.action_engine
+	var ar = battle.context.action_registry
+	var dts = battle.context.damage_token_service
+	var attack = ar.get_action(attack_id)
+	var guard: int = 0
+	while attack != null and attack.state == &"waiting_effect_action" and guard < 10:
+		guard += 1
+		var pending: Array = attack.pending_effect_action_ids.duplicate()
+		var dc_id: StringName = &""
+		for cid2: StringName in pending:
+			var sub = ar.get_action(cid2)
+			if sub != null and sub.action_type == &"damage_change" and sub.state == &"waiting_input":
+				dc_id = cid2
+				break
+		if dc_id == &"":
+			break
+		dts.place_one_damage_token(em.mech_id, &"头部")
+		dts.place_one_damage_token(em.mech_id, &"躯干")
+		ae.continue_action(dc_id, {"auto_placed": true})
+		ae.notify_effect_action_completed(dc_id, attack_id)
+	await _pump_frames(5)
+	# ATTACK_SETTLE：effect_119 弹 CHOOSE_ONE
+	var coe: String = await _drive_choose_one_confirm(battle, attack_id)
+	if coe != "":
+		return "effect_119 损伤分散应弹 CHOOSE_ONE: %s" % coe
+	await _pump_frames(4)
+	# effect_119 确认后 EXECUTE_DAMAGE_CHANGE 生成2枚额外损伤 -> 驱动放置
+	_drive_damage_placement(battle, attack_id)
+	await _pump_frames(3)
+	# 额外2损伤已放置：主2(头1+躯1) + 额外2 = 总4（额外2由 _choose_slot_for_token 随机选空槽，故按全槽位合计）
+	var total_dt: int = 0
+	for sid in em.slots.keys():
+		var s = em.slots[sid]
+		if s != null:
+			total_dt += int(s.region_damage_tokens)
+	if total_dt != 4:
+		return "主2+额外2应总4损伤，实际 %d" % total_dt
+	return true
+
+
+## effect_119 负向：主损伤全在同一区 -> 不触发
+func test_weapon_119_same_slot_no_trigger() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	_GenEquipEffects.set_aura_game_state(battle.context.game_state)
+	var cid: StringName = await _equip_weapon(battle, "weapon_025_超级火箭筒")
+	if cid == &"":
+		return "装备 weapon_025 失败"
+	var gs = battle.context.game_state
+	var pm = gs.get_mech_for_player(&"player")
+	var em = gs.get_mech_for_player(&"enemy")
+	em.current_hp = 100
+	for slot_id in em.slots.keys():
+		var s = em.slots[slot_id]
+		if s != null:
+			s.equipped_card = null
+			s.base_armor = 0
+			s.armor_modifier = 0
+	pm.position = {"q": 5, "r": 0}
+	em.position = {"q": 6, "r": 0}
+	_clear_enemy_hand(battle)
+	battle.context.action_ui_bridge.context = battle.context
+	var atk_card: StringName = _ensure_attack_card_in_hand(battle)
+	if atk_card == &"":
+		return "玩家无攻击牌"
+	var atk_result: Dictionary = battle.execute_attack_action(&"player", &"enemy", cid, atk_card)
+	var attack_id: StringName = atk_result.get("action_id", &"") if atk_result is Dictionary else &""
+	if attack_id == &"":
+		return "攻击未发起"
+	await _pump_frames(5)
+	# 主损伤2枚全放头部（同区）
+	_drive_damage_placement_on_slot(battle, attack_id, &"头部")
+	await _pump_frames(5)
+	# 同区 -> effect_119 不触发，不弹 CHOOSE_ONE
+	var wait_info: Dictionary = battle.context.action_ui_bridge.get_waiting_action_info()
+	if String(wait_info.get("input_type", &"")) == &"choose_one_effect":
+		return "effect_119 损伤同区不应弹 CHOOSE_ONE"
+	# 头部应=2（无额外）
+	var head_dt: int = int(em.slots.get(&"头部").region_damage_tokens) if em.slots.get(&"头部") else -1
+	if head_dt != 2:
+		return "同区应无额外，头部=2，实际 %d" % head_dt
 	return true

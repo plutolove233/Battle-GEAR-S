@@ -571,7 +571,9 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 
 		&"ATTACK_MARKERS_ABOVE":
 			# 本次攻击产生的损伤标记数 > threshold
-			var am_threshold: int = int(condition.get("threshold", 0))
+			# threshold 可置于 condition 顶层或 condition.params 下（历史不一致），params 优先回退顶层。
+			var ama_params: Dictionary = condition.get("params", condition)
+			var am_threshold: int = int(ama_params.get("threshold", condition.get("threshold", 0)))
 			var am_markers: int = int(payload.get("markers", 0)) + int(payload.get("extra_markers", 0))
 			return am_markers > am_threshold
 
@@ -609,8 +611,10 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 			return oah_player.action_hand.size() > oah_threshold
 
 		&"OWNER_POWER_ABOVE_OR_EQUAL":
-			# 装备牌所属机甲当前动力 >= threshold（机动头部消耗4动力前置）
-			var op_threshold: int = int(condition.get("threshold", 0))
+			# 装备牌所属机甲当前动力 >= threshold（闪回激光剑 effect_110/111 动力前置）
+			# threshold 可置于 condition 顶层或 condition.params 下，params 优先回退顶层。
+			var op_params: Dictionary = condition.get("params", condition)
+			var op_threshold: int = int(op_params.get("threshold", condition.get("threshold", 0)))
 			var op_mech_id: StringName = _equip_mech_id(binding, payload)
 			var op_ctx = binding.context if binding != null else null
 			if op_mech_id == &"" or op_ctx == null or op_ctx.get("game_state") == null:
@@ -622,8 +626,9 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 
 		&"OWNER_POWER_EQUALS":
 			# 装备牌所属机甲当前动力 == value（机动装·头部 effect_017：消耗动力后动力恰为0）
-			# 兼容 value / threshold 两种参数名。BASIC_MOVE_AFTER fire 时动力已扣除，读 mech.power。
-			var ope_value: int = int(condition.get("value", condition.get("threshold", 0)))
+			# 兼容 value / threshold 两种参数名；params 优先回退顶层。BASIC_MOVE_AFTER fire 时动力已扣除，读 mech.power。
+			var ope_params: Dictionary = condition.get("params", condition)
+			var ope_value: int = int(ope_params.get("value", ope_params.get("threshold", condition.get("value", condition.get("threshold", 0)))))
 			var ope_mech_id: StringName = _equip_mech_id(binding, payload)
 			var ope_ctx = binding.context if binding != null else null
 			if ope_mech_id == &"" or ope_ctx == null or ope_ctx.get("game_state") == null:
@@ -953,7 +958,9 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 
 		&"TARGET_POWER_EQUALS":
 			# 目标当前动力 == value（effect_118：减动力后目标动力为0）
-			var tpe_value: int = int(condition.get("value", condition.get("threshold", 0)))
+			# 兼容 value / threshold 两种参数名；params 优先回退顶层。
+			var tpe_params: Dictionary = condition.get("params", condition)
+			var tpe_value: int = int(tpe_params.get("value", tpe_params.get("threshold", condition.get("value", condition.get("threshold", 0)))))
 			var tpe_target: StringName = payload.get("target_id", &"")
 			var tpe_ctx = binding.context if binding != null else null
 			if tpe_target == &"" or tpe_ctx == null or tpe_ctx.get("game_state") == null:
