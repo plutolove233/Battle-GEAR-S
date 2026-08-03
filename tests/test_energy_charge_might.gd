@@ -274,3 +274,92 @@ func test_energy_charge_stacks_double_might():
 	# 清理：驱动损伤设置到完成，避免残留 pending 影响后续测试
 	await _drive_damage_placement(battle, attack_a.action_id)
 	return true
+
+
+## 统计某武器上的聚能状态层数（按 weapon_id 匹配）
+func _energy_stacks_for_weapon(mech, weapon_id: StringName) -> int:
+	if mech == null:
+		return 0
+	for s: Dictionary in mech.statuses:
+		if s.get("type", &"") == &"ENERGY_CHARGE" and s.get("weapon_id", &"") == weapon_id:
+			return int(s.get("stacks", 1))
+	return 0
+
+
+## ── 逐武器清除：聚能武器X+武器Y，用X攻击后只清X，Y保留 ──
+## 验证 Bug A 修复：原 REMOVE_STATUS remove_all 会清该机甲所有武器的聚能。
+func test_energy_charge_clears_only_attacking_weapon():
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	var gs = battle.context.game_state
+	var player_mech = gs.get_mech_for_player(&"player")
+	var enemy_mech = gs.get_mech_for_player(&"enemy")
+	if player_mech == null or enemy_mech == null:
+		return "找不到玩家/敌方机甲"
+	var pp = player_mech.position
+	enemy_mech.position = {"q": int(pp["q"]) + 1, "r": int(pp["r"])}
+	for cid: StringName in gs.players.get(&"enemy").action_hand.duplicate():
+		battle.context.timing_engine.unregister_listeners_for_card(cid)
+	gs.players.get(&"enemy").action_hand.clear()
+
+	var weapon_ids = player_mech.get_weapon_ids()
+	if weapon_ids.size() < 2:
+		return "需要2把武器验证逐武器清除，实际: %d（%s）" % [weapon_ids.size(), str(weapon_ids)]
+	var wid_a: StringName = weapon_ids[0]
+	var wid_b: StringName = weapon_ids[1]
+
+	# 直接对两把武器施加聚能（apply_energy_to_weapon 会注册状态监听器）
+	battle.context.game_actions.apply_energy_to_weapon({"mech_id": player_mech.mech_id, "weapon_id": wid_a, "delta": 4})
+	battle.context.game_actions.apply_energy_to_weapon({"mech_id": player_mech.mech_id, "weapon_id": wid_b, "delta": 4})
+	await _pump_frames(2)
+	if _energy_stacks_for_weapon(player_mech, wid_a) != 1 or _energy_stacks_for_weapon(player_mech, wid_b) != 1:
+		return "施加后两把武器应各 stacks=1，实际 a=%d b=%d" % [_energy_stacks_for_weapon(player_mech, wid_a), _energy_stacks_for_weapon(player_mech, wid_b)]
+
+	# 用 wid_a 攻击
+	battle.execute_attack_action(&"player", &"enemy", wid_a, &"")
+	await _pump_frames(5)
+	var attack_a = _find_attack(battle)
+	if attack_a == null:
+		return "攻击动作未创建或已完成"
+	var drive_ret: Dictionary = await _drive_damage_placement(battle, attack_a.action_id)
+	if not drive_ret.get("ok", false):
+		return drive_ret.get("msg", "损伤设置驱动失败")
+	await _pump_frames(5)
+
+	# wid_a 的聚能应清除，wid_b 的应保留
+	if _energy_stacks_for_weapon(player_mech, wid_a) != 0:
+		return "攻击武器A的聚能应被清除，仍存在 stacks=%d" % _energy_stacks_for_weapon(player_mech, wid_a)
+	if _energy_stacks_for_weapon(player_mech, wid_b) != 1:
+		return "未攻击武器B的聚能应保留 stacks=1，实际: %d（误清了其他武器）" % _energy_stacks_for_weapon(player_mech, wid_b)
+	return true
+
+
+## ── 回合末清除：聚能后结束持有者回合 -> 聚能状态全部移除 ──
+func test_energy_charge_clears_on_turn_end():
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	var gs = battle.context.game_state
+	var player_mech = gs.get_mech_for_player(&"player")
+	if player_mech == null:
+		return "找不到玩家机甲"
+	var weapon_ids = player_mech.get_weapon_ids()
+	if weapon_ids.is_empty():
+		return "玩家机甲无可用武器"
+	var weapon_id = weapon_ids[0]
+
+	# 施加聚能
+	battle.context.game_actions.apply_energy_to_weapon({"mech_id": player_mech.mech_id, "weapon_id": weapon_id, "delta": 4})
+	await _pump_frames(2)
+	if _energy_stacks_for_weapon(player_mech, weapon_id) != 1:
+		return "施加后聚能应 stacks=1，实际: %d" % _energy_stacks_for_weapon(player_mech, weapon_id)
+
+	# 结束玩家回合 -> _clean_this_turn_durations 清除 THIS_TURN 聚能
+	gs.active_player_id = &"player"
+	battle.context.turn_service.end_turn(&"player")
+	await _pump_frames(3)
+
+	if _energy_stacks_for_weapon(player_mech, weapon_id) != 0:
+		return "回合末聚能应被清除，仍存在 stacks=%d" % _energy_stacks_for_weapon(player_mech, weapon_id)
+	return true

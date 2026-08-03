@@ -52,14 +52,20 @@ func _refresh() -> void:
 		mech_header.add_theme_font_size_override("font_size", 15)
 		_vbox.add_child(mech_header)
 
-		if mech.statuses.is_empty():
+		# 聚能是武器状态（在装备面板武器详情显示），不在机甲状态面板列出
+		var shown_statuses: Array = []
+		for s: Dictionary in mech.statuses:
+			if String(s.get("type", &"")) == "ENERGY_CHARGE":
+				continue
+			shown_statuses.append(s)
+		if shown_statuses.is_empty():
 			var none := Label.new()
 			none.text = "  （无状态）"
 			none.add_theme_color_override("font_color", Color(0.55, 0.55, 0.55))
 			_vbox.add_child(none)
 		else:
 			has_any = true
-			for s: Dictionary in mech.statuses:
+			for s: Dictionary in shown_statuses:
 				var line := Label.new()
 				line.text = "  • " + _format_status(gs, s)
 				line.add_theme_color_override("font_color", Color(0.75, 0.8, 0.75))

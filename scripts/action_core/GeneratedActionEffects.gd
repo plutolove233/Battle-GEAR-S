@@ -85,7 +85,7 @@ static func get_effects_for_card(card_def_id: StringName) -> Array:
 static func get_effects_for_status(status_type: StringName) -> Array[StringName]:
 	var _status_effect_map: Dictionary = {
 		&"LOCKED": [&"lock_status_clear_on_hit", &"lock_status_duration_tick"],
-		&"ENERGY_CHARGE": [&"energy_status_might", &"energy_status_clear_on_attack", &"energy_status_clear_on_turn_end"],
+		&"ENERGY_CHARGE": [&"energy_status_might", &"energy_status_clear_on_attack"],
 		&"UNITE": [&"unite_status_attack", &"unite_status_clear"],
 		&"DISCOUNT": [&"discount_clear_on_turn_end"],
 	}
@@ -504,9 +504,9 @@ static func build_all_effects() -> Dictionary:
 	energy_status_e2.requires_effect = &"energy_status_might"
 	energy_status_e2.set_actions([{
 		"type": &"REMOVE_STATUS",
-		"params": {"status_type": &"ENERGY_CHARGE", "remove_all": true, "target_id": "$binding_context.target_id"},
+		"params": {"status_id": "$binding_context.status_id", "target_id": "$binding_context.target_id"},
 	}])
-	energy_status_e2.description = "攻击结算后去除Target所有的聚能状态。"
+	energy_status_e2.description = "攻击结算后去除该武器（本状态）的聚能状态。"
 	effects[energy_status_e2.effect_id] = energy_status_e2
 
 	# 聚能状态效果3：回合结束清除

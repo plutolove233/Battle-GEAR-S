@@ -432,8 +432,9 @@ func test_remove_status_effects_have_status_type():
 		for act in effect.actions:
 			if act.get("type") == &"REMOVE_STATUS":
 				var params = act.get("params", {})
-				if not params.has("status_type"):
-					return "REMOVE_STATUS动作缺少status_type"
+				# 允许按 status_type 或 status_id 精确移除（聚能攻击后清除用 status_id 定位该武器状态）
+				if not params.has("status_type") and not params.has("status_id"):
+					return "REMOVE_STATUS动作缺少status_type/status_id"
 	return true
 
 

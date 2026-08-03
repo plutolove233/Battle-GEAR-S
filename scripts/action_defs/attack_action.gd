@@ -343,13 +343,13 @@ func _step_apply_damage(action: Action) -> Dictionary:
 
 	# 设置损伤（损伤变动动作）—— 作为效果动作发起，attack 等其完成
 	if markers > 0 and context.action_service != null:
-		# 损伤位置由谁设置：迎击牌响应(counter_attacked=true)时由被攻击目标设置，
-		# 否则（未响应或非迎击牌响应）由攻击方设置。
-		# 注意用 counter_attacked 而非 responded：responded 含非迎击牌响应（装备牌/机师牌），
-		# 非迎击牌响应不算迎击，损伤仍由攻击方设置。
+		# 损伤位置由谁设置：攻击目标响应了攻击（迎击牌/装备效果/机师牌任意响应）时由被攻击目标设置，
+		# 否则（未响应）由攻击方设置。
+		# 注意用 responded（任何响应均算）而非 counter_attacked：装备牌响应（如光束步枪-5威力）
+		# 不写 counter_attacked，但既然攻击目标响应了，命中后损伤就由攻击目标设置，不再区分响应类型。
 		var chooser_player_id: StringName = &""
-		var counter_attacked: bool = action.record.get("counter_attacked", false)
-		if counter_attacked:
+		var responded: bool = action.record.get("responded", false)
+		if responded:
 			var target_player = context.game_state.get_player_for_mech(target_id)
 			chooser_player_id = target_player.player_id if target_player else &""
 		else:

@@ -2448,10 +2448,10 @@ static func build_equipment_effects() -> Dictionary:
 	# （101/119）在 ATTACK_SETTLE 读 damage_placement_log。
 	# ═══════════════════════════════════════════════════════════════
 
-	# 093 聚能后本回合范围+1（01光束军刀/17热能机枪）
+	# 093 聚能后本回合范围+2（01光束军刀/17热能机枪）
 	var w093 := _ActionEffect.new()
 	w093.effect_id = &"equipment_effect_093"
-	w093.display_name = "聚能后本回合范围+1"
+	w093.display_name = "聚能后本回合范围+2"
 	w093.mode = _TC.MODE_LISTEN
 	w093.priority = 10
 	w093.listen_timing = _TC.EFFECT_FIRE_AFTER
@@ -2459,14 +2459,14 @@ static func build_equipment_effects() -> Dictionary:
 	w093.set_conditions([{"op": &"ENERGY_TARGET_IS_SELF"}])
 	w093.set_target_rules([{"rule": &"NO_TARGET"}])
 	w093.set_costs([])
-	w093.set_actions([{"type": &"SET_WEAPON_STATS", "params": {"target_card_instance_id": "$binding_context.card_instance_id", "might_delta": 0, "range_delta": 1, "duration": &"THIS_OWNER_TURN", "stack": true}}])
-	w093.description = "对此牌使用聚能时，本回合额外使此牌范围+1。"
+	w093.set_actions([{"type": &"SET_WEAPON_STATS", "params": {"target_card_instance_id": "$binding_context.card_instance_id", "might_delta": 0, "range_delta": 2, "duration": &"THIS_OWNER_TURN", "stack": true}}])
+	w093.description = "对此牌使用聚能时，本回合额外使此牌范围+2。"
 	effects[w093.effect_id] = w093
 
-	# 094 被光束名武器攻击时弃攻击牌响应，威力-5（01光束军刀/16光束步枪）
+	# 094 被光束名武器攻击时弃行动牌响应，威力-5（01光束军刀/16光束步枪）
 	var w094 := _ActionEffect.new()
 	w094.effect_id = &"equipment_effect_094"
-	w094.display_name = "被光束名武器攻击时弃攻击牌响应，威力-5"
+	w094.display_name = "被光束名武器攻击时弃行动牌响应，威力-5"
 	w094.mode = _TC.MODE_AVAILABILITY
 	w094.priority = 10
 	w094.availability_priority = 5
@@ -2474,22 +2474,22 @@ static func build_equipment_effects() -> Dictionary:
 	w094.listen_action_type = &"attack"
 	w094.set_conditions([
 		{"op": &"SELF_MECH_IS_ATTACK_TARGET"},
-		{"op": &"WEAPON_NAME_CONTAINS", "params": {"substring": "光束"}},
-		{"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"card_type": &"attack", "count": 1}},
+		{"op": &"WEAPON_NAME_CONTAINS", "substring": "光束"},
+		{"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"count": 1}},
 	])
 	w094.set_target_rules([{"rule": &"NO_TARGET"}])
-	w094.set_costs([{"cost_type": &"DISCARD_ACTION_CARD", "count": 1, "optional": false, "params": {"card_type": &"attack", "reason": &"weapon_named_response"}}])
+	w094.set_costs([{"cost_type": &"DISCARD_ACTION_CARD", "count": 1, "optional": false, "params": {"reason": &"weapon_named_response"}}])
 	w094.set_actions([
 		{"type": &"RESPOND_ATTACK", "params": {"source_type": &"equipment", "source_card_instance_id": "$binding_context.card_instance_id", "is_counter_card": false}},
 		{"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": -5}},
 	])
-	w094.description = "机甲被名称带有光束的武器攻击时，可弃1张攻击行动牌响应，使该攻击威力-5。"
+	w094.description = "机甲被名称带有光束的武器攻击时，可弃1张行动牌响应，使该攻击威力-5。"
 	effects[w094.effect_id] = w094
 
-	# 095 聚能后本回合威力+3（02热能战斧/16光束步枪）
+	# 095 聚能后本回合威力+4（02热能战斧/16光束步枪）
 	var w095 := _ActionEffect.new()
 	w095.effect_id = &"equipment_effect_095"
-	w095.display_name = "聚能后本回合威力+3"
+	w095.display_name = "聚能后本回合威力+4"
 	w095.mode = _TC.MODE_LISTEN
 	w095.priority = 10
 	w095.listen_timing = _TC.EFFECT_FIRE_AFTER
@@ -2497,14 +2497,14 @@ static func build_equipment_effects() -> Dictionary:
 	w095.set_conditions([{"op": &"ENERGY_TARGET_IS_SELF"}])
 	w095.set_target_rules([{"rule": &"NO_TARGET"}])
 	w095.set_costs([])
-	w095.set_actions([{"type": &"SET_WEAPON_STATS", "params": {"target_card_instance_id": "$binding_context.card_instance_id", "might_delta": 3, "range_delta": 0, "duration": &"THIS_OWNER_TURN", "stack": true}}])
-	w095.description = "对此牌使用聚能时，本回合额外使此牌威力+3。"
+	w095.set_actions([{"type": &"SET_WEAPON_STATS", "params": {"target_card_instance_id": "$binding_context.card_instance_id", "might_delta": 4, "range_delta": 0, "duration": &"THIS_OWNER_TURN", "stack": true}}])
+	w095.description = "对此牌使用聚能时，本回合额外使此牌威力+4。"
 	effects[w095.effect_id] = w095
 
-	# 096 被热能名武器攻击时弃攻击牌响应，威力-5（02热能战斧/17热能机枪）
+	# 096 被热能名武器攻击时弃行动牌响应，威力-5（02热能战斧/17热能机枪）
 	var w096 := _ActionEffect.new()
 	w096.effect_id = &"equipment_effect_096"
-	w096.display_name = "被热能名武器攻击时弃攻击牌响应，威力-5"
+	w096.display_name = "被热能名武器攻击时弃行动牌响应，威力-5"
 	w096.mode = _TC.MODE_AVAILABILITY
 	w096.priority = 10
 	w096.availability_priority = 5
@@ -2512,16 +2512,16 @@ static func build_equipment_effects() -> Dictionary:
 	w096.listen_action_type = &"attack"
 	w096.set_conditions([
 		{"op": &"SELF_MECH_IS_ATTACK_TARGET"},
-		{"op": &"WEAPON_NAME_CONTAINS", "params": {"substring": "热能"}},
-		{"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"card_type": &"attack", "count": 1}},
+		{"op": &"WEAPON_NAME_CONTAINS", "substring": "热能"},
+		{"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"count": 1}},
 	])
 	w096.set_target_rules([{"rule": &"NO_TARGET"}])
-	w096.set_costs([{"cost_type": &"DISCARD_ACTION_CARD", "count": 1, "optional": false, "params": {"card_type": &"attack", "reason": &"weapon_named_response"}}])
+	w096.set_costs([{"cost_type": &"DISCARD_ACTION_CARD", "count": 1, "optional": false, "params": {"reason": &"weapon_named_response"}}])
 	w096.set_actions([
 		{"type": &"RESPOND_ATTACK", "params": {"source_type": &"equipment", "source_card_instance_id": "$binding_context.card_instance_id", "is_counter_card": false}},
 		{"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": -5}},
 	])
-	w096.description = "机甲被名称带有热能的武器攻击时，可弃1张攻击行动牌响应，使该攻击威力-5。"
+	w096.description = "机甲被名称带有热能的武器攻击时，可弃1张行动牌响应，使该攻击威力-5。"
 	effects[w096.effect_id] = w096
 
 	# 097 命中后可使本次攻击损伤标记+2（03破甲狼爪/09重型锤矛）

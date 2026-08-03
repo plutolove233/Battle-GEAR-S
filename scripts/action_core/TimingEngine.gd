@@ -366,7 +366,7 @@ func _handle_response_window(_timing: StringName, action, availability_entries: 
 		var card_instance_id: StringName = entry.get("card_instance_id", &"")
 
 		# 检查可用条件
-		if not _check_availability(effect, action, card_instance_id):
+		if not _check_availability(effect, action, card_instance_id, entry.get("binding_context", {})):
 			continue
 
 		# 构建显示数据
@@ -525,6 +525,35 @@ func handle_response_selection(action_id: StringName, selected_cards: Array[Dict
 			"target_id": attack_action.record.get("target_id", &""),
 			"attacker_id": attack_action.record.get("attacker_id", &""),
 		}
+		# 装备响应效果含弃牌费用（094/096 光束/热能响应）：先弹"弃1张行动牌"选择窗，
+		# 玩家选牌后续跑（弃牌 + 执行效果 actions）。不直接 _execute_effect_by_id--
+		# 那会走非可选弃牌的 _pay_costs 自动弃第一张牌（无弹窗），且无攻击牌时 can_pay 失败致效果不执行。
+		var nc_effect: ActionEffect = card_data.get("effect")
+		if nc_effect != null and _effect_has_discard_cost(nc_effect):
+			var _rd_count := 1
+			for _rd_cost in nc_effect.costs:
+				if _rd_cost is Dictionary and _rd_cost.get("cost_type", &"") == &"DISCARD_ACTION_CARD":
+					_rd_count = int(_rd_cost.get("count", 1))
+					break
+			_pending_effect[action_id] = {
+				"effect": nc_effect,
+				"payload": nc_payload,
+				"phase": &"response_discard",
+			}
+			attack_action.state = &"waiting_timing"
+			response_window_closed.emit(action_id, selected_cards)
+			action_needs_input.emit(action_id, &"select_discard_cards", {
+				"action_id": action_id,
+				"player_id": responder_player_id,
+				"discard_player_id": responder_player_id,
+				"count": _rd_count,
+				"face_up": true,
+				"optional": false,
+				"effect_id": effect_id,
+				"source_label": "%s：弃置1张行动牌响应" % String(card.def.display_name),
+			})
+			SLog.log_raw("[ACTION] %s 装备响应效果 %s 挂起弃牌选择（持有者 %s）" % [String(action_id), String(effect_id), String(responder_player_id)])
+			return
 		_execute_effect_by_id(effect_id, nc_payload, attack_action)
 		SLog.log_raw("[ACTION] %s 被 %s 响应(非迎击牌效果 %s)" % [String(action_id), String(card_instance_id), String(effect_id)])
 		# 若创建了子动作（如 single_move），attack 等其完成；否则同步完成恢复 attack
@@ -823,7 +852,7 @@ func get_available_cards(timing: StringName, action) -> Array[Dictionary]:
 			continue
 		# 检查可用条件
 		var card_instance_id: StringName = entry.get("card_instance_id", &"")
-		if _check_availability(effect, action, card_instance_id):
+		if _check_availability(effect, action, card_instance_id, entry.get("binding_context", {})):
 			result.append({
 				"effect_id": effect.effect_id,
 				"card_instance_id": entry.get("card_instance_id", &""),
@@ -844,7 +873,7 @@ func get_available_cards(timing: StringName, action) -> Array[Dictionary]:
 			continue
 		var pbind: Dictionary = pentry.get("binding_context", {})
 		var pcid: StringName = pentry.get("card_instance_id", pbind.get("card_instance_id", &""))
-		if _check_availability(peffect, action, pcid):
+		if _check_availability(peffect, action, pcid, pbind):
 			result.append({
 				"effect_id": peffect.effect_id,
 				"card_instance_id": pcid,
@@ -1080,6 +1109,14 @@ func _request_target_selection(effect: ActionEffect, payload: Dictionary, action
 func _has_optional_discard_cost(effect: ActionEffect) -> bool:
 	for cost in effect.costs:
 		if cost is Dictionary and cost.get("cost_type", &"") == &"DISCARD_ACTION_CARD" and cost.get("optional", false):
+			return true
+	return false
+
+
+## 效果是否含弃置行动牌费用（不论 optional）。用于装备响应效果（094/096）判断是否需弹弃牌选择窗。
+func _effect_has_discard_cost(effect: ActionEffect) -> bool:
+	for cost in effect.costs:
+		if cost is Dictionary and cost.get("cost_type", &"") == &"DISCARD_ACTION_CARD":
 			return true
 	return false
 
@@ -1451,6 +1488,48 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 			context.action_engine.continue_action(action_id, {})
 		return
 
+	# ── 响应窗口装备效果的弃牌阶段（094/096 光束/热能响应）：玩家选了1张行动牌或取消 ──
+	if phase == &"response_discard":
+		if input_data.get("cancelled", false):
+			# 取消：不执行效果，回退 responded（攻击目标未响应），attack 继续（攻击方放损伤）
+			SLog.log_raw("[TIMING] %s 装备响应弃牌被取消，effect=%s 不执行，回退 responded" % [String(action_id), String(effect.effect_id)])
+			action.record["responded"] = false
+			action.record.erase("response_card_id")
+			action.record.erase("response_source")
+			if context.action_engine != null:
+				action.state = &"waiting_timing"
+				context.action_engine.continue_action(action_id, {})
+			return
+		# 选了牌：注入 selected_action_card_ids，支付弃牌费用后执行效果 actions
+		var rd_selected: Array = input_data.get("selected_action_card_ids", [])
+		payload["selected_action_card_ids"] = rd_selected
+		SLog.log_effect(effect.effect_id, action.source, action.action_id, String(action.action_type), {"status": "resuming_response_discard", "selected": rd_selected})
+		# 支付弃牌费用（CostChecker.pay_single 用 selected_action_card_ids 弃指定牌）
+		_pay_costs(effect, payload, action)
+		payload["_optional_discard_paid"] = true  # 防 _execute_effect 重跑时再走弃牌弹窗/扣费
+		_announce_equipment_effect(effect, payload, action)
+		_execute_actions(effect, payload, action)
+		if action.state == &"waiting_timing" and _pending_effect.has(action.action_id):
+			return
+		effect_executed.emit(effect.effect_id, action.action_id)
+		_mark_effect_executed(effect.effect_id, action.action_id)
+		_mark_once_per_turn_used(effect, payload)
+		# 若创建了子动作（如 single_move），attack 等其完成；否则恢复 attack 继续结算
+		var _rd_has_pending_sub := false
+		if context.action_registry != null:
+			for _rd_sub_id: StringName in action.pending_effect_action_ids:
+				var _rd_sub = context.action_registry.get_action(_rd_sub_id)
+				if _rd_sub != null and _rd_sub.state != &"completed" and _rd_sub.state != &"cancelled":
+					_rd_has_pending_sub = true
+					break
+		if _rd_has_pending_sub:
+			action.state = &"waiting_effect_action"
+			return
+		if context.action_engine != null:
+			action.state = &"waiting_timing"
+			context.action_engine.continue_action(action_id, {})
+		return
+
 	# 取消：不弃牌、不执行 actions，直接恢复 attack 继续结算。
 	# 翻转后（handler 先跑再 fire timing）：ATTACK_SETTLE fire 时 _step_settle handler 已执行（写日志），
 	# flash_effect2 挂起使 attack 停在 settle 步的 timing_firing 阶段。恢复时应推进到 timing_done
@@ -1775,13 +1854,13 @@ func clear_executed_effects_for_action(action_id: StringName) -> void:
 ## 检查可用条件
 ## card_instance_id 由调用方从监听器 entry 传入（注册时存入）；
 ## AVAILABILITY 效果是共享 Resource，其 source 不携带具体牌实例，故不能依赖 effect.source。
-func _check_availability(effect: ActionEffect, action, card_instance_id: StringName = &"") -> bool:
+func _check_availability(effect: ActionEffect, action, card_instance_id: StringName = &"", bind_ctx: Dictionary = {}) -> bool:
 	var condition: StringName = effect.availability_condition
-	if condition == &"":
-		return true
-
-	# 检查 context.game_state 是否可用
-	if context == null or context.get("game_state") == null:
+	# availability_condition 为空时跳过专用可用性检查，回退到通用 set_conditions 检查（见函数末尾）。
+	# 装备 AVAILABILITY 效果（094/096 光束/热能响应）用 set_conditions 表达
+	# "持有者被攻击 + 攻击武器名匹配 + 手牌有行动牌"，须在可用性阶段过滤，
+	# 否则所有玩家的同名武器牌都会进入响应窗口（只有持有者才能用）。
+	if condition != &"" and (context == null or context.get("game_state") == null):
 		return false
 
 	if condition == _TimingConst.AVAIL_RESPOND_ATTACK:
@@ -1869,8 +1948,27 @@ func _check_availability(effect: ActionEffect, action, card_instance_id: StringN
 		var map_cells: Dictionary = context.game_state.map_state.cells if context.game_state.map_state else {}
 		return _RangeCalculator.is_in_weapon_range(holder_mech.position, attacker_mech.position, max_range, map_cells)
 
+	# 通用 set_conditions 检查：availability_condition 为空（或已通过专用检查）时，
+	# 进一步用效果的 set_conditions 过滤（094/096 等）。payload 取攻击动作 record + binding_context。
+	if effect.conditions.size() > 0:
+		if context == null or context.get("game_state") == null:
+			return false
+		var avail_payload: Dictionary = action.record.duplicate()
+		avail_payload["action_id"] = action.action_id
+		avail_payload["action_type"] = action.action_type
+		if not bind_ctx.is_empty():
+			avail_payload["binding_context"] = bind_ctx
+		elif card_instance_id != &"":
+			var av_card = context.game_state.get_card(card_instance_id)
+			if av_card != null:
+				avail_payload["binding_context"] = {
+					"card_instance_id": card_instance_id,
+					"mech_id": av_card.mech_id,
+					"player_id": av_card.owner_player_id,
+				}
+		if not _check_conditions(effect, avail_payload, action):
+			return false
 	return true
-
 
 ## 检查是否被抑制
 func _is_effect_suppressed(timing: StringName, effect: ActionEffect) -> bool:

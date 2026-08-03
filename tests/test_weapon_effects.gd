@@ -482,10 +482,10 @@ func test_weapon_093_energy_range_bonus() -> Variant:
 	var uc_a = battle.context.action_registry.get_action(ef_id)
 	var energy_tgt: String = String(uc_a.record.get("energy_target_weapon_instance_id", &"")) if uc_a != null else "removed"
 	var range_mods: Array = card.range_modifiers if "range_modifiers" in card else []
-	# effect_093：范围+1（2->3）
+	# effect_093：范围+2（2->4）
 	var range_after: int = int(_GenEquipEffects.get_effective_weapon_stats(card).get("range_value", 0))
-	if range_after != 3:
-		return "effect_093 聚能后范围应=3（2+1），实际 %d energy_tgt=%s range_mods=%s" % [range_after, energy_tgt, str(range_mods)]
+	if range_after != 4:
+		return "effect_093 聚能后范围应=4（2+2），实际 %d energy_tgt=%s range_mods=%s" % [range_after, energy_tgt, str(range_mods)]
 	return true
 
 

@@ -8,6 +8,7 @@ class_name EquipmentPanel
 const _MechState = preload("res://scripts/runtime/MechState.gd")
 const _MechSlotState = preload("res://scripts/runtime/MechSlotState.gd")
 const _EquipmentCardDef = preload("res://scripts/card_defs/EquipmentCardDef.gd")
+const _GenEquipEffects = preload("res://scripts/generated_database/GeneratedEquipmentEffects.gd")
 
 ## 备用区设置按钮被点击（参数：备用区槽位ID，如"reserve_1"）
 signal reserve_set_clicked(slot_id: StringName)
@@ -351,6 +352,48 @@ func _make_tooltip_stylebox() -> StyleBoxFlat:
 	return sb
 
 
+## 武器当前状态详情（用于 tooltip）：有效威力/范围 + 修正来源 + 聚能层数与理论加成。
+## 聚能加成（威力+delta*stacks）只在攻击时触发，此处仅告知玩家理论上限。
+func _weapon_status_bbcode(slot, cid: StringName) -> String:
+	if slot == null or slot.equipped_card == null:
+		return ""
+	var card = slot.equipped_card
+	var stats: Dictionary = _GenEquipEffects.get_effective_weapon_stats(card)
+	var might_e: int = int(stats.get("might", 0))
+	var range_e: int = int(stats.get("range_value", 0))
+	var lines: Array = []
+	lines.append("[color=#8cf]当前 威%d 射%d[/color]" % [might_e, range_e])
+	# 修正来源（聚能 effect_093/095 临时+范围/威力、其他 might/range_modifiers、形态）
+	var mods: Array = []
+	if "might_modifiers" in card and card.might_modifiers is Array:
+		for m in card.might_modifiers:
+			if m is Dictionary:
+				mods.append("威%+d" % int(m.get("delta", 0)))
+	if "range_modifiers" in card and card.range_modifiers is Array:
+		for m in card.range_modifiers:
+			if m is Dictionary:
+				mods.append("射%+d" % int(m.get("delta", 0)))
+	var mode: StringName = card.weapon_mode if "weapon_mode" in card else &""
+	if String(mode) == "extended":
+		mods.append("形态:威-5射+2")
+	if not mods.is_empty():
+		lines.append("[color=#9c9]修正：%s[/color]" % " ".join(mods))
+	# 聚能状态（按 weapon_id=该牌实例 匹配，每张武器牌独立）
+	if _mech != null and _mech.statuses is Array:
+		var stacks := 0
+		var delta := 4
+		for s in _mech.statuses:
+			if s is Dictionary and s.get("type", &"") == &"ENERGY_CHARGE" and String(s.get("weapon_id", &"")) == String(cid):
+				stacks = int(s.get("stacks", 1))
+				delta = int(s.get("delta", 4))
+				break
+		if stacks > 0:
+			lines.append("[color=#fc6]聚能 %d层（攻击时威力+%d）[/color]" % [stacks, delta * stacks])
+	if lines.size() <= 1:
+		return ""
+	return "\n".join(lines)
+
+
 func _build_tooltip_bbcode(slot, cid: StringName) -> String:
 	if slot == null or slot.equipped_card == null or slot.equipped_card.def == null:
 		return ""
@@ -376,6 +419,11 @@ func _build_tooltip_bbcode(slot, cid: StringName) -> String:
 			stats.append("武器")
 	if not stats.is_empty():
 		lines.append("[color=#9cf]%s[/color]" % " ".join(stats))
+	# 武器状态详情：当前有效威力/范围 + 修正来源 + 聚能层数（理论加成）
+	if def is _EquipmentCardDef and def.equipment_kind == &"WEAPON":
+		var wstat := _weapon_status_bbcode(slot, cid)
+		if wstat != "":
+			lines.append(wstat)
 	# 损伤/耐久
 	if def is _EquipmentCardDef:
 		var dur: int = def.durability
