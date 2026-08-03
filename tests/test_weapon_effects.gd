@@ -631,3 +631,43 @@ func test_weapon_122_self_damage_extra_markers() -> Variant:
 	await _pump_frames(3)
 	return true
 
+
+## ⑭ effect_115：weapon_018 光束霰弹枪命中相邻目标+2损伤（TARGET_IS_ADJACENT 条件）
+func test_weapon_115_adjacent_extra_markers() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	_GenEquipEffects.set_aura_game_state(battle.context.game_state)
+	var cid: StringName = await _equip_weapon(battle, "weapon_018_光束霰弹枪")
+	if cid == &"":
+		return "装备 weapon_018 失败"
+	var gs = battle.context.game_state
+	var pm = gs.get_mech_for_player(&"player")
+	var em = gs.get_mech_for_player(&"enemy")
+	em.current_hp = 100
+	pm.position = {"q": 5, "r": 0}
+	em.position = {"q": 6, "r": 0}  # 距离1=相邻，在射程3内
+	_clear_enemy_hand(battle)
+	battle.context.action_ui_bridge.context = battle.context
+	var atk_card: StringName = _ensure_attack_card_in_hand(battle)
+	if atk_card == &"":
+		return "玩家无攻击牌"
+	var atk_result: Dictionary = battle.execute_attack_action(&"player", &"enemy", cid, atk_card)
+	var attack_id: StringName = atk_result.get("action_id", &"") if atk_result is Dictionary else &""
+	if attack_id == &"":
+		return "攻击未发起"
+	await _pump_frames(5)
+	# effect_115 在 ATTACK_AFTER 弹 CHOOSE_ONE（相邻+2）
+	var wait_info: Dictionary = battle.context.action_ui_bridge.get_waiting_action_info()
+	if String(wait_info.get("input_type", &"")) != &"choose_one_effect":
+		_drive_damage_placement(battle, attack_id)
+		return "effect_115 未弹 choose_one_effect（wait=%s）" % String(wait_info.get("input_type", &""))
+	battle.context.timing_engine.resume_pending_effect(attack_id, {"chosen_option_index": 0})
+	await _pump_frames(3)
+	var atk2 = battle.context.action_registry.get_action(attack_id)
+	if atk2 != null and int(atk2.record.get("extra_markers", 0)) != 2:
+		return "effect_115 相邻应使 extra_markers=2，实际 %d" % int(atk2.record.get("extra_markers", 0))
+	_drive_damage_placement(battle, attack_id)
+	await _pump_frames(3)
+	return true
+
