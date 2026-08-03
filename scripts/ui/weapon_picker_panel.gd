@@ -159,7 +159,7 @@ func _refresh() -> void:
 			var wstat_tag: String = ""
 			if bool(card.counters.get("cooldown_active", false)) if "counters" in card else false:
 				wstat_tag = " [冷却中]"
-			elif card.get("lock_target_mech_id", &"") != &"":
+			elif (card.lock_target_mech_id if "lock_target_mech_id" in card else &"") != &"":
 				wstat_tag = " [锁定中]"
 			if not vw.is_empty():
 				btn.text = "%s(虚拟武器) [威力:%d 射程:%d]%s" % [
