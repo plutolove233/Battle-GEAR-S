@@ -517,6 +517,16 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 				aetw_weapon = _resolve_atomic_value(aetw_weapon, payload, parent_action)
 		if aetw_weapon != &"" and parent_action != null and parent_action.record is Dictionary:
 			parent_action.record["energy_target_weapon_instance_id"] = aetw_weapon
+			# fire EFFECT_FIRE_AFTER 触发武器聚能联动效果（effect_093/095/114/126 监听此点）。
+			# 聚能经 use_action_card 执行（不发 EFFECT_FIRE_AFTER），故在此补 fire。
+			# payload=parent_action.record.duplicate() 含 energy_target_weapon_instance_id。
+			if context != null and context.timing_engine != null:
+				# fire_timing 在 action.state=waiting_timing 时跳过；resume 重跑 _execute_effect 时
+				# use_action_card 仍处 waiting_timing，需临时设 running 让 fire 生效，再恢复。
+				var _saved_state: StringName = parent_action.state
+				parent_action.state = &"running"
+				context.timing_engine.fire_timing(&"EFFECT_FIRE_AFTER", parent_action)
+				parent_action.state = _saved_state
 
 	# INCREMENT_VARIABLE scope=attack：写父 attack 动作 record["variables"][name]，
 	# 供同 attack 的 ATTACK_SETTLE 时点经 VARIABLE_ABOVE(scope=attack) 读取（effect_106/108/117）。

@@ -2455,7 +2455,7 @@ static func build_equipment_effects() -> Dictionary:
 	w093.mode = _TC.MODE_LISTEN
 	w093.priority = 10
 	w093.listen_timing = _TC.EFFECT_FIRE_AFTER
-	w093.listen_action_type = &"effect_fire"
+	w093.listen_action_type = &""  # 聚能联动：APPLY_ENERGY_TO_WEAPON 特判 fire EFFECT_FIRE_AFTER
 	w093.set_conditions([{"op": &"ENERGY_TARGET_IS_SELF"}])
 	w093.set_target_rules([{"rule": &"NO_TARGET"}])
 	w093.set_costs([])
@@ -2493,7 +2493,7 @@ static func build_equipment_effects() -> Dictionary:
 	w095.mode = _TC.MODE_LISTEN
 	w095.priority = 10
 	w095.listen_timing = _TC.EFFECT_FIRE_AFTER
-	w095.listen_action_type = &"effect_fire"
+	w095.listen_action_type = &""  # 聚能联动
 	w095.set_conditions([{"op": &"ENERGY_TARGET_IS_SELF"}])
 	w095.set_target_rules([{"rule": &"NO_TARGET"}])
 	w095.set_costs([])
@@ -2808,7 +2808,7 @@ static func build_equipment_effects() -> Dictionary:
 	w114.mode = _TC.MODE_LISTEN
 	w114.priority = 10
 	w114.listen_timing = _TC.EFFECT_FIRE_AFTER
-	w114.listen_action_type = &"effect_fire"
+	w114.listen_action_type = &""  # 聚能联动
 	w114.set_conditions([{"op": &"ENERGY_TARGET_IS_SELF"}])
 	w114.set_target_rules([{"rule": &"NO_TARGET"}])
 	w114.set_costs([])
@@ -2997,7 +2997,7 @@ static func build_equipment_effects() -> Dictionary:
 	w126.mode = _TC.MODE_LISTEN
 	w126.priority = 20
 	w126.listen_timing = _TC.EFFECT_FIRE_AFTER
-	w126.listen_action_type = &"effect_fire"
+	w126.listen_action_type = &""  # 聚能联动
 	w126.set_conditions([{"op": &"ENERGY_TARGET_IS_SELF"}, {"op": &"WEAPON_IS_ON_COOLDOWN"}])
 	w126.set_target_rules([{"rule": &"NO_TARGET"}])
 	w126.set_costs([])

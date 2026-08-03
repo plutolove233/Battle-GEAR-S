@@ -425,3 +425,65 @@ func test_weapon_097_hit_extra_markers() -> Variant:
 	_drive_damage_placement(battle, attack_id)
 	await _pump_frames(3)
 	return true
+
+
+## ⑩ effect_093：weapon_001 聚能后本回合范围+1（聚能联动 ENERGY_TARGET_IS_SELF）
+func test_weapon_093_energy_range_bonus() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	_GenEquipEffects.set_aura_game_state(battle.context.game_state)
+	var cid: StringName = await _equip_weapon(battle, "weapon_001_光束军刀")
+	if cid == &"":
+		return "装备 weapon_001 失败"
+	var gs = battle.context.game_state
+	var pm = gs.get_mech_for_player(&"player")
+	gs.phase = &"MAIN"
+	gs.active_player_id = &"player"
+	battle.context.action_ui_bridge.context = battle.context
+	# 聚能前范围=2
+	var card = gs.get_card(cid)
+	var range_before: int = int(_GenEquipEffects.get_effective_weapon_stats(card).get("range_value", 0))
+	if range_before != 2:
+		return "weapon_001 初始范围应=2，实际 %d" % range_before
+	# 触发聚能：打出 action_014_聚能 行动牌（use_action_card -> energy_direct -> CHOOSE_OWN_WEAPON）
+	var energy_card: StringName = &""
+	for c in gs.deck_state.action_deck.duplicate():
+		var cc = gs.get_card(c)
+		if cc and cc.def and cc.def.card_id == "action_014_聚能":
+			energy_card = c
+			gs.deck_state.action_deck.erase(c)
+			gs.players.get(&"player").action_hand.append(c)
+			cc.zone = &"action_hand"
+			break
+	if energy_card == &"":
+		for c in gs.players.get(&"player").action_hand:
+			var cc = gs.get_card(c)
+			if cc and cc.def and cc.def.card_id == "action_014_聚能":
+				energy_card = c
+				break
+	if energy_card == &"":
+		return "找不到 action_014_聚能 牌"
+	var uc_result: Dictionary = battle.context.action_service.execute(&"use_action_card", {
+		"card_instance_id": energy_card, "player_id": &"player", "mech_id": pm.mech_id,
+	})
+	var ef_id: StringName = uc_result.get("action_id", &"") if uc_result is Dictionary else &""
+	if ef_id == &"":
+		return "聚能 use_action_card 未发起"
+	await _pump_frames(5)
+	# effect_fire 应等待选武器（select_weapon_for_charge）
+	var wait_info: Dictionary = battle.context.action_ui_bridge.get_waiting_action_info()
+	if String(wait_info.get("input_type", &"")) != &"select_weapon_for_charge":
+		return "聚能应弹 select_weapon_for_charge，实际 %s" % String(wait_info.get("input_type", &""))
+	# 选 weapon_001 聚能
+	battle.context.timing_engine.resume_pending_effect(ef_id, {"selected_weapon_id": cid})
+	await _pump_frames(5)
+	# 诊断：energy_target 是否写入 + range_modifiers
+	var uc_a = battle.context.action_registry.get_action(ef_id)
+	var energy_tgt: String = String(uc_a.record.get("energy_target_weapon_instance_id", &"")) if uc_a != null else "removed"
+	var range_mods: Array = card.range_modifiers if "range_modifiers" in card else []
+	# effect_093：范围+1（2->3）
+	var range_after: int = int(_GenEquipEffects.get_effective_weapon_stats(card).get("range_value", 0))
+	if range_after != 3:
+		return "effect_093 聚能后范围应=3（2+1），实际 %d energy_tgt=%s range_mods=%s" % [range_after, energy_tgt, str(range_mods)]
+	return true
