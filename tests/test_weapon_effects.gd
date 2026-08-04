@@ -1487,6 +1487,86 @@ func test_weapon_130_transform_repair() -> Variant:
 	return true
 
 
+## effect_135：weapon_037 多功能机械臂「弃2抽2」分支
+## 验证：持有者自选2张行动牌弃置（非随机/非前N张），再抽2张，之后自损2
+func test_weapon_135_discard_draw_branch() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	_GenEquipEffects.set_aura_game_state(battle.context.game_state)
+	var gs = battle.context.game_state
+	gs.active_player_id = &"player"
+	gs.phase = &"MAIN"
+	var pm = gs.get_mech_for_player(&"player")
+	# 装备多功能机械臂（R稀有度，在 equipment_deck）
+	var arm_cid: StringName = _ensure_equipment_in_hand(battle, "weapon_037_多功能机械臂")
+	if arm_cid == &"":
+		return "找不到 weapon_037"
+	var set_res: Dictionary = battle.context.card_set_service.set_equipment(&"player", arm_cid, &"weapon_1")
+	if not set_res.get("ok", false):
+		return "装备 weapon_037 失败: %s" % String(set_res.get("message", ""))
+	await _pump_frames(3)
+	# 玩家机甲满血无损伤 -> 无维修目标 -> CHOOSE_ONE 仅「弃2抽2」可用
+	pm.current_hp = pm.max_hp
+	for slot_id in pm.slots:
+		var slot = pm.slots[slot_id]
+		if slot:
+			slot.region_damage_tokens = 0
+	# 确保 ≥3 行动牌（弃2后留≥1）
+	var pl = gs.players.get(&"player")
+	while pl.action_hand.size() < 3 and not gs.deck_state.action_deck.is_empty():
+		var dc: StringName = gs.deck_state.action_deck[0]
+		gs.deck_state.action_deck.remove_at(0)
+		pl.action_hand.append(dc)
+		var cc = gs.get_card(dc)
+		if cc:
+			cc.zone = &"action_hand"
+			cc.owner_player_id = &"player"
+	var hand_before: int = pl.action_hand.size()
+	var discard_cards: Array = pl.action_hand.slice(0, 2)
+	battle.context.action_ui_bridge.context = battle.context
+	# 触发 effect_135
+	var src: Dictionary = {"card_instance_id": arm_cid, "mech_id": pm.mech_id, "player_id": &"player", "effect_id": &"equipment_effect_135"}
+	battle.context.action_service.execute(&"effect_fire", {
+		"effect_id": &"equipment_effect_135", "player_id": &"player",
+		"source_mech_id": pm.mech_id, "card_instance_id": arm_cid,
+		"phase": &"MAIN", "source": src,
+	})
+	await _pump_frames(3)
+	# ① 应弹 choose_one_effect（仅「弃2抽2」可用，optional 弹窗）
+	var ef_action = null
+	for a in battle.context.action_registry.get_actions_by_type(&"effect_fire"):
+		if a.state == &"waiting_timing":
+			ef_action = a
+			break
+	if ef_action == null:
+		return "effect_135 未挂起在 CHOOSE_ONE"
+	var bridge = battle.context.action_ui_bridge
+	var w0: Dictionary = bridge.get_waiting_action_info()
+	if String(w0.get("input_type", &"")) != &"choose_one_effect":
+		return "应弹 choose_one_effect，实际 %s" % String(w0.get("input_type", &""))
+	# 选「弃2抽2」(option_1)
+	battle.context.timing_engine.resume_pending_effect(ef_action.action_id, {"chosen_option_index": 1})
+	await _pump_frames(3)
+	# ② 应弹 select_discard_cards（持有者自选2张，非随机/非前N张）
+	var w1: Dictionary = bridge.get_waiting_action_info()
+	if String(w1.get("input_type", &"")) != &"select_discard_cards":
+		return "应弹 select_discard_cards（玩家自选弃牌），实际 %s" % String(w1.get("input_type", &""))
+	bridge.on_ui_confirmed({"determined_card_ids": discard_cards})
+	await _pump_frames(6)
+	# 断言：弃2抽2 -> 手牌数不变，2张进弃牌堆，机械臂自损2
+	if pl.action_hand.size() != hand_before:
+		return "弃2抽2后手牌数应不变(%d)，实际 %d" % [hand_before, pl.action_hand.size()]
+	for dc: StringName in discard_cards:
+		var dc_card = gs.get_card(dc)
+		if dc_card == null or String(dc_card.zone) != &"discard":
+			return "弃置的牌应进弃牌堆，zone=%s" % (String(dc_card.zone) if dc_card != null else "null")
+	var arm_card = gs.get_card(arm_cid)
+	if arm_card == null or int(arm_card.damage_tokens) != 2:
+		return "机械臂应自损2，实际 damage_tokens=%d" % (int(arm_card.damage_tokens) if arm_card != null else -1)
+	return true
+
+
 ## effect_102/102b：weapon_008 断甲长刀 命中后+2，之后(ATTACK_SETTLE)自损1
 ## 验证「之后」：+2 在 ATTACK_AFTER 写入 extra_markers、step⑦ 放到目标后，自损1 才在 ATTACK_SETTLE 落点
 func test_weapon_102_plus2_then_settle_self_damage() -> Variant:

@@ -1497,6 +1497,16 @@ func _extract_discard_params(action_def: Dictionary, payload: Dictionary, parent
 		result["executor"] = &"system_random"
 	else:
 		result["executor"] = params.get("executor", &"")
+	# from_target=false + choose=true：持有者从己方手牌自选弃置（多功能机械臂「弃2抽2」等）。
+	# executor 须置为来源玩家才触发 select_discard_cards UI；否则 executor 空走 system_default
+	# 弃前N张牌（非玩家所选）。player_id 一并置上供 UI discard_player_id 路由。
+	if not from_target and bool(params.get("choose", false)) and String(result.get("executor", &"")) == "":
+		var _self_choose_pid: StringName = StringName(payload.get("player_id", &""))
+		if _self_choose_pid == &"" and parent_action != null and parent_action.source is Dictionary:
+			_self_choose_pid = parent_action.source.get("player_id", &"")
+		if _self_choose_pid != &"":
+			result["executor"] = _self_choose_pid
+			result["player_id"] = _self_choose_pid
 	result["choose"] = params.get("choose", false)
 	result["face_up"] = params.get("face_up", true)
 	result["reason"] = params.get("reason", &"effect")
