@@ -416,3 +416,41 @@ func test_lark_virtual_weapon_select_flow() -> Variant:
 		return "effect_088 应施加 CANNOT_RESTORE_POWER"
 	_drive_damage_placement(battle, attack_id)
 	return true
+
+
+## ⑦ 虚拟武器攻击动力=0：effect_088 必耗 ALL_CURRENT 不可支付，取消攻击（不能攻击）
+func test_lark_virtual_weapon_no_power_cancels() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	if not await _equip_part(battle, "part_122_帝国的神莺_躯干", &"躯干"):
+		return "装备神莺躯干失败"
+	var gs = battle.context.game_state
+	var pm = gs.get_mech_for_player(&"player")
+	var em = gs.get_mech_for_player(&"enemy")
+	var torso_card = pm.slots.get(&"躯干").equipped_card
+	var virtual_weapon_id: StringName = torso_card.instance_id
+	pm.power = 0  # 动力不足
+	pm.position = {"q": 5, "r": 0}
+	em.position = {"q": 6, "r": 0}
+	_clear_enemy_hand(battle)
+	battle.context.action_ui_bridge.context = battle.context
+	var atk_card: StringName = _ensure_attack_card_in_hand(battle)
+	if atk_card == &"":
+		return "玩家无攻击牌"
+	var atk_result: Dictionary = battle.execute_attack_action(&"player", &"enemy", virtual_weapon_id, atk_card)
+	var attack_id: StringName = atk_result.get("action_id", &"") if atk_result is Dictionary else &""
+	if attack_id == &"":
+		return "虚拟武器攻击未发起"
+	await _pump_frames(6)
+	# effect_088 必耗 ALL_CURRENT 不可支付(动力=0) -> 取消父攻击
+	var atk2 = battle.context.action_registry.get_action(attack_id)
+	if atk2 != null and atk2.state != &"cancelled":
+		return "动力=0 应取消攻击，实际 state=%s power=%d" % [String(atk2.state), int(pm.power)]
+	if int(pm.power) != 0:
+		return "取消后动力应仍为0，实际 %d" % int(pm.power)
+	# 不应施加 CANNOT_RESTORE_POWER（cost 失败，action 未执行）
+	for s in pm.statuses:
+		if s is Dictionary and s.get("type", &"") == &"CANNOT_RESTORE_POWER":
+			return "动力不足取消攻击，不应施加 CANNOT_RESTORE_POWER"
+	return true

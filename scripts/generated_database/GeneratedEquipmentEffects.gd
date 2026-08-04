@@ -2428,7 +2428,6 @@ static func build_equipment_effects() -> Dictionary:
 	lark_torso_cost.set_conditions([
 		{"op": &"SELF_MECH_IS_ATTACKER"},
 		{"op": &"ATTACK_SOURCE_IS_SELF"},
-		{"op": &"OWNER_POWER_ABOVE_OR_EQUAL", "threshold": 1},
 	])
 	lark_torso_cost.set_target_rules([{"rule": &"NO_TARGET"}])
 	lark_torso_cost.set_costs([
@@ -2437,7 +2436,7 @@ static func build_equipment_effects() -> Dictionary:
 	lark_torso_cost.set_actions([
 		{"type": &"ADD_STATUS", "params": {"status_type": &"CANNOT_RESTORE_POWER", "target_id": "$binding_context.mech_id", "duration": &"UNTIL_OWNER_TURN_START", "source_card_id": "$binding_context.card_instance_id"}},
 	])
-	lark_torso_cost.description = "使用此牌发动攻击需要消耗当前所有动力(不为0)，且直到下个我方回合开始无法回复。"
+	lark_torso_cost.description = "使用此牌发动攻击需要消耗当前所有动力(不为0)，且直到下个我方回合开始无法回复。动力不足时不能攻击。"
 	effects[lark_torso_cost.effect_id] = lark_torso_cost
 
 	# ═══════════════════════════════════════════════════════════════
@@ -3629,7 +3628,13 @@ static func get_weapon_attack_power_cost(card, context = null) -> int:
 				continue
 			if cost.get("optional", false):
 				continue
-			total += int(cost.get("amount", 0))
+			# ALL_CURRENT（神莺躯干虚拟武器）：耗尽全部动力，须动力>0 才可支付，等价门槛 1。
+			# int("ALL_CURRENT")=0 会让选框误判"无需动力"，故特判为 1。
+			var amt_raw = cost.get("amount", 0)
+			if str(amt_raw) == "ALL_CURRENT":
+				total += 1
+			else:
+				total += int(amt_raw)
 	return total
 
 
