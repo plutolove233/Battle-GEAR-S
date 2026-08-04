@@ -87,6 +87,10 @@ func start_turn(player_id: StringName) -> Dictionary:
 		drawn_actions = context.deck_service.draw_from_deck(&"action_deck", 2)
 		for card_id: StringName in drawn_actions:
 			player.action_hand.append(card_id)
+			# 标记归属玩家（draw_from_deck 不设 owner_player_id；条件检查/离场效果依赖此字段）
+			var _ac = context.game_state.get_card(card_id)
+			if _ac:
+				_ac.owner_player_id = player_id
 			# 注册 AVAILABILITY 效果（迎击牌等的响应窗口监听器）；
 			# 否则后续被攻击时响应窗口不会弹出
 			if context.has_method("register_hand_card_availability"):
@@ -98,6 +102,9 @@ func start_turn(player_id: StringName) -> Dictionary:
 		drawn_equipment = context.deck_service.draw_from_deck(&"equipment_deck", 1)
 		for card_id: StringName in drawn_equipment:
 			player.equipment_hand.append(card_id)
+			var _ec = context.game_state.get_card(card_id)
+			if _ec:
+				_ec.owner_player_id = player_id
 
 	# ── 7. 获得2金币 ──
 	if context.game_actions:

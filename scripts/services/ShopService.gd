@@ -81,6 +81,7 @@ func buy_normal_equipment(player_id: StringName, slot_index: int, use_face_value
 	if card:
 		card.zone = &"equipment_hand"
 		card.face_down = false
+		card.owner_player_id = player_id
 	player.equipment_hand.append(card_id)
 
 	# 清空槽位
@@ -117,6 +118,7 @@ func buy_advanced_equipment(player_id: StringName, use_face_value: bool = false)
 	player.gold -= price
 	if card:
 		card.zone = &"equipment_hand"
+		card.owner_player_id = player_id
 	player.equipment_hand.append(card_id)
 	shop.advanced_slot = &""
 
@@ -156,6 +158,7 @@ func buy_hidden_advanced(player_id: StringName) -> Dictionary:
 	if card:
 		card.zone = &"equipment_hand"
 		card.face_down = false
+		card.owner_player_id = player_id
 	player.equipment_hand.append(card_id)
 	shop.hidden_advanced_slot = &""
 

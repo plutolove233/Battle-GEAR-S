@@ -1173,7 +1173,18 @@ static func _equip_player_id(binding, payload: Dictionary) -> StringName:
 		if pid != &"":
 			return pid
 	if binding != null:
-		return binding.get_owner_player_id()
+		var opid: StringName = binding.get_owner_player_id()
+		if opid != &"":
+			return opid
+		# 退路：从来源机甲反查所属玩家（商店购买装备历史遗留未设 owner_player_id 的兜底，
+		# 否则 MULTI_ARM 等条件因 player_id 空误判分支不可用，致触发按钮禁用）。
+		var ep_ctx = binding.context
+		if ep_ctx != null and ep_ctx.get("game_state") != null:
+			var mid: StringName = _equip_mech_id(binding, payload)
+			if mid != &"":
+				var mech = ep_ctx.game_state.mechs.get(mid)
+				if mech != null:
+					return mech.owner_player_id
 	return &""
 
 

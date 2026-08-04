@@ -555,6 +555,10 @@ func draw_action_cards(params: Dictionary) -> void:
 		# 将抽到的行动牌加入玩家手牌（draw_from_deck 仅更新 zone，不维护手牌数组）
 		if player_state != null and not player_state.action_hand.has(card_id):
 			player_state.action_hand.append(card_id)
+		# 标记归属玩家（条件检查/离场效果依赖 owner_player_id）
+		var _dac = context.game_state.get_card(card_id)
+		if _dac:
+			_dac.owner_player_id = player_id
 		# 注册 AVAILABILITY 效果（迎击牌等的响应窗口监听器）；
 		# 否则被攻击时响应窗口不会弹出
 		if context.has_method("register_hand_card_availability"):
@@ -617,6 +621,10 @@ func draw_equipment_cards(params: Dictionary) -> void:
 		# 将抽到的装备牌加入玩家手牌（draw_from_deck 仅更新 zone，不维护手牌数组）
 		if player_state != null and not player_state.equipment_hand.has(card_id):
 			player_state.equipment_hand.append(card_id)
+		# 标记归属玩家
+		var _dec = context.game_state.get_card(card_id)
+		if _dec:
+			_dec.owner_player_id = player_id
 
 		context.effect_engine.fire_hook(&"ON_CARD_DRAWN", {
 			"player_id": player_id,

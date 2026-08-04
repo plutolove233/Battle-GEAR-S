@@ -1487,6 +1487,110 @@ func test_weapon_130_transform_repair() -> Variant:
 	return true
 
 
+## effect_135：满血(无维修目标)+≥2牌时触发按钮应可用（弃2抽2分支可用）
+func test_weapon_135_trigger_enabled_with_discard_branch() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	_GenEquipEffects.set_aura_game_state(battle.context.game_state)
+	var gs = battle.context.game_state
+	gs.active_player_id = &"player"
+	gs.phase = &"MAIN"
+	var pm = gs.get_mech_for_player(&"player")
+	var arm_cid: StringName = _ensure_equipment_in_hand(battle, "weapon_037_多功能机械臂")
+	if arm_cid == &"":
+		return "找不到 weapon_037"
+	battle.context.card_set_service.set_equipment(&"player", arm_cid, &"weapon_1")
+	await _pump_frames(3)
+	# 满血无损伤 -> 无维修目标
+	pm.current_hp = pm.max_hp
+	for slot_id in pm.slots:
+		var slot = pm.slots[slot_id]
+		if slot:
+			slot.region_damage_tokens = 0
+	# 确保 ≥2 行动牌（弃2抽2可用）
+	var pl = gs.players.get(&"player")
+	while pl.action_hand.size() < 2 and not gs.deck_state.action_deck.is_empty():
+		var dc: StringName = gs.deck_state.action_deck[0]
+		gs.deck_state.action_deck.remove_at(0)
+		pl.action_hand.append(dc)
+		var cc = gs.get_card(dc)
+		if cc:
+			cc.zone = &"action_hand"
+			cc.owner_player_id = &"player"
+	var hand_n: int = pl.action_hand.size()
+	if hand_n < 2:
+		return "测试前置失败：手牌不足2张"
+	# 找 effect_135 permanent listener，调 can_trigger_active_effect
+	var te = battle.context.timing_engine
+	var eff_135 = null
+	var bind_135: Dictionary = {}
+	for timing in te.permanent_listeners:
+		for entry in te.permanent_listeners[timing]:
+			if entry is Dictionary and entry.get("effect") != null and String(entry.effect.effect_id) == "equipment_effect_135":
+				eff_135 = entry.effect
+				bind_135 = entry.get("binding_context", {})
+				break
+	if eff_135 == null:
+		return "effect_135 未注册为 permanent listener"
+	var can_trigger: bool = te.can_trigger_active_effect(eff_135, bind_135)
+	if not can_trigger:
+		return "满血+≥2牌应可触发(弃2抽2分支可用)，can_trigger=false（手牌%d）" % hand_n
+	return true
+
+
+## effect_135：装备牌 owner_player_id 为空(历史抽牌/商店未设)时触发应仍可用（_equip_player_id 从机甲反查兜底）
+func test_weapon_135_trigger_no_owner_id_fallback() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	_GenEquipEffects.set_aura_game_state(battle.context.game_state)
+	var gs = battle.context.game_state
+	gs.active_player_id = &"player"
+	gs.phase = &"MAIN"
+	var pm = gs.get_mech_for_player(&"player")
+	var arm_cid: StringName = _ensure_equipment_in_hand(battle, "weapon_037_多功能机械臂")
+	if arm_cid == &"":
+		return "找不到 weapon_037"
+	# 模拟历史抽牌/商店未设 owner_player_id 的 bug 场景：装前清空
+	var arm_card_pre = gs.get_card(arm_cid)
+	if arm_card_pre != null:
+		arm_card_pre.owner_player_id = &""
+	battle.context.card_set_service.set_equipment(&"player", arm_cid, &"weapon_1")
+	await _pump_frames(3)
+	pm.current_hp = pm.max_hp
+	for slot_id in pm.slots:
+		var slot = pm.slots[slot_id]
+		if slot:
+			slot.region_damage_tokens = 0
+	var pl = gs.players.get(&"player")
+	while pl.action_hand.size() < 2 and not gs.deck_state.action_deck.is_empty():
+		var dc: StringName = gs.deck_state.action_deck[0]
+		gs.deck_state.action_deck.remove_at(0)
+		pl.action_hand.append(dc)
+		var cc = gs.get_card(dc)
+		if cc:
+			cc.zone = &"action_hand"
+			cc.owner_player_id = &"player"
+	var te = battle.context.timing_engine
+	var eff_135 = null
+	var bind_135: Dictionary = {}
+	for timing in te.permanent_listeners:
+		for entry in te.permanent_listeners[timing]:
+			if entry is Dictionary and entry.get("effect") != null and String(entry.effect.effect_id) == "equipment_effect_135":
+				eff_135 = entry.effect
+				bind_135 = entry.get("binding_context", {})
+				break
+	if eff_135 == null:
+		return "effect_135 未注册"
+	if String(bind_135.get("player_id", &"")) != &"":
+		return "测试前置失败：binding_context.player_id 应为空(模拟未设 owner_player_id)"
+	var can_trigger: bool = te.can_trigger_active_effect(eff_135, bind_135)
+	if not can_trigger:
+		return "owner_player_id 空时应从机甲反查玩家使触发可用，can_trigger=false"
+	return true
+
+
 ## effect_135：weapon_037 多功能机械臂「弃2抽2」分支
 ## 验证：持有者自选2张行动牌弃置（非随机/非前N张），再抽2张，之后自损2
 func test_weapon_135_discard_draw_branch() -> Variant:
