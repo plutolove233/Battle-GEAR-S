@@ -3006,7 +3006,11 @@ static func build_equipment_effects() -> Dictionary:
 	w124.display_name = "随机弃牌若为最后一张，则本次攻击威力+3"
 	w124.mode = _TC.MODE_LISTEN
 	w124.priority = 10
-	w124.listen_timing = _TC.ATTACK_AFTER
+	# ATTACK_BEFORE（非 ATTACK_AFTER）：与 effect_123（priority 20，同 ATTACK_BEFORE）配合——
+	# effect_123 先随机弃牌并写 attack 作用域变量 weapon_028_was_last，本效果（priority 10）随后读取，
+	# 在 _step_calculate_damage 读取 extra_might 之前写好 +3。ATTACK_AFTER 时点翻转后 handler 先于 fire，
+	# MODIFY_ATTACK_MIGHT 写入发生在 calculate_damage 之后，+3 会丢失。
+	w124.listen_timing = _TC.ATTACK_BEFORE
 	w124.listen_action_type = &"attack"
 	w124.requires_effect = &"equipment_effect_123"
 	w124.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"VARIABLE_ABOVE", "params": {"scope": &"attack", "variable_name": &"weapon_028_was_last", "threshold": 0}}])
@@ -3103,9 +3107,12 @@ static func build_equipment_effects() -> Dictionary:
 	w130.set_target_rules([{"rule": &"NO_TARGET"}])
 	w130.set_costs([])
 	w130.set_actions([
-		{"type": &"CHOOSE_MANY_CARDS", "params": {"filter": {"zone": &"action_hand", "owner_id": "$binding_context.mech_id"}, "min_count": 1, "max_count": 1, "label": "选择1张行动牌当作维修打出", "confirm_verb": "当作维修", "cancel_label": "取消", "per_card_actions": [
-			{"type": &"DECLARE_CARD_TYPE", "params": {"card_instance_id": "$selected_card_instance_id", "declared_card_def_id": &"action_013_维修", "duration": &"UNTIL_USE_ACTION_SETTLE"}},
-			{"type": &"EXECUTE_USE_ACTION_CARD", "params": {"card_instance_id": "$selected_card_instance_id", "acting_mech_id": "$binding_context.mech_id", "as_card_def_id": &"action_013_维修", "consume_original_card": true}},
+		# 转化行动牌：列出持有者全部行动牌选1（source=OWNER_ACTION_HAND），选中牌当作维修打出。
+		# discard_selected=false：原牌由 EXECUTE_USE_ACTION_CARD(use_action_card) 在结算时弃置，不在此重复弃。
+		# per_card_actions 用 $chosen_card.card_instance_id（CHOOSE_MANY_CARDS 逐张注入 chosen_card）。
+		# virtual_transform=true：转化牌为虚拟牌，不消耗攻击次数、不受行动牌类型限制。
+		{"type": &"CHOOSE_MANY_CARDS", "params": {"source": &"OWNER_ACTION_HAND", "min_count": 1, "max_count": 1, "label": "选择1张行动牌当作维修打出", "confirm_verb": "当作维修", "cancel_label": "取消", "discard_selected": false, "per_card_actions": [
+			{"type": &"EXECUTE_USE_ACTION_CARD", "params": {"card_instance_id": "$chosen_card.card_instance_id", "as_card_def_id": &"action_013_维修", "consume_original_card": true, "virtual_transform": true}},
 			{"type": &"INCREMENT_VARIABLE", "params": {"scope": &"attack", "variable_name": &"weapon_033_used", "delta": 1}},
 		]}},
 	])
@@ -3120,7 +3127,10 @@ static func build_equipment_effects() -> Dictionary:
 	w130b.priority = 10
 	w130b.listen_timing = _TC.EFFECT_FIRE_SETTLE
 	w130b.listen_action_type = &"effect_fire"
-	w130b.requires_effect = &"equipment_effect_130"
+	# 不用 requires_effect：effect_130 经 CHOOSE_MANY_CARDS 挂起，_execute_effect 在挂起时
+	# 不标记 executed（line 1037 提前返回），且 CHOOSE_MANY_CARDS resume 走 per_card_actions
+	# 不重跑 _execute_effect，致 requires_effect 永远不满足。改由 VARIABLE_ABOVE(weapon_033_used)
+	# 判定（INCREMENT_VARIABLE 仅在玩家选牌确认后跑，取消选牌则变量=0->不自损）。
 	w130b.set_conditions([{"op": &"VARIABLE_ABOVE", "params": {"scope": &"attack", "variable_name": &"weapon_033_used", "threshold": 0}}])
 	w130b.set_target_rules([{"rule": &"NO_TARGET"}])
 	w130b.set_costs([])
@@ -3263,13 +3273,12 @@ static func build_equipment_effects() -> Dictionary:
 	w135.set_costs([])
 	w135.set_actions([
 		{"type": &"CHOOSE_ONE", "params": {"optional": true, "options": [
-			{"label": "将1张行动牌当作维修打出", "condition": {"op": &"REPAIR_BRANCH_AVAILABLE"}, "actions": [{"type": &"CHOOSE_MANY_CARDS", "params": {"filter": {"zone": &"action_hand", "owner_id": "$binding_context.mech_id"}, "min_count": 1, "max_count": 1, "label": "选择维修素材", "confirm_verb": "打出", "cancel_label": "返回", "per_card_actions": [
-				{"type": &"DECLARE_CARD_TYPE", "params": {"card_instance_id": "$selected_card_instance_id", "declared_card_def_id": &"action_013_维修", "duration": &"UNTIL_USE_ACTION_SETTLE"}},
-				{"type": &"EXECUTE_USE_ACTION_CARD", "params": {"card_instance_id": "$selected_card_instance_id", "acting_mech_id": "$binding_context.mech_id", "as_card_def_id": &"action_013_维修", "consume_original_card": true}},
+			{"label": "将1张行动牌当作维修打出", "condition": {"op": &"REPAIR_BRANCH_AVAILABLE"}, "actions": [{"type": &"CHOOSE_MANY_CARDS", "params": {"source": &"OWNER_ACTION_HAND", "min_count": 1, "max_count": 1, "label": "选择维修素材", "confirm_verb": "打出", "cancel_label": "返回", "discard_selected": false, "per_card_actions": [
+				{"type": &"EXECUTE_USE_ACTION_CARD", "params": {"card_instance_id": "$chosen_card.card_instance_id", "as_card_def_id": &"action_013_维修", "consume_original_card": true, "virtual_transform": true}},
 				{"type": &"INCREMENT_VARIABLE", "params": {"scope": &"attack", "variable_name": &"weapon_037_used", "delta": 1}},
 			]}}]},
 			{"label": "弃置2张行动牌，再抽2张", "condition": {"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"count": 2}}, "actions": [
-				{"type": &"EXECUTE_DISCARD", "params": {"from_target": false, "count": 2, "face_up": true, "reason": &"weapon_cycle"}},
+				{"type": &"EXECUTE_DISCARD", "params": {"from_target": false, "count": 2, "choose": true, "face_up": true, "reason": &"weapon_cycle"}},
 				{"type": &"DRAW_ACTION", "params": {"target_id": "$binding_context.mech_id", "count": 2, "reason": &"weapon_cycle"}},
 				{"type": &"INCREMENT_VARIABLE", "params": {"scope": &"attack", "variable_name": &"weapon_037_used", "delta": 1}},
 			]},
@@ -3286,7 +3295,7 @@ static func build_equipment_effects() -> Dictionary:
 	w135b.priority = 10
 	w135b.listen_timing = _TC.EFFECT_FIRE_SETTLE
 	w135b.listen_action_type = &"effect_fire"
-	w135b.requires_effect = &"equipment_effect_135"
+	# 不用 requires_effect（同 effect_130b 理由：CHOOSE_ONE+CHOOSE_MANY_CARDS 挂起致 executed 不标记）。
 	w135b.set_conditions([{"op": &"VARIABLE_ABOVE", "params": {"scope": &"attack", "variable_name": &"weapon_037_used", "threshold": 0}}])
 	w135b.set_target_rules([{"rule": &"NO_TARGET"}])
 	w135b.set_costs([])

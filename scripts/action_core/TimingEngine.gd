@@ -93,6 +93,14 @@ func fire_timing(timing: StringName, action) -> void:
 	if action.state == &"waiting_timing" or action.state == &"waiting_input":
 		return
 
+	# 预初始化 attack-scope 变量字典：使同一时点内「先写后读」的变量可见。
+	# payload = record.duplicate() 为浅拷贝，variables 子字典按引用共享，
+	# 故高优先级 listener 写入的变量（如 effect_123 在 ATTACK_BEFORE 写 weapon_028_was_last）
+	# 对同一 fire_timing 内低优先级 listener（如 effect_124 读取）可见。
+	# 不预初始化时，variables 键在首次写入前不存在，payload 副本无此键，同后读 listener 读到空。
+	if action.record != null and not action.record.has("variables"):
+		action.record["variables"] = {}
+
 	var payload: Dictionary = action.record.duplicate()
 	payload["action_id"] = action.action_id
 	payload["action_type"] = action.action_type
@@ -1332,9 +1340,17 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 		action.record.erase("_waiting_for_redirect")
 		if input_data.get("cancelled", false):
 			SLog.log_raw("[TIMING] %s 损伤转移被取消，effect=%s 不转移" % [String(action_id), String(effect.effect_id)])
+			action.record["redirect_absorbed"] = 0
 		else:
 			var plan: Array = input_data.get("redirect_plan", [])
 			_write_redirect_plan(action, plan)
+			# 盾牌 all_or_nothing 确认转移时，减伤(absorb)点数被吸收消失；普通转移/不转移为0。
+			# _ao_absorb 由 all_or_nothing 挂起时写入 record；非盾牌路径无此键，默认0。
+			if bool(input_data.get("all_or_nothing_confirmed", false)):
+				action.record["redirect_absorbed"] = int(action.record.get("_ao_absorb", 0))
+			else:
+				action.record["redirect_absorbed"] = 0
+		action.record.erase("_ao_absorb")
 		# 续跑 _execute_actions（剩余动作）；redirect_plan 已写 record，_step_set_damage 读它
 		# 注意：转移效果是 damage_change 动作在 DAMAGE_REDIRECT_WINDOW 触发的，恢复后 damage_change 继续 _step_set_damage
 		if context.action_engine != null:
@@ -2337,19 +2353,57 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 			var odr_mode: StringName = odr_params.get("mode", &"")
 			var odr_reduction: int = int(odr_params.get("reduction", 0))
 			var odr_plan: Array = payload.get("redirect_plan", []) if payload.has("redirect_plan") else []
-			# 盾牌 all_or_nothing（effect_127/133/136）：把全部损伤(减 reduction 后)改向本牌槽。
-			# 自动构建转移计划，不弹逐点选择窗（"optional"取消语义暂简化为自动转移；transfer=0 时等同不转移）。
+			# 盾牌 all_or_nothing（effect_127/133/136）：把全部损伤(减 reduction 后)改向本牌槽，
+			# 减伤部分(reduction)被盾牌吸收直接消失，不回原目标。人类弹可选确认窗(转移/不转移)，AI 自动转移。
 			if odr_mode == &"all_or_nothing":
+				# 多盾牌守卫：前序转移效果已处理全部损伤(redirect_plan 非空或已吸收)时，本盾牌不再弹窗。
+				if not action.record.get("redirect_plan", []).is_empty() or int(action.record.get("redirect_absorbed", 0)) > 0:
+					continue
 				var bind_ctx_ao: Dictionary = payload.get("binding_context", {})
 				var ao_mech: StringName = bind_ctx_ao.get("mech_id", &"")
 				var ao_slot: StringName = bind_ctx_ao.get("slot_id", &"")
 				var ao_total: int = int(payload.get("total_points", payload.get("value", 0)))
 				var ao_transfer: int = maxi(0, ao_total - odr_reduction)
-				if ao_mech != &"" and ao_slot != &"" and ao_transfer > 0:
-					_write_redirect_plan(action, [{"to_mech_id": ao_mech, "to_slot_id": ao_slot, "count": ao_transfer}])
-				else:
-					_write_redirect_plan(action, [])  # 减伤归0或不转移
-				continue
+				var ao_absorb: int = ao_total - ao_transfer  # 确认转移时被盾牌减伤吸收(消失)的点数
+				var ao_owner_player: StringName = bind_ctx_ao.get("player_id", &"")
+				if _is_ai_owner(ao_owner_player, ao_mech):
+					# AI 自动转移：transfer 点到盾牌槽，absorb 点消失
+					if ao_mech != &"" and ao_slot != &"" and ao_transfer > 0:
+						_write_redirect_plan(action, [{"to_mech_id": ao_mech, "to_slot_id": ao_slot, "count": ao_transfer}])
+					else:
+						_write_redirect_plan(action, [])
+					action.record["redirect_absorbed"] = ao_absorb
+					continue
+				# 人类玩家：弹可选确认窗（转移全部 / 不转移）
+				action.record["_ao_absorb"] = ao_absorb
+				_pending_effect[action.action_id] = {"effect": effect, "payload": payload, "phase": "redirect_select"}
+				action.record["_waiting_for_redirect"] = true
+				action.state = &"waiting_timing"
+				var ao_card_name: String = ""
+				var ao_cid: StringName = bind_ctx_ao.get("card_instance_id", &"")
+				if ao_cid != &"" and context != null and context.game_state != null:
+					var ao_card = context.game_state.get_card(ao_cid)
+					if ao_card != null and ao_card.def != null:
+						ao_card_name = ao_card.def.display_name
+				var ao_label: String = ("将本次全部 %d 损伤设置到%s" % [ao_total, ao_card_name]) if ao_card_name != "" else ("将本次全部 %d 损伤转移到此牌" % ao_total)
+				if odr_reduction > 0:
+					ao_label += "（减%d后放置%d点）" % [odr_reduction, ao_transfer]
+				action_needs_input.emit(action.action_id, &"redirect_select", {
+					"action_id": action.action_id,
+					"effect_id": effect.effect_id,
+					"mech_ids": payload.get("mech_ids", []),
+					"total_points": ao_total,
+					"max_points": ao_transfer,
+					"redirect_mech_id": ao_mech,
+					"redirect_slot_id": ao_slot,
+					"all_or_nothing": true,
+					"transfer": ao_transfer,
+					"absorb": ao_absorb,
+					"source_label": ao_label,
+					"player_id": _effect_popup_owner_pid(effect, payload, action),
+				})
+				SLog.log_raw("[TIMING] %s 挂起盾牌转移确认 effect=%s total=%d transfer=%d absorb=%d" % [String(action.action_id), String(effect.effect_id), ao_total, ao_transfer, ao_absorb])
+				return
 			if odr_plan.is_empty():
 				var bind_ctx_odr: Dictionary = payload.get("binding_context", {})
 				var odr_owner_player: StringName = bind_ctx_odr.get("player_id", &"")

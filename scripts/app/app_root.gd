@@ -2974,10 +2974,6 @@ func _show_popup(popup_type: StringName, params: Dictionary) -> void:
 				var total: int = int(params.get("total_points", 0))
 				var max_pts: int = int(params.get("max_points", -1))
 				var redir_mech_id: StringName = params.get("redirect_mech_id", &"")
-				# 计算可转移上限
-				var cap: int = total
-				if max_pts > 0:
-					cap = mini(cap, max_pts)
 				# 转移目标=本牌所在 slot（TimingEngine 从 binding_context.slot_id 传入，如 effect_004 联邦右臂=右臂）。
 				# 兜底：未传时遍历机甲第一个有装备的槽位（旧逻辑，保兼容）。
 				var to_slot: StringName = StringName(params.get("redirect_slot_id", &""))
@@ -2989,15 +2985,31 @@ func _show_popup(popup_type: StringName, params: Dictionary) -> void:
 							if slot != null and slot.equipped_card != null:
 								to_slot = StringName(String(sid))
 								break
-				# 构造档位选项：0(不转移)/1/2/.../cap
-				var options: Array[Dictionary] = []
-				options.append({"label": "不转移", "effect_id": &"__redirect_0__", "count": 0})
-				for n in range(1, cap + 1):
-					options.append({"label": "转移 %d 点损伤至此牌区域" % n, "effect_id": StringName("__redirect_%d__" % n), "count": n})
-				choice_panel.configure(options, String(params.get("source_label", "")))
-				choice_panel.visible = true
-				# 记录转移上下文，供 _on_choice_selected 读取
-				_redirect_context = {"mech_id": redir_mech_id, "to_slot": to_slot, "action_id": params.get("action_id", &"")}
+				if bool(params.get("all_or_nothing", false)):
+					# 盾牌（effect_127/133/136）：全部转移(减伤后) / 不转移，二选一。
+					# 转移=transfer 点到本牌槽+减伤 absorb 点消失；不转移=损伤回原目标正常放置。
+					var ao_transfer: int = int(params.get("transfer", 0))
+					var ao_src: String = String(params.get("source_label", "转移全部损伤至此牌"))
+					var ao_options: Array[Dictionary] = []
+					ao_options.append({"label": "不转移", "effect_id": &"__redirect_cancel__"})
+					ao_options.append({"label": ao_src, "effect_id": &"__redirect_confirm__"})
+					choice_panel.configure(ao_options, "盾牌损伤转移")
+					choice_panel.visible = true
+					_redirect_context = {"mech_id": redir_mech_id, "to_slot": to_slot, "action_id": params.get("action_id", &""), "all_or_nothing": true, "transfer": ao_transfer}
+				else:
+					# 计算可转移上限
+					var cap: int = total
+					if max_pts > 0:
+						cap = mini(cap, max_pts)
+					# 构造档位选项：0(不转移)/1/2/.../cap
+					var options: Array[Dictionary] = []
+					options.append({"label": "不转移", "effect_id": &"__redirect_0__", "count": 0})
+					for n in range(1, cap + 1):
+						options.append({"label": "转移 %d 点损伤至此牌区域" % n, "effect_id": StringName("__redirect_%d__" % n), "count": n})
+					choice_panel.configure(options, String(params.get("source_label", "")))
+					choice_panel.visible = true
+					# 记录转移上下文，供 _on_choice_selected 读取
+					_redirect_context = {"mech_id": redir_mech_id, "to_slot": to_slot, "action_id": params.get("action_id", &"")}
 		&"thrust_select":
 			# 推进 effect2 多选：列出手中所有推进供玩家多选，确认后一起打出
 			if thrust_select_panel and battle and battle.context:
@@ -3801,6 +3813,19 @@ func _on_choice_made(effect_id: StringName) -> void:
 				return
 			if input_type == &"redirect_select":
 				# 损伤转移：把选中的档位 effect_id(__redirect_N__) 解析为转移点数，构造 redirect_plan 回填
+				if bool(_redirect_context.get("all_or_nothing", false)):
+					# 盾牌 all_or_nothing：__redirect_confirm__=转移全部(transfer 点+减伤吸收)，__redirect_cancel__=不转移
+					var ao_plan: Array = []
+					var ao_confirmed: bool = (effect_id == &"__redirect_confirm__")
+					if ao_confirmed:
+						var ao_transfer: int = int(_redirect_context.get("transfer", 0))
+						if ao_transfer > 0:
+							ao_plan = [{"to_mech_id": _redirect_context.get("mech_id", &""), "to_slot_id": _redirect_context.get("to_slot", &""), "count": ao_transfer}]
+					_redirect_context = {}
+					if choice_panel:
+						choice_panel.visible = false
+					_net_exec("ui_confirmed", {"data": {"redirect_plan": ao_plan, "all_or_nothing_confirmed": ao_confirmed}})
+					return
 				var es := String(effect_id)
 				var n: int = 0
 				if es.begins_with("__redirect_") and es.ends_with("__"):

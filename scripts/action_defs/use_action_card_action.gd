@@ -88,7 +88,9 @@ func _step_validate_card(action: Action) -> Dictionary:
 	# 但 destroyed / cannot_attack 状态仍阻止攻击。否则 Target 在敌方回合联合攻击时，
 	# 其 attack_count_this_turn 未随敌方回合重置（TurnService 仅重置当前回合玩家机甲），
 	# can_attack() 误拒致 validate 报错、动作链卡死。
-	if card.def and card.def.action_type == "攻击":
+	# 转化行动牌（virtual_transform=true）：转化牌为虚拟牌，不受攻击次数/类型限制，整体跳过。
+	var _vt_transform: bool = bool(action.record.get("virtual_transform", false))
+	if not _vt_transform and card.def and card.def.action_type == "攻击":
 		var mech = context.game_state.mechs.get(mech_id)
 		if mech:
 			var src_action_id: StringName = action.source.get("source_action_id", &"") if action.source is Dictionary else &""
@@ -144,6 +146,25 @@ func _step_card_to_temp_zone(action: Action) -> Dictionary:
 	var card = context.game_state.get_card(card_id)
 	if card != null:
 		card.zone = &"temp_zone"
+
+	# 转化行动牌（effect_130/135 维修臂）：标注 (转化维修) 标签 + 日志消息。
+	# 牌进临时区时标注，结算后随牌进弃牌堆；供 UI/日志识别“此牌当作 XXX 打出”。
+	if bool(action.record.get("virtual_transform", false)):
+		var as_id: StringName = action.record.get("as_card_def_id", &"")
+		var as_name: String = ""
+		if as_id != &"" and context.card_database != null:
+			var as_def = context.card_database.card_defs.get(as_id, null)
+			if as_def != null:
+				as_name = String(as_def.display_name)
+		var vt_label: String = ("转化%s" % as_name) if as_name != "" else "转化"
+		if card != null:
+			card.counters["transform_label"] = vt_label
+		if context.game_state != null:
+			context.game_state.write_log(&"card_transformed", {
+				"card_id": String(card_id),
+				"card_name": String(card.def.display_name) if card != null and card.def != null else "",
+				"as_name": as_name,
+			})
 
 	# 注册此牌的DIRECT/LISTEN效果
 	_register_card_effects(action, card_id)
@@ -374,9 +395,10 @@ func _step_settle(action: Action) -> Dictionary:
 
 	if not is_virtual and card_id != &"" and context.deck_service != null:
 		var card = context.game_state.get_card(card_id)
+		var _vt_settle: bool = bool(action.record.get("virtual_transform", false))
 		# 只有玩家主动使用攻击牌，才在整张牌效果完成后的结算阶段消耗攻击次数。
-		# 效果产生的“使用攻击牌”不重复占用通常攻击次数。
-		if card != null and card.def != null and card.def.action_type == "攻击":
+		# 效果产生的“使用攻击牌”不重复占用通常攻击次数。转化行动牌(virtual_transform)不消耗。
+		if not _vt_settle and card != null and card.def != null and card.def.action_type == "攻击":
 			var source_action_id: StringName = action.source.get("source_action_id", &"")
 			if source_action_id == &"":
 				var mech = context.game_state.mechs.get(action.record.get("mech_id", &""))
@@ -384,7 +406,8 @@ func _step_settle(action: Action) -> Dictionary:
 					mech.attack_count_this_turn += 1
 		# 绑定到原 attack 动作的效果（如反击2）在原攻击 ATTACK_SETTLE 才触发，须等其触发后再弃置，
 		# 故此处跳过，交由 attack_action._step_cleanup 弃置（规则：行动牌所有效果执行完才结算弃置）。
-		if card != null and String(card.zone) != &"discard" and not _has_bind_to_attack_action_effect(card):
+		# 转化行动牌(virtual_transform)：当作虚拟牌打出，非其原类型用途，无 bind_to_attack 延迟，直接弃置。
+		if card != null and String(card.zone) != &"discard" and (_vt_settle or not _has_bind_to_attack_action_effect(card)):
 			context.deck_service.discard_card(card_id, &"ACTION_CARD_PLAYED")
 				# 诊断：discard_card 是异步效果动作(fire DISCARD 时点)，此处 result 不声明 effect_action_created
 				# 若双连卡在此后仍停 temp_zone，说明 discard_card 效果动作未完成/settle 未等它。

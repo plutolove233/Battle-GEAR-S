@@ -275,7 +275,7 @@ func _create_action(action_type: StringName, params: Dictionary) -> Action:
 				&"max_cells", &"free_move", &"adjacent_only",
 				&"target_slot_id", &"target_mech_id", &"fixed_slot", &"exclude_slot_id",
 				&"cardless_weapon_attack", &"consume_turn_attack_count", &"skip_weapon_select", &"weapon_instance_id",
-				&"as_card_def_id", &"consume_original_card"]
+				&"as_card_def_id", &"consume_original_card", &"virtual_transform"]
 			for key: String in params:
 				if key in record_keys:
 					action.record[key] = params[key]
@@ -1611,8 +1611,9 @@ func _extract_use_action_card_params(action_def: Dictionary, payload: Dictionary
 			result["player_id"] = player.player_id
 	# 联合攻击：直接指定要使用的攻击牌（玩家弹窗选定），透传到 use_action_card record。
 	# 无显式 card_instance_id 时为空（旧 CHOOSE_ONE 路径，已废弃），use_action_card 会报缺牌。
+	# 转化行动牌（effect_130/135）传 $chosen_card.card_instance_id 表达式，需解析（_extract_sub_action_params 不解析 $）。
 	if params.has("card_instance_id") and String(params.get("card_instance_id", &"")) != "":
-		result["card_instance_id"] = params["card_instance_id"]
+		result["card_instance_id"] = _resolve_atomic_value(params.get("card_instance_id", &""), payload, parent_action)
 	# 攻击牌过滤参数（供 use_action_card_action 在需要选牌时使用）
 	result["card_action_type_filter"] = params.get("card_action_type", &"")
 	result["target_count"] = params.get("target_count", 1)
@@ -1621,6 +1622,9 @@ func _extract_use_action_card_params(action_def: Dictionary, payload: Dictionary
 	# 效果按 as_card_def_id 定义执行，原牌实例进临时区/弃牌堆。
 	result["as_card_def_id"] = params.get("as_card_def_id", &"")
 	result["consume_original_card"] = bool(params.get("consume_original_card", false))
+	# virtual_transform：转化行动牌为虚拟牌（不消耗攻击次数、不受类型限制），
+	# 供 use_action_card _step_validate_card / _step_settle 跳过攻击次数校验/结算。
+	result["virtual_transform"] = bool(params.get("virtual_transform", false))
 	result["source"] = _build_source_from_payload(payload, parent_action)
 	return result
 

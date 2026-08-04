@@ -631,6 +631,12 @@ func _translate_log_entry(entry: Dictionary) -> String:
 			var reason: String = String(entry.get("reason", ""))
 			var reason_text: String = DISCARD_REASONS.get(reason, reason)
 			return "  [color=gray]弃置 %s (原因:%s)[/color]" % [card_name, reason_text]
+		"card_transformed":
+			var ct_card := _card_display_name(entry.get("card_id", &""))
+			var ct_as: String = String(entry.get("as_name", ""))
+			if ct_as != "":
+				return "[color=#b9f]%s（转化%s）[/color]" % [ct_card, ct_as]
+			return "[color=#b9f]%s（转化）[/color]" % ct_card
 		"mech_moved":
 			var mech_name := _mech_display_name(String(entry.get("mech_id", "")))
 			var from_q: int = int(entry.get("from_q", 0))

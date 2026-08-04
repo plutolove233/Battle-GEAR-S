@@ -157,7 +157,7 @@ func _apply_redirect_plan(mech_ids: Array, redirect_plan: Array, action: Action)
 			continue
 		if context.game_actions != null and context.game_actions.has_method("_check_equipment_broken_after_damage"):
 			context.game_actions._check_equipment_broken_after_damage(to_mech, to_slot)
-	return int(action.record.get("value", 0)) - placed
+	return int(action.record.get("value", 0)) - placed - int(action.record.get("redirect_absorbed", 0))
 
 
 func _step_settle(action: Action) -> Dictionary:

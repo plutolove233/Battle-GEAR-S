@@ -50,6 +50,33 @@ func _ensure_equipment_in_hand(battle: BattleState, card_def_id: String) -> Stri
 	return &""
 
 
+## 在任意位置（牌堆/商店/弃牌堆）找 card_def_id 并强制移入玩家装备手牌（测试用）。
+## 用于商店开局已抽走目标 SR 武器的情形（_ensure_equipment_in_hand 搜不到）。
+func _force_equipment_to_hand(battle: BattleState, card_def_id: String) -> StringName:
+	var gs = battle.context.game_state
+	var pl = gs.players.get(&"player")
+	if pl == null:
+		return &""
+	for c_id: StringName in gs.cards:
+		var c = gs.get_card(c_id)
+		if c and c.def and String(c.def.card_id) == card_def_id:
+			if pl.equipment_hand.has(c_id):
+				return c_id
+			gs.remove_card_from_all_zones(c_id)
+			var shop = gs.shop_state
+			if shop != null:
+				shop.normal_slots.erase(c_id)
+				if shop.advanced_slot == c_id:
+					shop.advanced_slot = &""
+				if shop.hidden_advanced_slot == c_id:
+					shop.hidden_advanced_slot = &""
+			pl.equipment_hand.append(c_id)
+			c.zone = &"equipment_hand"
+			c.owner_player_id = &"player"
+			return c_id
+	return &""
+
+
 func _equip_weapon(battle: BattleState, card_def_id: String) -> StringName:
 	var cid: StringName = _ensure_equipment_in_hand(battle, card_def_id)
 	if cid == &"":
@@ -155,6 +182,31 @@ func _drive_damage_placement(battle: BattleState, attack_id: StringName) -> void
 				dts.place_damage_tokens({"mech_id": mech_id, "count": amount})
 		ae.continue_action(dc_id, {"auto_placed": true})
 		ae.notify_effect_action_completed(dc_id, attack_id)
+
+
+## 驱动盾牌 all_or_nothing 转移确认弹窗：确认转移全部(减伤后)损伤到盾牌槽。
+## 返回 "" 成功；非空则错误信息。调用方需 await。
+func _drive_shield_redirect_confirm(battle: BattleState, attack_id: StringName, to_slot: StringName) -> String:
+	var ar = battle.context.action_registry
+	var te = battle.context.timing_engine
+	var attack = ar.get_action(attack_id)
+	if attack == null:
+		return "attack 不存在"
+	for cid: StringName in attack.pending_effect_action_ids:
+		var sub = ar.get_action(cid)
+		if sub != null and sub.action_type == &"damage_change" and sub.state == &"waiting_timing":
+			var value: int = int(sub.record.get("value", 0))
+			var absorb: int = int(sub.record.get("_ao_absorb", 0))
+			var transfer: int = maxi(0, value - absorb)
+			var mech_ids: Array = sub.record.get("mech_ids", [])
+			var target_mech: StringName = StringName(mech_ids[0]) if not mech_ids.is_empty() else &""
+			var plan: Array = []
+			if transfer > 0:
+				plan = [{"to_mech_id": target_mech, "to_slot_id": to_slot, "count": transfer}]
+			te.resume_pending_effect(cid, {"redirect_plan": plan, "all_or_nothing_confirmed": true})
+			await _pump_frames(3)
+			return ""
+	return "未找到盾牌转移弹窗（damage_change waiting_timing）"
 
 
 ## 驱动 effect 的 CHOOSE_ONE(optional) 弹窗：确认选 index 0（如 effect_115 相邻+2）。
@@ -1258,7 +1310,11 @@ func test_weapon_127_shield_redirect() -> Variant:
 	if attack_id == &"":
 		return "enemy 攻击未发起"
 	await _pump_frames(5)
-	# 驱动损伤放置（盾牌 all_or_nothing 自动转移全到 weapon_1 槽）
+	# 盾牌 all_or_nothing 转移弹窗（人类玩家可选）：确认转移全部损伤到 weapon_1 槽
+	var redirect_err: String = await _drive_shield_redirect_confirm(battle, attack_id, &"weapon_1")
+	if redirect_err != "":
+		return redirect_err
+	# 驱动剩余损伤放置（合金盾牌 reduction=0，全转移后无剩余）
 	_drive_damage_placement(battle, attack_id)
 	await _pump_frames(3)
 	# 盾牌槽（weapon_1）应有损伤
@@ -1268,6 +1324,166 @@ func test_weapon_127_shield_redirect() -> Variant:
 	var shield_region: int = int(shield_slot.region_damage_tokens)
 	if shield_region <= 0:
 		return "effect_127 应将损伤转移到盾牌槽，weapon_1 region_damage=%d" % shield_region
+	return true
+
+
+## effect_124：weapon_028 雷爆磁轨炮 随机弃牌为最后一张时 +3 威力（被动，无弹窗）
+## 打出攻击牌后手牌恰剩1张 -> ATTACK_BEFORE 随机弃该牌 -> effect_124 ATTACK_BEFORE 写 extra_might+3
+func test_weapon_124_plus3_last_card() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	_GenEquipEffects.set_aura_game_state(battle.context.game_state)
+	# weapon_028 为 SR，开局常被商店抽走，用 _force_equipment_to_hand 从任意位置取回
+	var cid: StringName = _force_equipment_to_hand(battle, "weapon_028_雷爆磁轨炮")
+	if cid == &"":
+		return "找不到 weapon_028"
+	var eq_result: Dictionary = battle.context.card_set_service.set_equipment(&"player", cid, &"weapon_1")
+	if not eq_result.get("ok", false):
+		return "装备 weapon_028 失败: %s" % String(eq_result.get("message", ""))
+	await _pump_frames(3)
+	var gs = battle.context.game_state
+	var pm = gs.get_mech_for_player(&"player")
+	var em = gs.get_mech_for_player(&"enemy")
+	em.current_hp = 100
+	pm.position = {"q": 5, "r": 0}
+	em.position = {"q": 6, "r": 0}  # 距离1，在射程6内
+	_clear_enemy_hand(battle)
+	battle.context.action_ui_bridge.context = battle.context
+	# 玩家手牌设为：1张攻击牌 + 1张非攻击牌
+	var pl = gs.players.get(&"player")
+	if pl == null:
+		return "player 不存在"
+	for c in pl.action_hand.duplicate():
+		battle.context.timing_engine.unregister_listeners_for_card(c)
+	pl.action_hand.clear()
+	var atk_card: StringName = _ensure_attack_card_in_hand(battle)
+	if atk_card == &"":
+		return "玩家无攻击牌"
+	var other_card: StringName = &""
+	for i in range(gs.deck_state.action_deck.size()):
+		var dc: StringName = gs.deck_state.action_deck[i]
+		var cc = gs.get_card(dc)
+		if cc and cc.def and cc.def.action_type != &"攻击":
+			gs.deck_state.action_deck.remove_at(i)
+			pl.action_hand.append(dc)
+			cc.zone = &"action_hand"
+			cc.owner_player_id = &"player"
+			other_card = dc
+			break
+	if other_card == &"":
+		return "无非攻击牌可用"
+	# 真实流程：打出攻击牌经 use_action_card 移入临时区，再发起 attack 子动作。
+	# 测试直起 attack 动作，故手动把攻击牌移入 temp_zone，使 ATTACK_BEFORE 时手牌仅剩 other（最后一张）。
+	var atk_card_obj = gs.get_card(atk_card)
+	if atk_card_obj != null:
+		pl.action_hand.erase(atk_card)
+		atk_card_obj.zone = &"temp_zone"
+	var atk_result: Dictionary = battle.execute_attack_action(&"player", &"enemy", cid, atk_card)
+	var attack_id: StringName = atk_result.get("action_id", &"") if atk_result is Dictionary else &""
+	if attack_id == &"":
+		return "攻击未发起"
+	await _pump_frames(5)
+	# 攻击应已过 ATTACK_BEFORE：effect_123 随机弃置 other（最后一张），effect_124 写 extra_might+3。
+	# 此时攻击停在损伤放置（或响应窗口已自动关闭），extra_might 已写入。
+	var atk_mid = battle.context.action_registry.get_action(attack_id)
+	if atk_mid == null:
+		return "ATTACK_BEFORE 后攻击动作不存在（应停在损伤放置）"
+	if int(atk_mid.record.get("extra_might", 0)) != 3:
+		return "effect_124 应使 extra_might=3（最后一张弃置），实际 %d" % int(atk_mid.record.get("extra_might", 0))
+	# 驱动损伤放置，完成攻击
+	_drive_damage_placement(battle, attack_id)
+	await _pump_frames(5)
+	# 被随机弃置的牌（other）应进弃牌堆
+	var oc = gs.get_card(other_card)
+	if oc == null or String(oc.zone) != &"discard":
+		return "随机弃置的牌应进弃牌堆，zone=%s" % (String(oc.zone) if oc != null else "null")
+	return true
+
+
+## effect_130：weapon_033 维修机械臂 转化行动牌（选1张行动牌当维修打出，之后自损2）
+## 验证：触发->列全部行动牌选1->维修目标选择->二选一回复4HP->素材牌进弃牌堆->本牌自损2
+func test_weapon_130_transform_repair() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	_GenEquipEffects.set_aura_game_state(battle.context.game_state)
+	var gs = battle.context.game_state
+	gs.active_player_id = &"player"
+	gs.phase = &"MAIN"
+	var pm = gs.get_mech_for_player(&"player")
+	# 装备维修机械臂（N稀有度，在 equipment_deck）
+	var arm_cid: StringName = _ensure_equipment_in_hand(battle, "weapon_033_维修机械臂")
+	if arm_cid == &"":
+		return "找不到 weapon_033"
+	var set_res: Dictionary = battle.context.card_set_service.set_equipment(&"player", arm_cid, &"weapon_1")
+	if not set_res.get("ok", false):
+		return "装备 weapon_033 失败: %s" % String(set_res.get("message", ""))
+	await _pump_frames(3)
+	# 维修目标：玩家机甲掉血+有损伤（HP不满 + 有损伤 -> 回复/移除两选项均可，CHOOSE_ONE 弹窗）
+	var hp_before: int = pm.current_hp
+	pm.current_hp = max(1, pm.current_hp - 5)
+	for slot_id in pm.slots:
+		var slot = pm.slots[slot_id]
+		if slot and slot.equipped_card:
+			slot.region_damage_tokens = 3
+			break
+	# 确保 ≥2 行动牌（1张转化素材 + 余量）
+	var pl = gs.players.get(&"player")
+	while pl.action_hand.size() < 2 and not gs.deck_state.action_deck.is_empty():
+		var dc: StringName = gs.deck_state.action_deck[0]
+		gs.deck_state.action_deck.remove_at(0)
+		pl.action_hand.append(dc)
+		var cc = gs.get_card(dc)
+		if cc:
+			cc.zone = &"action_hand"
+			cc.owner_player_id = &"player"
+	var transform_card: StringName = pl.action_hand[0]
+	battle.context.action_ui_bridge.context = battle.context
+	# 触发 effect_130（DIRECT 主动效果）
+	var src: Dictionary = {"card_instance_id": arm_cid, "mech_id": pm.mech_id, "player_id": &"player", "effect_id": &"equipment_effect_130"}
+	battle.context.action_service.execute(&"effect_fire", {
+		"effect_id": &"equipment_effect_130", "player_id": &"player",
+		"source_mech_id": pm.mech_id, "card_instance_id": arm_cid,
+		"phase": &"MAIN", "source": src,
+	})
+	await _pump_frames(3)
+	# ① 应挂起 select_thrust_cards（CHOOSE_MANY_CARDS source=OWNER_ACTION_HAND 列出全部行动牌）
+	var ef_action = null
+	for a in battle.context.action_registry.get_actions_by_type(&"effect_fire"):
+		if a.state == &"waiting_timing":
+			ef_action = a
+			break
+	if ef_action == null:
+		return "effect_130 未挂起在 CHOOSE_MANY_CARDS"
+	var bridge = battle.context.action_ui_bridge
+	var w0: Dictionary = bridge.get_waiting_action_info()
+	if String(w0.get("input_type", &"")) != &"select_thrust_cards":
+		return "应弹 select_thrust_cards，实际 %s" % String(w0.get("input_type", &""))
+	# 选1张行动牌当作维修
+	battle.context.timing_engine.resume_pending_effect(ef_action.action_id, {"selected_card_ids": [transform_card]})
+	await _pump_frames(3)
+	# ② use_action_card 应挂起 select_repair_target（维修目标选择）
+	var w1: Dictionary = bridge.get_waiting_action_info()
+	if String(w1.get("input_type", &"")) != &"select_repair_target":
+		return "应弹 select_repair_target，实际 %s" % String(w1.get("input_type", &""))
+	bridge.on_ui_confirmed({"target_id": pm.mech_id})
+	await _pump_frames(3)
+	# ③ 应挂起 choose_one_effect（回复4生命/移除2损伤）
+	var w2: Dictionary = bridge.get_waiting_action_info()
+	if String(w2.get("input_type", &"")) != &"choose_one_effect":
+		return "应弹 choose_one_effect，实际 %s" % String(w2.get("input_type", &""))
+	bridge.on_ui_confirmed({"chosen_option_index": 0, "chosen_effect_id": "option_0"})
+	await _pump_frames(6)
+	# 断言：转化素材牌进弃牌堆，HP回复4，机械臂自损2（effect_130b）
+	var tc = gs.get_card(transform_card)
+	if tc == null or String(tc.zone) != &"discard":
+		return "转化素材牌应进弃牌堆，zone=%s" % (String(tc.zone) if tc != null else "null")
+	if pm.current_hp != (hp_before - 5) + 4:
+		return "回复4生命未生效：期望 %d，实际 %d" % [(hp_before - 5) + 4, pm.current_hp]
+	var arm_card = gs.get_card(arm_cid)
+	if arm_card == null or int(arm_card.damage_tokens) != 2:
+		return "机械臂应自损2，实际 damage_tokens=%d" % (int(arm_card.damage_tokens) if arm_card != null else -1)
 	return true
 
 
@@ -1513,27 +1729,34 @@ func test_weapon_after_self_damage_split_registered() -> Variant:
 	# 从 battle 的 CardDatabaseLoader 取 JSON effect_ids 映射
 	var cdb_loader = battle.context.card_database.loader
 	var eid_map: Dictionary = cdb_loader.get_effect_ids_map() if cdb_loader != null and cdb_loader.has_method(&"get_effect_ids_map") else {}
-	# (card_def_id, 主effect_id, b_effect_id, 期望时点)
+	# (card_def_id, 主effect_id, b_effect_id, 期望时点, 是否用 requires_effect)
+	# 130b/135b 不用 requires_effect：主效果经 CHOOSE_MANY_CARDS 挂起致 executed 不标记，
+	# 改由 VARIABLE_ABOVE(weapon_0xx_used) 判定（变量仅在玩家选牌确认后写入）。
 	var cases: Array = [
-		["weapon_033_维修机械臂", &"equipment_effect_130", &"equipment_effect_130b", &"EFFECT_FIRE_SETTLE"],
-		["weapon_034_手持推进器", &"equipment_effect_131", &"equipment_effect_131b", &"EFFECT_FIRE_SETTLE"],
-		["weapon_034_手持推进器", &"equipment_effect_132", &"equipment_effect_132b", &"USE_ACTION_SETTLE"],
-		["weapon_036_投掷式机雷", &"equipment_effect_134", &"equipment_effect_134b", &"EFFECT_FIRE_SETTLE"],
-		["weapon_037_多功能机械臂", &"equipment_effect_135", &"equipment_effect_135b", &"EFFECT_FIRE_SETTLE"],
-		["weapon_039_投掷式双子机雷", &"equipment_effect_137", &"equipment_effect_137b", &"EFFECT_FIRE_SETTLE"],
+		["weapon_033_维修机械臂", &"equipment_effect_130", &"equipment_effect_130b", &"EFFECT_FIRE_SETTLE", false],
+		["weapon_034_手持推进器", &"equipment_effect_131", &"equipment_effect_131b", &"EFFECT_FIRE_SETTLE", true],
+		["weapon_034_手持推进器", &"equipment_effect_132", &"equipment_effect_132b", &"USE_ACTION_SETTLE", true],
+		["weapon_036_投掷式机雷", &"equipment_effect_134", &"equipment_effect_134b", &"EFFECT_FIRE_SETTLE", true],
+		["weapon_037_多功能机械臂", &"equipment_effect_135", &"equipment_effect_135b", &"EFFECT_FIRE_SETTLE", false],
+		["weapon_039_投掷式双子机雷", &"equipment_effect_137", &"equipment_effect_137b", &"EFFECT_FIRE_SETTLE", true],
 	]
 	for case in cases:
 		var card_def_id: String = case[0]
 		var main_id: StringName = case[1]
 		var b_id: StringName = case[2]
 		var expect_timing: StringName = case[3]
+		var uses_requires: bool = case[4]
 		var b_eff = all_effects.get(b_id)
 		if b_eff == null:
 			return "%s 未定义" % String(b_id)
 		if b_eff.listen_timing != expect_timing:
 			return "%s 时点应为 %s，实际 %s" % [String(b_id), String(expect_timing), String(b_eff.listen_timing)]
-		if b_eff.requires_effect != main_id:
-			return "%s requires_effect 应为 %s，实际 %s" % [String(b_id), String(main_id), String(b_eff.requires_effect)]
+		if uses_requires:
+			if b_eff.requires_effect != main_id:
+				return "%s requires_effect 应为 %s，实际 %s" % [String(b_id), String(main_id), String(b_eff.requires_effect)]
+		else:
+			if b_eff.requires_effect != &"":
+				return "%s 应不设 requires_effect（改用变量条件），实际 %s" % [String(b_id), String(b_eff.requires_effect)]
 		var main_eff = all_effects.get(main_id)
 		if main_eff == null:
 			return "%s 未定义" % String(main_id)
