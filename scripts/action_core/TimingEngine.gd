@@ -1348,9 +1348,12 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 			# _ao_absorb 由 all_or_nothing 挂起时写入 record；非盾牌路径无此键，默认0。
 			if bool(input_data.get("all_or_nothing_confirmed", false)):
 				action.record["redirect_absorbed"] = int(action.record.get("_ao_absorb", 0))
+				# 盾牌确认转移：HP伤害减 _ao_hp_reduction（太空合金盾牌 effect_136）
+				_apply_shield_hp_reduction(action, int(action.record.get("_ao_hp_reduction", 0)))
 			else:
 				action.record["redirect_absorbed"] = 0
 		action.record.erase("_ao_absorb")
+		action.record.erase("_ao_hp_reduction")
 		# 续跑 _execute_actions（剩余动作）；redirect_plan 已写 record，_step_set_damage 读它
 		# 注意：转移效果是 damage_change 动作在 DAMAGE_REDIRECT_WINDOW 触发的，恢复后 damage_change 继续 _step_set_damage
 		if context.action_engine != null:
@@ -1736,6 +1739,34 @@ func _write_redirect_plan(action, plan: Array) -> void:
 	if action == null:
 		return
 	action.record["redirect_plan"] = plan
+
+
+## 盾牌转移确认时，将 HP 伤害减量写入父 attack 动作 record。
+## effect_136（太空合金盾牌）监听 ATTACK_AFTER（造成HP伤害前）：此时 action 即 attack，直接写。
+## 兼容 DAMAGE_REDIRECT_WINDOW（损伤变动）路径：action=damage_change，沿 parent_action_id 链找 attack。
+## 由 attack._step_apply_damage 读取并扣减HP伤害。
+func _apply_shield_hp_reduction(action, hp_reduction: int) -> void:
+	if hp_reduction <= 0 or action == null:
+		return
+	var target = action
+	if target.action_type != &"attack":
+		# damage_change 上下文：沿父链找 attack
+		if context == null or context.action_registry == null:
+			return
+		target = null
+		var pid: StringName = action.parent_action_id
+		while pid != &"":
+			var parent = context.action_registry.get_action(pid)
+			if parent == null:
+				break
+			if parent.action_type == &"attack":
+				target = parent
+				break
+			pid = parent.parent_action_id
+	if target != null and target.action_type == &"attack":
+		target.record["shield_hp_reduction"] = int(target.record.get("shield_hp_reduction", 0)) + hp_reduction
+
+
 
 
 func _mark_effect_executed(effect_id: StringName, action_id: StringName) -> void:
@@ -2352,6 +2383,9 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 			var odr_max: int = int(odr_params.get("max_points", -1))
 			var odr_mode: StringName = odr_params.get("mode", &"")
 			var odr_reduction: int = int(odr_params.get("reduction", 0))
+			# hp_reduction（太空合金盾牌 effect_136）：转移确认时使本次攻击造成的HP伤害-N。
+			# 写入父 attack.record["shield_hp_reduction"]，由 attack._step_apply_hp 读取扣减。
+			var odr_hp_reduction: int = int(odr_params.get("hp_reduction", 0))
 			var odr_plan: Array = payload.get("redirect_plan", []) if payload.has("redirect_plan") else []
 			# 盾牌 all_or_nothing（effect_127/133/136）：把全部损伤(减 reduction 后)改向本牌槽，
 			# 减伤部分(reduction)被盾牌吸收直接消失，不回原目标。人类弹可选确认窗(转移/不转移)，AI 自动转移。
@@ -2363,6 +2397,10 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 				var ao_mech: StringName = bind_ctx_ao.get("mech_id", &"")
 				var ao_slot: StringName = bind_ctx_ao.get("slot_id", &"")
 				var ao_total: int = int(payload.get("total_points", payload.get("value", 0)))
+				# effect_136 监听 ATTACK_AFTER（造成HP伤害前）：payload 无 total_points/value，
+				# 取 markers(+extra_markers) 作为待转移损伤数。
+				if ao_total == 0:
+					ao_total = int(payload.get("markers", 0)) + int(payload.get("extra_markers", 0))
 				var ao_transfer: int = maxi(0, ao_total - odr_reduction)
 				var ao_absorb: int = ao_total - ao_transfer  # 确认转移时被盾牌减伤吸收(消失)的点数
 				var ao_owner_player: StringName = bind_ctx_ao.get("player_id", &"")
@@ -2373,9 +2411,11 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 					else:
 						_write_redirect_plan(action, [])
 					action.record["redirect_absorbed"] = ao_absorb
+					_apply_shield_hp_reduction(action, odr_hp_reduction)
 					continue
 				# 人类玩家：弹可选确认窗（转移全部 / 不转移）
 				action.record["_ao_absorb"] = ao_absorb
+				action.record["_ao_hp_reduction"] = odr_hp_reduction
 				_pending_effect[action.action_id] = {"effect": effect, "payload": payload, "phase": "redirect_select"}
 				action.record["_waiting_for_redirect"] = true
 				action.state = &"waiting_timing"

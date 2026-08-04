@@ -41,8 +41,7 @@ func check_equipment_broken(mech_id: StringName, slot_id: StringName) -> void:
 	# ── 重算动力上限并调整当前动力 ──
 	var old_max_power: int = mech.max_power
 	mech.max_power = mech.get_total_power()
-	var power_delta: int = mech.max_power - old_max_power
-	mech.power = maxi(0, mech.power + power_delta)
+	mech.sync_own_power_after_max_change(old_max_power)
 
 	gs.write_log(&"equipment_broken", {
 		"mech_id": String(mech_id),
@@ -113,8 +112,7 @@ func replace_equipment(player_id: StringName, mech_id: StringName, new_card_id: 
 	# ── 重算动力上限并调整当前动力 ──
 	var old_max_power: int = mech.max_power
 	mech.max_power = mech.get_total_power()
-	var power_delta: int = mech.max_power - old_max_power
-	mech.power = maxi(0, mech.power + power_delta)
+	mech.sync_own_power_after_max_change(old_max_power)
 
 	gs.write_log(&"equipment_replaced", {
 		"player_id": String(player_id),

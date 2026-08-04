@@ -45,8 +45,10 @@ func start_turn(player_id: StringName) -> Dictionary:
 	var mech: MechState = gs.get_mech_for_player(player_id)
 	if mech:
 		mech.attack_count_this_turn = 0
-		mech.power_spent_this_turn = 0
 		mech.cells_moved_this_turn = 0
+		# 重置本回合临时动力计数（消耗/授予）与临时动力本身（临时动力不跨回合保留）
+		mech.temp_power = 0
+		mech.reset_turn_power_counters()
 
 	# ── 3. 发出 ROUND_START 时点（位次1玩家回合开始前，优先于回合开始前） ──
 	# 文档第143-145行：新轮次开始时点优先于回合开始前。1v1下player为位次1，首轮也发。
@@ -232,7 +234,12 @@ func _clean_this_turn_durations(turn_player_id: StringName = &"") -> void:
 				var status_type: StringName = status.get("type", &"")
 				var delta: int = int(status.get("delta", 0))
 				if status_type == &"POWER_MODIFIER" and delta != 0:
-					mech.power = clamp(mech.power - delta, 0, mech.max_power)
+					# 正向 delta（临时动力）：不在此扣减（消耗时已优先扣 temp_power），
+					# 剩余临时动力由下方 clear_temp_power 统一清除（本身动力保留）。
+					# 负向 delta（减动力 debuff）：还原本身动力（power - delta = +|delta|），
+					# clamp 上限保留 temp_power（临时动力不被压回）。
+					if delta < 0:
+						mech.power = clamp(mech.power - delta, 0, mech.max_power + mech.temp_power)
 				to_remove.append(status)
 		# 注销被清除状态关联的监听器，避免孤儿监听器在状态移除后仍触发。
 		# 联合状态 unite_status_attack 监听 ATTACK_SETTLE，若不注销，状态下回合被清后，
@@ -245,6 +252,8 @@ func _clean_this_turn_durations(turn_player_id: StringName = &"") -> void:
 		mech.statuses = mech.statuses.filter(func(s: Dictionary) -> bool:
 			return not _is_this_turn_duration(s.get("duration", &""))
 		)
+		# 清除剩余临时动力（未消耗的临时动力不保留，本身动力保留）
+		mech.clear_temp_power()
 	# 清理装备牌 effect_negated（THIS_TURN/UNTIL_TURN_END）：恢复被压制的效果
 	for card_id: StringName in gs.cards:
 		var card = gs.cards[card_id]

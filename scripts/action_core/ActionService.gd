@@ -200,7 +200,7 @@ func _is_atomic_action(act_type: StringName) -> bool:
 		&"DISCARD_SELF_AND_REDUCE_ATTACK_MARKERS", &"DISCARD_SELF_FROM_SLOT", &"REMOVE_DAMAGE_TOKENS_OTHER_SLOTS", \
 		&"RANDOM_DISCARD_ACTION_CARD", &"SET_WEAPON_MODE", &"SET_WEAPON_COOLDOWN", \
 		&"SET_ATTACK_MIGHT_FROM_PRINTED_WEAPON", &"DISCARD_ALL_FACE_UP_PARTS", &"CHOOSE_MANY_MAP_CELLS", \
-		&"SET_WEAPON_LOCK":
+		&"SET_WEAPON_LOCK", &"SET_WEAPON_CONVERSION":
 			return true
 		_:
 			return false
@@ -1003,6 +1003,8 @@ func _dispatch_atomic_action(act_type: StringName, params: Dictionary, payload: 
 			ga.set_weapon_cooldown(params)
 		&"DISCARD_ALL_FACE_UP_PARTS":
 			ga.discard_all_face_up_parts(params, payload)
+		&"SET_WEAPON_CONVERSION":
+			ga.set_weapon_conversion(params)
 		&"CHOOSE_MANY_MAP_CELLS":
 			# 由 TimingEngine._execute_actions 拦截弹选格 UI（同 CHOOSE_ONE/OFFER_DAMAGE_REDIRECT）
 			pass

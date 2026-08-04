@@ -109,6 +109,10 @@ func _serialize_mechs(gs) -> Dictionary:
 			"max_hp": m.max_hp,
 			"power": m.power,
 			"max_power": m.max_power,
+			"temp_power": m.temp_power,
+			"power_spent_this_turn": m.power_spent_this_turn,
+			"own_power_spent_this_turn": m.own_power_spent_this_turn,
+			"temp_power_granted_this_turn": m.temp_power_granted_this_turn,
 			"position": m.position.duplicate(),
 			"destroyed": m.destroyed,
 			"attack_count_this_turn": m.attack_count_this_turn,
@@ -289,6 +293,10 @@ func apply_snapshot(context, snap: Dictionary) -> void:
 		m.max_hp = int(m_snap.get("max_hp", 0))
 		m.power = int(m_snap.get("power", 0))
 		m.max_power = int(m_snap.get("max_power", 0))
+		m.temp_power = int(m_snap.get("temp_power", 0))
+		m.power_spent_this_turn = int(m_snap.get("power_spent_this_turn", 0))
+		m.own_power_spent_this_turn = int(m_snap.get("own_power_spent_this_turn", 0))
+		m.temp_power_granted_this_turn = int(m_snap.get("temp_power_granted_this_turn", 0))
 		m.position = m_snap.get("position", {"q": 0, "r": 0}).duplicate()
 		m.destroyed = bool(m_snap.get("destroyed", false))
 		m.attack_count_this_turn = int(m_snap.get("attack_count_this_turn", 0))

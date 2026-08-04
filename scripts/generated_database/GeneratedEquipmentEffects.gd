@@ -3303,19 +3303,24 @@ static func build_equipment_effects() -> Dictionary:
 	w135b.description = "维修/弃抽完成后，在此牌上设置2损伤（之后）。"
 	effects[w135b.effect_id] = w135b
 
-	# 136 月神合金盾牌全量吸收并使转移损伤-2（38）
+	# 136 太空合金盾牌：攻击后时点(造成HP伤害/设置损伤前)弹窗，损伤与伤害不分离
+	# 规则书：可以将每次攻击或陷阱产生的全部损伤设置到此牌上，并使此次设置的损伤-1，造成的伤害-2。
+	# 监听 ATTACK_AFTER（在造成HP伤害与设置损伤之前）：弹可选确认窗，确认则全量转移损伤到本牌
+	#（reduction=1：1点被吸收消失）并使本次HP伤害-2（hp_reduction 写入 attack.record["shield_hp_reduction"]）。
+	# 损伤和伤害在同一个弹窗中处理（不分离）：确认即同时转移损伤(-1)与减HP伤害(-2)，取消则都不生效。
+	# 转移计划 redirect_plan/redirect_absorbed 写入 attack record，由 damage_change 读取（_step_set_damage 兜底从父attack取）。
 	var w136 := _ActionEffect.new()
 	w136.effect_id = &"equipment_effect_136"
-	w136.display_name = "月神合金盾牌全量吸收并使转移损伤-2"
+	w136.display_name = "太空合金盾牌全量吸收并使转移损伤-1、造成的伤害-2"
 	w136.mode = _TC.MODE_LISTEN
 	w136.priority = 20
-	w136.listen_timing = &"DAMAGE_REDIRECT_WINDOW"
-	w136.listen_action_type = &"damage_change"
-	w136.set_conditions([{"op": &"SELF_MECH_IS_DAMAGE_TARGET"}, {"op": &"DAMAGE_SOURCE_IS_ATTACK_OR_TRAP"}, {"op": &"PAYLOAD_DAMAGE_TOKENS_ABOVE", "params": {"threshold": 0}}])
+	w136.listen_timing = _TC.ATTACK_AFTER
+	w136.listen_action_type = &"attack"
+	w136.set_conditions([{"op": &"SELF_MECH_IS_DAMAGE_TARGET"}, {"op": &"ATTACK_MARKERS_ABOVE", "params": {"threshold": 0}}])
 	w136.set_target_rules([{"rule": &"NO_TARGET"}])
 	w136.set_costs([])
-	w136.set_actions([{"type": &"OFFER_DAMAGE_REDIRECT", "params": {"max_points": -1, "mode": &"all_or_nothing", "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "reduction": 2, "min_points": 0, "optional": true}}])
-	w136.description = "可以将每次攻击或陷阱产生的全部损伤设置到此牌上，并使此次设置的损伤-2。"
+	w136.set_actions([{"type": &"OFFER_DAMAGE_REDIRECT", "params": {"max_points": -1, "mode": &"all_or_nothing", "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "reduction": 1, "hp_reduction": 2, "min_points": 0, "optional": true}}])
+	w136.description = "可以将每次攻击或陷阱产生的全部损伤设置到此牌上，并使此次设置的损伤-1，造成的伤害-2。"
 	effects[w136.effect_id] = w136
 
 	# 137 每回合1次在范围内2个格子各放1陷阱（39投掷式双子机雷）--「之后」自损1拆到 effect_137b(EFFECT_FIRE_SETTLE)
@@ -3357,14 +3362,14 @@ static func build_equipment_effects() -> Dictionary:
 	# 138 威力实时变为当前护甲×2，范围实时变为当前动力（40）派生值型——不注册监听器
 	var w138 := _ActionEffect.new()
 	w138.effect_id = &"equipment_effect_138"
-	w138.display_name = "威力实时变为当前护甲×2，范围实时变为当前动力"
+	w138.display_name = "威力变为机甲当前护甲×2，范围变为当前动力"
 	w138.mode = _TC.MODE_DIRECT
 	w138.priority = 10
-	w138.set_conditions([{"op": &"ALWAYS"}])
+	w138.set_conditions([{"op": &"IS_OWNER_MAIN_PHASE"}])
 	w138.set_target_rules([{"rule": &"NO_TARGET"}])
 	w138.set_costs([])
-	w138.set_actions([])
-	w138.description = "可以将此牌的威力变为机甲当前护甲数值*2，范围变为当前动力数值。"
+	w138.set_actions([{"type": &"SET_WEAPON_CONVERSION", "params": {"weapon_instance_id": "$binding_context.card_instance_id", "mech_id": "$binding_context.mech_id"}}])
+	w138.description = "我方回合中，可以将此牌的威力变为机甲当前护甲数值*2，范围变为当前动力数值。"
 	effects[w138.effect_id] = w138
 
 	# 139 本牌攻击结算后弃置所有正面部件装备牌（40）
@@ -3378,7 +3383,7 @@ static func build_equipment_effects() -> Dictionary:
 	w139.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}])
 	w139.set_target_rules([{"rule": &"NO_TARGET"}])
 	w139.set_costs([])
-	w139.set_actions([{"type": &"DISCARD_ALL_FACE_UP_PARTS", "params": {"target_mech_id": "$binding_context.mech_id", "slot_kinds": [&"HEAD", &"TORSO", &"RIGHT_ARM", &"LEFT_ARM", &"RIGHT_LEG", &"LEFT_LEG"], "reason": &"weapon_040_conversion_cost", "preserve_slot_damage": true}}])
+	w139.set_actions([{"type": &"DISCARD_ALL_FACE_UP_PARTS", "params": {"target_mech_id": "$binding_context.mech_id", "slot_kinds": [&"PART"], "reason": &"weapon_040_conversion_cost", "preserve_slot_damage": true}}])
 	w139.description = "此牌发动攻击结算完成后，弃置机甲所有正面朝上的部件装备牌。"
 	effects[w139.effect_id] = w139
 
@@ -3717,16 +3722,13 @@ static func get_effective_weapon_stats(card) -> Dictionary:
 	var might: int = base_might
 	var range: int = base_range
 
-	# 派生值型：effect_138 质能全转换（40）威力=max(0,armor*2) 范围=max(0,current_power)
-	# 替代牌面 1/1，之后再叠加下方修正。
-	if _card_has_effect_id(card, &"equipment_effect_138"):
-		var ec_mech = _get_card_mech(card)
-		if ec_mech != null:
-			might = max(0, int(ec_mech.get_armor()) * 2)
-			range = max(0, int(ec_mech.power))
-		else:
-			might = 0
-			range = 0
+	# effect_138 质能全转换（40）主动触发后快照：card.counters["conversion_might/range"]
+	# 替代牌面 1/1。未触发时用牌面 1/1。快照保留至再次主动触发（不随后续数值改变而改变）。
+	if card.get("counters") != null:
+		if card.counters.has("conversion_might"):
+			might = max(0, int(card.counters["conversion_might"]))
+		if card.counters.has("conversion_range"):
+			range = max(0, int(card.counters["conversion_range"]))
 
 	# 持久/临时修正（聚能 effect_093/095 临时 +3/+1、其他 might_modifiers/range_modifiers）
 	might += _sum_weapon_modifiers(card, &"might")

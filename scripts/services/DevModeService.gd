@@ -444,7 +444,7 @@ func modify_mech_power(player_id: StringName, amount: int) -> int:
 	if mech == null:
 		return -1
 
-	mech.power = clamp(mech.power + amount, 0, mech.max_power)
+	mech.dev_modify_power(amount)
 	return mech.power
 
 
@@ -455,7 +455,9 @@ func set_mech_power(player_id: StringName, value: int) -> int:
 	if mech == null:
 		return -1
 
-	mech.power = clamp(value, 0, mech.max_power)
+	# dev 设定动力：清临时动力，本身动力=clamp(value,0,max)
+	mech.temp_power = 0
+	mech.power = clampi(value, 0, mech.max_power)
 	return mech.power
 
 

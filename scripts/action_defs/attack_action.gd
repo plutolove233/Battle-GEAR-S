@@ -305,6 +305,12 @@ func _step_apply_damage(action: Action) -> Dictionary:
 	# 此处不再按"任意攻击命中"清除（旧逻辑会误清他人命中导致的锁定）。
 
 	var damage: int = action.record.get("damage", 0)
+	# 盾牌在 ATTACK_AFTER 写入的HP伤害减量（太空合金盾牌 effect_136：造成的伤害-2）。
+	# ATTACK_AFTER 时点在造成HP伤害前 fire，故此处读取时盾牌的减量已生效。
+	var shield_hp_red: int = int(action.record.get("shield_hp_reduction", 0))
+	if shield_hp_red > 0:
+		damage = max(0, damage - shield_hp_red)
+		action.record["damage"] = damage
 	var markers: int = action.record.get("markers", 0)
 	# 应用 extra_markers（破甲 +2 / 联邦左腿 -最多2 等 ATTACK_AFTER 时点效果写入）。
 	# 时点翻转后 ATTACK_AFTER fire 在 _step_calculate_damage handler 之后，extra_markers

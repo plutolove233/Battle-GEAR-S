@@ -63,6 +63,12 @@ func _step_set_damage(action: Action) -> Dictionary:
 	var value: int = action.record.get("value", 0)
 	var method: StringName = action.record.get("method", &"increase")
 	var redirect_plan: Array = action.record.get("redirect_plan", [])
+	# effect_136 太空合金盾牌在 ATTACK_AFTER（damage_change 之前）已把 redirect_plan 写入父 attack record。
+	# 本动作 record 无 redirect_plan 时兜底从父 attack 取。
+	if redirect_plan.is_empty():
+		var parent_atk = _get_parent_attack(action)
+		if parent_atk != null:
+			redirect_plan = parent_atk.record.get("redirect_plan", [])
 
 	if value == 0:
 		return result
@@ -134,6 +140,22 @@ func _step_set_damage(action: Action) -> Dictionary:
 	return result
 
 
+## 沿父动作链找 attack（damage_change 是 attack 的子动作）。
+## effect_136 在 ATTACK_AFTER 把 redirect_plan/redirect_absorbed 写入父 attack record，此处兜底读取。
+func _get_parent_attack(action: Action):
+	if context == null or context.action_registry == null:
+		return null
+	var pid: StringName = action.parent_action_id
+	while pid != &"":
+		var parent = context.action_registry.get_action(pid)
+		if parent == null:
+			break
+		if parent.action_type == &"attack":
+			return parent
+		pid = parent.parent_action_id
+	return null
+
+
 ## 应用转移计划：把转移点直接放到目标 slot，返回剩余待放置点数
 ## redirect_plan = [{to_mech_id, to_slot_id, count}, ...]
 func _apply_redirect_plan(mech_ids: Array, redirect_plan: Array, action: Action) -> int:
@@ -157,7 +179,13 @@ func _apply_redirect_plan(mech_ids: Array, redirect_plan: Array, action: Action)
 			continue
 		if context.game_actions != null and context.game_actions.has_method("_check_equipment_broken_after_damage"):
 			context.game_actions._check_equipment_broken_after_damage(to_mech, to_slot)
-	return int(action.record.get("value", 0)) - placed - int(action.record.get("redirect_absorbed", 0))
+	# redirect_absorbed：本动作 record 优先，兜底从父 attack record 取（effect_136 在 ATTACK_AFTER 写入）。
+	var rd_absorbed: int = int(action.record.get("redirect_absorbed", 0))
+	if rd_absorbed == 0:
+		var parent_atk = _get_parent_attack(action)
+		if parent_atk != null:
+			rd_absorbed = int(parent_atk.record.get("redirect_absorbed", 0))
+	return int(action.record.get("value", 0)) - placed - rd_absorbed
 
 
 func _step_settle(action: Action) -> Dictionary:

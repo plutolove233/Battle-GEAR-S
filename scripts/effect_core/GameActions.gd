@@ -363,20 +363,31 @@ func modify_mech_power(params: Dictionary) -> void:
 	var min_value: int = int(params.get("min_value", 0))
 
 	# ── 始终立即应用动力修改 ──
+	# 三种操作区分（用户裁定）：
+	#  - 当前增加（临时）：正向 delta + THIS_TURN/THIS_ATTACK/current_and_temporary_max -> temp_power
+	#    （消耗优先扣 temp_power，回合末清剩余，本身动力保留）。推进/手持推进器 +N 走此路径。
+	#  - 回复/正向非临时（PERMANENT 等）：填本身动力至上限（保留 temp_power）。
+	#  - 减动力（debuff，current_only 或负 delta）：减本身动力，不动 temp_power。
 	var before: int = mech.power
-	if mode == &"current_only":
-		# 只改当前动力，不影响上限；clamp 到 [min_value, 当前max_power]
-		mech.power = clamp(mech.power + delta, min_value, _get_max_power(mech_id))
-	elif mode == &"current_and_temporary_max":
-		# 当前动力+delta（允许超原 max_power，不 clamp）；duration 必为 THIS_TURN，
-		# 由下方 POWER_MODIFIER 状态回合结束还原。"临时上限+4"语义近似为不 clamp（power 不被压回）。
-		mech.power = maxi(min_value, mech.power + delta)
+	var is_temp_add: bool = delta > 0 and (duration == &"THIS_TURN" or duration == &"THIS_ATTACK" or mode == &"current_and_temporary_max")
+	if is_temp_add:
+		# 临时动力：power 与 temp_power 同步 +delta（允许超 max_power）
+		mech.add_temp_power(delta)
 		if duration == &"":
 			duration = &"THIS_TURN"
-	elif duration == &"THIS_TURN" or duration == &"THIS_ATTACK":
-		mech.power = maxi(0, mech.power + delta)
+	elif mode == &"current_only":
+		# 只改本身动力，clamp 到 [min_value, max_power]，保留 temp_power
+		var own: int = mech.get_own_power()
+		var new_own: int = clampi(own + delta, min_value, _get_max_power(mech_id))
+		mech.power += (new_own - own)
+	elif delta > 0:
+		# 正向非临时（PERMANENT 等）：填本身动力至上限
+		mech.restore_own_power(delta)
 	else:
-		mech.power = clamp(mech.power + delta, 0, _get_max_power(mech_id))
+		# 负向非 current_only：减本身动力
+		var own2: int = mech.get_own_power()
+		var new_own2: int = clampi(own2 + delta, 0, _get_max_power(mech_id))
+		mech.power += (new_own2 - own2)
 
 	# 记录数值修正
 	var method := "add" if delta > 0 else "sub"
@@ -430,8 +441,8 @@ func spend_power(params: Dictionary) -> bool:
 	if mech.power < amount:
 		return false
 
-	mech.power -= amount
-	mech.power_spent_this_turn += amount
+	# 消耗动力优先扣减临时动力（temp_power），本身动力保留至回合末。
+	mech.consume_power(amount)
 
 	context.effect_engine.fire_hook(&"ON_POWER_SPENT", {
 		"mech_id": mech_id,
@@ -473,9 +484,10 @@ func restore_power(params: Dictionary) -> void:
 
 	var amount_value = params.get("amount", params.get("count", &"full"))
 	if str(amount_value) == "full":
-		mech.power = max_power
+		# 回复本身动力至上限（保留 temp_power，不压回临时动力）
+		mech.restore_own_power_to_full()
 	else:
-		mech.power = clamp(mech.power + int(amount_value), 0, max_power)
+		mech.restore_own_power(int(amount_value))
 
 	var restored: int = mech.power - before
 	if restored <= 0:
@@ -2167,8 +2179,7 @@ func _check_equipment_broken_after_damage(mech_id: StringName, slot_id: StringNa
 	# ── 重算动力上限并调整当前动力 ──
 	var old_max_power: int = mech.max_power
 	mech.max_power = mech.get_total_power()
-	var power_delta: int = mech.max_power - old_max_power
-	mech.power = maxi(0, mech.power + power_delta)
+	mech.sync_own_power_after_max_change(old_max_power)
 
 
 ## 破坏机甲
@@ -2515,6 +2526,34 @@ func set_weapon_cooldown(params: Dictionary) -> void:
 		var cur_turn: int = int(context.game_state.turn_number) if context.game_state != null else 0
 		weapon.cooldown_until_turn = cur_turn + 2  # 下个我方回合（1v1 轮换）
 		SLog.log_raw("[ACTION] SET_WEAPON_COOLDOWN set %s until_turn=%d" % [String(weapon_id), weapon.cooldown_until_turn])
+
+
+## 质能全转换剑炮（effect_138）主动触发：快照当前护甲×2/动力写入 card.counters
+## 威力变为机甲当前护甲数值*2，范围变为当前动力数值。算完保留，不随后续机甲数值改变而改变
+##（除非再次使用此效果）。get_effective_weapon_stats 以 conversion_might/range 为基数替代牌面1/1。
+func set_weapon_conversion(params: Dictionary) -> void:
+	var weapon_id: StringName = params.get("weapon_instance_id", params.get("target_card_instance_id", &""))
+	var mech_id: StringName = params.get("mech_id", params.get("source_mech_id", &""))
+	if weapon_id == &"" or mech_id == &"" or not context.game_state.mechs.has(mech_id):
+		push_error("SET_WEAPON_CONVERSION 缺少 weapon_id/mech_id")
+		return
+	var weapon = context.game_state.get_card(weapon_id)
+	if weapon == null:
+		return
+	var mech = context.game_state.mechs[mech_id]
+	if not "counters" in weapon:
+		weapon.counters = {}
+	var conv_might: int = max(0, int(mech.get_armor()) * 2)
+	var conv_range: int = max(0, int(mech.power))
+	weapon.counters["conversion_might"] = conv_might
+	weapon.counters["conversion_range"] = conv_range
+	context.game_state.write_log(&"weapon_conversion", {
+		"weapon_id": String(weapon_id),
+		"mech_id": String(mech_id),
+		"conversion_might": conv_might,
+		"conversion_range": conv_range,
+	})
+	SLog.log_raw("[ACTION] SET_WEAPON_CONVERSION %s might=%d(armor*2) range=%d(power)" % [String(weapon_id), conv_might, conv_range])
 
 
 ## 弃置机甲所有正面朝上的部件装备牌（effect_140 质能全转换剑炮攻击结算后代价）

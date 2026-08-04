@@ -700,10 +700,10 @@ func _apply_dev_edit(op: StringName, params: Dictionary) -> void:
 				mech.current_hp = mech.max_hp
 		&"modify_power":
 			if mech:
-				mech.power = maxi(0, mech.power + int(params.get("amount", 0)))
+				mech.dev_modify_power(int(params.get("amount", 0)))
 		&"set_full_power":
 			if mech:
-				mech.power = mech.max_power
+				mech.restore_own_power_to_full()
 		&"modify_gold":
 			player.gold = maxi(0, player.gold + int(params.get("amount", 0)))
 		&"set_gold_50":
@@ -981,6 +981,9 @@ func _dispatch_input(op: String, data: Dictionary) -> Variant:
 					cm_mech.position = {"q": int(data.get("q", cm_mech.position.get("q", 0))), "r": int(data.get("r", cm_mech.position.get("r", 0)))}
 					cm_mech.power = int(data.get("power", cm_mech.power))
 					cm_mech.power_spent_this_turn = int(data.get("power_spent", cm_mech.power_spent_this_turn))
+					cm_mech.temp_power = int(data.get("temp_power", cm_mech.temp_power))
+					cm_mech.own_power_spent_this_turn = int(data.get("own_power_spent", cm_mech.own_power_spent_this_turn))
+					cm_mech.temp_power_granted_this_turn = int(data.get("temp_power_granted", cm_mech.temp_power_granted_this_turn))
 					cm_mech.cells_moved_this_turn = int(data.get("cells_moved", cm_mech.cells_moved_this_turn))
 			# 强制同步 ActionRegistry 计数器到本方值：先前动作(设装备/打牌)可能已使两端计数器
 			# 发散，致后续动作 action_id 不匹配（攻击响应窗口 respond_attack 找不到动作->攻击卡临时区）。
@@ -3635,6 +3638,9 @@ func _build_cancel_move_data(single_move_action) -> Dictionary:
 		"r": int(mech.position.get("r", 0)),
 		"power": int(mech.power),
 		"power_spent": int(mech.power_spent_this_turn),
+		"temp_power": int(mech.temp_power),
+		"own_power_spent": int(mech.own_power_spent_this_turn),
+		"temp_power_granted": int(mech.temp_power_granted_this_turn),
 		"cells_moved": int(mech.cells_moved_this_turn),
 		# 本方 ActionRegistry 计数器当前值：远端若因先前动作(设装备/打牌)致计数器发散，
 		# 后续攻击等动作的 action_id 会两端不匹配（respond_attack 找不到动作->攻击卡临时区）。

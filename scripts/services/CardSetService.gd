@@ -169,8 +169,7 @@ func sell_equipment(player_id: StringName, card_id: StringName) -> Dictionary:
 				# 部件槽重算动力上限
 				var old_max_power: int = mech.max_power
 				mech.max_power = mech.get_total_power()
-				var power_delta: int = mech.max_power - old_max_power
-				mech.power = maxi(0, mech.power + power_delta)
+				mech.sync_own_power_after_max_change(old_max_power)
 		context.deck_service.discard_card(card_id, &"sell_set_equipment")
 
 	gs.write_log(&"equipment_sold", {
@@ -256,8 +255,7 @@ func _set_equipment_legacy(player_id: StringName, mech: MechState, slot: MechSlo
 	if slot.slot_kind == &"PART":
 		var old_max_power: int = mech.max_power
 		mech.max_power = mech.get_total_power()
-		var power_delta: int = mech.max_power - old_max_power
-		mech.power = maxi(0, mech.power + power_delta)
+		mech.sync_own_power_after_max_change(old_max_power)
 
 	if context.effect_registry and slot.slot_kind != &"RESERVE":
 		context.effect_registry.register_card(card)

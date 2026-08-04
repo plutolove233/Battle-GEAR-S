@@ -253,7 +253,7 @@ func test_weapon_json_effect_ids() -> Variant:
 	return true
 
 
-## ③ 派生值：weapon_040 威力=护甲×2，范围=当前动力
+## ③ 主动触发：weapon_040 effect_138 主动将威力变为护甲×2、范围变为动力（快照保留）
 func test_weapon_040_energy_conversion() -> Variant:
 	var battle := _new_battle()
 	if battle == null or battle.context == null:
@@ -262,17 +262,39 @@ func test_weapon_040_energy_conversion() -> Variant:
 	var cid: StringName = await _equip_weapon(battle, "weapon_040_质能全转换剑炮")
 	if cid == &"":
 		return "装备 weapon_040 失败"
-	var card = battle.context.game_state.get_card(cid)
-	var pm = battle.context.game_state.get_mech_for_player(&"player")
-	pm.power = 5  # 当前动力5
-	# 护甲取当前总护甲（含部件）。威力应=max(0,armor*2)，范围应=5
-	var stats: Dictionary = _GenEquipEffects.get_effective_weapon_stats(card)
+	var gs = battle.context.game_state
+	var card = gs.get_card(cid)
+	var pm = gs.get_mech_for_player(&"player")
+	gs.phase = &"MAIN"
+	gs.active_player_id = &"player"
+	battle.context.action_ui_bridge.context = battle.context
+	# 未触发：牌面 1/1
+	var stats0: Dictionary = _GenEquipEffects.get_effective_weapon_stats(card)
+	if int(stats0.get("might", -1)) != 1 or int(stats0.get("range_value", -1)) != 1:
+		return "weapon_040 未触发时应为牌面1/1，实际 %d/%d" % [int(stats0.get("might", -1)), int(stats0.get("range_value", -1))]
+	pm.power = 5
 	var armor: int = pm.get_armor()
 	var exp_might: int = maxi(0, armor * 2)
+	# 主动触发 effect_138（快照当前护甲*2/动力写入 card.counters）
+	var ef_result: Dictionary = battle.context.action_service.execute(&"effect_fire", {
+		"effect_id": &"equipment_effect_138",
+		"player_id": &"player", "source_mech_id": pm.mech_id, "card_instance_id": cid, "phase": &"MAIN",
+		"source": {"card_instance_id": cid, "mech_id": pm.mech_id, "player_id": &"player", "effect_id": &"equipment_effect_138"},
+	})
+	var ef_id: StringName = ef_result.get("action_id", &"") if ef_result is Dictionary else &""
+	if ef_id == &"":
+		return "effect_138 effect_fire 未发起"
+	await _pump_frames(3)
+	var stats: Dictionary = _GenEquipEffects.get_effective_weapon_stats(card)
 	if int(stats.get("might", -1)) != exp_might:
-		return "weapon_040 威力应=护甲%d×2=%d，实际 %d" % [armor, exp_might, int(stats.get("might", -1))]
+		return "weapon_040 触发后威力应=护甲%d×2=%d，实际 %d" % [armor, exp_might, int(stats.get("might", -1))]
 	if int(stats.get("range_value", -1)) != 5:
-		return "weapon_040 范围应=当前动力5，实际 %d" % int(stats.get("range_value", -1))
+		return "weapon_040 触发后范围应=当前动力5，实际 %d" % int(stats.get("range_value", -1))
+	# 保留性：动力改变后快照不变（除非再次使用此效果）
+	pm.power = 3
+	var stats2: Dictionary = _GenEquipEffects.get_effective_weapon_stats(card)
+	if int(stats2.get("range_value", -1)) != 5:
+		return "weapon_040 快照应保留，动力变3后范围仍=5（除非再次使用），实际 %d" % int(stats2.get("range_value", -1))
 	return true
 
 
@@ -1327,6 +1349,94 @@ func test_weapon_127_shield_redirect() -> Variant:
 	return true
 
 
+## effect_136：weapon_038 太空合金盾牌 攻击后时点(ATTACK_AFTER)转移损伤(-1)并使造成的伤害-2
+## 损伤和伤害不分离：同一弹窗确认即同时转移损伤(-1)与减HP伤害(-2)。
+func test_weapon_136_shield_redirect_and_hp_reduction() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	_GenEquipEffects.set_aura_game_state(battle.context.game_state)
+	var cid: StringName = await _equip_weapon(battle, "weapon_038_月神合金盾牌")
+	if cid == &"":
+		return "装备 weapon_038 失败"
+	var gs = battle.context.game_state
+	var pm = gs.get_mech_for_player(&"player")
+	var em = gs.get_mech_for_player(&"enemy")
+	pm.current_hp = 100
+	em.current_hp = 100
+	var armor_before: int = int(pm.get_armor())
+	pm.position = {"q": 5, "r": 0}
+	em.position = {"q": 6, "r": 0}
+	# 清 player 手牌（避免 player 迎击）
+	var pl = gs.players.get(&"player")
+	if pl != null:
+		for c in pl.action_hand.duplicate():
+			battle.context.timing_engine.unregister_listeners_for_card(c)
+		pl.action_hand.clear()
+	battle.context.action_ui_bridge.context = battle.context
+	# enemy 武器 + 攻击牌；确保威力>=10（markers>=2，便于见 -1）
+	var enemy_weapons: Array = em.get_weapon_ids()
+	if enemy_weapons.is_empty():
+		return "enemy 无武器"
+	var enemy_weapon: StringName = enemy_weapons[0]
+	if not em.base_weapons.is_empty():
+		em.base_weapons[0]["might"] = 12
+	var ep = gs.players.get(&"enemy")
+	if ep == null:
+		return "enemy 玩家不存在"
+	var enemy_atk: StringName = &""
+	for c in ep.action_hand:
+		var cc = gs.get_card(c)
+		if cc and cc.def and cc.def.action_type == &"攻击":
+			enemy_atk = c
+			break
+	if enemy_atk == &"":
+		for c in gs.deck_state.action_deck:
+			var cc = gs.get_card(c)
+			if cc and cc.def and cc.def.action_type == &"攻击":
+				enemy_atk = c
+				gs.deck_state.action_deck.erase(c)
+				ep.action_hand.append(c)
+				cc.zone = &"action_hand"
+				break
+	if enemy_atk == &"":
+		return "enemy 无攻击牌"
+	var atk_result: Dictionary = battle.execute_attack_action(&"enemy", &"player", enemy_weapon, enemy_atk)
+	var attack_id: StringName = atk_result.get("action_id", &"") if atk_result is Dictionary else &""
+	if attack_id == &"":
+		return "enemy 攻击未发起"
+	await _pump_frames(5)
+	# 盾牌 ATTACK_AFTER 转移弹窗（attack waiting_timing）：确认转移全部(损伤-1)并使伤害-2
+	var ar = battle.context.action_registry
+	var te = battle.context.timing_engine
+	var attack = ar.get_action(attack_id)
+	if attack == null:
+		return "attack 不存在"
+	if attack.state != &"waiting_timing":
+		return "attack 未 waiting_timing（盾牌 ATTACK_AFTER 转移窗未弹）state=%s" % String(attack.state)
+	var markers: int = int(attack.record.get("markers", 0))
+	var absorb: int = int(attack.record.get("_ao_absorb", 0))
+	var transfer: int = maxi(0, markers - absorb)
+	var target_mech: StringName = attack.record.get("target_id", &"")
+	var plan: Array = []
+	if transfer > 0:
+		plan = [{"to_mech_id": target_mech, "to_slot_id": &"weapon_1", "count": transfer}]
+	te.resume_pending_effect(attack_id, {"redirect_plan": plan, "all_or_nothing_confirmed": true})
+	await _pump_frames(3)
+	_drive_damage_placement(battle, attack_id)
+	await _pump_frames(3)
+	# 盾牌槽应有损伤（转移 markers-1，markers=floor(12/5)=2 -> 转1点）
+	var shield_slot = pm.slots.get(&"weapon_1")
+	if shield_slot == null or int(shield_slot.region_damage_tokens) <= 0:
+		return "effect_136 应将损伤转移到盾牌槽"
+	# HP伤害减2：base=max(0,12-armor)，reduced=max(0,base-2)，HP=100-reduced
+	var base_dmg: int = maxi(0, 12 - armor_before)
+	var expected_hp: int = 100 - maxi(0, base_dmg - 2)
+	if int(pm.current_hp) != expected_hp:
+		return "HP应=100-(伤害-2)=%d（base=%d armor=%d），实际 %d" % [expected_hp, base_dmg, armor_before, int(pm.current_hp)]
+	return true
+
+
 ## effect_124：weapon_028 雷爆磁轨炮 随机弃牌为最后一张时 +3 威力（被动，无弹窗）
 ## 打出攻击牌后手牌恰剩1张 -> ATTACK_BEFORE 随机弃该牌 -> effect_124 ATTACK_BEFORE 写 extra_might+3
 func test_weapon_124_plus3_last_card() -> Variant:
@@ -1900,6 +2010,56 @@ func test_weapon_131_power_boost_then_settle_self_damage() -> Variant:
 	if int(card.damage_tokens) != 1:
 		var ef_a = battle.context.action_registry.get_action(ef_id)
 		return "effect_131b 应在 EFFECT_FIRE_SETTLE 自损1，实际 damage_tokens=%d ef_state=%s" % [int(card.damage_tokens), String(ef_a.state) if ef_a != null else "removed"]
+	return true
+
+
+## 临时动力系统：增加当前动力(临时)消耗优先扣减、回合末清剩余本身动力保留
+## 场景：4/8 -> +4临时 -> 8/8 -> 消耗4 -> 4/8(临时已消耗) -> 回合末 -> 4/8(本身保留)
+func test_temp_power_consume_first_and_preserve() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	var pm = battle.context.game_state.get_mech_for_player(&"player")
+	pm.max_power = 8
+	pm.power = 4
+	pm.temp_power = 0
+	pm.reset_turn_power_counters()
+	# 临时动力+4（推进/手持推进器 effect_131/132 走 add_temp_power）
+	pm.add_temp_power(4)
+	if int(pm.power) != 8 or int(pm.temp_power) != 4:
+		return "add_temp_power 后应 8/8 temp=4，实际 %d temp=%d" % [int(pm.power), int(pm.temp_power)]
+	# 消耗4：优先扣临时，本身动力保留
+	pm.consume_power(4)
+	if int(pm.power) != 4 or int(pm.temp_power) != 0:
+		return "消耗4后应 4/8 temp=0（临时已优先消耗），实际 %d temp=%d" % [int(pm.power), int(pm.temp_power)]
+	if int(pm.own_power_spent_this_turn) != 0:
+		return "本身动力消耗应为0（全从临时扣），实际 %d" % int(pm.own_power_spent_this_turn)
+	# 回合末：本身动力4保留，临时0清除
+	pm.clear_temp_power()
+	if int(pm.power) != 4:
+		return "回合末本身动力应保留4，实际 %d" % int(pm.power)
+	# 另一场景：临时未消耗完，回合末清剩余、本身保留
+	pm.power = 4
+	pm.temp_power = 0
+	pm.reset_turn_power_counters()
+	pm.add_temp_power(4)  # 8/8 temp=4
+	pm.consume_power(2)  # 6/8 temp=2（消耗2临时）
+	if int(pm.power) != 6 or int(pm.temp_power) != 2:
+		return "消耗2后应 6/8 temp=2，实际 %d temp=%d" % [int(pm.power), int(pm.temp_power)]
+	pm.clear_temp_power()  # 回合末：清剩余临时2，本身4保留
+	if int(pm.power) != 4:
+		return "回合末未消耗临时应清除、本身4保留，实际 %d" % int(pm.power)
+	# 临时动力可超上限：上限8+临时4=12
+	pm.power = 8
+	pm.temp_power = 0
+	pm.reset_turn_power_counters()
+	pm.add_temp_power(4)
+	if int(pm.power) != 12:
+		return "临时动力应可超上限 8+4=12，实际 %d" % int(pm.power)
+	# 回复本身动力不压回临时：power=12(own8+temp4)，restore full 不变（own已满）
+	var restored = pm.restore_own_power_to_full()
+	if restored != 0 or int(pm.power) != 12:
+		return "本身已满时回复应为0且不动临时，restored=%d power=%d" % [int(restored), int(pm.power)]
 	return true
 
 

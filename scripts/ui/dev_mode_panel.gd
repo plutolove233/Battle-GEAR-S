@@ -927,7 +927,7 @@ func _on_modify_power(amount: int) -> void:
 		return
 	var mech := _current_mech()
 	if mech:
-		mech.power = maxi(0, mech.power + amount)
+		mech.dev_modify_power(amount)
 	_update_info_display()
 	edit_applied.emit()
 
@@ -938,7 +938,7 @@ func _on_set_full_power() -> void:
 		return
 	var mech := _current_mech()
 	if mech:
-		mech.power = mech.max_power
+		mech.restore_own_power_to_full()
 	_update_info_display()
 	edit_applied.emit()
 

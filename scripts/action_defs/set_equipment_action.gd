@@ -155,8 +155,8 @@ func _register_equipment_effects(card, mech_id: StringName, slot_id: StringName 
 		return
 
 	# 武器装备牌效果现已落码（effect_093+），正常注册。武器仅在正面设置到 WEAPON 槽时注册
-	# permanent listener；备用区不注册（上面 face_down 守卫已拦）。派生值型武器效果（120/138）
-	# 由 _is_derived_effect 跳过监听器注册，实时重算。
+	# permanent listener；备用区不注册（上面 face_down 守卫已拦）。派生值型武器效果（120）
+	# 由 _is_derived_effect 跳过监听器注册，实时重算。effect_138 质能全转换已改主动触发，正常注册。
 
 	# 取该牌的 effect_id 列表
 	var effect_ids: Array = _GeneratedEquipmentEffects.get_effects_for_card(card.def.card_id, context)
@@ -228,7 +228,6 @@ func _is_derived_effect(effect_id: StringName) -> bool:
 		&"equipment_effect_086",  # 神莺头·全场帝国光环动力+1
 		&"equipment_effect_087",  # 神莺躯干·虚拟武器(权限型，由武器选择识别)
 		&"equipment_effect_120",  # 武器 26/27·每1自损威力-2(派生值实时重算)
-		&"equipment_effect_138",  # 武器 40·质能全转换威力=护甲×2范围=动力(派生值实时重算)
 	]
 
 
@@ -254,7 +253,7 @@ func _step_activate_equip(action: Action) -> Dictionary:
 	if slot != null and slot.slot_kind == &"PART":
 		var old_max_power: int = mech.max_power
 		mech.max_power = mech.get_total_power()
-		mech.power = maxi(0, mech.power + mech.max_power - old_max_power)
+		mech.sync_own_power_after_max_change(old_max_power)
 	return {}
 
 

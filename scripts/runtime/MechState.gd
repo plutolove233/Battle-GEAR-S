@@ -51,6 +51,17 @@ var attack_count_this_turn: int = 0
 ## 本回合累计消耗动力（effect_044/045 帝国赤枭腿用）
 var power_spent_this_turn: int = 0
 
+## 当前临时动力（本回合临时增加的动力，如推进/手持推进器 +N）。
+## 是 power 的子集：power = 本身动力 + temp_power。消耗动力时优先扣减 temp_power，
+## 回合结束未消耗的 temp_power 不保留（本身动力保留）。本身动力 = power - temp_power。
+var temp_power: int = 0
+
+## 本回合临时动力累计授予量（供详情面板显示「非本身的动力合计」）
+var temp_power_granted_this_turn: int = 0
+
+## 本回合消耗的本身动力（不含临时动力消耗，供详情面板显示）
+var own_power_spent_this_turn: int = 0
+
 ## 本回合累计移动格数（effect_012/013 帝国腿主动效果阈值用）
 var cells_moved_this_turn: int = 0
 
@@ -119,7 +130,101 @@ func recalc_power_limits() -> void:
 	if delta == 0:
 		return
 	max_power = new_max
-	power = clampi(power + delta, 0, max_power)
+	# 本身动力随上限变化同步增减，保留临时动力 temp_power（不被压回 max_power）
+	var own: int = get_own_power()
+	var new_own: int = clampi(own + delta, 0, max_power)
+	power = new_own + temp_power
+
+
+## 上限变化后同步本身动力（保留 temp_power）。在 max_power 已更新后调用，传入旧上限。
+## 修复 maxi(0, power + delta) 在本身动力被扣至负时误压回 temp_power 的问题。
+func sync_own_power_after_max_change(old_max_power: int) -> void:
+	var delta: int = max_power - old_max_power
+	var own2: int = get_own_power()
+	own2 = clampi(own2 + delta, 0, max_power)
+	power = own2 + temp_power
+
+
+## 调整本身动力（+/-amount，clamp 到 [0, max_power]，保留 temp_power）。dev 模式动力 +/- 用。
+func adjust_own_power(amount: int) -> void:
+	var own: int = get_own_power()
+	own = clampi(own + amount, 0, max_power)
+	power = own + temp_power
+
+
+## dev 模式 +/- 动力：正向当作额外(临时)动力增加（可超上限，不被 max_power 截断），
+## 负向先扣临时再扣本身。不计入 own_power_spent_this_turn（dev 调试，不污染消耗统计）。
+func dev_modify_power(amount: int) -> void:
+	if amount > 0:
+		add_temp_power(amount)
+	elif amount < 0:
+		var reduce: int = -amount
+		var from_temp: int = mini(temp_power, reduce)
+		temp_power -= from_temp
+		power -= from_temp
+		var remaining: int = reduce - from_temp
+		if remaining > 0:
+			var own: int = maxi(0, power - temp_power)
+			power -= mini(own, remaining)
+
+
+## ── 临时动力系统 ──
+## 三种动力操作区分：增加上限(装备/派生→max_power)、当前增加(临时→temp_power，消耗优先、回合末清剩余)、
+## 回复(填本身动力至上限，保留temp_power)。temp_power 是 power 的子集：power = 本身动力 + temp_power。
+
+
+## 当前本身动力（上限囊括的动力，= power - temp_power，不含临时增加）。
+## 返回原始值（可能为负，如被减动力 debuff 致 power < temp_power）；调用方按需 clamp。
+func get_own_power() -> int:
+	return power - temp_power
+
+
+## 增加临时动力（本回合动力+N：推进/手持推进器等，允许超 max_power）
+func add_temp_power(delta: int) -> void:
+	power += delta
+	temp_power += delta
+	temp_power_granted_this_turn += delta
+
+
+## 消耗动力：优先扣减 temp_power，再扣本身动力。返回从临时动力扣减的量。
+## 调用前需保证 power >= amount。
+func consume_power(amount: int) -> int:
+	var from_temp: int = mini(temp_power, amount)
+	temp_power -= from_temp
+	power -= amount
+	power_spent_this_turn += amount
+	own_power_spent_this_turn += (amount - from_temp)
+	return from_temp
+
+
+## 回复本身动力（不超过上限，保留 temp_power）。返回实际回复量。
+func restore_own_power(amount: int) -> int:
+	var own: int = get_own_power()
+	var new_own: int = clampi(own + amount, 0, max_power)
+	var restored: int = new_own - own
+	power += restored
+	return restored
+
+
+## 回复本身动力至上限（保留 temp_power，不压回临时动力）。返回回复量。
+func restore_own_power_to_full() -> int:
+	var own: int = get_own_power()
+	var restored: int = maxi(0, max_power - own)
+	power += restored
+	return restored
+
+
+## 回合结束：清除剩余临时动力（未消耗的临时动力不保留，本身动力保留）
+func clear_temp_power() -> void:
+	power = maxi(0, power - temp_power)
+	temp_power = 0
+
+
+## 重置回合临时动力计数（回合开始调用）
+func reset_turn_power_counters() -> void:
+	power_spent_this_turn = 0
+	own_power_spent_this_turn = 0
+	temp_power_granted_this_turn = 0
 
 
 ## 护甲来源明细（供机甲详情框展示）。各项 amount 之和 == get_armor()。
@@ -172,7 +277,8 @@ func get_armor_breakdown(context = null) -> Array:
 
 
 ## 动力上限来源明细（供机甲详情框展示）。各项 amount 之和 == get_total_power() == max_power。
-## 注意：当前可花动力 = 上限 - 本回合已消耗（临时动力加成如推进直接改 power，未单独追踪来源）。
+## 注意：当前可花动力 = power（含 temp_power 临时动力）；临时动力（推进/手持推进器 +N）单独由
+## temp_power 追踪，消耗时优先扣减、回合末清剩余，不在此上限明细中（详情面板单独显示）。
 func get_power_breakdown(_context = null) -> Array:
 	var result: Array = []
 	var part_slots: Array[StringName] = [&"头部", &"躯干", &"右臂", &"左臂", &"右腿", &"左腿"]

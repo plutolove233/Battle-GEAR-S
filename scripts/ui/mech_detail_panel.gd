@@ -94,9 +94,17 @@ func _refresh_armor() -> void:
 func _refresh_power() -> void:
 	for c in _power_container.get_children():
 		c.queue_free()
-	# 当前/上限/已消耗
+	# 当前/上限/临时动力/已消耗明细（用户裁定：临时动力消耗优先、回合末清剩余，详情须区分本身/临时）
+	var temp_avail: int = mini(_mech.temp_power, _mech.power)
 	_add_info_line(_power_container, "当前动力: %d / 上限: %d" % [_mech.power, _mech.max_power], Color(0.85, 0.85, 0.95))
-	_add_info_line(_power_container, "本回合已消耗: %d" % _mech.power_spent_this_turn, Color(0.75, 0.75, 0.8))
+	if temp_avail > 0:
+		_add_info_line(_power_container, "  其中临时动力: %d（消耗优先，回合末清剩余）" % temp_avail, Color(0.7, 0.9, 0.95))
+	var total_spent: int = _mech.power_spent_this_turn
+	var own_spent: int = _mech.own_power_spent_this_turn
+	var temp_spent: int = total_spent - own_spent
+	_add_info_line(_power_container, "本回合消耗动力: %d（本身 %d + 临时 %d）" % [total_spent, own_spent, temp_spent], Color(0.75, 0.75, 0.8))
+	if _mech.temp_power_granted_this_turn > 0:
+		_add_info_line(_power_container, "  本回合临时动力合计: %d（非本身动力）" % _mech.temp_power_granted_this_turn, Color(0.7, 0.9, 0.95))
 	var items: Array = _mech.get_power_breakdown(_context)
 	var total := 0
 	for item in items:
