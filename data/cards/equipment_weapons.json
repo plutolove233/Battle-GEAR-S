@@ -629,13 +629,12 @@
     "slot": "武器",
     "rarity": "R",
     "count": 2,
-    "effect_text": "此牌发动攻击结算后会被设置1损伤。可直接使用此牌发动攻击(不需要攻击牌)。我方回合1次，可以在此牌攻击范围内的格子上设置1陷阱，之后在此牌上设置1损伤。",
+    "effect_text": "此牌发动攻击结算后会被设置1损伤。可直接使用此牌发动攻击(不需要攻击牌)。我方回合1次，可以在此牌范围内的1个无机甲的格子上设置1陷阱，之后在此牌上设置1损伤。",
     "damage": 12,
     "range": 4,
     "durability": 6,
     "cost": 5,
     "effect_ids": [
-      "equipment_effect_128",
       "equipment_effect_129",
       "equipment_effect_134",
       "equipment_effect_134b"
@@ -673,7 +672,8 @@
     "durability": 6,
     "cost": 6,
     "effect_ids": [
-      "equipment_effect_136"
+      "equipment_effect_136",
+      "equipment_effect_136b"
     ]
   },
   {
@@ -684,13 +684,12 @@
     "slot": "武器",
     "rarity": "SR",
     "count": 1,
-    "effect_text": "此牌攻击结算后会被设置1损伤。可直接使用此牌发动攻击(不需要攻击牌)。我方回合1次，可以在此牌范围内的2个格子上各设置1陷阱，之后在此牌上设置1损伤。",
+    "effect_text": "此牌攻击结算后会被设置1损伤。可直接使用此牌发动攻击(不需要攻击牌)。我方回合1次，可以在此牌范围内的2个无机甲的格子上各设置1陷阱，之后在此牌上设置1损伤。",
     "damage": 14,
     "range": 4,
     "durability": 6,
     "cost": 6,
     "effect_ids": [
-      "equipment_effect_128",
       "equipment_effect_129",
       "equipment_effect_137",
       "equipment_effect_137b"

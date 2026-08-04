@@ -129,10 +129,19 @@ func _step_select_target(action: Action) -> Dictionary:
 		# 有效范围 = 基础范围 + extra_range（狙击头部+1 / 近战头部-2 等经 ATTACK_BEFORE 写入）
 		var weapon_range: int = action.record.get("weapon_range", 1) + int(action.record.get("extra_range", 0))
 		weapon_range = max(1, weapon_range)  # 范围最低1
+		var _map_cells: Dictionary = context.game_state.map_state.cells if context.game_state.map_state else {}
+
+		# 陷阱作为攻击目标（无响应窗口，攻击即引爆）：校验陷阱格在范围内
+		if bool(action.record.get("target_is_trap", false)):
+			var trap_q: int = int(action.record.get("target_trap_q", 0))
+			var trap_r: int = int(action.record.get("target_trap_r", 0))
+			if attacker != null and _RangeCalculator.is_in_weapon_range(attacker.position, {"q": trap_q, "r": trap_r}, weapon_range, _map_cells):
+				result["target_id"] = target_id
+				return result
+			return {"cancelled": true, "cancel_reason": "preset_target_out_of_range"}
 
 		if attacker != null and target != null:
-			var map_cells: Dictionary = context.game_state.map_state.cells if context.game_state.map_state else {}
-			if _RangeCalculator.is_in_weapon_range(attacker.position, target.position, weapon_range, map_cells):
+			if _RangeCalculator.is_in_weapon_range(attacker.position, target.position, weapon_range, _map_cells):
 				result["target_id"] = target_id
 				return result
 			# target_id 已 preset 但目标不在攻击范围内（如反击 effect2 的 counter_strike 锁定
@@ -163,6 +172,15 @@ func _step_select_target(action: Action) -> Dictionary:
 				if _RangeCalculator.is_in_weapon_range(attacker_pre.position, m_pre.position, range_pre, cells_pre):
 					has_any_target = true
 					break
+			if not has_any_target:
+				# 也检查范围内是否有陷阱标记（陷阱可选为攻击目标）
+				for marker in context.game_state.map_state.markers:
+					if marker.get("type", &"") != &"TRAP":
+						continue
+					var trap_pos := {"q": int(marker.get("q", 0)), "r": int(marker.get("r", 0))}
+					if _RangeCalculator.is_in_weapon_range(attacker_pre.position, trap_pos, range_pre, cells_pre):
+						has_any_target = true
+						break
 			if not has_any_target:
 				return {"cancelled": true, "cancel_reason": "no_target_in_range"}
 	return {
@@ -231,6 +249,12 @@ func _step_check_hit(action: Action) -> Dictionary:
 	var target = context.game_state.mechs.get(target_id)
 
 	var hit: bool = false
+	# 陷阱目标：攻击即引爆，必命中（陷阱无回避）
+	if bool(action.record.get("target_is_trap", false)):
+		hit = true
+		result["hit"] = hit
+		result["miss"] = false
+		return result
 	if attacker != null and target != null and not target.destroyed:
 		# 有效范围 = 基础范围 + extra_range（命中检查同样读取修正后范围）
 		var weapon_range: int = action.record.get("weapon_range", 1) + int(action.record.get("extra_range", 0))
@@ -252,6 +276,12 @@ func _step_calculate_damage(action: Action) -> Dictionary:
 	var hit: bool = action.record.get("hit", false)
 
 	if not hit:
+		result["damage"] = 0
+		result["markers"] = 0
+		return result
+
+	# 陷阱目标：无HP/护甲，攻击伤害 irrelevant（引爆在 _step_apply_damage 处理）
+	if bool(action.record.get("target_is_trap", false)):
 		result["damage"] = 0
 		result["markers"] = 0
 		return result
@@ -298,6 +328,25 @@ func _step_apply_damage(action: Action) -> Dictionary:
 	var result: Dictionary = {}
 	var hit: bool = action.record.get("hit", false)
 	if not hit:
+		return result
+
+	# 陷阱目标：攻击即引爆--移除陷阱标记并触发陷阱爆炸（无HP/护甲，不走HP/损伤变动）。
+	# 爆炸经 MarkerService.trigger_marker -> trap_explosion 动作（洪水扩散+逐机甲结算，
+	# 攻击者在范围内亦受爆炸伤害）。爆炸为顶层动作，与本攻击的 ATTACK_SETTLE 并行结算。
+	if bool(action.record.get("target_is_trap", false)):
+		var trap_q: int = int(action.record.get("target_trap_q", 0))
+		var trap_r: int = int(action.record.get("target_trap_r", 0))
+		var attacker_id_t: StringName = action.record.get("attacker_id", &"")
+		var gs = context.game_state
+		var trap_marker: Dictionary = {}
+		for m in gs.map_state.get_markers_at(trap_q, trap_r):
+			if m.get("type", &"") == &"TRAP":
+				trap_marker = m
+				break
+		if not trap_marker.is_empty():
+			gs.map_state.remove_marker(trap_marker.get("marker_id", &""))
+			if context.marker_service:
+				context.marker_service.trigger_marker(attacker_id_t, trap_marker)
 		return result
 
 	# 拘束钩爪 effect_104 的锁定解除现由 LOCKED 状态机制处理：lock_status_clear_on_hit 在

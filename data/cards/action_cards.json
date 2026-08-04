@@ -195,10 +195,9 @@
     "type": "辅助",
     "rarity": "N",
     "count": 5,
-    "effect_text": "本回合有2次机会，当机甲离开某格子时可以在该格子上设置1枚陷阱。",
+    "effect_text": "对自身施加2层设陷状态（可叠加）。拥有设陷状态时可使用“设陷”按钮记录当前位置，机甲离开该位置后在原位设置1枚陷阱并移除1层。",
     "effect_ids": [
-      "trap_two_chances_this_turn",
-      "set_trap_when_leaving_cell"
+      "set_trap_direct"
     ]
   },
   {

@@ -1,9 +1,11 @@
-## MarkerService.gd — 地图标记触发服务
+## MarkerService.gd - 地图标记触发服务
 ##
-## 处理地图标记的触发逻辑：
-## - 金币标记：投骰获得金币
-## - 事件标记：翻开事件牌并设置
-## - 陷阱标记：触发爆炸，中心和相邻1格机甲受伤
+## 处理地图标记的效果执行（触发由 MapService._check_map_markers 驱动）：
+## - 金币标记：投1骰，按映射得金币（1-3→3、4-5→4、6→6）
+## - 事件标记：抽1张事件牌并设置（效果待实装，当前仅文本）
+## - 陷阱标记：发起 trap_explosion 动作（洪水扩散+逐机甲HP/损伤结算）
+##
+## 标记的查找/移除/重生由 MapState/MapService 负责，本服务只执行效果。
 class_name MarkerService
 extends RefCounted
 
@@ -13,36 +15,43 @@ const _GameConfig = preload("res://scripts/config/GameConfig.gd")
 var context = null  # type: GameContext
 
 
-## 触发指定坐标的标记
-## 当机甲移动到有标记的格子时调用
-func trigger_marker_at(mech_id: StringName, hex: Dictionary) -> Dictionary:
-	# 查找该坐标的标记
-	var marker = _find_marker_at(hex)
-	if marker == null:
-		return {"ok": true, "message": "无标记"}
-
-	var result: Dictionary = {}
-
-	match marker.get("type", &""):
+## 触发指定标记（执行其效果）。不从 map_state 移除--移除由调用方负责。
+## marker: { "marker_id", "q", "r", "cell_id", "type", "source_point_id" }
+func trigger_marker(mech_id: StringName, marker: Dictionary) -> Dictionary:
+	var marker_type: StringName = marker.get("type", &"")
+	match marker_type:
 		&"GOLD":
-			result = _trigger_gold_marker(mech_id, marker)
+			return _trigger_gold_marker(mech_id, marker)
 		&"EVENT":
-			result = _trigger_event_marker(mech_id, marker)
+			return _trigger_event_marker(mech_id, marker)
 		&"TRAP":
-			result = _trigger_trap_marker(mech_id, hex, marker)
+			return _trigger_trap_marker(mech_id, marker)
 		_:
-			result = {"ok": true, "message": "未知标记类型"}
-
-	# 标记已触发，移除
-	_remove_marker(marker)
-
-	return result
+			return {"ok": true, "message": "未知标记类型，无事发生"}
 
 
-## ── 标记触发实现 ──
+## 旧入口兼容：按坐标查找并触发该格所有标记（查找+移除）。
+## 保留供 legacy GameActions 调用；新流程走 MapService._check_map_markers。
+func trigger_marker_at(mech_id: StringName, hex: Dictionary) -> Dictionary:
+	var gs = context.game_state
+	var q: int = int(hex.get("q", 0))
+	var r: int = int(hex.get("r", 0))
+	var here: Array = gs.map_state.get_markers_at(q, r)
+	if here.is_empty():
+		return {"ok": true, "message": "无标记"}
+	var to_trigger: Array = here.duplicate(true)
+	for m: Dictionary in to_trigger:
+		gs.map_state.remove_marker(m.get("marker_id", &""))
+	var last: Dictionary = {"ok": true}
+	for m: Dictionary in to_trigger:
+		last = trigger_marker(mech_id, m)
+	return last
 
 
-## 金币标记：投1个D6，获得对应金币
+## ── 标记效果实现 ──
+
+
+## 金币标记：投1个D6，按映射得金币（1-3→3、4-5→4、6→6）
 func _trigger_gold_marker(mech_id: StringName, _marker: Dictionary) -> Dictionary:
 	var gs = context.game_state
 	var player_id: StringName = _get_owner_of_mech(mech_id)
@@ -50,105 +59,51 @@ func _trigger_gold_marker(mech_id: StringName, _marker: Dictionary) -> Dictionar
 	if player == null:
 		return {"ok": false, "message": "找不到玩家"}
 
-	var _r = context.rng if context != null and context.rng != null else null
-	var roll: int = (_r.randi() if _r != null else randi()) % _GameConfig.GOLD_MARKER_D6 + 1
-	player.gold += roll
+	var rng = context.rng if (context != null and context.rng != null) else null
+	var roll: int = (rng.randi_range(1, _GameConfig.GOLD_MARKER_D6) if rng != null else (randi() % _GameConfig.GOLD_MARKER_D6 + 1))
+	var gold: int = _GameConfig.gold_marker_payout(roll)
+	player.gold += gold
 
 	gs.write_log(&"marker_gold", {
 		"mech_id": String(mech_id),
+		"player_id": String(player_id),
 		"roll": roll,
-		"gold_gained": roll,
+		"gold_gained": gold,
 	})
-	return {"ok": true, "type": "gold", "roll": roll, "gold_gained": roll}
+	return {"ok": true, "type": "gold", "roll": roll, "gold_gained": gold}
 
 
-## 事件标记：从事件牌堆抽1张并设置到机甲事件槽
+## 事件标记：抽1张事件牌并设置到机甲事件槽。
+## 效果待实装，当前仅记录文本。
 func _trigger_event_marker(mech_id: StringName, _marker: Dictionary) -> Dictionary:
 	var gs = context.game_state
-	var mech = gs.mechs.get(mech_id)
-	if mech == null:
-		return {"ok": false, "message": "机甲不存在"}
-
-	# 从事件牌堆抽1张
-	var drawn: Array[StringName] = context.deck_service.draw_from_deck(&"event_deck", 1)
-	if drawn.is_empty():
-		return {"ok": false, "message": "事件牌堆为空"}
-
-	var card_id: StringName = drawn[0]
-	var card = gs.get_card(card_id)
-	if card:
-		card.zone = &"event_slot"
-		card.owner_player_id = _get_owner_of_mech(mech_id)
-
-	# 设置到事件槽
-	if mech.slots.has(&"event_1"):
-		mech.slots[&"event_1"].equipped_card = card
-
-	# 注册效果
-	if context.effect_registry and card:
-		context.effect_registry.register_card(card)
-
 	gs.write_log(&"marker_event", {
 		"mech_id": String(mech_id),
-		"card_id": String(card_id),
+		"message": "事件标记触发（效果待实装，无事发生）",
 	})
-	return {"ok": true, "type": "event", "card_id": String(card_id)}
+	return {"ok": true, "type": "event"}
 
 
-## 陷阱标记：中心格和相邻1格内的机甲受伤
-func _trigger_trap_marker(mech_id: StringName, hex: Dictionary, _marker: Dictionary) -> Dictionary:
+## 陷阱标记：发起陷阱爆炸动作（洪水扩散+逐机甲结算，HP+损伤经 damage_change 路由）。
+## 触发陷阱已由调用方移除；本服务只发起爆炸，爆炸内的连锁移除由 trap_explosion 动作负责。
+func _trigger_trap_marker(mech_id: StringName, marker: Dictionary) -> Dictionary:
 	var gs = context.game_state
-	var damage: int = _GameConfig.TRAP_BLAST_DAMAGE
-	var tokens: int = _GameConfig.TRAP_BLAST_TOKENS
-
-	# 找到爆炸范围内的所有机甲
-	var affected_mechs: Array[StringName] = []
-	for m_id: StringName in gs.mechs:
-		var m = gs.mechs[m_id]
-		if m.destroyed:
-			continue
-		var dist: int = _HexGrid.distance(hex, m.position)
-		if dist <= _GameConfig.TRAP_BLAST_RANGE:
-			affected_mechs.append(m_id)
-
-	# 对每个受影响的机甲造成伤害
-	for affected_id: StringName in affected_mechs:
-		var affected_mech = gs.mechs.get(affected_id)
-		if affected_mech:
-			affected_mech.current_hp = max(0, affected_mech.current_hp - damage)
-			if tokens > 0:
-				context.damage_token_service.place_damage_tokens({
-					"mech_id": affected_id,
-					"count": tokens,
-					"source": "trap",
-				})
-			if affected_mech.current_hp <= 0:
-				gs.destroy_mech(affected_id, "trap")
-
 	gs.write_log(&"marker_trap", {
 		"mech_id": String(mech_id),
-		"damage": damage,
-		"affected_count": affected_mechs.size(),
+		"q": int(marker.get("q", 0)),
+		"r": int(marker.get("r", 0)),
 	})
-	return {"ok": true, "type": "trap", "damage": damage, "affected_count": affected_mechs.size()}
+	if context.action_service != null:
+		context.action_service.execute(&"trap_explosion", {
+			"trigger_q": int(marker.get("q", 0)),
+			"trigger_r": int(marker.get("r", 0)),
+			"trigger_mech_id": mech_id,
+			"source": {"mech_id": mech_id},
+		})
+	return {"ok": true, "type": "trap"}
 
 
 ## ── 内部方法 ──
-
-
-## 查找指定坐标的标记
-func _find_marker_at(hex: Dictionary) -> Dictionary:
-	var map_state = context.game_state.map_state
-	for marker in map_state.markers:
-		if int(marker.get("q", 0)) == int(hex.get("q", 0)) and int(marker.get("r", 0)) == int(hex.get("r", 0)):
-			return marker
-	return {}
-
-
-## 移除标记
-func _remove_marker(marker: Dictionary) -> void:
-	var map_state = context.game_state.map_state
-	map_state.markers.erase(marker)
 
 
 ## 获取机甲所属玩家ID

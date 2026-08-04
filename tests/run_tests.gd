@@ -80,6 +80,7 @@ class TestDriver:
 		"res://tests/test_net_transport.gd",
 		"res://tests/test_pvp_client_intents.gd",
 		"res://tests/test_pvp_lockstep_sync.gd",
+		"res://tests/test_map_markers.gd",
 		]
 		_run()
 

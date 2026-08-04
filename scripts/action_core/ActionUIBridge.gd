@@ -130,6 +130,9 @@ func _on_action_needs_input(action_id: StringName, input_type: StringName, input
 				_auto_repair_target(action_id, input_params)
 				return
 			request_ui_popup.emit(&"repair_target_select", input_params)
+		&"select_map_cell":
+			# 机雷设陷选格：AI 已在 TimingEngine._execute_actions 自动选第一格，此处仅玩家路径。
+			request_ui_popup.emit(&"map_cell_select", input_params)
 		&"choose_one_effect":
 			# 维修二选一：回复4HP vs 移除2损伤。AI 自动决策；玩家弹 effect_choice
 			if _is_ai_source(input_params):

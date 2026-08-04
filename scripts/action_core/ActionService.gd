@@ -16,6 +16,7 @@ const SLog = preload("res://scripts/services/slog.gd")
 const _GenEquipEffects = preload("res://scripts/generated_database/GeneratedEquipmentEffects.gd")
 # 新增动作类用 preload 引用，避免 headless -s 模式下新 class_name 尚未注册到全局缓存
 const _AwakenAction = preload("res://scripts/action_defs/awaken_action.gd")
+const _TrapExplosionAction = preload("res://scripts/action_defs/trap_explosion_action.gd")
 
 ## 动作类型到创建函数的映射
 var _action_factories: Dictionary = {}
@@ -40,6 +41,7 @@ func init_factories() -> void:
 	_action_factories[&"hp_change"] = _create_hp_change_action
 	_action_factories[&"damage_change"] = _create_damage_change_action
 	_action_factories[&"show_card"] = _create_show_card_action
+	_action_factories[&"trap_explosion"] = _create_trap_explosion_action
 
 
 ## 统一入口：创建并执行动作
@@ -199,7 +201,7 @@ func _is_atomic_action(act_type: StringName) -> bool:
 		&"OFFER_DAMAGE_REDIRECT", \
 		&"DISCARD_SELF_AND_REDUCE_ATTACK_MARKERS", &"DISCARD_SELF_FROM_SLOT", &"REMOVE_DAMAGE_TOKENS_OTHER_SLOTS", \
 		&"RANDOM_DISCARD_ACTION_CARD", &"SET_WEAPON_MODE", &"SET_WEAPON_COOLDOWN", \
-		&"SET_ATTACK_MIGHT_FROM_PRINTED_WEAPON", &"DISCARD_ALL_FACE_UP_PARTS", &"CHOOSE_MANY_MAP_CELLS", \
+		&"SET_ATTACK_MIGHT_FROM_PRINTED_WEAPON", &"DISCARD_ALL_FACE_UP_PARTS", \
 		&"SET_WEAPON_LOCK", &"SET_WEAPON_CONVERSION":
 			return true
 		_:
@@ -275,7 +277,8 @@ func _create_action(action_type: StringName, params: Dictionary) -> Action:
 				&"max_cells", &"free_move", &"adjacent_only",
 				&"target_slot_id", &"target_mech_id", &"fixed_slot", &"exclude_slot_id",
 				&"cardless_weapon_attack", &"consume_turn_attack_count", &"skip_weapon_select", &"weapon_instance_id",
-				&"as_card_def_id", &"consume_original_card", &"virtual_transform"]
+				&"as_card_def_id", &"consume_original_card", &"virtual_transform",
+				&"trigger_q", &"trigger_r", &"trigger_mech_id"]
 			for key: String in params:
 				if key in record_keys:
 					action.record[key] = params[key]
@@ -1265,6 +1268,12 @@ func _create_damage_change_action(params: Dictionary) -> Action:
 
 func _create_show_card_action(params: Dictionary) -> Action:
 	var action = ShowCardAction.new()
+	action.setup_steps()
+	return action
+
+
+func _create_trap_explosion_action(params: Dictionary) -> Action:
+	var action = _TrapExplosionAction.new()
 	action.setup_steps()
 	return action
 

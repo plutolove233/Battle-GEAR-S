@@ -174,6 +174,7 @@ func _serialize_map(gs) -> Dictionary:
 	return {
 		"cells": cells_out,
 		"markers": gs.map_state.markers.duplicate(true) if gs.map_state != null else [],
+		"marker_points": gs.map_state.marker_points.duplicate(true) if gs.map_state != null else [],
 	}
 
 
@@ -355,6 +356,7 @@ func _reset_game_state(gs) -> void:
 	if gs.map_state != null:
 		gs.map_state.cells.clear()
 		gs.map_state.markers.clear()
+		gs.map_state.marker_points.clear()
 	if gs.deck_state != null:
 		gs.deck_state.action_deck.clear()
 		gs.deck_state.equipment_deck.clear()
@@ -408,6 +410,7 @@ func _apply_map(gs, map_snap: Dictionary) -> void:
 		if cell != null:
 			cell.marker_id = c_snap.get("marker_id", &"")
 	gs.map_state.markers = map_snap.get("markers", []).duplicate(true)
+	gs.map_state.marker_points = map_snap.get("marker_points", []).duplicate(true)
 
 
 func _apply_deck(gs, deck_snap: Dictionary) -> void:

@@ -1261,6 +1261,14 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 		# 需在此注入，否则重跑 _execute_effect 仍判定无目标->重新挂起->选武器死循环。
 		if input_data.has("selected_weapon_id"):
 			payload["selected_weapon_id"] = input_data["selected_weapon_id"]
+		# CHOOSE_MAP_CELL 选格（机雷设陷）：注入选中格 id，续跑 _execute_effect 时
+		# CHOOSE_MAP_CELL 见已选则跳过，后续 PLACE_OR_TRIGGER_TRAP 读 $payload.selected_cell_id。
+		if input_data.has("selected_cell_id"):
+			payload["selected_cell_id"] = input_data["selected_cell_id"]
+		# CHOOSE_MANY_MAP_CELLS 多格选格（双子机雷）：注入选中格 id 数组，PLACE_OR_TRIGGER_TRAP(place_each) 读 $payload.selected_cell_ids。
+		if input_data.has("selected_cell_ids"):
+			payload["selected_cell_ids"] = input_data["selected_cell_ids"]
+		action.record.erase("_waiting_for_map_cell")
 		SLog.log_effect(effect.effect_id, action.source, action.action_id, String(action.action_type), {"status": "resuming_after_target", "input": input_data})
 		action.record.erase("_waiting_for_target")
 		action.record.erase("_target_effect_id")
@@ -1741,16 +1749,16 @@ func _write_redirect_plan(action, plan: Array) -> void:
 	action.record["redirect_plan"] = plan
 
 
-## 盾牌转移确认时，将 HP 伤害减量写入父 attack 动作 record。
+## 盾牌转移确认时，将 HP 伤害减量写入父 attack/trap_explosion 动作 record。
 ## effect_136（太空合金盾牌）监听 ATTACK_AFTER（造成HP伤害前）：此时 action 即 attack，直接写。
-## 兼容 DAMAGE_REDIRECT_WINDOW（损伤变动）路径：action=damage_change，沿 parent_action_id 链找 attack。
-## 由 attack._step_apply_damage 读取并扣减HP伤害。
+## effect_136b 监听 DAMAGE_REDIRECT_WINDOW（陷阱爆炸损伤变动）：action=damage_change，沿 parent_action_id 链找 attack 或 trap_explosion。
+## 由 attack._step_apply_damage 或 trap_explosion 的 hp_change 读取并扣减HP伤害。
 func _apply_shield_hp_reduction(action, hp_reduction: int) -> void:
 	if hp_reduction <= 0 or action == null:
 		return
 	var target = action
-	if target.action_type != &"attack":
-		# damage_change 上下文：沿父链找 attack
+	if target.action_type != &"attack" and target.action_type != &"trap_explosion":
+		# damage_change 上下文：沿父链找 attack 或 trap_explosion
 		if context == null or context.action_registry == null:
 			return
 		target = null
@@ -1759,11 +1767,11 @@ func _apply_shield_hp_reduction(action, hp_reduction: int) -> void:
 			var parent = context.action_registry.get_action(pid)
 			if parent == null:
 				break
-			if parent.action_type == &"attack":
+			if parent.action_type == &"attack" or parent.action_type == &"trap_explosion":
 				target = parent
 				break
 			pid = parent.parent_action_id
-	if target != null and target.action_type == &"attack":
+	if target != null and (target.action_type == &"attack" or target.action_type == &"trap_explosion"):
 		target.record["shield_hp_reduction"] = int(target.record.get("shield_hp_reduction", 0)) + hp_reduction
 
 
@@ -2277,6 +2285,17 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 				if _ba_deis_ret == &"skip":
 					_ba_idx += 1
 					continue
+				# CHOOSE_MAP_CELL / CHOOSE_MANY_MAP_CELLS：分支内共用顶层 helper（execute_sub_action 无法处理 CHOOSE_*）
+				if sub_type == &"CHOOSE_MAP_CELL":
+					if _handle_choose_map_cell(sub_act_merged, effect, payload, action):
+						return
+					_ba_idx += 1
+					continue
+				if sub_type == &"CHOOSE_MANY_MAP_CELLS":
+					if _handle_choose_many_map_cells(sub_act_merged, effect, payload, action):
+						return
+					_ba_idx += 1
+					continue
 				if sub_type in [&"EXECUTE_HP_CHANGE", &"EXECUTE_DAMAGE_CHANGE", &"HEAL_HP", &"REMOVE_DAMAGE_TOKENS", &"DEAL_DAMAGE", &"PLACE_DAMAGE_TOKENS", &"MODIFY_DAMAGE_TOKENS"]:
 					if not sub_params.has("mech_ids"):
 						sub_params["mech_ids"] = [target_id_co]
@@ -2632,6 +2651,16 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 			if rs_allow_continue and _handle_repeat_loop(action, effect, payload, rs_params):
 				return
 			continue
+		# CHOOSE_MAP_CELL：机雷设陷选格（顶层与 CHOOSE_ONE 分支共用 _handle_choose_map_cell）
+		if act_type == &"CHOOSE_MAP_CELL":
+			if _handle_choose_map_cell(act, effect, payload, action):
+				return
+			continue
+		# CHOOSE_MANY_MAP_CELLS：双子机雷设陷多格选格（顶层与分支共用 _handle_choose_many_map_cells）
+		if act_type == &"CHOOSE_MANY_MAP_CELLS":
+			if _handle_choose_many_map_cells(act, effect, payload, action):
+				return
+			continue
 		# 委托给 ActionService 执行效果动作
 		if context != null and context.action_service != null:
 			context.action_service.execute_sub_action(act, payload, action)
@@ -2745,6 +2774,91 @@ func _last_created_sub_action_paused(parent_action) -> bool:
 ## 串行续跑：上一个效果子动作完成/取消后，创建下一个待执行的效果子动作。
 ## 由 ActionEngine._after_sub_action_finished 在父动作所有子动作结束时调用。
 ## 返回 true 表示创建了新的未完成子动作（父动作继续等待）；false 表示无更多动作（父动作可推进）。
+
+## 处理 CHOOSE_MAP_CELL（机雷设陷单格选格）。返回 true=已挂起(应return)；false=已处理/无可用格(continue)。
+## 人类：挂起 select_map_cell 选格 UI（标绿+点击）；AI：自动选第一格。
+## 选中格 id 由 resume_pending_effect 注入 payload["selected_cell_id"]，后续 PLACE_OR_TRIGGER_TRAP 读 $payload.selected_cell_id。
+## 顶层 _execute_actions 与 CHOOSE_ONE 分支循环共用本方法（分支内 execute_sub_action 无法处理 CHOOSE_*）。
+func _handle_choose_map_cell(act: Dictionary, effect, payload: Dictionary, action) -> bool:
+	if payload.has("selected_cell_id"):
+		return false  # resume 重跑时已选格：跳过（后续 PLACE_OR_TRIGGER_TRAP 读 $payload.selected_cell_id）
+	var cmc_params: Dictionary = act.get("params", {})
+	var cmc_bind: Dictionary = payload.get("binding_context", {})
+	var cmc_card_id: StringName = cmc_bind.get("card_instance_id", payload.get("card_instance_id", &""))
+	var cmc_mech_id: StringName = cmc_bind.get("mech_id", payload.get("source_mech_id", payload.get("mech_id", &"")))
+	if cmc_card_id == &"" or cmc_mech_id == &"" or context == null or context.game_state == null:
+		return false
+	var cmc_valid: Array[Dictionary] = _ConditionChecker.get_valid_trap_cells(context.game_state, cmc_card_id, cmc_mech_id)
+	if cmc_valid.is_empty():
+		SLog.log_raw("[TIMING] %s CHOOSE_MAP_CELL 无可放陷阱格，跳过 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+		return false
+	var cmc_owner_pid: StringName = _effect_popup_owner_pid(effect, payload, action)
+	if _is_ai_owner(cmc_owner_pid, cmc_mech_id):
+		payload["selected_cell_id"] = String(cmc_valid[0].get("cell_id", &""))
+		return false
+	_pending_effect[action.action_id] = {"effect": effect, "payload": payload, "phase": &"pre_actions_target"}
+	action.record["_waiting_for_map_cell"] = true
+	action.state = &"waiting_timing"
+	var cmc_cells: Array = []
+	for c in cmc_valid:
+		cmc_cells.append({"q": int(c.get("q", 0)), "r": int(c.get("r", 0)), "cell_id": String(c.get("cell_id", ""))})
+	action_needs_input.emit(action.action_id, &"select_map_cell", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"valid_cells": cmc_cells,
+		"count": 1,
+		"mech_id": cmc_mech_id,
+		"card_instance_id": cmc_card_id,
+		"label": String(cmc_params.get("label", "选择格子设置陷阱")),
+		"player_id": cmc_owner_pid,
+	})
+	SLog.log_raw("[TIMING] %s 挂起陷阱选格 effect=%s 候选=%d" % [String(action.action_id), String(effect.effect_id), cmc_valid.size()])
+	return true
+
+
+## 处理 CHOOSE_MANY_MAP_CELLS（双子机雷设陷多格选格，单次挂起收集 N 格）。返回 true=已挂起。
+## 玩家逐格点击（已选格从高亮移除->不可再选）；收集满 count 格后 ui_confirmed selected_cell_ids(数组)。
+## 后续 PLACE_OR_TRIGGER_TRAP(place_each) 读 $payload.selected_cell_ids。
+func _handle_choose_many_map_cells(act: Dictionary, effect, payload: Dictionary, action) -> bool:
+	if payload.has("selected_cell_ids"):
+		return false  # resume 重跑时已选格：跳过（后续 PLACE_OR_TRIGGER_TRAP place_each 读 $payload.selected_cell_ids）
+	var mmc_params: Dictionary = act.get("params", {})
+	var mmc_count: int = int(mmc_params.get("count", 1))
+	var mmc_bind: Dictionary = payload.get("binding_context", {})
+	var mmc_card_id: StringName = mmc_bind.get("card_instance_id", payload.get("card_instance_id", &""))
+	var mmc_mech_id: StringName = mmc_bind.get("mech_id", payload.get("source_mech_id", payload.get("mech_id", &"")))
+	if mmc_card_id == &"" or mmc_mech_id == &"" or context == null or context.game_state == null:
+		return false
+	var mmc_valid: Array[Dictionary] = _ConditionChecker.get_valid_trap_cells(context.game_state, mmc_card_id, mmc_mech_id)
+	if mmc_valid.size() < mmc_count:
+		SLog.log_raw("[TIMING] %s CHOOSE_MANY_MAP_CELLS 可放陷阱格不足%d，跳过 effect=%s" % [String(action.action_id), mmc_count, String(effect.effect_id)])
+		return false
+	var mmc_owner_pid: StringName = _effect_popup_owner_pid(effect, payload, action)
+	if _is_ai_owner(mmc_owner_pid, mmc_mech_id):
+		var ai_ids: Array = []
+		for i in range(mmc_count):
+			ai_ids.append(String(mmc_valid[i].get("cell_id", &"")))
+		payload["selected_cell_ids"] = ai_ids
+		return false
+	_pending_effect[action.action_id] = {"effect": effect, "payload": payload, "phase": &"pre_actions_target"}
+	action.record["_waiting_for_map_cell"] = true
+	action.state = &"waiting_timing"
+	var mmc_cells: Array = []
+	for c in mmc_valid:
+		mmc_cells.append({"q": int(c.get("q", 0)), "r": int(c.get("r", 0)), "cell_id": String(c.get("cell_id", ""))})
+	action_needs_input.emit(action.action_id, &"select_map_cell", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"valid_cells": mmc_cells,
+		"count": mmc_count,
+		"mech_id": mmc_mech_id,
+		"card_instance_id": mmc_card_id,
+		"label": String(mmc_params.get("label", "选择%d个格子设置陷阱" % mmc_count)),
+		"player_id": mmc_owner_pid,
+	})
+	SLog.log_raw("[TIMING] %s 挂起多格陷阱选格 effect=%s 候选=%d 需%d" % [String(action.action_id), String(effect.effect_id), mmc_valid.size(), mmc_count])
+	return true
+
 func _continue_seq_effect_actions(parent_action) -> bool:
 	if parent_action == null or not parent_action.record.has("_seq_effect_actions"):
 		return false

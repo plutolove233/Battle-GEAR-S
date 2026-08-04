@@ -65,17 +65,38 @@ const DEFAULT_MAP_COLS: int = 24
 ## 默认地图高度（行数）
 const DEFAULT_MAP_ROWS: int = 8
 
+## 绿色格子数量（移动/攻击范围消耗+1，BFS 地形感知）
+const GREEN_TILE_COUNT: int = 16
+
+## 红色格子数量（不可进入，攻击范围需绕行）
+const RED_TILE_COUNT: int = 16
+
+## 金币标记点数量（开局生成金币标记，后续不刷新）
+const GOLD_MARKER_POINT_COUNT: int = 8
+
+## 事件标记点数量（所有事件标记消失后重生，被占据的点一次性跳过）
+const EVENT_MARKER_POINT_COUNT: int = 8
+
 ## 金币标记投骰面数
 const GOLD_MARKER_D6: int = 6
 
-## 陷阱爆炸范围（hex距离）
+## 金币标记投骰收益映射：1-3 -> 3 金币、4-5 -> 4 金币、6 -> 6 金币
+static func gold_marker_payout(roll: int) -> int:
+	if roll <= 3:
+		return 3
+	elif roll <= 5:
+		return 4
+	else:
+		return 6
+
+## 陷阱爆炸范围（hex距离；陷阱自身格 + 此距离内的相邻格）
 const TRAP_BLAST_RANGE: int = 1
 
-## 陷阱爆炸基础伤害
-const TRAP_BLAST_DAMAGE: int = 3
+## 陷阱爆炸：每个参与爆炸的陷阱对范围内每个机甲造成的HP伤害
+const TRAP_BLAST_DAMAGE: int = 2
 
-## 陷阱爆炸损伤标记数
-const TRAP_BLAST_TOKENS: int = 1
+## 陷阱爆炸：每个参与爆炸的陷阱对范围内每个机甲设置的损伤标记数
+const TRAP_BLAST_TOKENS: int = 2
 
 
 ## ── 胜利 ──

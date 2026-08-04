@@ -503,6 +503,318 @@ func test_weapon_128_cardless_attack() -> Variant:
 	return true
 
 
+## effect_134：weapon_036 机雷 CHOOSE_ONE(攻击|设陷) -> 选设陷 -> CHOOSE_MAP_CELL 选格 -> 放置陷阱 + 自损1
+func test_weapon_134_choose_set_trap() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	_GenEquipEffects.set_aura_game_state(battle.context.game_state)
+	var cid: StringName = await _equip_weapon(battle, "weapon_036_投掷式机雷")
+	if cid == &"":
+		return "装备 weapon_036 失败"
+	var gs = battle.context.game_state
+	var ctx = battle.context
+	var pm = gs.get_mech_for_player(&"player")
+	var em = gs.get_mech_for_player(&"enemy")
+	em.current_hp = 100
+	pm.position = {"q": 5, "r": 0}
+	em.position = {"q": 7, "r": 0}  # 距离2 在射程4内（攻击可用），且非pm邻居（不占陷阱候选格）
+	_clear_enemy_hand(battle)
+	ctx.action_ui_bridge.context = ctx
+	gs.phase = &"MAIN"
+	gs.active_player_id = &"player"
+	pm.attack_count_this_turn = 0
+	# 选一个可放陷阱的相邻格（在地图上、无机甲占据）
+	var trap_cell_id: String = ""
+	var trap_hex: Dictionary = {}
+	for n in _HexGrid.neighbors(pm.position):
+		var nq: int = int(n.get("q", 0))
+		var nr: int = int(n.get("r", 0))
+		var nkey := "%s,%s" % [nq, nr]
+		if not gs.map_state.cells.has(nkey):
+			continue
+		var occupied := false
+		for m_id in gs.mechs:
+			var m = gs.mechs[m_id]
+			if m != null and not m.destroyed and int(m.position.get("q", 0)) == nq and int(m.position.get("r", 0)) == nr:
+				occupied = true
+				break
+		if not occupied:
+			trap_cell_id = nkey
+			trap_hex = {"q": nq, "r": nr}
+			break
+	if trap_cell_id == "":
+		return "未找到可放陷阱的相邻格"
+	var ef_result: Dictionary = ctx.action_service.execute(&"effect_fire", {
+		"effect_id": &"equipment_effect_134",
+		"player_id": &"player",
+		"source_mech_id": pm.mech_id,
+		"card_instance_id": cid,
+		"phase": &"MAIN",
+		"source": {"card_instance_id": cid, "mech_id": pm.mech_id, "player_id": &"player", "effect_id": &"equipment_effect_134"},
+	})
+	var ef_id: StringName = ef_result.get("action_id", &"") if ef_result is Dictionary else &""
+	if ef_id == &"":
+		return "effect_fire 未发起"
+	await _pump_frames(5)
+	# effect_134 应挂起在 CHOOSE_ONE
+	if not ctx.timing_engine._pending_effect.has(ef_id):
+		return "effect_134 应挂起在 CHOOSE_ONE"
+	# 选"设置1陷阱"（option index 1）
+	ctx.timing_engine.resume_pending_effect(ef_id, {"chosen_option_index": 1})
+	await _pump_frames(5)
+	# 应挂起在 CHOOSE_MAP_CELL
+	if not ctx.timing_engine._pending_effect.has(ef_id):
+		return "effect_134 选设陷后应挂起在 CHOOSE_MAP_CELL"
+	ctx.timing_engine.resume_pending_effect(ef_id, {"selected_cell_id": trap_cell_id})
+	await _pump_frames(8)
+	# 陷阱应放置在所选格
+	var traps: Array = gs.map_state.get_markers_at(int(trap_hex.get("q", 0)), int(trap_hex.get("r", 0)))
+	var has_trap: bool = false
+	for m in traps:
+		if m.get("type", &"") == &"TRAP":
+			has_trap = true
+	if not has_trap:
+		return "effect_134 设陷应在所选格放置陷阱标记"
+	# 本牌应自损1（effect_134b）
+	var card = gs.get_card(cid)
+	if int(card.damage_tokens) != 1:
+		return "effect_134b 应使 weapon_036 自损1，实际 %d" % int(card.damage_tokens)
+	return true
+
+
+## effect_137：weapon_039 双子机雷 CHOOSE_ONE(攻击|设陷) -> 选设陷 -> CHOOSE_MANY_MAP_CELLS 选2格 -> 各放置1陷阱
+func test_weapon_137_choose_set_two_traps() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	_GenEquipEffects.set_aura_game_state(battle.context.game_state)
+	var cid: StringName = await _equip_weapon(battle, "weapon_039_投掷式双子机雷")
+	if cid == &"":
+		return "装备 weapon_039 失败"
+	var gs = battle.context.game_state
+	var ctx = battle.context
+	var pm = gs.get_mech_for_player(&"player")
+	var em = gs.get_mech_for_player(&"enemy")
+	em.current_hp = 100
+	pm.position = {"q": 5, "r": 0}
+	em.position = {"q": 7, "r": 0}
+	_clear_enemy_hand(battle)
+	ctx.action_ui_bridge.context = ctx
+	gs.phase = &"MAIN"
+	gs.active_player_id = &"player"
+	pm.attack_count_this_turn = 0
+	# 找2个可放陷阱的相邻格
+	var trap_cells: Array = []
+	for n in _HexGrid.neighbors(pm.position):
+		var nq: int = int(n.get("q", 0))
+		var nr: int = int(n.get("r", 0))
+		var nkey := "%s,%s" % [nq, nr]
+		if not gs.map_state.cells.has(nkey):
+			continue
+		var occupied := false
+		for m_id in gs.mechs:
+			var m = gs.mechs[m_id]
+			if m != null and not m.destroyed and int(m.position.get("q", 0)) == nq and int(m.position.get("r", 0)) == nr:
+				occupied = true
+				break
+		if not occupied:
+			trap_cells.append(nkey)
+			if trap_cells.size() >= 2:
+				break
+	if trap_cells.size() < 2:
+		return "未找到2个可放陷阱的相邻格"
+	var ef_result: Dictionary = ctx.action_service.execute(&"effect_fire", {
+		"effect_id": &"equipment_effect_137",
+		"player_id": &"player",
+		"source_mech_id": pm.mech_id,
+		"card_instance_id": cid,
+		"phase": &"MAIN",
+		"source": {"card_instance_id": cid, "mech_id": pm.mech_id, "player_id": &"player", "effect_id": &"equipment_effect_137"},
+	})
+	var ef_id: StringName = ef_result.get("action_id", &"") if ef_result is Dictionary else &""
+	if ef_id == &"":
+		return "effect_fire 未发起"
+	await _pump_frames(5)
+	if not ctx.timing_engine._pending_effect.has(ef_id):
+		return "effect_137 应挂起在 CHOOSE_ONE"
+	ctx.timing_engine.resume_pending_effect(ef_id, {"chosen_option_index": 1})
+	await _pump_frames(5)
+	if not ctx.timing_engine._pending_effect.has(ef_id):
+		return "effect_137 选设陷后应挂起在 CHOOSE_MANY_MAP_CELLS"
+	ctx.timing_engine.resume_pending_effect(ef_id, {"selected_cell_ids": trap_cells.duplicate()})
+	await _pump_frames(8)
+	# 2格各放置1陷阱
+	for nkey in trap_cells:
+		var parts: PackedStringArray = String(nkey).split(",")
+		var tq: int = int(parts[0])
+		var tr: int = int(parts[1])
+		var has_trap: bool = false
+		for m in gs.map_state.get_markers_at(tq, tr):
+			if m.get("type", &"") == &"TRAP":
+				has_trap = true
+		if not has_trap:
+			return "effect_137 应在 %s 放置陷阱" % nkey
+	# 本牌自损1（effect_137b）
+	var card = gs.get_card(cid)
+	if int(card.damage_tokens) != 1:
+		return "effect_137b 应使 weapon_039 自损1，实际 %d" % int(card.damage_tokens)
+	return true
+
+
+## 驱动 trap_explosion 动作完成（damage_change 暂停时自动放置损伤）
+func _drive_trap_explosion_damage(battle: BattleState, trap_expl_id: StringName) -> void:
+	var ctx = battle.context
+	var ae = ctx.action_engine
+	var ar = ctx.action_registry
+	var dts = ctx.damage_token_service
+	var guard: int = 0
+	while guard < 20:
+		guard += 1
+		var trap_expl = ar.get_action(trap_expl_id)
+		if trap_expl == null or trap_expl.state == &"completed" or trap_expl.state == &"cancelled":
+			return
+		if trap_expl.state != &"waiting_effect_action":
+			return
+		var pending: Array = trap_expl.pending_effect_action_ids.duplicate()
+		if pending.is_empty():
+			ae.continue_action(trap_expl_id, {})
+			continue
+		var dc_id: StringName = &""
+		for cid: StringName in pending:
+			var sub = ar.get_action(cid)
+			if sub != null and sub.action_type == &"damage_change" and sub.state == &"waiting_input":
+				dc_id = cid
+				break
+		if dc_id != &"":
+			var dc = ar.get_action(dc_id)
+			var amount: int = int(dc.record.get("value", 0))
+			var mech_ids: Array = dc.record.get("mech_ids", [])
+			if dts != null and amount > 0:
+				for mid: StringName in mech_ids:
+					dts.place_damage_tokens({"mech_id": mid, "count": amount})
+			ae.continue_action(dc_id, {"auto_placed": true})
+			ae.notify_effect_action_completed(dc_id, trap_expl_id)
+		else:
+			for cid: StringName in pending:
+				ae.notify_effect_action_completed(cid, trap_expl_id)
+
+
+## 陷阱可选为攻击目标：攻击陷阱即引爆（无响应窗口），攻击者在范围内受爆炸伤害
+func test_attack_trap_target_triggers_explosion() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	_GenEquipEffects.set_aura_game_state(battle.context.game_state)
+	var cid: StringName = await _equip_weapon(battle, "weapon_032_投掷式飞弹")
+	if cid == &"":
+		return "装备 weapon_032 失败"
+	var gs = battle.context.game_state
+	var ctx = battle.context
+	var pm = gs.get_mech_for_player(&"player")
+	var em = gs.get_mech_for_player(&"enemy")
+	em.current_hp = 100
+	pm.position = {"q": 5, "r": 0}
+	em.position = {"q": 9, "r": 0}  # 距离4在射程内（effect_128 前置满足），但远离陷阱不在爆炸范围
+	_clear_enemy_hand(battle)
+	ctx.action_ui_bridge.context = ctx
+	gs.phase = &"MAIN"
+	gs.active_player_id = &"player"
+	pm.attack_count_this_turn = 0
+	# 放陷阱在 pm 邻居格（距离1，在射程4内 -> 攻击者亦在爆炸范围内）
+	var trap_hex: Dictionary = _HexGrid.neighbors(pm.position)[0]
+	var trap_q: int = int(trap_hex.get("q", 0))
+	var trap_r: int = int(trap_hex.get("r", 0))
+	var trap_mid: StringName = gs.next_id(&"marker")
+	gs.map_state.add_marker(trap_mid, trap_q, trap_r, &"TRAP")
+	var hp_before: int = pm.current_hp
+	# 发起 cardless 直攻（effect_128），choose_new_target -> 挂起在 select_attack_target
+	var ef_result: Dictionary = ctx.action_service.execute(&"effect_fire", {
+		"effect_id": &"equipment_effect_128",
+		"player_id": &"player",
+		"source_mech_id": pm.mech_id,
+		"card_instance_id": cid,
+		"phase": &"MAIN",
+		"source": {"card_instance_id": cid, "mech_id": pm.mech_id, "player_id": &"player", "effect_id": &"equipment_effect_128"},
+	})
+	var ef_id: StringName = ef_result.get("action_id", &"") if ef_result is Dictionary else &""
+	if ef_id == &"":
+		return "effect_fire 未发起"
+	await _pump_frames(5)
+	# 找挂起的 attack（select_attack_target）
+	var attack_id: StringName = &""
+	for a in ctx.action_registry.get_actions_by_type(&"attack"):
+		if a.state == &"waiting_input":
+			attack_id = a.action_id
+			break
+	if attack_id == &"":
+		return "cardless 直攻未挂起在 select_attack_target"
+	# 选陷阱为攻击目标
+	ctx.action_engine.continue_action(attack_id, {"target_id": trap_mid, "target_is_trap": true, "target_trap_q": trap_q, "target_trap_r": trap_r})
+	await _pump_frames(5)
+	# 陷阱应被移除
+	if not gs.map_state.get_markers_at(trap_q, trap_r).is_empty():
+		return "攻击陷阱应移除陷阱标记"
+	# 应触发 trap_explosion
+	var trap_expls: Array = ctx.action_registry.get_actions_by_type(&"trap_explosion")
+	if trap_expls.is_empty():
+		return "攻击陷阱应触发 trap_explosion"
+	_drive_trap_explosion_damage(battle, trap_expls[0].action_id)
+	await _pump_frames(3)
+	# 攻击者在爆炸范围内 -> HP-2
+	if pm.current_hp != hp_before - 2:
+		return "攻击陷阱：攻击者应受爆炸HP-2（前%d 后%d）" % [hp_before, pm.current_hp]
+	return true
+
+
+## 范围内仅陷阱（无机甲）时攻击仍可发起：前置 WEAPON_HAS_ATTACKABLE_TARGET_IN_RANGE 须含陷阱
+func test_attack_trap_only_in_range_initiates() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	_GenEquipEffects.set_aura_game_state(battle.context.game_state)
+	var cid: StringName = await _equip_weapon(battle, "weapon_032_投掷式飞弹")
+	if cid == &"":
+		return "装备 weapon_032 失败"
+	var gs = battle.context.game_state
+	var ctx = battle.context
+	var pm = gs.get_mech_for_player(&"player")
+	var em = gs.get_mech_for_player(&"enemy")
+	pm.position = {"q": 5, "r": 0}
+	em.position = {"q": 20, "r": 0}  # 远离，不在射程4内 -> 范围内无机甲
+	_clear_enemy_hand(battle)
+	ctx.action_ui_bridge.context = ctx
+	gs.phase = &"MAIN"
+	gs.active_player_id = &"player"
+	pm.attack_count_this_turn = 0
+	# 唯一可攻击目标：陷阱在 pm 邻居格（距离1，射程4内）
+	var trap_hex: Dictionary = _HexGrid.neighbors(pm.position)[0]
+	gs.map_state.add_marker(gs.next_id(&"marker"), int(trap_hex.q), int(trap_hex.r), &"TRAP")
+	# 发起 cardless 直攻（effect_128）-> 前置 WEAPON_HAS_ATTACKABLE_TARGET_IN_RANGE 须因陷阱通过
+	var ef_result: Dictionary = ctx.action_service.execute(&"effect_fire", {
+		"effect_id": &"equipment_effect_128",
+		"player_id": &"player",
+		"source_mech_id": pm.mech_id,
+		"card_instance_id": cid,
+		"phase": &"MAIN",
+		"source": {"card_instance_id": cid, "mech_id": pm.mech_id, "player_id": &"player", "effect_id": &"equipment_effect_128"},
+	})
+	var ef_id: StringName = ef_result.get("action_id", &"") if ef_result is Dictionary else &""
+	if ef_id == &"":
+		return "effect_fire 未发起"
+	await _pump_frames(5)
+	# 应挂起在 select_attack_target（前置因陷阱通过），而非被前置跳过
+	var found := false
+	for a in ctx.action_registry.get_actions_by_type(&"attack"):
+		if a.state == &"waiting_input":
+			found = true
+			ctx.action_engine.cancel_action(a.action_id)
+			break
+	if not found:
+		return "范围内仅陷阱时攻击应可发起（前置 WEAPON_HAS_ATTACKABLE_TARGET_IN_RANGE 须含陷阱）"
+	return true
+
+
 ## ⑨ effect_097：weapon_003 命中后 CHOOSE_ONE 额外+2损伤标记
 func test_weapon_097_hit_extra_markers() -> Variant:
 	var battle := _new_battle()
@@ -1434,6 +1746,62 @@ func test_weapon_136_shield_redirect_and_hp_reduction() -> Variant:
 	var expected_hp: int = 100 - maxi(0, base_dmg - 2)
 	if int(pm.current_hp) != expected_hp:
 		return "HP应=100-(伤害-2)=%d（base=%d armor=%d），实际 %d" % [expected_hp, base_dmg, armor_before, int(pm.current_hp)]
+	return true
+
+
+## effect_136b：太空合金盾牌对陷阱爆炸转移损伤(-1)并使HP伤害-2
+## 陷阱不经过 ATTACK_AFTER（effect_136 不触发），effect_136b 监听 DAMAGE_REDIRECT_WINDOW(DAMAGE_SOURCE_IS_TRAP)。
+## 陷阱2HP+2损伤 -> 盾牌转移1损伤到本牌(1被吸收) + HP伤害-2(2-2=0)。
+func test_weapon_136b_trap_shield_redirect_and_hp_reduction() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	_GenEquipEffects.set_aura_game_state(battle.context.game_state)
+	var cid: StringName = await _equip_weapon(battle, "weapon_038_月神合金盾牌")
+	if cid == &"":
+		return "装备 weapon_038 失败"
+	var gs = battle.context.game_state
+	var pm = gs.get_mech_for_player(&"player")
+	pm.current_hp = 100
+	battle.context.action_ui_bridge.context = battle.context
+	# 陷阱放在机甲相邻格（距离1 -> 在爆炸范围内）
+	var target := _HexGrid.neighbors(pm.position)[0]
+	gs.map_state.add_marker(gs.next_id(&"marker"), int(target.q), int(target.r), &"TRAP")
+	var hp_before: int = pm.current_hp
+	# 触发：_check_map_markers 移除陷阱并发起 trap_explosion
+	battle.context.map_service._check_map_markers(pm, target)
+	await _pump_frames(3)
+	var ar = battle.context.action_registry
+	var te = battle.context.timing_engine
+	var trap_expls: Array = ar.get_actions_by_type(&"trap_explosion")
+	if trap_expls.is_empty():
+		return "陷阱应发起 trap_explosion"
+	var trap_expl = trap_expls[0]
+	# 找到 trap_explosion 的 damage_change（waiting_timing = 盾牌 effect_136b 转移窗）
+	var dc_id: StringName = &""
+	for sid in trap_expl.pending_effect_action_ids:
+		var sub = ar.get_action(sid)
+		if sub != null and sub.action_type == &"damage_change" and sub.state == &"waiting_timing":
+			dc_id = sid
+			break
+	if dc_id == &"":
+		return "未找到盾牌转移弹窗（damage_change waiting_timing）"
+	var dc = ar.get_action(dc_id)
+	var value: int = int(dc.record.get("value", 0))  # 2 tokens
+	var absorb: int = int(dc.record.get("_ao_absorb", 0))  # 1
+	var transfer: int = maxi(0, value - absorb)  # 1
+	var plan: Array = []
+	if transfer > 0:
+		plan = [{"to_mech_id": pm.mech_id, "to_slot_id": &"weapon_1", "count": transfer}]
+	te.resume_pending_effect(dc_id, {"redirect_plan": plan, "all_or_nothing_confirmed": true})
+	await _pump_frames(6)
+	# 盾牌槽应有损伤（转移 tokens-1=1）
+	var shield_slot = pm.slots.get(&"weapon_1")
+	if shield_slot == null or int(shield_slot.region_damage_tokens) <= 0:
+		return "effect_136b 应将陷阱损伤转移到盾牌槽"
+	# HP伤害-2：陷阱HP=2，shield_hp_reduction=2 -> 实际HP伤害0，HP不变
+	if int(pm.current_hp) != hp_before:
+		return "陷阱HP伤害应被盾牌-2减为0（HP应不变 前%d 后%d）" % [hp_before, int(pm.current_hp)]
 	return true
 
 

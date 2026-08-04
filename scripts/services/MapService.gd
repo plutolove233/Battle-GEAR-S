@@ -88,7 +88,8 @@ func move_mech_to_hex(mech_id: StringName, target: Dictionary, power_budget: int
 		"power_spent": power_cost,
 	})
 
-	# ── 9. 检查目标格地图标记（后续阶段实现） ──
+	# ── 9. 设陷状态离场放置 + 检查目标格地图标记 ──
+	_check_set_trap_leave(mech, old_position)
 	_check_map_markers(mech, target)
 
 	gs.write_log(&"mech_moved", {
@@ -203,7 +204,9 @@ func commit_basic_move(mech_id: StringName, target: Dictionary, power_cost: int)
 	_fire_hook(_EffectConst.HOOK_MECH_MOVED, {
 		"mech_id": String(mech_id), "from": old_position, "to": target, "power_spent": power_cost,
 	})
-	# 地图标记触发尚未实装，移动时暂不处理标记（避免调用未实现的 MapState.get_marker_at）。
+	# 设陷状态离场放置（离开已记录位置）+ 触发并弃置该格所有地图标记（机甲与标记不能共存）。
+	_check_set_trap_leave(mech, old_position)
+	_check_map_markers(mech, target)
 	gs.write_log(&"mech_moved", {
 		"mech_id": String(mech_id),
 		"from_q": int(old_position.get("q", 0)), "from_r": int(old_position.get("r", 0)),
@@ -243,15 +246,100 @@ func _get_cell_terrain(cell) -> StringName:
 	return &"normal"
 
 
-## 检查目标格的地图标记
-## 后续阶段实现，当前为占位
+## 检查目标格的地图标记：机甲到达即弃置该格所有标记并执行效果。
+## 标记与机甲不能共存，故机甲进入含标记的格子会触发全部标记。
+## 一格可有多个标记（不同类型共存），全部触发后检查事件标记重生。
 func _check_map_markers(mech: MechState, target: Dictionary) -> void:
 	var gs: GameState = context.game_state
-	for marker: Dictionary in gs.map_state.markers:
-		var marker_pos: Dictionary = marker.get("position", {})
-		if HexGrid.key(marker_pos) == HexGrid.key(target):
-			# 触发标记效果（后续实现）
-			pass
+	var q: int = int(target.get("q", 0))
+	var r: int = int(target.get("r", 0))
+	var markers_here: Array = gs.map_state.get_markers_at(q, r)
+	if markers_here.is_empty():
+		return
+	# 先全部弃置（从 map_state 移除），再逐个执行效果，避免触发中再次查询到自身。
+	var to_trigger: Array = markers_here.duplicate(true)
+	for m: Dictionary in to_trigger:
+		gs.map_state.remove_marker(m.get("marker_id", &""))
+	for m: Dictionary in to_trigger:
+		if context.marker_service:
+			context.marker_service.trigger_marker(mech.mech_id, m)
+	# 事件标记重生检查（所有事件标记消失后立即重生，被占据点一次性跳过）
+	_maybe_regenerate_event_markers(gs)
+
+
+## 设陷状态"设陷"按钮：记录机甲当前位置（arm）。机甲离开该位置后在原位放陷阱+消耗1层。
+## armed_cell 存于 SET_TRAP 状态字典。一位置同时只 arm 1 个（再点同位置无效，须先移动）。
+func arm_set_trap(mech_id: StringName) -> Dictionary:
+	var gs: GameState = context.game_state
+	var mech: MechState = gs.mechs.get(mech_id)
+	if mech == null:
+		return {"ok": false, "message": "机甲不存在"}
+	var st: Dictionary = mech.get_status(&"SET_TRAP")
+	if st.is_empty() or int(st.get("stacks", 0)) <= 0:
+		return {"ok": false, "message": "无可用设陷层数"}
+	var cur: String = HexGrid.key(mech.position)
+	if String(st.get("armed_cell", "")) == cur:
+		return {"ok": false, "message": "已在当前位置设陷，请先移动后再设陷"}
+	st["armed_cell"] = cur
+	gs.write_log(&"set_trap_armed", {"mech_id": String(mech_id), "cell": cur})
+	return {"ok": true, "cell": cur}
+
+
+## 设陷状态离场放置：机甲离开已记录位置时在原位放置1陷阱标记并消耗1层设陷状态。
+func _check_set_trap_leave(mech: MechState, old_position: Dictionary) -> void:
+	var gs: GameState = context.game_state
+	var st: Dictionary = mech.get_status(&"SET_TRAP")
+	if st.is_empty():
+		return
+	var armed: String = String(st.get("armed_cell", ""))
+	if armed == "":
+		return
+	if armed != HexGrid.key(old_position):
+		return  # 未离开已记录位置
+	var parts := armed.split(",")
+	var q: int = int(parts[0])
+	var r: int = int(parts[1])
+	gs.map_state.add_marker(gs.next_id(&"marker"), q, r, &"TRAP")
+	gs.write_log(&"marker_trap_placed", {"cell_id": armed, "source": &"set_trap_leave"})
+	# 消耗1层；归0则移除状态（注销回合末清除监听器）
+	st["armed_cell"] = ""
+	st["stacks"] = int(st.get("stacks", 1)) - 1
+	if int(st["stacks"]) <= 0 and context.game_actions != null:
+		context.game_actions.remove_status({"target_id": mech.mech_id, "status_type": &"SET_TRAP"})
+
+
+## 事件标记重生：当地图上无事件标记时，在所有空闲事件标记点上重新放置事件标记。
+func _maybe_regenerate_event_markers(gs: GameState) -> void:
+	var map_state = gs.map_state
+	if map_state.has_event_markers():
+		return
+	var regen_count: int = 0
+	for point: Dictionary in map_state.marker_points:
+		if point.get("type", &"") != &"EVENT":
+			continue
+		var pq: int = int(point.get("q", 0))
+		var pr: int = int(point.get("r", 0))
+		# 被机甲占据 -> 一次性跳过（机甲离开后也不补放，等下一次"全部消失"）
+		if _hex_occupied_by_mech(gs, pq, pr):
+			continue
+		# 防御性：该点已有标记则跳过
+		if not map_state.get_markers_at(pq, pr).is_empty():
+			continue
+		map_state.add_marker(gs.next_id(&"marker"), pq, pr, &"EVENT", point.get("point_id", &""))
+		regen_count += 1
+	if regen_count > 0:
+		gs.write_log(&"event_markers_regenerated", {"count": regen_count})
+
+
+## 指定格是否被任一未摧毁机甲占据
+func _hex_occupied_by_mech(gs: GameState, q: int, r: int) -> bool:
+	for m_id: StringName in gs.mechs:
+		var m: MechState = gs.mechs[m_id]
+		if m.destroyed:
+			continue
+		if int(m.position.get("q", 0)) == q and int(m.position.get("r", 0)) == r:
+			return true
+	return false
 
 
 ## 触发效果钩子

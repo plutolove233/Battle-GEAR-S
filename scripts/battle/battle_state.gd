@@ -37,6 +37,11 @@ var pre_selected_equipment: Array[String] = []
 ## 显式设 randi() 保持每局随机；PvP 双端设同一共享种子。
 var rng_seed: int = 12345
 
+## 是否在地图上配置 PvP 地图特征（绿/红格子 + 标记点 + 初始标记）。
+## 由 app_root 在 start_tutorial 前设置；教学/测试不设（默认 false），仅 PvP 设 true。
+## 传给 GameSetupService.setup_tutorial_battle(pvp_map_features=...)。
+var pvp_map_features: bool = false
+
 ## 兼容字段：供 app_root 和 BattleBoard 读取
 var map_tiles: Array[Dictionary] = []
 var turn_number: int = 0
@@ -62,7 +67,7 @@ func start_tutorial(data_registry) -> Dictionary:
 		context.set_rng_seed(rng_seed)
 
 	# 通过 GameSetupService 创建完整游戏状态
-	var setup_result: Dictionary = context.game_setup_service.setup_tutorial_battle(data_registry)
+	var setup_result: Dictionary = context.game_setup_service.setup_tutorial_battle(data_registry, pvp_map_features)
 	if not setup_result.get("ok", false):
 		return setup_result
 	# 注入 game_state 供全场光环 helper（effect_080/086）查询所有机甲
@@ -442,7 +447,7 @@ func _sync_compat_fields() -> void:
 		map_tiles.clear()
 		for cell_key: String in gs.map_state.cells:
 			var cell = gs.map_state.cells[cell_key]
-			map_tiles.append({"q": cell.q, "r": cell.r})
+			map_tiles.append({"q": cell.q, "r": cell.r, "terrain": String(cell.terrain)})
 
 	# 从 MechState 构建兼容的 units 字典
 	units.clear()

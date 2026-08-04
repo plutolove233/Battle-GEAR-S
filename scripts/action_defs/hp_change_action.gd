@@ -36,6 +36,17 @@ func _step_change_hp(action: Action) -> Dictionary:
 	var value: int = action.record.get("value", 0)
 	var method: StringName = action.record.get("method", &"decrease")
 
+	# 太空合金盾牌 effect_136b 对陷阱爆炸的HP减量：从父 trap_explosion record 读 shield_hp_reduction
+	# （攻击路径的HP减量在 attack._step_apply_damage 已扣 value，不走此；此处仅陷阱路径生效）
+	if method == &"decrease" or method == &"reduce":
+		var shp_red: int = int(action.record.get("shield_hp_reduction", 0))
+		if shp_red == 0 and action.parent_action_id != &"" and context != null and context.action_registry != null:
+			var parent = context.action_registry.get_action(action.parent_action_id)
+			if parent != null and parent.action_type == &"trap_explosion":
+				shp_red = int(parent.record.get("shield_hp_reduction", 0))
+		if shp_red > 0:
+			value = max(0, value - shp_red)
+
 	if value == 0:
 		return result
 

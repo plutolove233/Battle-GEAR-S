@@ -3227,20 +3227,33 @@ static func build_equipment_effects() -> Dictionary:
 	# 规则书：设置1陷阱，之后在此牌上设置1损伤。「之后」= 陷阱放置完成后才自损（结构分离）。
 	var w134 := _ActionEffect.new()
 	w134.effect_id = &"equipment_effect_134"
-	w134.display_name = "每回合1次在武器范围内设置1陷阱"
+	w134.display_name = "攻击或设置1陷阱"
 	w134.mode = _TC.MODE_DIRECT
 	w134.priority = 10
 	w134.once_per_turn_key = &"weapon_036_trap"
 	w134.once_per_turn_max = 1
-	w134.set_conditions([{"op": &"IS_OWNER_MAIN_PHASE"}, {"op": &"WEAPON_HAS_VALID_TRAP_CELL"}])
-	w134.set_target_rules([{"rule": &"CHOOSE_MAP_CELL_IN_WEAPON_RANGE"}, {"rule": &"TARGET_CELL_CAN_HOLD_TRAP"}])
+	w134.set_conditions([{"op": &"IS_OWNER_MAIN_PHASE"}, {"op": &"WEAPON_HAS_ATTACK_OR_TRAP_OPTION"}])
+	w134.set_target_rules([{"rule": &"NO_TARGET"}])
 	w134.set_costs([])
 	w134.set_actions([
-		{"type": &"PLACE_OR_TRIGGER_TRAP", "params": {"mode": &"place", "cell_id": "$selected_cell_id", "count": 1, "source_mech_id": "$binding_context.mech_id", "source_card_instance_id": "$binding_context.card_instance_id"}},
-		{"type": &"INCREMENT_VARIABLE", "params": {"scope": &"attack", "variable_name": &"weapon_036_trap_used", "delta": 1}},
+		{"type": &"CHOOSE_ONE", "params": {"options": [
+			{"label": "发动攻击", "condition": [
+				{"op": &"ATTACK_COUNT_ABOVE", "params": {"threshold": 0}},
+				{"op": &"WEAPON_CAN_ATTACK_AGAIN"},
+				{"op": &"WEAPON_HAS_ATTACKABLE_TARGET_IN_RANGE"},
+			], "actions": [
+				{"type": &"EXECUTE_ATTACK", "params": {"attacker_id": "$binding_context.mech_id", "weapon_instance_id": "$binding_context.card_instance_id", "target_count": 1, "skip_weapon_select": true, "choose_new_target": true, "source_action_card": null, "cardless_weapon_attack": true, "consume_turn_attack_count": true}},
+			]},
+			{"label": "设置1陷阱", "condition": [{"op": &"WEAPON_HAS_VALID_TRAP_CELL"}], "actions": [
+				{"type": &"CHOOSE_MAP_CELL", "params": {"label": "选择设置陷阱的格子"}},
+				{"type": &"PLACE_OR_TRIGGER_TRAP", "params": {"mode": &"place", "cell_id": "$payload.selected_cell_id", "count": 1, "source_mech_id": "$binding_context.mech_id", "source_card_instance_id": "$binding_context.card_instance_id"}},
+				{"type": &"INCREMENT_VARIABLE", "params": {"scope": &"attack", "variable_name": &"weapon_036_trap_used", "delta": 1}},
+			]},
+		]}},
 	])
-	w134.description = "我方回合1次，可以在此牌攻击范围内的格子上设置1陷阱。"
+	w134.description = "可直接使用此牌发动攻击(不需要攻击牌)。我方回合1次，可以在此牌范围内的1个无机甲的格子上设置1陷阱。"
 	effects[w134.effect_id] = w134
+
 
 	# 134b 投掷式机雷「之后」自损1：陷阱放置完成后，在 EFFECT_FIRE_SETTLE 本牌自损1
 	var w134b := _ActionEffect.new()
@@ -3323,25 +3336,55 @@ static func build_equipment_effects() -> Dictionary:
 	w136.description = "可以将每次攻击或陷阱产生的全部损伤设置到此牌上，并使此次设置的损伤-1，造成的伤害-2。"
 	effects[w136.effect_id] = w136
 
+	# 136b 太空合金盾牌（陷阱专用）：陷阱爆炸不经过 ATTACK_AFTER，effect_136 不触发；
+	# 故监听 DAMAGE_REDIRECT_WINDOW（陷阱 damage_change 的损伤转移窗），DAMAGE_SOURCE_IS_TRAP 限定仅陷阱
+	# （避免与 effect_136 攻击用双触发）。确认则全量转移陷阱损伤到本牌(-1) + HP伤害-2。
+	# hp_reduction 经 _apply_shield_hp_reduction 写入父 trap_explosion record，由 hp_change 读取扣减。
+	var w136b := _ActionEffect.new()
+	w136b.effect_id = &"equipment_effect_136b"
+	w136b.display_name = "太空合金盾牌吸收陷阱损伤并使HP伤害-2"
+	w136b.mode = _TC.MODE_LISTEN
+	w136b.priority = 20
+	w136b.listen_timing = _TC.DAMAGE_REDIRECT_WINDOW
+	w136b.listen_action_type = &"damage_change"
+	w136b.set_conditions([{"op": &"SELF_MECH_IS_DAMAGE_TARGET"}, {"op": &"DAMAGE_SOURCE_IS_TRAP"}, {"op": &"PAYLOAD_DAMAGE_TOKENS_ABOVE", "params": {"threshold": 0}}])
+	w136b.set_target_rules([{"rule": &"NO_TARGET"}])
+	w136b.set_costs([])
+	w136b.set_actions([{"type": &"OFFER_DAMAGE_REDIRECT", "params": {"max_points": -1, "mode": &"all_or_nothing", "target_mech_id": "$binding_context.mech_id", "target_slot": "$binding_context.slot_id", "target_card_instance_id": "$binding_context.card_instance_id", "reduction": 1, "hp_reduction": 2, "min_points": 0, "optional": true}}])
+	w136b.description = "可以将陷阱产生的全部损伤设置到此牌上，并使此次设置的损伤-1，造成的伤害-2。"
+	effects[w136b.effect_id] = w136b
+
 	# 137 每回合1次在范围内2个格子各放1陷阱（39投掷式双子机雷）--「之后」自损1拆到 effect_137b(EFFECT_FIRE_SETTLE)
 	# 规则书：2个格子各设置1陷阱，之后在此牌上设置1损伤。「之后」= 陷阱放置完成后才自损（结构分离）。
 	var w137 := _ActionEffect.new()
 	w137.effect_id = &"equipment_effect_137"
-	w137.display_name = "每回合1次在范围内2个格子各放1陷阱"
+	w137.display_name = "攻击或设置2陷阱"
 	w137.mode = _TC.MODE_DIRECT
 	w137.priority = 10
 	w137.once_per_turn_key = &"weapon_039_trap"
 	w137.once_per_turn_max = 1
-	w137.set_conditions([{"op": &"IS_OWNER_MAIN_PHASE"}, {"op": &"WEAPON_HAS_VALID_TRAP_CELLS", "params": {"count": 2}}])
-	w137.set_target_rules([{"rule": &"CHOOSE_TWO_DISTINCT_MAP_CELLS_IN_WEAPON_RANGE"}, {"rule": &"TARGET_CELL_CAN_HOLD_TRAP"}])
+	w137.set_conditions([{"op": &"IS_OWNER_MAIN_PHASE"}, {"op": &"WEAPON_HAS_ATTACK_OR_TRAP_OPTION"}])
+	w137.set_target_rules([{"rule": &"NO_TARGET"}])
 	w137.set_costs([])
 	w137.set_actions([
-		{"type": &"CHOOSE_MANY_MAP_CELLS", "params": {"count": 2, "distinct": true, "range_source_weapon_instance_id": "$binding_context.card_instance_id", "cell_rule": &"TARGET_CELL_CAN_HOLD_TRAP", "label": "选择2个格子设置陷阱"}},
-		{"type": &"PLACE_OR_TRIGGER_TRAP", "params": {"mode": &"place_each", "cell_ids": "$selected_cell_ids", "count_each": 1, "source_mech_id": "$binding_context.mech_id", "source_card_instance_id": "$binding_context.card_instance_id"}},
-		{"type": &"INCREMENT_VARIABLE", "params": {"scope": &"attack", "variable_name": &"weapon_039_trap_used", "delta": 1}},
+		{"type": &"CHOOSE_ONE", "params": {"options": [
+			{"label": "发动攻击", "condition": [
+				{"op": &"ATTACK_COUNT_ABOVE", "params": {"threshold": 0}},
+				{"op": &"WEAPON_CAN_ATTACK_AGAIN"},
+				{"op": &"WEAPON_HAS_ATTACKABLE_TARGET_IN_RANGE"},
+			], "actions": [
+				{"type": &"EXECUTE_ATTACK", "params": {"attacker_id": "$binding_context.mech_id", "weapon_instance_id": "$binding_context.card_instance_id", "target_count": 1, "skip_weapon_select": true, "choose_new_target": true, "source_action_card": null, "cardless_weapon_attack": true, "consume_turn_attack_count": true}},
+			]},
+			{"label": "设置2陷阱", "condition": [{"op": &"WEAPON_HAS_VALID_TRAP_CELLS", "params": {"count": 2}}], "actions": [
+				{"type": &"CHOOSE_MANY_MAP_CELLS", "params": {"count": 2, "label": "选择2个格子设置陷阱"}},
+				{"type": &"PLACE_OR_TRIGGER_TRAP", "params": {"mode": &"place_each", "cell_ids": "$payload.selected_cell_ids", "count_each": 1, "source_mech_id": "$binding_context.mech_id", "source_card_instance_id": "$binding_context.card_instance_id"}},
+				{"type": &"INCREMENT_VARIABLE", "params": {"scope": &"attack", "variable_name": &"weapon_039_trap_used", "delta": 1}},
+			]},
+		]}},
 	])
-	w137.description = "我方回合1次，可以在此牌范围内的2个格子上各设置1陷阱。"
+	w137.description = "可直接使用此牌发动攻击(不需要攻击牌)。我方回合1次，可以在此牌范围内的2个无机甲的格子上各设置1陷阱。"
 	effects[w137.effect_id] = w137
+
 
 	# 137b 投掷式双子机雷「之后」自损1：2陷阱放置完成后，在 EFFECT_FIRE_SETTLE 本牌自损1
 	var w137b := _ActionEffect.new()

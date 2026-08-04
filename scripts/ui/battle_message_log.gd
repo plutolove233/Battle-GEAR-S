@@ -699,6 +699,30 @@ func _translate_log_entry(entry: Dictionary) -> String:
 			var delta: int = int(entry.get("delta", 0))
 			var detail := " 数值:%+d" % delta if delta != 0 else ""
 			return "  └ %s 获得状态:%s%s" % [target, st, detail]
+		"marker_gold":
+			var mech_name := _mech_display_name(String(entry.get("mech_id", "")))
+			var roll: int = int(entry.get("roll", 0))
+			var gold: int = int(entry.get("gold_gained", 0))
+			return "[color=gold]◆ %s 触发金币标记，投骰 %d，获得 %d 金币[/color]" % [mech_name, roll, gold]
+		"marker_event":
+			var mech_name := _mech_display_name(String(entry.get("mech_id", "")))
+			return "[color=#7c6]✦ %s 触发事件标记（效果待实装，无事发生）[/color]" % mech_name
+		"marker_trap":
+			var mech_name := _mech_display_name(String(entry.get("mech_id", "")))
+			return "[color=#e66]▲ %s 触发陷阱标记，引发爆炸！[/color]" % mech_name
+		"marker_trap_exploded":
+			var traps_n: int = int(entry.get("traps_triggered", 1))
+			var mechs_n: int = int(entry.get("mechs_affected", 0))
+			return "[color=#e66]💥 陷阱爆炸：引爆 %d 个陷阱，波及 %d 台机甲[/color]" % [traps_n, mechs_n]
+		"marker_trap_placed":
+			return "[color=#e66]▼ 陷阱标记已设置[/color]"
+		"event_markers_regenerated":
+			return "[color=#7c6]✦ 事件标记已全部消失，地图上重新生成 %d 个事件标记[/color]" % int(entry.get("count", 0))
+		"map_features_configured":
+			return "[color=gray]地图已配置: 绿格%d 红格%d 金币点%d 事件点%d[/color]" % [
+				int(entry.get("green_tiles", 0)), int(entry.get("red_tiles", 0)),
+				int(entry.get("gold_points", 0)), int(entry.get("event_points", 0)),
+			]
 	return ""
 
 

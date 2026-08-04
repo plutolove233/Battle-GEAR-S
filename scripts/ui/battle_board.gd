@@ -36,6 +36,20 @@ const ATTACK_TARGET_FILL := Color(0.9, 0.15, 0.15, 0.45)
 const ATTACK_TARGET_BORDER := Color(1.0, 0.3, 0.3, 0.9)
 const TEXT_COLOR := Color(0.62, 0.68, 0.72)
 
+# ── 地形格（绿/红）：不透明实色填充，遮盖背景图，与攻击范围绿/可攻击红明显区分 ──
+const GREEN_TILE_FILL := Color(0.06, 0.32, 0.13, 0.92)
+const GREEN_TILE_BORDER := Color(0.16, 0.58, 0.26, 0.85)
+const RED_TILE_FILL := Color(0.42, 0.06, 0.09, 0.92)
+const RED_TILE_BORDER := Color(0.72, 0.18, 0.20, 0.85)
+
+# ── 地图标记点（常驻贴图，淡色小图标）+ 活动标记（亮色大图标+光）──
+# 金币=金黄色，事件=草绿色
+const GOLD_POINT_COLOR := Color(0.96, 0.80, 0.13, 0.38)
+const GOLD_MARKER_COLOR := Color(1.0, 0.84, 0.16, 0.96)
+const EVENT_POINT_COLOR := Color(0.40, 0.78, 0.28, 0.40)
+const EVENT_MARKER_COLOR := Color(0.52, 0.92, 0.34, 0.96)
+const MARKER_GLOW := Color(1.0, 1.0, 0.85, 0.55)
+
 const BORDER_WIDTH := 2.0
 const ICON_RADIUS := HEX_RADIUS * 0.32
 
@@ -88,8 +102,13 @@ func configure(new_tiles: Array, new_units: Dictionary) -> void:
 			var grid_pos := _axial_to_grid(q, r)
 			var key := Vector2i(grid_pos.col, grid_pos.row)
 			var tile_type := "normal"
-			# 检查是否为阻挡格
-			if tile.has("blocked") and tile.blocked:
+			# 地形优先：绿/红格由 map_state.terrain 决定（PvP 配置）
+			var terrain: String = String(tile.get("terrain", "NORMAL"))
+			if terrain == "GREEN":
+				tile_type = "green"
+			elif terrain == "RED":
+				tile_type = "red"
+			elif tile.has("blocked") and tile.blocked:
 				tile_type = "blocked"
 			tiles[key] = {
 				"col": grid_pos.col,
@@ -216,6 +235,8 @@ func _draw() -> void:
 	# NOTIFICATION_RESIZED（窗口尺寸变化）时重算，_draw 用缓存的 _grid_scale/_grid_offset。
 	draw_set_transform(_grid_offset, 0.0, Vector2(_grid_scale, _grid_scale))
 	_draw_background()
+	# 地图标记叠加层查找表（标记点常驻 + 活动标记），每帧从 _context 读取（标记会变化）
+	var marker_lookup := _build_marker_lookup()
 	# 绘制所有格子
 	for key in tiles.keys():
 		var tile: Dictionary = tiles[key]
@@ -244,6 +265,7 @@ func _draw() -> void:
 			draw_polyline(points + PackedVector2Array([points[0]]), red_border, (BORDER_WIDTH * 1.6) / _grid_scale)
 		_draw_hex_label(tile, center)
 		_draw_special_icon(tile, center)
+		_draw_marker_overlay(tile, center, marker_lookup)
 	# 移动路径预览线：逐格移动进行中画"当前位置->目标"的逐格路径（实时更新，随机甲逐格推进缩短）；
 	# 否则画悬停预览路径（鼠标悬停可达格的最短路线）。线/圆点用白色边缘高光增强清晰度。
 	var _path_centers: Array = []
@@ -347,6 +369,87 @@ func _draw_special_icon(tile: Dictionary, center: Vector2) -> void:
 			var color := Color(1.0, 1.0, 1.0, 0.7)
 			draw_arc(center, icon_r, 0.0, TAU, 24, color, line_w)
 
+# ═══════════════════════════════════════════
+# 地图标记叠加层（标记点常驻 + 活动标记）
+# ═══════════════════════════════════════════
+
+## 从 _context.game_state.map_state 构建 "q,r" -> {point_type, marker_types[]} 查找表
+func _build_marker_lookup() -> Dictionary:
+	var lookup: Dictionary = {}
+	if _context == null:
+		return lookup
+	var gs = _context.game_state
+	if gs == null:
+		return lookup
+	var ms = gs.map_state
+	if ms == null:
+		return lookup
+	# 标记点（常驻贴图）
+	for p in ms.marker_points:
+		var k := "%s,%s" % [int(p.get("q", 0)), int(p.get("r", 0))]
+		if not lookup.has(k):
+			lookup[k] = {"point_type": &"", "marker_types": []}
+		lookup[k]["point_type"] = p.get("type", &"")
+	# 活动标记
+	for m in ms.markers:
+		var k := "%s,%s" % [int(m.get("q", 0)), int(m.get("r", 0))]
+		if not lookup.has(k):
+			lookup[k] = {"point_type": &"", "marker_types": []}
+		lookup[k]["marker_types"].append(m.get("type", &""))
+	return lookup
+
+## 绘制某格的标记点（淡色小图标）+ 活动标记（亮色大图标+光晕）
+func _draw_marker_overlay(tile: Dictionary, center: Vector2, lookup: Dictionary) -> void:
+	if lookup.is_empty():
+		return
+	var k := "%s,%s" % [int(tile.get("q", 0)), int(tile.get("r", 0))]
+	var overlay = lookup.get(k)
+	if overlay == null:
+		return
+	var icon_r := ICON_RADIUS / _grid_scale
+	var line_w := 2.0 / _grid_scale
+	var point_type: StringName = overlay.get("point_type", &"")
+	var marker_types: Array = overlay.get("marker_types", [])
+	# 标记点：淡色小图标（金币金黄菱形 / 事件草绿圆环）
+	match point_type:
+		&"GOLD":
+			_draw_diamond(center, icon_r * 0.65, GOLD_POINT_COLOR, line_w * 0.5)
+		&"EVENT":
+			draw_arc(center, icon_r * 0.65, 0.0, TAU, 20, EVENT_POINT_COLOR, line_w * 0.5)
+	# 活动标记：亮色大图标 + 光晕
+	for mtype in marker_types:
+		match mtype:
+			&"GOLD":
+				draw_arc(center, icon_r * 1.55, 0.0, TAU, 24, MARKER_GLOW, line_w * 0.8)
+				_draw_diamond(center, icon_r * 1.05, GOLD_MARKER_COLOR, line_w)
+			&"EVENT":
+				draw_arc(center, icon_r * 1.55, 0.0, TAU, 24, MARKER_GLOW, line_w * 0.8)
+				draw_arc(center, icon_r * 1.05, 0.0, TAU, 24, EVENT_MARKER_COLOR, line_w * 1.6)
+			&"TRAP":
+				_draw_trap_icon(center, icon_r, line_w)
+
+## 菱形图标
+func _draw_diamond(center: Vector2, radius: float, fill_color: Color, line_w: float) -> void:
+	var diamond := PackedVector2Array([
+		Vector2(center.x, center.y - radius),
+		Vector2(center.x + radius, center.y),
+		Vector2(center.x, center.y + radius),
+		Vector2(center.x - radius, center.y)
+	])
+	draw_colored_polygon(diamond, fill_color)
+	if line_w > 0.0:
+		draw_polyline(diamond + PackedVector2Array([diamond[0]]), Color(1, 1, 1, fill_color.a * 0.6), line_w)
+
+## 陷阱标记：橙色三角警告（橙色系，与攻击范围绿/可攻击红区分）
+func _draw_trap_icon(center: Vector2, radius: float, line_w: float) -> void:
+	var tri := PackedVector2Array([
+		Vector2(center.x, center.y - radius),
+		Vector2(center.x + radius * 0.9, center.y + radius * 0.7),
+		Vector2(center.x - radius * 0.9, center.y + radius * 0.7)
+	])
+	draw_colored_polygon(tri, Color(0.95, 0.45, 0.08, 0.94))
+	draw_polyline(tri + PackedVector2Array([tri[0]]), Color(1.0, 0.78, 0.2, 0.95), line_w)
+
 func _draw_unit(side: String, unit: Dictionary) -> void:
 	var unit_pos = unit.get("position", {})
 	if typeof(unit_pos) != TYPE_DICTIONARY:
@@ -388,9 +491,14 @@ func _get_fill_color(tile_type: String) -> Color:
 		"resource": return RESOURCE_FILL
 		"event": return EVENT_FILL
 		"blocked": return BLOCKED_FILL
+		"green": return GREEN_TILE_FILL
+		"red": return RED_TILE_FILL
 		_: return NORMAL_FILL
 
 func _get_border_color(tile_type: String) -> Color:
+	match tile_type:
+		"green": return GREEN_TILE_BORDER
+		"red": return RED_TILE_BORDER
 	if tile_type != "normal":
 		return SPECIAL_BORDER
 	return NORMAL_BORDER

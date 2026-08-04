@@ -1242,58 +1242,41 @@ func set_card_to_slot(params: Dictionary) -> void:
 ## 放置或触发陷阱
 func place_or_trigger_trap(params: Dictionary) -> void:
 	var mode: StringName = params.get("mode", &"place")
+	var gs = context.game_state
+	var map_state = gs.map_state
 
+	# trigger：直接触发指定标记（效果由 MarkerService 执行，含爆炸/连锁）
 	if mode == &"trigger":
 		var marker_id: StringName = params.get("marker_id", &"")
+		var trig_mech_id: StringName = params.get("mech_id", params.get("source_mech_id", &""))
 		if marker_id != &"" and context.marker_service != null:
-			# Find the marker hex and trigger it
-			for marker in context.game_state.map_state.markers:
+			for marker in map_state.markers:
 				if marker.get("marker_id", &"") == marker_id:
-					context.marker_service.trigger_marker_at(&"", {"q": int(marker.get("q", 0)), "r": int(marker.get("r", 0))})
+					map_state.remove_marker(marker_id)
+					context.marker_service.trigger_marker(trig_mech_id, marker)
 					break
 		return
 
+	# place / place_each：在指定格子放置陷阱标记
 	var cell_id: StringName = params.get("cell_id", &"")
-	# mode=place_each：在多个格子各放1陷阱（effect_137 双子机雷）。cell_ids 数组。
+	var cell_ids: Array = []
 	if mode == &"place_each":
-		var cell_ids: Array = params.get("cell_ids", [])
+		cell_ids = params.get("cell_ids", [])
 		if cell_ids.is_empty() and cell_id != &"":
 			cell_ids = [cell_id]
-		for cid in cell_ids:
-			var cid_sn: StringName = StringName(String(cid))
-			if cid_sn == &"" or not context.game_state.map_state.cells.has(cid_sn):
-				continue
-			var me_marker_id: StringName = context.game_state.next_id(&"marker")
-			var me_marker := {
-				"marker_id": me_marker_id,
-				"marker_type": &"TRAP",
-				"cell_id": cid_sn,
-				"owner_player_id": params.get("source_owner_player_id", params.get("player_id", &"")),
-			}
-			context.game_state.map_state.markers[me_marker_id] = me_marker
-			context.game_state.map_state.cells[cid_sn]["marker_id"] = me_marker_id
-			context.effect_engine.fire_hook(&"ON_MAP_MARKER_PLACED", {"marker_id": me_marker_id, "marker_type": &"TRAP", "cell_id": cid_sn})
-		return
-	if cell_id == &"" or not context.game_state.map_state.cells.has(cell_id):
-		push_error("PLACE_OR_TRIGGER_TRAP 找不到 cell_id")
-		return
-
-	var marker_id: StringName = context.game_state.next_id(&"marker")
-	var marker := {
-		"marker_id": marker_id,
-		"marker_type": &"TRAP",
-		"cell_id": cell_id,
-		"owner_player_id": params.get("source_owner_player_id", params.get("player_id", &"")),
-	}
-
-	context.game_state.map_state.markers[marker_id] = marker
-	context.game_state.map_state.cells[cell_id]["marker_id"] = marker_id
-
-	context.effect_engine.fire_hook(&"ON_MAP_MARKER_PLACED", {
-		"marker_id": marker_id,
-		"marker_type": &"TRAP",
-		"cell_id": cell_id
-	})
+	else:
+		if cell_id != &"":
+			cell_ids = [cell_id]
+	for cid in cell_ids:
+		var cid_sn: StringName = StringName(String(cid))
+		if cid_sn == &"" or not map_state.cells.has(cid_sn):
+			continue
+		var parts := String(cid_sn).split(",")
+		var q := int(parts[0])
+		var r := int(parts[1])
+		var new_marker_id: StringName = gs.next_id(&"marker")
+		map_state.add_marker(new_marker_id, q, r, &"TRAP")
+		gs.write_log(&"marker_trap_placed", {"cell_id": String(cid_sn), "marker_id": String(new_marker_id)})
 
 
 ## ────────────────────────────────────────────
@@ -1554,6 +1537,21 @@ func add_status(params: Dictionary) -> void:
 		status["source_card_id"] = params.get("source_card_id", &"")
 	if not status.has("source_player_id"):
 		status["source_player_id"] = params.get("source_player_id", params.get("player_id", &""))
+
+	# 设陷状态可叠加：已存在则累加层数（复用既有状态对象与其回合末清除监听器，不新建）
+	if String(status.get("type", &"")) == &"SET_TRAP":
+		var _st_mech = context.game_state.mechs.get(target_id)
+		if _st_mech != null:
+			var _st_existing = _st_mech.get_status(&"SET_TRAP")
+			if not _st_existing.is_empty():
+				_st_existing["stacks"] = int(_st_existing.get("stacks", 1)) + int(status.get("stacks", 1))
+				context.game_state.write_log(&"status_added", {
+					"target_id": String(target_id),
+					"status_type": "SET_TRAP",
+					"delta": int(status.get("stacks", 1)),
+					"source_card_id": String(status.get("source_card_id", &"")),
+				})
+				return
 
 	context.game_state.add_status_to_target(target_id, status)
 

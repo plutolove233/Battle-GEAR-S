@@ -160,6 +160,8 @@ var _set_equipment_card_id: StringName = &""
 var _sell_mode_active: bool = false
 ## 卖出装备按钮引用（用于更新文本）
 var _sell_button: Button = null
+## 设陷按钮引用（机甲拥有设陷状态时可用，点击记录当前位置）
+var _set_trap_button: Button = null
 ## 维修目标选择状态：正在选择维修目标的维修牌ID
 var _repair_target_select_card_id: StringName = &""
 ## 维修已选目标机甲ID（打出时注入 payload，空表示默认以自身机甲为目标）
@@ -176,6 +178,10 @@ var _counterattack_weapon_select_active: bool = false
 var _counterattack_target_select_active: bool = false
 ## 反击已选武器 instance_id（attack2 目标选择阶段使用）
 var _counterattack_weapon_id: StringName = &""
+## 机雷设陷多格选格状态：剩余可放格 / 已选格 / 需选格数（双子机雷 count=2，逐格点击）
+var _map_cell_select_valid: Array = []
+var _map_cell_select_chosen: Array = []
+var _map_cell_select_count: int = 1
 ## 当前待处理的反击 pending（attack2）
 var _counterattack_pending: Dictionary = {}
 ## 反击上下文：反击发生在哪一方的回合 ("player"/"enemy")
@@ -379,6 +385,7 @@ func _start_pvp_host() -> void:
 	_pvp_seed = randi()
 	battle = _BattleState.new()
 	battle.rng_seed = _pvp_seed
+	battle.pvp_map_features = true
 	var start_result = battle.start_tutorial(registry)
 	if not _status_ok(start_result):
 		_show_status("PvP 战斗启动失败: %s" % _status_message(start_result))
@@ -474,6 +481,7 @@ func _apply_pvp_seed_and_build(seed: int) -> void:
 	if battle == null:
 		battle = _BattleState.new()
 	battle.rng_seed = seed
+	battle.pvp_map_features = true
 	var start_result = battle.start_tutorial(registry)
 	if not _status_ok(start_result):
 		_show_status("PvP 自建局失败: %s" % _status_message(start_result))
@@ -887,6 +895,18 @@ func _dispatch_input(op: String, data: Dictionary) -> Variant:
 				battle.log.append({"message": "卖出失败: %s" % String(se_result.get("message", "")), "details": {}})
 			_refresh_battle()
 			return se_result
+		"set_trap_arm":
+			# 设陷按钮：记录本方机甲当前位置（arm），机甲离开后由 MapService 离场放置陷阱+消耗1层
+			var sta_pid: StringName = data.get("player_id", &"")
+			var sta_mech = ctx.game_state.get_mech_for_player(sta_pid) if ctx != null and ctx.game_state != null else null
+			var sta_result: Dictionary = {"ok": false}
+			if sta_mech != null:
+				sta_result = ctx.map_service.arm_set_trap(sta_mech.mech_id)
+				SLog.log_call("app_root", "net_set_trap_arm", {"actor": String(sta_pid)}, sta_result)
+				if not sta_result.get("ok", false):
+					battle.log.append({"message": "设陷失败: %s" % String(sta_result.get("message", "")), "details": {}})
+			_refresh_battle()
+			return sta_result
 		"shop_buy":
 			var sb_pid: StringName = data.get("player_id", &"")
 			var sb_kind := String(data.get("kind", &""))
@@ -1235,7 +1255,7 @@ func _popup_owner(popup_type: StringName, params: Dictionary) -> StringName:
 			return _owner_of_mech_id(params.get("target_mech_id", &""))
 		&"use_card_confirm", &"choice_select", &"effect_choice", &"mech_target_select", \
 		&"weapon_charge_select", &"repair_target_select", &"redirect_select", &"thrust_select", \
-		&"awaken_select", &"immediate_set_equipment", &"integer_select":
+		&"awaken_select", &"immediate_set_equipment", &"integer_select", &"map_cell_select":
 			var pid: StringName = params.get("player_id", &"")
 			if pid != &"" and gs.players.has(pid):
 				return pid
@@ -1382,8 +1402,7 @@ func _show_battle() -> void:
 	layout.add_child(action_bar)
 	_add_button(action_bar, "结束回合", Callable(self, "_end_player_turn"))
 	_sell_button = _add_button(action_bar, "卖出(*)", Callable(self, "_on_sell_equipment_clicked"), "sell")
-	_add_button(action_bar, "敌方信息", Callable(self, "_on_enemy_info_clicked"))
-	_add_button(action_bar, "状态", Callable(self, "_on_status_panel_clicked"))
+	_set_trap_button = _add_button(action_bar, "设陷", Callable(self, "_on_set_trap_clicked"), "set_trap")
 	_add_button(action_bar, "商店", Callable(self, "_on_shop_clicked"))
 	_add_button(action_bar, "牌堆信息", Callable(self, "_on_deck_info_clicked"))
 	_add_button(action_bar, "返回主菜单", Callable(self, "_on_return_to_main_menu"))
@@ -1588,8 +1607,55 @@ func _on_battle_hex_clicked(hex: Dictionary) -> void:
 						_clear_attack_highlights()
 						_net_exec("ui_confirmed", {"data": {"target_id": target_id}})
 					else:
-						battle.log.append({"message": "该格无可攻击目标，请点红色闪烁格内的机甲", "details": {}})
+						# 陷阱可选为攻击目标（攻击即引爆，无响应窗口）：点含陷阱标记的格
+						var sat_q: int = int(hex.get("q", 0))
+						var sat_r: int = int(hex.get("r", 0))
+						var sat_trap: Dictionary = {}
+						if battle.context and battle.context.game_state:
+							for m in battle.context.game_state.map_state.get_markers_at(sat_q, sat_r):
+								if m.get("type", &"") == &"TRAP":
+									sat_trap = m
+									break
+						if not sat_trap.is_empty():
+							_clear_attack_highlights()
+							_net_exec("ui_confirmed", {"data": {
+								"target_id": sat_trap.get("marker_id", &""),
+								"target_is_trap": true,
+								"target_trap_q": sat_q,
+								"target_trap_r": sat_r,
+							}})
+						else:
+							battle.log.append({"message": "该格无可攻击目标（机甲或陷阱），请点亮格内的机甲/陷阱或点取消", "details": {}})
+							_refresh_battle()
+					return
+				&"select_map_cell":
+					# 机雷设陷选格：仅在标绿的可放陷阱格内生效。count>1 时逐格点击收集，选满后提交。
+					var smc_q: int = int(hex.get("q", 0))
+					var smc_r: int = int(hex.get("r", 0))
+					var smc_cell_id: String = ""
+					var smc_idx: int = -1
+					for _i in range(_map_cell_select_valid.size()):
+						var _c = _map_cell_select_valid[_i]
+						if int(_c.get("q", -999)) == smc_q and int(_c.get("r", -999)) == smc_r:
+							smc_cell_id = String(_c.get("cell_id", "%d,%d" % [smc_q, smc_r]))
+							smc_idx = _i
+							break
+					if smc_cell_id == "":
+						battle.log.append({"message": "该格不可设置陷阱（非绿色可放格/有机甲/已有陷阱），请点绿格或点取消", "details": {}})
 						_refresh_battle()
+						return
+					_map_cell_select_chosen.append(smc_cell_id)
+					_map_cell_select_valid.remove_at(smc_idx)
+					if _map_cell_select_chosen.size() >= _map_cell_select_count:
+						_clear_attack_highlights()
+						if _map_cell_select_count <= 1:
+							_net_exec("ui_confirmed", {"data": {"selected_cell_id": smc_cell_id}})
+						else:
+							_net_exec("ui_confirmed", {"data": {"selected_cell_ids": _map_cell_select_chosen.duplicate()}})
+						return
+					# 未选满：刷新高亮（已选格移除->不可再选），继续等待下一格
+					_refresh_map_cell_highlight()
+					_refresh_battle()
 					return
 				&"select_move_target":
 					# 迎击循环移动（回避/疾行/反击）：点格子移动。
@@ -2781,14 +2847,29 @@ func _show_popup(popup_type: StringName, params: Dictionary) -> void:
 				)
 				# 绿色：武器可达的全部格子（范围标识）
 				battle_board.highlight_hexes(highlights)
-				# 红色闪烁：其中有机甲的格子（可攻击格子，不区分敌我）
+				# 红色闪烁：其中有机甲的格子（可攻击格子，不区分敌我）+ 陷阱标记格（可攻击目标，攻击即引爆）
 				var target_hexes: Array[Dictionary] = []
 				for hx: Dictionary in highlights:
 					if _find_mech_at_hex(hx) != &"":
 						target_hexes.append(hx)
+					else:
+						for m in gs.map_state.get_markers_at(int(hx.get("q", 0)), int(hx.get("r", 0))):
+							if m.get("type", &"") == &"TRAP":
+								target_hexes.append(hx)
+								break
 				battle_board.highlight_attack_targets(target_hexes)
 				_show_cancel_button(true)
-				battle.log.append({"message": "选择攻击目标：点击红色闪烁格内的机甲（绿色为武器范围）", "details": {}})
+				battle.log.append({"message": "选择攻击目标：点击红色闪烁格内的机甲或陷阱（绿色为武器范围）", "details": {}})
+		&"map_cell_select":
+			# 机雷设陷选格：标绿可放陷阱格（无机甲、无既有陷阱、在武器范围内），点击放置
+			# count>1（双子机雷）：逐格点击，已选格从高亮移除（不可再选），选满 count 格后提交
+			if battle_board:
+				_map_cell_select_valid = params.get("valid_cells", []).duplicate(true)
+				_map_cell_select_chosen = []
+				_map_cell_select_count = int(params.get("count", 1))
+				_refresh_map_cell_highlight()
+				_show_cancel_button(true)
+				battle.log.append({"message": "选择设置陷阱的格子：点击绿色格放置陷阱（%s）" % String(params.get("label", "")), "details": {}})
 		&"move_target_select":
 			if battle_board:
 				# single_move 动作的 input_params 用 current_position（机甲当前位置）与
@@ -3224,6 +3305,43 @@ func _on_sell_panel_equipment_selected(card_id: StringName) -> void:
 func _on_sell_panel_cancelled() -> void:
 	sell_equipment_panel.visible = false
 	_refresh_battle()
+
+## 点击设陷按钮：记录本方机甲当前位置（arm），机甲离开后由 MapService 离场放置陷阱+消耗1层。
+## 仅本方机甲拥有设陷状态时按钮可见/可用（见 _update_set_trap_button）。
+func _on_set_trap_clicked() -> void:
+	if battle == null or battle.context == null:
+		return
+	_net_exec("set_trap_arm", {"player_id": local_player_id})
+
+## 更新设陷按钮可见/可用状态：本方机甲有设陷状态(层数>0)时显示；
+## 已在当前位置 arm 则禁用（须先移动后再 arm）。
+func _update_set_trap_button() -> void:
+	if _set_trap_button == null:
+		return
+	if battle == null or battle.context == null:
+		_set_trap_button.visible = false
+		return
+	var gs = battle.context.game_state
+	if gs == null:
+		_set_trap_button.visible = false
+		return
+	var mech = gs.get_mech_for_player(local_player_id)
+	if mech == null:
+		_set_trap_button.visible = false
+		return
+	var st: Dictionary = mech.get_status(&"SET_TRAP")
+	if st.is_empty() or int(st.get("stacks", 0)) <= 0:
+		_set_trap_button.visible = false
+		return
+	_set_trap_button.visible = true
+	var armed := String(st.get("armed_cell", ""))
+	var cur := "%s,%s" % [int(mech.position.get("q", 0)), int(mech.position.get("r", 0))]
+	if armed == cur:
+		_set_trap_button.text = "设陷(已设)"
+		_set_trap_button.disabled = true
+	else:
+		_set_trap_button.text = "设陷(%d)" % int(st.get("stacks", 0))
+		_set_trap_button.disabled = false
 
 ## 显示卖出装备选择面板
 func _show_sell_equipment_panel() -> void:
@@ -3676,6 +3794,15 @@ func _clear_attack_highlights() -> void:
 		battle_board.clear_highlight()      # 清绿色范围 + 连带清红色闪烁层
 		battle_board.clear_attack_targets()
 	_show_cancel_button(false)
+
+## 刷新机雷设陷选格高亮：仅高亮剩余可放格（已选格已从 _map_cell_select_valid 移除->不可再选）
+func _refresh_map_cell_highlight() -> void:
+	if battle_board == null:
+		return
+	var hexes: Array[Dictionary] = []
+	for c in _map_cell_select_valid:
+		hexes.append({"q": int(c.get("q", 0)), "r": int(c.get("r", 0))})
+	battle_board.highlight_hexes(hexes)
 
 ## 尝试攻击目标
 ## 新动作系统下，攻击目标选择由 ActionUIBridge 驱动（_on_battle_hex_clicked 已在
@@ -4716,6 +4843,8 @@ func _refresh_damage_ui() -> void:
 	# 消息日志（损坏/效果消息）
 	if message_log and battle.context:
 		message_log.configure(battle.context)
+	# 设陷按钮：移动离场放陷阱后层数/armed_cell 变化需及时刷新（否则按钮残留灰色）
+	_update_set_trap_button()
 
 ## 效果弹窗/损伤放置等选择后的轻量刷新：只更新面板（状态栏/手牌/临时区/装备/技能/消息/卖出按钮），
 ## 跳过 battle_board.configure -> queue_redraw -> _draw 192 格重绘（效果/损伤选择不改变棋盘可视状态，
@@ -4753,6 +4882,7 @@ func _refresh_panels_only() -> void:
 			var remaining = _GameConfig.SELL_EQUIPMENT_LIMIT_PER_TURN - player_state.sell_equipment_count_this_turn
 			_sell_button.text = "卖出(%d/2)" % remaining
 			_sell_button.disabled = (remaining <= 0)
+	_update_set_trap_button()
 
 func _refresh_battle() -> void:
 	if battle == null:
@@ -4828,6 +4958,7 @@ func _refresh_battle() -> void:
 			var remaining = _GameConfig.SELL_EQUIPMENT_LIMIT_PER_TURN - player_state.sell_equipment_count_this_turn
 			_sell_button.text = "卖出(%d/2)" % remaining
 			_sell_button.disabled = (remaining <= 0)
+	_update_set_trap_button()
 
 	# 更新开发者面板
 	if dev_panel and dev_panel.visible and battle.context:
@@ -4936,6 +5067,10 @@ func _weapon_has_attackable_target(mech, weapon_id: StringName) -> bool:
 		var target_mech_id: StringName = _find_mech_at_hex(hex)
 		if target_mech_id != &"" and target_mech_id != mech.mech_id:
 			return true
+		# 陷阱标记也是可攻击目标（攻击即引爆，无响应窗口）
+		for m in gs.map_state.get_markers_at(int(hex.get("q", 0)), int(hex.get("r", 0))):
+			if m.get("type", &"") == &"TRAP":
+				return true
 	return false
 
 

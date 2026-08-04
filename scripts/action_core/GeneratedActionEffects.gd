@@ -61,6 +61,8 @@ static func _ensure_card_map() -> void:
 			&"action_020_回忆": [{"effect_id": &"recall_direct", "bind_to_sub": false}],
 			# 18 折扣
 			&"action_021_折扣": [{"effect_id": &"discount_direct", "bind_to_sub": false}],
+		# 设陷
+		&"action_017_设陷": [{"effect_id": &"set_trap_direct", "bind_to_sub": false}],
 			# 19 补给
 			&"action_022_补给": [{"effect_id": &"supply_direct", "bind_to_sub": false}],
 			# 20 锁定
@@ -88,6 +90,7 @@ static func get_effects_for_status(status_type: StringName) -> Array[StringName]
 		&"ENERGY_CHARGE": [&"energy_status_might", &"energy_status_clear_on_attack"],
 		&"UNITE": [&"unite_status_attack", &"unite_status_clear"],
 		&"DISCOUNT": [&"discount_clear_on_turn_end"],
+		&"SET_TRAP": [&"set_trap_clear_on_turn_end"],
 	}
 	var result: Array[StringName] = []
 	for eid: StringName in _status_effect_map.get(status_type, []):
@@ -740,6 +743,41 @@ static func build_all_effects() -> Dictionary:
 	}])
 	discount_status_clear.description = "回合结束后去除所有折扣状态。"
 	effects[discount_status_clear.effect_id] = discount_status_clear
+
+	# 设陷：对自身施加2层设陷状态（可叠加）。机甲拥有设陷状态时，UI 提供"设陷"按钮：
+	# 点击记录当前位置，机甲离开该位置后在原位放置1陷阱标记并移除1层（MapService 离场处理）。
+	# 状态本回合有效，回合末清除。
+	var set_trap := ActionEffect.new()
+	set_trap.effect_id = &"set_trap_direct"
+	set_trap.display_name = "设陷"
+	set_trap.mode = _TC.MODE_DIRECT
+	set_trap.priority = 10
+	set_trap.set_conditions([{"op": &"ALWAYS"}])
+	set_trap.set_target_rules([{"rule": &"NO_TARGET"}])
+	set_trap.set_costs([])
+	set_trap.set_actions([{
+		"type": &"ADD_STATUS",
+		"params": {"status_type": &"SET_TRAP", "stacks": 2},
+	}])
+	set_trap.description = "对自身施加2层设陷状态（可叠加）。"
+	effects[set_trap.effect_id] = set_trap
+
+	# 设陷状态回合结束清除
+	var set_trap_clear := ActionEffect.new()
+	set_trap_clear.effect_id = &"set_trap_clear_on_turn_end"
+	set_trap_clear.display_name = "设陷·回合结束清除"
+	set_trap_clear.mode = _TC.MODE_LISTEN
+	set_trap_clear.priority = 10
+	set_trap_clear.listen_timing = _TC.TURN_AFTER_END
+	set_trap_clear.set_conditions([{"op": &"HAS_SET_TRAP_STATUS"}])
+	set_trap_clear.set_target_rules([{"rule": &"NO_TARGET"}])
+	set_trap_clear.set_costs([])
+	set_trap_clear.set_actions([{
+		"type": &"REMOVE_STATUS",
+		"params": {"status_type": &"SET_TRAP", "remove_all": true},
+	}])
+	set_trap_clear.description = "回合结束后去除所有设陷状态。"
+	effects[set_trap_clear.effect_id] = set_trap_clear
 
 	var supply := ActionEffect.new()
 	supply.effect_id = &"supply_direct"

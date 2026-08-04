@@ -236,6 +236,13 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 					continue
 				if _RangeCalculator.is_in_weapon_range(wt_attacker.position, m_wt.position, wt_range, wt_cells):
 					return true
+			# 陷阱标记也是可攻击目标（攻击即引爆，无响应窗口）
+			if wt_ctx.game_state.map_state != null:
+				for m_wt2 in wt_ctx.game_state.map_state.markers:
+					if m_wt2.get("type", &"") == &"TRAP":
+						var t_pos: Dictionary = {"q": int(m_wt2.get("q", 0)), "r": int(m_wt2.get("r", 0))}
+						if _RangeCalculator.is_in_weapon_range(wt_attacker.position, t_pos, wt_range, wt_cells):
+							return true
 			return false
 
 
@@ -502,6 +509,19 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 				return false
 			var mech_statuses_d: Array = payload.get("source_mech_statuses", [])
 			return mech_statuses_d.any(func(s: Dictionary) -> bool: return s.get("type", &"") == &"DISCOUNT")
+
+		&"HAS_SET_TRAP_STATUS":
+			# 机甲拥有设陷状态（回合末清除监听器用：binding_context.target_id = 持有设陷状态的机甲）
+			var st_ctx: Dictionary = payload.get("binding_context", {})
+			var st_mech_id: StringName = st_ctx.get("target_id", &"")
+			if st_mech_id == &"":
+				st_mech_id = binding.get_source_mech_id()
+			if st_mech_id == &"" or binding.context == null or binding.context.get("game_state") == null:
+				return false
+			var st_mech = binding.context.game_state.mechs.get(st_mech_id)
+			if st_mech == null:
+				return false
+			return st_mech.has_status(&"SET_TRAP")
 
 		&"TARGET_HAS_LOCK_FROM_ATTACKER":
 			# 攻击目标被本次攻击的攻击者锁定。
@@ -1001,6 +1021,11 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 			# damage_change 由 attack 子动作发起时无 reason，检查 payload 是否来自 attack（有 attack_action_id）
 			return payload.has("attack_action_id") or payload.get("source", {}).has("attack_action_id")
 
+		&"DAMAGE_SOURCE_IS_TRAP":
+			# 损伤来源仅为陷阱（effect_136b 陷阱专用，避免与 effect_136 攻击用双触发）
+			var dst_reason: String = String(payload.get("reason", &""))
+			return dst_reason.find("trap") >= 0
+
 		&"PAYLOAD_DAMAGE_TOKENS_ABOVE":
 			# 待放损伤 > threshold（盾牌：损伤>0 才弹转移）
 			var pdt_threshold: int = int(condition.get("threshold", 0))
@@ -1105,6 +1130,17 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 			# effect_137：武器范围内有 ≥ count 个可放陷阱格
 			var wvc_count: int = int(condition.get("count", 1))
 			return _count_valid_trap_cells(binding, payload) >= wvc_count
+
+		&"WEAPON_HAS_ATTACK_OR_TRAP_OPTION":
+			# 机雷 CHOOSE_ONE(攻击|设陷) 前置：攻击可用 或 可放陷阱 至少一项，否则按钮置灰
+			# （避免0可选项时点了无效却标记 once_per_turn 致按钮错误禁用）
+			if check_all(binding, payload, [
+				{"op": &"ATTACK_COUNT_ABOVE", "params": {"threshold": 0}},
+				{"op": &"WEAPON_CAN_ATTACK_AGAIN"},
+				{"op": &"WEAPON_HAS_ATTACKABLE_TARGET_IN_RANGE"},
+			]):
+				return true
+			return check_all(binding, payload, [{"op": &"WEAPON_HAS_VALID_TRAP_CELL"}])
 
 		&"TARGET_CELL_CAN_HOLD_TRAP":
 			# 选格规则：所选格子可放陷阱（无既有陷阱）
@@ -1323,7 +1359,7 @@ static func _mech_has_damage(mech) -> bool:
 	return false
 
 
-## 格子是否可放陷阱（无既有陷阱标记，且非不可通行地形）
+## 格子是否可放陷阱（非不可通行地形、无机甲占据、无既有陷阱标记）
 static func _cell_can_hold_trap(gs, cell_id: StringName) -> bool:
 	if gs == null or gs.map_state == null:
 		return false
@@ -1333,14 +1369,22 @@ static func _cell_can_hold_trap(gs, cell_id: StringName) -> bool:
 	if cell == null:
 		return false
 	# 不可通行地形(RED)不可放陷阱
-	if String(cell.get("terrain", &"NORMAL")) == &"RED":
+	if String(cell.terrain) == &"RED":
 		return false
+	var parts := String(cell_id).split(",")
+	var q := int(parts[0])
+	var r := int(parts[1])
+	# 有机甲占据的格子不可放陷阱（机甲与标记不能共存）
+	for m_id in gs.mechs:
+		var m = gs.mechs[m_id]
+		if m == null or m.destroyed:
+			continue
+		if int(m.position.get("q", 0)) == q and int(m.position.get("r", 0)) == r:
+			return false
 	# 已有陷阱标记的格子不可叠加
-	if gs.map_state.markers != null:
-		for mid in gs.map_state.markers:
-			var m = gs.map_state.markers[mid]
-			if m is Dictionary and m.get("cell_id", &"") == cell_id and m.get("marker_type", &"") == &"TRAP":
-				return false
+	for m in gs.map_state.get_markers_at(q, r):
+		if m.get("type", &"") == &"TRAP":
+			return false
 	return true
 
 
@@ -1351,22 +1395,29 @@ static func _count_valid_trap_cells(binding, payload: Dictionary) -> int:
 	var ctc_ctx = binding.context if binding != null else null
 	if ctc_card_id == &"" or ctc_mech_id == &"" or ctc_ctx == null or ctc_ctx.get("game_state") == null:
 		return 0
-	var gs = ctc_ctx.game_state
-	var card = gs.get_card(ctc_card_id)
+	return get_valid_trap_cells(ctc_ctx.game_state, ctc_card_id, ctc_mech_id).size()
+
+
+## 返回武器有效范围内可放陷阱的格子列表（供 CHOOSE_MAP_CELL 选格 UI 高亮+点击）
+## 每项: {q, r, cell_id}
+static func get_valid_trap_cells(gs, card_id: StringName, mech_id: StringName) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	if gs == null or gs.map_state == null:
+		return result
+	var card = gs.get_card(card_id)
 	if card == null:
-		return 0
-	var mech = gs.mechs.get(ctc_mech_id)
+		return result
+	var mech = gs.mechs.get(mech_id)
 	if mech == null:
-		return 0
+		return result
 	var stats: Dictionary = _GenEquipEffects.get_effective_weapon_stats(card)
 	var range: int = max(1, int(stats.get("range_value", 1)))
-	var count: int = 0
 	for cell_id in gs.map_state.cells:
 		var cell = gs.map_state.cells[cell_id]
 		if cell == null:
 			continue
-		var cell_pos: Dictionary = {"q": int(cell.get("q", 0)), "r": int(cell.get("r", 0))}
+		var cell_pos: Dictionary = {"q": int(cell.q), "r": int(cell.r)}
 		if _RangeCalculator.is_in_weapon_range(mech.position, cell_pos, range, gs.map_state.cells):
 			if _cell_can_hold_trap(gs, cell_id):
-				count += 1
-	return count
+				result.append({"q": int(cell.q), "r": int(cell.r), "cell_id": String(cell_id)})
+	return result
