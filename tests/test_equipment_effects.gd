@@ -2109,6 +2109,65 @@ func test_damage_on_equipped_slot_persists_after_break() -> Variant:
 	return true
 
 
+## 测试：区域有损伤时设置新装备牌 -> 弃「新牌耐久数」损伤 -> 新牌继承剩余损伤 -> 损伤≥耐久立即损坏（区域损伤保留）
+## 用户场景：区域12损伤 + 耐久3新牌 -> 弃3剩9 -> 新牌9损伤 -> 9≥3损坏弃置 -> 区域留9
+func test_set_equipment_on_damaged_region_breaks() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	var gs = battle.context.game_state
+	var mech = gs.get_mech_for_player(&"player")
+	var slot_id: StringName = &"右臂"
+	var slot = mech.slots.get(slot_id)
+	# 确保槽位为空（区域损伤模型：损伤在区域上，与牌独立）
+	if slot.equipped_card != null:
+		battle.context.deck_service.discard_card(slot.equipped_card.instance_id, &"test")
+		slot.equipped_card = null
+	# 区域放12损伤
+	slot.region_damage_tokens = 12
+	# 设置耐久3的量产装右臂
+	var card_id: StringName = _ensure_equipment_in_hand(battle, "part_003_量产装_右臂")
+	if card_id == &"":
+		return "找不到量产装右臂(耐久3)"
+	battle.context.card_set_service.set_equipment(&"player", card_id, slot_id)
+	await _pump_frames(5)
+	# 期望：新牌继承9损伤(12-3) -> 9≥3 立即损坏弃置 -> 区域留9
+	if slot.equipped_card != null:
+		return "新牌应因9损伤≥耐久3立即损坏弃置，实际仍装备"
+	if slot.region_damage_tokens != 9:
+		return "区域损伤应留9，实际 %d" % slot.region_damage_tokens
+	return true
+
+
+## 测试：区域损伤<2倍耐久时设置新装备牌 -> 新牌继承剩余损伤并存活（区域/牌损伤同步）
+## 区域5损伤 + 耐久3新牌 -> 弃3剩2 -> 新牌继承2损伤 -> 2<3 存活
+func test_set_equipment_on_damaged_region_inherits_and_survives() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	var gs = battle.context.game_state
+	var mech = gs.get_mech_for_player(&"player")
+	var slot_id: StringName = &"左臂"
+	var slot = mech.slots.get(slot_id)
+	if slot.equipped_card != null:
+		battle.context.deck_service.discard_card(slot.equipped_card.instance_id, &"test")
+		slot.equipped_card = null
+	slot.region_damage_tokens = 5
+	var card_id: StringName = _ensure_equipment_in_hand(battle, "part_004_量产装_左臂")
+	if card_id == &"":
+		return "找不到量产装左臂(耐久3)"
+	battle.context.card_set_service.set_equipment(&"player", card_id, slot_id)
+	await _pump_frames(5)
+	# 期望：新牌继承2损伤(5-3) -> 2<3 存活，区域2/牌2同步
+	if slot.equipped_card == null:
+		return "新牌应继承2损伤存活(2<3)，实际未装备"
+	if slot.equipped_card.damage_tokens != 2:
+		return "新牌应继承2损伤，实际 %d" % slot.equipped_card.damage_tokens
+	if slot.region_damage_tokens != 2:
+		return "区域损伤应为2，实际 %d" % slot.region_damage_tokens
+	return true
+
+
 ## 测试：套装11超重甲效果定义结构（046-049）+ JSON part_061-066 effect_ids 对齐
 func test_heavy_armor_suite11_structure() -> Variant:
 	var effects: Dictionary = _GeneratedEquipmentEffects.build_equipment_effects()

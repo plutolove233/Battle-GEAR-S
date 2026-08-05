@@ -90,9 +90,10 @@ func _step_remove_damage(action: Action) -> Dictionary:
 			if mech != null:
 				var slot = mech.slots.get(slot_id)
 				if slot != null:
-					slot.region_damage_tokens = max(0, slot.region_damage_tokens - durability)
-					if slot.equipped_card != null:
-						slot.equipped_card.damage_tokens = max(0, slot.equipped_card.damage_tokens - durability)
+					# 弃置「新牌耐久数」的区域损伤（最多弃现有数）。
+					# 新牌的损伤在 _step_place_equip 继承区域剩余损伤（损伤在区域上=在牌上）。
+					var tokens_to_remove: int = mini(durability, slot.region_damage_tokens)
+					slot.region_damage_tokens -= tokens_to_remove
 	return result
 
 
@@ -134,6 +135,26 @@ func _step_place_equip(action: Action) -> Dictionary:
 	var player = context.game_state.get_player_for_mech(mech_id)
 	if player != null:
 		player.equipment_hand.erase(card_id)
+
+	# 新牌继承区域剩余损伤（损伤在区域上=在牌上，二者保持一致；备用区白板不继承）。
+	# 若继承后损伤≥耐久，立即损坏弃置（区域损伤保留），并跳过 activate 的效果注册。
+	if slot.slot_kind != &"RESERVE":
+		card.damage_tokens = slot.region_damage_tokens
+		var new_durability: int = card.def.durability if (card.def != null and "durability" in card.def) else 0
+		if new_durability > 0 and card.damage_tokens >= new_durability:
+			card.counters.erase("_pending_equipment_activation")
+			context.deck_service.discard_card(card.instance_id, &"damage_durability")
+			slot.equipped_card = null
+			# 槽位变空，重算动力上限并调整当前动力
+			var old_max_power: int = mech.max_power
+			mech.max_power = mech.get_total_power()
+			mech.sync_own_power_after_max_change(old_max_power)
+			action.record["equipment_broken_on_set"] = true
+			context.game_state.write_log(&"equipment_broken_by_damage", {
+				"card_id": String(card_id),
+				"slot_id": String(slot_id),
+			})
+			return result
 
 	return result
 
@@ -247,6 +268,9 @@ func _step_activate_equip(action: Action) -> Dictionary:
 	var mech = context.game_state.mechs.get(mech_id)
 	if card == null or mech == null:
 		return {"error": "装备激活失败"}
+	# 设牌时因损伤立即损坏 -> 已在 _step_place_equip 弃置，跳过效果注册/动力重算
+	if action.record.get("equipment_broken_on_set", false):
+		return {}
 	card.counters.erase("_pending_equipment_activation")
 	_register_equipment_effects(card, mech_id, action.record.get("slot_id", &""))
 	var slot = mech.slots.get(action.record.get("slot_id", &""))

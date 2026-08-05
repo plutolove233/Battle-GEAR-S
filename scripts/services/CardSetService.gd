@@ -239,12 +239,19 @@ func _set_equipment_legacy(player_id: StringName, mech: MechState, slot: MechSlo
 
 	if slot.slot_kind == &"RESERVE":
 		card.face_down = true
+	else:
+		# 新牌继承区域剩余损伤（损伤在区域上=在牌上，二者保持一致）
+		card.damage_tokens = slot.region_damage_tokens
 
-	if slot.slot_kind != &"RESERVE" and new_durability > 0 and slot.region_damage_tokens >= new_durability:
+	# 损伤≥耐久 -> 立即损坏弃置（区域损伤保留），重算动力上限并调整当前动力
+	if slot.slot_kind != &"RESERVE" and new_durability > 0 and card.damage_tokens >= new_durability:
 		if context.effect_registry:
 			context.effect_registry.unregister_card(card)
 		context.deck_service.discard_card(card.instance_id, &"damage_durability")
 		slot.equipped_card = null
+		var old_max_power_l: int = mech.max_power
+		mech.max_power = mech.get_total_power()
+		mech.sync_own_power_after_max_change(old_max_power_l)
 		gs.write_log(&"equipment_broken_by_damage", {
 			"player_id": String(player_id),
 			"card_id": String(card_id),

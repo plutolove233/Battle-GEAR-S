@@ -784,6 +784,16 @@ func _manual_set_equipment(card_id: StringName, slot_id: StringName) -> void:
 	card.mech_id = mech.mech_id
 	slot.equipped_card = card
 
+	# 新牌继承区域剩余损伤；损伤≥耐久立即损坏弃置（区域损伤保留）
+	if slot.slot_kind != &"RESERVE":
+		card.damage_tokens = slot.region_damage_tokens
+		if durability > 0 and card.damage_tokens >= durability:
+			context.deck_service.discard_card(card.instance_id, &"damage_durability")
+			slot.equipped_card = null
+			var _omp: int = mech.max_power
+			mech.max_power = mech.get_total_power()
+			mech.sync_own_power_after_max_change(_omp)
+
 
 func _on_discard_all_equipment_cards() -> void:
 	var gs := _gs()
