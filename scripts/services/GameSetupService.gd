@@ -11,6 +11,8 @@ const _HexGrid = preload("res://scripts/battle/hex_grid.gd")
 const _EffectConst = preload("res://scripts/effect_core/EffectConst.gd")
 const _MapCellState = preload("res://scripts/runtime/MapCellState.gd")
 const _GameConfig = preload("res://scripts/config/GameConfig.gd")
+const _ActionPilotEffects = preload("res://scripts/generated_database/ActionPilotEffects.gd")
+const _TimingConst = preload("res://scripts/action_core/TimingConst.gd")
 
 
 ## 初始化教学战斗
@@ -203,6 +205,196 @@ func _register_equipped_effects(mech: MechState) -> void:
 		var slot: MechSlotState = mech.slots[slot_id]
 		if slot.equipped_card != null:
 			context.effect_registry.register_card(slot.equipped_card)
+
+
+# ════════════════════════════════════════════════════════════
+# 机师牌：设置 / 注销 / 效果注册（infra 2.2 + 2.3）
+# ════════════════════════════════════════════════════════════
+
+## 设置机师牌到机甲 pilot 槽：放牌 + 联动基础数值 + 注册机师效果。
+## 建局 / dev 换机师调用。换机师须先调 unset_pilot 注销旧机师 listener 与派生状态。
+## 数值联动（infra 2.2）：pilot.attack_limit -> PlayerState.attack_limit + MechState.max_attacks_per_turn；
+## pilot.action_card_limit -> PlayerState.action_card_limit。
+func set_pilot(mech_id: StringName, pilot_card_instance) -> void:
+	var gs: GameState = context.game_state
+	var mech = gs.mechs.get(mech_id)
+	if mech == null or pilot_card_instance == null:
+		return
+	var slot = mech.slots.get(&"pilot")
+	if slot == null:
+		return
+	# 放牌进 pilot 槽
+	slot.equipped_card = pilot_card_instance
+	pilot_card_instance.zone = &"pilot_slot"
+	pilot_card_instance.slot_id = &"pilot"
+	pilot_card_instance.mech_id = mech_id
+	# 联动基础数值（机师牌决定回合攻击数与行动牌上限）
+	var pdef = pilot_card_instance.def
+	if pdef != null and pdef.card_kind == &"pilot":
+		var player = gs.get_player_for_mech(mech_id)
+		if player != null:
+			player.attack_limit = pdef.attack_limit
+			player.action_card_limit = pdef.action_card_limit
+		mech.max_attacks_per_turn = pdef.attack_limit
+	# 注册机师效果（DIRECT 出按钮 / LISTEN 监听时点 / AVAILABILITY 响应窗口）
+	_register_pilot_effects(pilot_card_instance, mech_id)
+	# 阵营光环注册（pilot_002 莱比尔联邦护甲+4 / pilot_005 肯特帝国动力+4）
+	if pdef != null and (String(pdef.card_id) == "pilot_002_莱比尔" or String(pdef.card_id) == "pilot_005_肯特"):
+		_ActionPilotEffects.register_faction_aura(pilot_card_instance.instance_id, pdef.card_id, String(pdef.faction))
+	# 派生光环（pilot_002 护甲 / pilot_005 动力）注册后重算动力上限，使 max_power 算入
+	mech.recalc_power_limits()
+	var _log_card_id: String = String(pdef.card_id) if pdef != null else ""
+	gs.write_log(&"pilot_set", {"mech_id": String(mech_id), "card_id": _log_card_id})
+
+
+## 注销机师牌效果（换机师前调用）：注销 permanent listener，清出 pilot 槽。
+## 派生光环/变量按 source_card_instance_id 清除由各 pilot 实现负责
+## （pilot_002 授予全清 / pilot_008 X 不转移 / pilot_009 控制立即解除）。
+func unset_pilot(mech_id: StringName) -> void:
+	var gs: GameState = context.game_state
+	var mech = gs.mechs.get(mech_id)
+	if mech == null:
+		return
+	var slot = mech.slots.get(&"pilot")
+	if slot == null or slot.equipped_card == null:
+		return
+	var old_card = slot.equipped_card
+	# 注销该机师实例的全部 permanent listener（按 card_instance_id）
+	if context.timing_engine != null:
+		context.timing_engine.unregister_permanent_listeners_for_card(old_card.instance_id)
+	# 注销阵营光环（pilot_002/005 换机师即时失效）
+	_ActionPilotEffects.unregister_faction_aura(old_card.instance_id)
+	# pilot_002 莱比尔离场：清除所有已转移批次权限（裁定歧义4：离场后所有权限和增益都没了）
+	if old_card.def != null and String(old_card.def.card_id) == "pilot_002_莱比尔":
+		_ActionPilotEffects.clear_pilot_002_batches_for_source(old_card.instance_id)
+	# pilot_003 瑟尔基尔离场：清除跳过正面牌设置
+	if old_card.def != null and String(old_card.def.card_id) == "pilot_003_瑟尔基尔":
+		_ActionPilotEffects.clear_pilot_003_skip_for_source(old_card.instance_id)
+	# pilot_009 美杜莎离场：立即解除本回合已建立的控制（裁定歧义5：换下立即解）
+	if old_card.def != null and String(old_card.def.card_id) == "pilot_009_美杜莎":
+		_ActionPilotEffects.clear_pilot_009_control_for_source(old_card.instance_id)
+	# pilot_006 里昂离场：清除悬赏标记（持续效果随离场终止）
+	if old_card.def != null and String(old_card.def.card_id) == "pilot_006_里昂":
+		_ActionPilotEffects.clear_pilot_006_mark(old_card.instance_id)
+	slot.equipped_card = null
+	old_card.zone = &""
+	old_card.slot_id = &""
+	gs.write_log(&"pilot_unset", {"mech_id": String(mech_id), "card_id": String(old_card.def.card_id) if old_card.def != null else ""})
+
+
+## 注册机师牌效果到 TimingEngine（仿 set_equipment_action._register_equipment_effects）。
+## 遍历该机师的 effect_ids，对 LISTEN/AVAILABILITY 注册到 listen_timing，
+## 对 DIRECT（无 listen_timing）注册到虚拟时点供 skill_bar 扫描，
+## 派生值型效果跳过（实时重算）。
+func _register_pilot_effects(card, mech_id: StringName) -> void:
+	if context == null or context.timing_engine == null:
+		return
+	if card == null or card.def == null:
+		return
+	var effect_ids: Array = _ActionPilotEffects.get_effects_for_pilot(card.def.card_id, context)
+	if effect_ids.is_empty():
+		return
+	var all_effects: Dictionary = _ActionPilotEffects.build_pilot_effects()
+	var player_id: StringName = card.owner_player_id
+	var binding_ctx: Dictionary = {
+		"card_instance_id": card.instance_id,
+		"mech_id": mech_id,
+		"player_id": player_id,
+		"card_def_id": card.def.card_id,
+		"slot_id": &"pilot",
+	}
+	for effect_id: StringName in effect_ids:
+		# pilot_005_effect_01 是 aura provider（授予型）：不注册自己 listener，向帝国机师授予 granted listener
+		# （provider 本身无 ActionEffect 定义，须在 effect==null 检查前处理）
+		if effect_id == &"pilot_005_effect_01":
+			_grant_pilot_005_to_empire_mechs(card, mech_id)
+			continue
+		if effect_id == &"pilot_002_effect_01":
+			# pilot_002 effect_01 aura provider：向联邦机师授予交牌转化能力（DIRECT 进攻 + AVAILABILITY 防御）
+			_grant_pilot_002_to_federation_mechs(card, mech_id)
+			continue
+		var effect = all_effects.get(effect_id)
+		if effect == null:
+			continue
+		# 派生值型效果不注册监听器（pilot_002 effect_02 护甲+4 / pilot_005 effect_02 动力+4 实时重算）
+		if _ActionPilotEffects.is_pilot_derived_effect(effect_id):
+			continue
+		# DIRECT 主动效果（无 listen_timing）：用 effect_id 作虚拟时点注册，供 skill_bar/pilot 按钮扫描
+		if effect.mode == _TimingConst.MODE_DIRECT and effect.listen_timing == &"":
+			context.timing_engine.register_permanent_listener(effect_id, effect, binding_ctx)
+			continue
+		# LISTEN / AVAILABILITY：注册到 effect.listen_timing
+		if (effect.mode == _TimingConst.MODE_LISTEN or effect.mode == _TimingConst.MODE_AVAILABILITY) and effect.listen_timing != &"":
+			context.timing_engine.register_permanent_listener(effect.listen_timing, effect, binding_ctx)
+
+
+## pilot_005 effect_01 授予机制：向所有帝国阵营机甲注册 granted ATTACK_PRE 弃牌 listener。
+## granted listener 的 binding_context.card_instance_id=pilot_005 实例（注销用），
+## mech_id=被授予帝国机甲（conditions SELF_MECH_IS_ATTACKER_OR_TARGET/PILOT_AURA_ACTIVE_FOR_MECH 用）。
+## unset_pilot 时 unregister_permanent_listeners_for_card(pilot_005_instance) 注销所有 granted。
+## 裁定：阵营含对手同阵营；toggle off 由 PILOT_AURA_ACTIVE_FOR_MECH 条件拦截（listener 保留但不触发）。
+func _grant_pilot_005_to_empire_mechs(card, _source_mech_id: StringName) -> void:
+	if context == null or context.timing_engine == null or context.game_state == null:
+		return
+	var all_effects: Dictionary = _ActionPilotEffects.build_pilot_effects()
+	var granted_effect = all_effects.get(&"pilot_005_granted_suppression")
+	if granted_effect == null:
+		return
+	for mid: StringName in context.game_state.mechs:
+		var m = context.game_state.mechs[mid]
+		if m == null:
+			continue
+		var slot = m.slots.get(&"pilot") if "slots" in m else null
+		if slot == null or slot.equipped_card == null or slot.equipped_card.def == null:
+			continue
+		var faction: String = String(slot.equipped_card.def.faction) if "faction" in slot.equipped_card.def else ""
+		if faction != "帝国":
+			continue
+		var granted_ctx: Dictionary = {
+			"card_instance_id": card.instance_id,
+			"mech_id": mid,
+			"player_id": m.owner_player_id,
+			"slot_id": &"pilot",
+			"card_def_id": &"pilot_005_肯特",
+		}
+		context.timing_engine.register_permanent_listener(_TimingConst.ATTACK_PRE, granted_effect, granted_ctx)
+
+
+## pilot_002 effect_01 授予机制：向所有联邦阵营机甲注册 granted DIRECT 进攻 + AVAILABILITY 防御 listener。
+## granted listener 的 binding_context.card_instance_id=pilot_002 实例（注销用），
+## mech_id=被授予联邦机甲。unset_pilot 时 unregister_permanent_listeners_for_card(pilot_002_instance) 注销所有 granted。
+## 裁定：阵营含敌方同阵营；toggle 只关闭对应莱比尔来源（由 is_aura_active_for_mech 判定）。
+func _grant_pilot_002_to_federation_mechs(card, _source_mech_id: StringName) -> void:
+	if context == null or context.timing_engine == null or context.game_state == null:
+		return
+	var all_effects: Dictionary = _ActionPilotEffects.build_pilot_effects()
+	var granted_attack = all_effects.get(&"pilot_002_granted_transfer_attack")
+	var granted_defense = all_effects.get(&"pilot_002_granted_transfer_defense")
+	if granted_attack == null and granted_defense == null:
+		return
+	for mid: StringName in context.game_state.mechs:
+		var m = context.game_state.mechs[mid]
+		if m == null:
+			continue
+		var slot = m.slots.get(&"pilot") if "slots" in m else null
+		if slot == null or slot.equipped_card == null or slot.equipped_card.def == null:
+			continue
+		var faction: String = String(slot.equipped_card.def.faction) if "faction" in slot.equipped_card.def else ""
+		if faction != "联邦":
+			continue
+		var granted_ctx: Dictionary = {
+			"card_instance_id": card.instance_id,
+			"mech_id": mid,
+			"player_id": m.owner_player_id,
+			"slot_id": &"pilot",
+			"card_def_id": &"pilot_002_莱比尔",
+		}
+		# DIRECT 进攻分支：注册到虚拟时点（skill_bar 按钮扫描）
+		if granted_attack != null:
+			context.timing_engine.register_permanent_listener(&"pilot_002_granted_transfer_attack", granted_attack, granted_ctx)
+		# AVAILABILITY 防御分支：注册到 ATTACK_AT（response_window 扫描）
+		if granted_defense != null:
+			context.timing_engine.register_permanent_listener(_TimingConst.ATTACK_AT, granted_defense, granted_ctx)
 
 
 # ═══════════════════════════════════════════

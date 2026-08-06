@@ -121,6 +121,50 @@ func get_pilot_card_ids() -> Array[StringName]:
 	return _pilot_card_ids.duplicate()
 
 
+## dev 换机师：unset 旧机师（注销 listener + 清派生）+ set 新机师（重新注册）。
+## 返回 {ok, message}。
+func change_pilot(player_id: StringName, pilot_def_id: StringName) -> Dictionary:
+	var gs = context.game_state
+	if gs == null:
+		return {"ok": false, "message": "game_state 未初始化"}
+	var mech = gs.get_mech_for_player(player_id)
+	if mech == null:
+		return {"ok": false, "message": "机甲不存在"}
+	var slot = mech.slots.get(&"pilot")
+	if slot != null and slot.equipped_card != null:
+		context.game_setup_service.unset_pilot(mech.mech_id)
+	var pilot_def = context.card_database.get_card(pilot_def_id) if context.card_database != null else null
+	if pilot_def == null:
+		return {"ok": false, "message": "机师牌定义不存在: %s" % String(pilot_def_id)}
+	var instance_id: StringName = gs.next_id(&"dev_pilot")
+	var card = CardInstance.new(instance_id, pilot_def)
+	card.owner_player_id = player_id
+	gs.cards[instance_id] = card
+	context.game_setup_service.set_pilot(mech.mech_id, card)
+	return {"ok": true, "message": "pilot_changed"}
+
+
+## dev 修改玩家数值：attack_limit/action_card_limit/gold/cost（即时重算 max_attacks_per_turn）。
+## 只修改传入的字段（传 -1 表示不修改）。
+func modify_player_limits(player_id: StringName, attack_limit: int = -1, action_card_limit: int = -1, gold: int = -1) -> Dictionary:
+	var gs = context.game_state
+	if gs == null:
+		return {"ok": false, "message": "game_state 未初始化"}
+	var player = gs.players.get(player_id)
+	if player == null:
+		return {"ok": false, "message": "玩家不存在"}
+	if attack_limit >= 0:
+		player.attack_limit = attack_limit
+		var mech = gs.get_mech_for_player(player_id)
+		if mech != null:
+			mech.max_attacks_per_turn = attack_limit
+	if action_card_limit >= 0:
+		player.action_card_limit = action_card_limit
+	if gold >= 0:
+		player.gold = gold
+	return {"ok": true, "message": "player_limits_modified"}
+
+
 ## 获取所有机甲框架ID
 func get_mech_frame_ids() -> Array[StringName]:
 	return _mech_frame_ids.duplicate()

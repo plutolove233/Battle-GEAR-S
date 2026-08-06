@@ -553,3 +553,91 @@ func test_unregister_permanent_listener():
 	if listeners.size() != 0:
 		return "注销后应无永久监听器"
 	return true
+
+
+## 测试21：once_per_game_key 每局1次--达到上限后第二次触发被跳过
+## 验证 ActionEffect.once_per_game_key/once_per_game_max 机制：本局持久，不带回合维度，
+## 即便用不同的 action（模拟后续回合/不同动作）触发也累计。
+func test_once_per_game_key_blocks_after_max():
+	var engine = _TimingEngine.new()
+
+	var effect = _ActionEffect.new()
+	effect.effect_id = &"once_per_game_effect"
+	effect.priority = 10
+	effect.mode = _TimingConst.MODE_LISTEN
+	effect.once_per_game_key = &"pilot_test_per_game"
+	effect.once_per_game_max = 1
+	effect.conditions = []
+	effect.target_rules = []
+	effect.costs = []
+	effect.actions = []
+
+	var binding_ctx: Dictionary = {
+		"card_instance_id": &"pilot_card_inst_1",
+		"mech_id": &"mech_1",
+		"player_id": &"player",
+	}
+	engine.register_permanent_listener(_TimingConst.TURN_START, effect, binding_ctx)
+
+	var fired: Array[StringName] = []
+	engine.effect_executed.connect(func(eid, _aid):
+		fired.append(eid)
+	)
+
+	# 第一次触发：应执行
+	var action1 = _Action.new()
+	action1.action_id = &"turn_action_1"
+	action1.action_type = &"turn_cycle"
+	action1.record = {}
+	engine.fire_timing(_TimingConst.TURN_START, action1)
+	if fired.size() != 1:
+		return "第一次触发应执行1次，实际: %d" % fired.size()
+
+	# 第二次触发（不同动作，模拟后续回合）：once_per_game 不带回合维度，本局已用满应跳过
+	var action2 = _Action.new()
+	action2.action_id = &"turn_action_2"
+	action2.action_type = &"turn_cycle"
+	action2.record = {}
+	engine.fire_timing(_TimingConst.TURN_START, action2)
+	if fired.size() != 1:
+		return "once_per_game 已用满(1)，第二次应被跳过，实际执行: %d" % fired.size()
+	return true
+
+
+## 测试22：once_per_game_key max=2 允许两次，第三次跳过（验证 max 计数与持久累计）
+func test_once_per_game_key_max_two_allows_two():
+	var engine = _TimingEngine.new()
+
+	var effect = _ActionEffect.new()
+	effect.effect_id = &"once_per_game_effect_2"
+	effect.priority = 10
+	effect.mode = _TimingConst.MODE_LISTEN
+	effect.once_per_game_key = &"pilot_test_per_game_2"
+	effect.once_per_game_max = 2
+	effect.conditions = []
+	effect.target_rules = []
+	effect.costs = []
+	effect.actions = []
+
+	var binding_ctx: Dictionary = {
+		"card_instance_id": &"pilot_card_inst_2",
+		"mech_id": &"mech_2",
+		"player_id": &"player",
+	}
+	engine.register_permanent_listener(_TimingConst.TURN_START, effect, binding_ctx)
+
+	var fired: Array[StringName] = []
+	engine.effect_executed.connect(func(eid, _aid):
+		fired.append(eid)
+	)
+
+	for i in range(3):
+		var a = _Action.new()
+		a.action_id = StringName("turn_action_max2_%d" % i)
+		a.action_type = &"turn_cycle"
+		a.record = {}
+		engine.fire_timing(_TimingConst.TURN_START, a)
+
+	if fired.size() != 2:
+		return "max=2 时应执行2次（第三次跳过），实际: %d" % fired.size()
+	return true

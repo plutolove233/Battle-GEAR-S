@@ -26,6 +26,7 @@ const _EffectBinding = preload("res://scripts/action_core/EffectBinding.gd")
 const _RangeCalculator = preload("res://scripts/battle/RangeCalculator.gd")
 const _HexGrid = preload("res://scripts/battle/hex_grid.gd")
 const _GameConfig = preload("res://scripts/config/GameConfig.gd")
+const _ActionPilotEffects = preload("res://scripts/generated_database/ActionPilotEffects.gd")
 
 ## 诊断开关（时点/效果排查遗留）。默认关闭：ATTACK_SETTLE 等诊断在 fire_timing 路径上，
 # 攻击被反复驱动时会写爆日志。复现时再置 true。
@@ -67,6 +68,12 @@ var _pending_effect: Dictionary = {}
 ## 触发前检查本回合 used_count >= once_per_turn_max 则跳过。
 ## scope = turn_number（换 turn 自动失效，无需显式清零）。owner 维度由 card_instance_id 区分。
 var _once_per_turn_used: Dictionary = {}
+
+## 每局1次使用记录：{ "{card_instance_id}:{once_per_game_key}": used_count }
+## effect.once_per_game_key 非空时，_execute_effect 成功执行后在此 +1；
+## 触发前检查 used_count >= once_per_game_max 则跳过。
+## 不带 turn 维度（本局持久，机师牌/装备牌本局1次效果用，如 pilot_033 弃2装抽高级）。
+var _once_per_game_used: Dictionary = {}
 
 ## ── 信号 ──
 signal timing_fired(timing: StringName, payload: Dictionary)
@@ -970,6 +977,11 @@ func _execute_effect(effect: ActionEffect, payload: Dictionary, action) -> void:
 		SLog.log_effect(effect.effect_id, action.source, action.action_id, String(action.action_type), {"status": "skipped", "reason": "once_per_turn_used_up"})
 		return
 
+	# 每局1次检查：effect.once_per_game_key 非空时，若本局已用满则跳过
+	if effect.once_per_game_key != &"" and _is_once_per_game_used_up(effect, payload):
+		SLog.log_effect(effect.effect_id, action.source, action.action_id, String(action.action_type), {"status": "skipped", "reason": "once_per_game_used_up"})
+		return
+
 	# 目标检查：需要玩家选择目标时，弹出UI而不是静默跳过
 	if not _check_targets(effect, payload, action):
 		var needs_target: bool = _effect_needs_player_target(effect)
@@ -1039,6 +1051,8 @@ func _execute_effect(effect: ActionEffect, payload: Dictionary, action) -> void:
 
 	# 标记每回合1次使用（机动头部/狙击右臂等 once_per_turn_key 效果）
 	_mark_once_per_turn_used(effect, payload)
+	# 标记每局1次使用（once_per_game_key 效果，如 pilot_033 弃2装抽高级 本局1次）
+	_mark_once_per_game_used(effect, payload)
 
 	# 通知
 	effect_executed.emit(effect.effect_id, action.action_id)
@@ -1176,6 +1190,70 @@ func _effect_popup_owner_pid(effect: ActionEffect, payload: Dictionary, action) 
 	if pid != &"":
 		return pid
 	return _owner_player_id_for_effect(effect, payload, action)
+
+
+## 解析机甲ID表达式（$payload.xxx / $binding_context.xxx / 字面值）。
+## 供 CHOOSE_ONE chooser_mech_id 等 param 表达式解析用（pilot_006 e3 被选机甲作选择者）。
+func _resolve_mech_id_expr(expr: String, payload: Dictionary) -> StringName:
+	if expr.begins_with("$payload."):
+		return payload.get(expr.substr(9), &"")
+	if expr.begins_with("$binding_context."):
+		var _bc: Dictionary = payload.get("binding_context", {})
+		return _bc.get(expr.substr(17), &"")
+	return StringName(expr)
+
+
+## pilot_006 e3 战后逼迫：被选机甲选1张攻击牌 use_action_card（passive，不计攻击数）。
+## 选牌取消/无牌可打 -> 回落4伤害。返回 true=已挂起弹窗。
+func _handle_pilot_006_force_use_attack(act: Dictionary, effect: ActionEffect, payload: Dictionary, action) -> bool:
+	var p06_params: Dictionary = act.get("params", {})
+	var p06_target_mech: StringName = _resolve_mech_id_expr(String(p06_params.get("target_mech_id", &"")), payload)
+	if p06_target_mech == &"":
+		p06_target_mech = payload.get("target_id", payload.get("target_mech_id", &""))
+	if p06_target_mech == &"" or context == null or context.game_state == null:
+		return false
+	var p06_player = context.game_state.get_player_for_mech(p06_target_mech)
+	if p06_player == null:
+		_pilot_006_fallback_damage(p06_target_mech, action)
+		return false
+	# AI 被选机甲：暂跳过（pilot_006 e3 先 PvP 人类）
+	if _is_ai_owner(p06_player.player_id, p06_target_mech):
+		SLog.log_raw("[TIMING] %s pilot_006 战后逼迫：被选机甲为 AI，跳过 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+		return false
+	var p06_card_ids: Array = []
+	for hand_cid in p06_player.action_hand:
+		var hand_card = context.game_state.get_card(hand_cid)
+		if hand_card != null and hand_card.def != null and String(hand_card.def.action_type) == "攻击":
+			p06_card_ids.append(hand_cid)
+	# 无攻击牌：回落4伤害（二选一选了攻击但无牌可打）
+	if p06_card_ids.is_empty():
+		_pilot_006_fallback_damage(p06_target_mech, action)
+		return false
+	# 去重守卫
+	if action.record.get("_pilot_006_force_shown", false):
+		return false
+	action.record["_pilot_006_force_shown"] = true
+	_pending_effect[action.action_id] = {"effect": effect, "payload": payload, "phase": &"pilot_006_force_use_attack", "pilot_006_target_mech": p06_target_mech}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"select_pilot_006_attack_card", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"card_ids": p06_card_ids,
+		"target_mech_id": p06_target_mech,
+		"player_id": p06_player.player_id,
+		"label": "战后逼迫：选择1张攻击牌使用（取消=受到4伤害）",
+	})
+	SLog.log_raw("[TIMING] %s pilot_006 战后逼迫选牌 effect=%s 候选=%d" % [String(action.action_id), String(effect.effect_id), p06_card_ids.size()])
+	return true
+
+
+## pilot_006 e3 战后逼迫回落：对被选机甲造成4伤害（选牌取消/无牌可打时）。
+## 直接减 HP（不走 DEAL_DAMAGE atomic 的 fire_hook，避免在 ATTACK_SETTLE 挂起链中
+## 嵌套 legacy hook 触发内存问题；裁定：回落4伤害是直接伤害）。
+func _pilot_006_fallback_damage(target_mech: StringName, _action) -> void:
+	if target_mech == &"" or context == null or context.game_actions == null:
+		return
+	context.game_actions.pilot_006_deal_4_damage({"mech_id": target_mech})
 
 
 ## AI 闪击 optional 弃牌决策：AI 总是选择再攻，弃自己手里第一张行动牌。
@@ -1380,6 +1458,28 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 		var cm_discard_selected: bool = bool(cm_params.get("discard_selected", true))
 		var cm_discard_reason: StringName = cm_params.get("discard_reason", &"ACTION_CARD_PLAYED")
 		action.record.erase("_choose_many_shown")
+		# store_result_key 路径（pilot_002 批次转化）：存 payload[key]=选中牌，续跑主循环剩余 actions
+		var cm_store_key: StringName = cm_params.get("store_result_key", &"")
+		if cm_store_key != &"":
+			if input_data.get("cancelled", false):
+				SLog.log_raw("[TIMING] %s pilot_002 交牌取消，能力不发动 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+				if context.action_engine != null:
+					action.state = &"waiting_input"
+					context.action_engine.continue_action(action_id, {})
+				return
+			payload[cm_store_key] = cm_selected
+			SLog.log_raw("[TIMING] %s pilot_002 批次存 %s=%d张 effect=%s" % [String(action.action_id), String(cm_store_key), cm_selected.size(), String(effect.effect_id)])
+			# 续跑 effect.actions 剩余（TRANSFER/GRANT_BATCH/DRAW）
+			var cm_act_idx: int = int(pending.get("act_idx", -1))
+			if cm_act_idx >= 0 and effect.actions.size() > cm_act_idx + 1:
+				action.record["_seq_effect_actions"] = {"payload": payload, "remaining": effect.actions.slice(cm_act_idx + 1)}
+				action.state = &"waiting_effect_action"
+				if _continue_seq_effect_actions(action):
+					return
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
 		if not input_data.get("cancelled", false):
 			for sel_cid in cm_selected:
 				# 注入 chosen_card 供 per_card_actions 中 $chosen_card.card_instance_id 解析
@@ -1392,6 +1492,7 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 			# 标记每回合1次（赤枭躯干 effect_040/041：确认即消耗次数，含选0张=弃0+0动力；
 			# 取消路径不至此，不消耗。无 once_per_turn_key 的效果为 no-op）
 			_mark_once_per_turn_used(effect, payload)
+			_mark_once_per_game_used(effect, payload)
 			# post_actions：选牌完成后执行一次（雄鹰躯干 effect_071/072 按弃牌数移动）。
 			# $choice.count = 选中牌数。预解析 *_expr/$binding_context/$choice 后串行执行
 			# （仿 CHOOSE_INTEGER）。选0张时跳过（如雄鹰弃0=移0格，无事发生）。
@@ -1494,6 +1595,67 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 			context.action_engine.continue_action(action_id, {})
 		return
 
+	# ── pilot_006 战后逼迫选牌（effect_03）：被选机甲选1张攻击牌 use_action_card / 取消回落4伤害 ──
+	if phase == &"pilot_006_force_use_attack":
+		var p06_target_mech: StringName = pending.get("pilot_006_target_mech", &"")
+		var p06_selected: StringName = input_data.get("selected_card_id", input_data.get("card_instance_id", &""))
+		var p06_cancelled: bool = input_data.get("cancelled", false) or p06_selected == &""
+		if p06_cancelled:
+			# 取消/无选择：回落4伤害
+			_pilot_006_fallback_damage(p06_target_mech, action)
+		else:
+			# 选牌：use_action_card（passive，source_action_id 非空不计攻击数，选攻击目标）
+			var p06_player = context.game_state.get_player_for_mech(p06_target_mech) if (p06_target_mech != &"" and context != null and context.game_state != null) else null
+			var p06_pid: StringName = p06_player.player_id if p06_player != null else &""
+			var p06_use_params: Dictionary = {
+				"card_instance_id": p06_selected,
+				"mech_id": p06_target_mech,
+				"player_id": p06_pid,
+				"is_virtual": false,
+				"target_count": 1,
+				"source_action_id": action.action_id,
+			}
+			if context.action_service != null:
+				context.action_service.execute(&"use_action_card", p06_use_params)
+		SLog.log_effect(effect.effect_id, action.source, action.action_id, String(action.action_type), {"status": "resuming_after_pilot_006_force", "cancelled": p06_cancelled})
+		if action.state == &"waiting_timing" and _pending_effect.has(action.action_id):
+			return
+		if not action.pending_effect_action_ids.is_empty():
+			action.state = &"waiting_effect_action"
+			return
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
+		return
+
+	# ── pilot_003 置顶选择（effect_01）：选1张移到牌堆顶 / 取消不移动 ──
+	if phase == &"pilot_003_choose_top":
+		var p003t_sel: StringName = input_data.get("selected_card_id", input_data.get("card_instance_id", &""))
+		var p003t_cancelled: bool = input_data.get("cancelled", false) or p003t_sel == &""
+		if not p003t_cancelled and p003t_sel != &"":
+			context.game_actions.pilot_003_move_to_deck_top(p003t_sel)
+		SLog.log_raw("[TIMING] %s pilot_003 置顶 %s" % [String(action.action_id), "取消" if p003t_cancelled else String(p003t_sel)])
+		if action.state == &"waiting_timing" and _pending_effect.has(action.action_id):
+			return
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
+		return
+
+	# ── pilot_003 effect_03 复选框提交：玩家勾选了跳过玩家集合 ──
+	if phase == &"pilot_003_skip_players":
+		var sp_player_ids: Array = input_data.get("player_ids", [])
+		var sp_cancelled: bool = bool(input_data.get("cancelled", false))
+		if not sp_cancelled and context != null and context.game_actions != null:
+			context.game_actions.set_pilot_003_skip_players({"player_ids": sp_player_ids}, payload)
+		SLog.log_raw("[TIMING] %s pilot_003 复选框 %s 跳过玩家: %s" % [String(action.action_id), "取消" if sp_cancelled else "提交", str(sp_player_ids)])
+		if action.state == &"waiting_timing" and _pending_effect.has(action.action_id):
+			return
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
+		return
+
 	# ── 立即设置装备阶段（effect_005）：玩家选了合法槽(chosen_slot_id)或取消 ──
 	if phase == &"draw_equipment_set":
 		var deis_drawn_id_r: StringName = pending.get("drawn_card_id", &"")
@@ -1552,6 +1714,7 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 		effect_executed.emit(effect.effect_id, action.action_id)
 		_mark_effect_executed(effect.effect_id, action.action_id)
 		_mark_once_per_turn_used(effect, payload)
+		_mark_once_per_game_used(effect, payload)
 		# 若创建了子动作（如 single_move），attack 等其完成；否则恢复 attack 继续结算
 		var _rd_has_pending_sub := false
 		if context.action_registry != null:
@@ -1603,6 +1766,7 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 	# 否则狙击右臂(024)/狙击影右臂(057)/圣牛右腿(069)等 optional 弃牌 + once_per_turn 效果
 	# 可每回合重复触发（取消路径不至此，不消耗次数，符合"取消=不发动"裁定）。
 	_mark_once_per_turn_used(effect, payload)
+	_mark_once_per_game_used(effect, payload)
 
 	# 闪击再攻：_execute_actions 创建的 attack B 若未立即完成（如等待玩家在武器范围内选目标），
 	# 父动作 attack A 须等待其完成再继续 cleanup。仿 choose_many_cards / unite_attack_offer 阶段守卫：
@@ -1679,6 +1843,26 @@ func _mark_once_per_turn_used(effect: ActionEffect, payload: Dictionary) -> void
 	_once_per_turn_used[key] = turn_map
 
 
+## 每局1次是否已用满（不带 turn 维度，本局持久）
+func _is_once_per_game_used_up(effect: ActionEffect, payload: Dictionary) -> bool:
+	var cid: StringName = _once_per_turn_card_instance_id(effect, payload)
+	if cid == &"":
+		return false  # 无来源牌实例，不限制（退路）
+	var key: String = "%s:%s" % [String(cid), String(effect.once_per_game_key)]
+	var used: int = int(_once_per_game_used.get(key, 0))
+	return used >= effect.once_per_game_max
+
+## 标记每局1次已使用（+1，本局持久）
+func _mark_once_per_game_used(effect: ActionEffect, payload: Dictionary) -> void:
+	if effect.once_per_game_key == &"":
+		return
+	var cid: StringName = _once_per_turn_card_instance_id(effect, payload)
+	if cid == &"":
+		return
+	var key: String = "%s:%s" % [String(cid), String(effect.once_per_game_key)]
+	_once_per_game_used[key] = int(_once_per_game_used.get(key, 0)) + 1
+
+
 ## DIRECT 主动效果「触发」按钮是否可点：复用 _execute_effect 的条件 + 每回合1次检查。
 ## bind_ctx 即装备 listener 的 binding_context（含 card_instance_id/mech_id/player_id/slot_id）。
 ## 供 equipment_panel 据此把按钮置灰（不满足条件/已用满时 disabled），
@@ -1692,6 +1876,9 @@ func can_trigger_active_effect(effect: ActionEffect, bind_ctx: Dictionary) -> bo
 		return false
 	# 每回合1次检查
 	if effect.once_per_turn_key != &"" and _is_once_per_turn_used_up(effect, payload):
+		return false
+	# 每局1次检查
+	if effect.once_per_game_key != &"" and _is_once_per_game_used_up(effect, payload):
 		return false
 	return true
 
@@ -2232,12 +2419,22 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 							"option_index": i,
 						})
 					action.state = &"waiting_timing"
+					# chooser_mech_id：CHOOSE_ONE 选择者机甲（pilot_006 e3 被选机甲二选一），
+					# 覆盖默认 effect 拥有者，路由弹窗到被选机甲玩家窗口。
+					var co_player_id: StringName = _effect_popup_owner_pid(effect, payload, action)
+					var co_chooser_expr: String = String(params_co.get("chooser_mech_id", &""))
+					if co_chooser_expr != "":
+						var co_chooser_mid: StringName = _resolve_mech_id_expr(co_chooser_expr, payload)
+						if co_chooser_mid != &"" and context != null and context.game_state != null:
+							var co_chooser_player = context.game_state.get_player_for_mech(co_chooser_mid)
+							if co_chooser_player != null:
+								co_player_id = co_chooser_player.player_id
 					action_needs_input.emit(action.action_id, &"choose_one_effect", {
 						"action_id": action.action_id,
 						"effect_id": effect.effect_id,
 						"options": ui_options,
 						"optional": co_optional,
-						"player_id": _effect_popup_owner_pid(effect, payload, action),
+						"player_id": co_player_id,
 					})
 					SLog.log_raw("[TIMING] %s 挂起二选一 effect=%s options=%d optional=%s" % [String(action.action_id), String(effect.effect_id), ui_options.size(), str(co_optional)])
 					return
@@ -2285,6 +2482,15 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 				if _ba_deis_ret == &"skip":
 					_ba_idx += 1
 					continue
+				# PILOT_006_FORCE_USE_ATTACK：pilot_006 e3 战后逼迫选牌 use_action_card（分支内特判，仿 CHOOSE_*）
+				if sub_type == &"PILOT_006_FORCE_USE_ATTACK":
+					if _handle_pilot_006_force_use_attack(sub_act_merged, effect, payload, action):
+						var _p06_remaining: Array = branch_actions.slice(_ba_idx + 1)
+						if not _p06_remaining.is_empty():
+							action.record["_seq_effect_actions"] = {"payload": payload, "remaining": _p06_remaining, "source_check": false}
+						return
+					_ba_idx += 1
+					continue
 				# CHOOSE_MAP_CELL / CHOOSE_MANY_MAP_CELLS：分支内共用顶层 helper（execute_sub_action 无法处理 CHOOSE_*）
 				if sub_type == &"CHOOSE_MAP_CELL":
 					if _handle_choose_map_cell(sub_act_merged, effect, payload, action):
@@ -2296,10 +2502,10 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 						return
 					_ba_idx += 1
 					continue
-				if sub_type in [&"EXECUTE_HP_CHANGE", &"EXECUTE_DAMAGE_CHANGE", &"HEAL_HP", &"REMOVE_DAMAGE_TOKENS", &"DEAL_DAMAGE", &"PLACE_DAMAGE_TOKENS", &"MODIFY_DAMAGE_TOKENS"]:
+				if sub_type in [&"EXECUTE_HP_CHANGE", &"EXECUTE_DAMAGE_CHANGE", &"HEAL_HP", &"REMOVE_DAMAGE_TOKENS", &"DEAL_DAMAGE", &"PLACE_DAMAGE_TOKENS", &"MODIFY_DAMAGE_TOKENS", &"PILOT_006_DEAL_4_DAMAGE"]:
 					if not sub_params.has("mech_ids"):
 						sub_params["mech_ids"] = [target_id_co]
-					if not sub_params.has("mech_id") and sub_type in [&"HEAL_HP", &"REMOVE_DAMAGE_TOKENS", &"DEAL_DAMAGE", &"PLACE_DAMAGE_TOKENS", &"MODIFY_DAMAGE_TOKENS"]:
+					if not sub_params.has("mech_id") and sub_type in [&"HEAL_HP", &"REMOVE_DAMAGE_TOKENS", &"DEAL_DAMAGE", &"PLACE_DAMAGE_TOKENS", &"MODIFY_DAMAGE_TOKENS", &"PILOT_006_DEAL_4_DAMAGE"]:
 						sub_params["mech_id"] = target_id_co
 					sub_act_merged["params"] = sub_params
 				if context != null and context.action_service != null:
@@ -2548,7 +2754,7 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 			if action.record.get("_choose_many_shown", false):
 				continue
 			action.record["_choose_many_shown"] = true
-			_pending_effect[action.action_id] = {"effect": effect, "payload": payload, "phase": "choose_many_cards", "choose_many_action": act}
+			_pending_effect[action.action_id] = {"effect": effect, "payload": payload, "phase": "choose_many_cards", "choose_many_action": act, "act_idx": _act_idx}
 			action.state = &"waiting_timing"
 			action_needs_input.emit(action.action_id, &"select_thrust_cards", {
 				"action_id": action.action_id,
@@ -2562,6 +2768,75 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 				"max_count": int(cm_params.get("max_count", 0)),
 			})
 			SLog.log_raw("[TIMING] %s 挂起多选 effect=%s 候选=%d" % [String(action.action_id), String(effect.effect_id), cm_card_ids.size()])
+			return
+		# CHOOSE_ONE_INSERTED_CARD_TO_DECK_TOP：pilot_003 effect_01 可选1张置顶（复用 unite 单选面板）
+		if act_type == &"CHOOSE_ONE_INSERTED_CARD_TO_DECK_TOP":
+			var p003t_params: Dictionary = act.get("params", {})
+			var p003t_card_ids_raw = p003t_params.get("card_ids", [])
+			var p003t_card_ids: Array = []
+			if String(str(p003t_card_ids_raw)).begins_with("$runtime."):
+				p003t_card_ids = payload.get(String(str(p003t_card_ids_raw)).replace("$runtime.", ""), [])
+			elif p003t_card_ids_raw is Array:
+				p003t_card_ids = p003t_card_ids_raw
+			else:
+				p003t_card_ids = payload.get("pilot_003_face_up_cards", [])
+			# 过滤：只保留仍在牌堆的牌
+			var p003t_in_deck: Array = []
+			var p003t_deck: Array = context.game_state.deck_state.action_deck if context.game_state != null else []
+			for p003t_cid in p003t_card_ids:
+				if p003t_deck.has(p003t_cid):
+					p003t_in_deck.append(p003t_cid)
+			if p003t_in_deck.is_empty():
+				continue
+			var p003t_bind: Dictionary = payload.get("binding_context", {})
+			var p003t_pid: StringName = p003t_bind.get("player_id", &"")
+			var p003t_mid: StringName = p003t_bind.get("mech_id", &"")
+			if _is_ai_owner(p003t_pid, p003t_mid):
+				continue  # AI 不处理置顶选择
+			if action.record.get("_p003_top_shown", false):
+				continue
+			action.record["_p003_top_shown"] = true
+			_pending_effect[action.action_id] = {"effect": effect, "payload": payload, "phase": &"pilot_003_choose_top", "act_idx": _act_idx}
+			action.state = &"waiting_timing"
+			action_needs_input.emit(action.action_id, &"select_pilot_006_attack_card", {
+				"action_id": action.action_id,
+				"effect_id": effect.effect_id,
+				"card_ids": p003t_in_deck,
+				"target_mech_id": p003t_mid,
+				"player_id": p003t_pid,
+				"label": String(p003t_params.get("label", "选择1张正面牌放置到牌堆顶（可取消）")),
+			})
+			SLog.log_raw("[TIMING] %s pilot_003 置顶选择 effect=%s 候选=%d" % [String(action.action_id), String(effect.effect_id), p003t_in_deck.size()])
+			return
+		# CHOOSE_MANY_PLAYERS：pilot_003 effect_03 复选框——列出所有玩家（含自己），
+		# 勾选"抽牌跳过正面牌"的玩家，提交后生效（裁定权威"重要补充"）。resume 走
+		# phase=pilot_003_skip_players，用 player_ids 整组覆盖该瑟尔基尔来源的跳过集合。
+		if act_type == &"CHOOSE_MANY_PLAYERS":
+			var p003s_bind: Dictionary = payload.get("binding_context", {})
+			var p003s_source: StringName = p003s_bind.get("card_instance_id", &"")
+			var p003s_pid: StringName = p003s_bind.get("player_id", &"")
+			if p003s_source == &"" or p003s_pid == &"" or context == null or context.game_state == null:
+				continue
+			# 列出所有玩家（含自己）；回显当前勾选状态
+			var p003s_players: Array = []
+			for pid: StringName in context.game_state.players:
+				p003s_players.append(String(pid))
+			if p003s_players.is_empty():
+				continue
+			if action.record.get("_p003_skip_shown", false):
+				continue
+			action.record["_p003_skip_shown"] = true
+			_pending_effect[action.action_id] = {"effect": effect, "payload": payload, "phase": &"pilot_003_skip_players"}
+			action.state = &"waiting_timing"
+			action_needs_input.emit(action.action_id, &"select_pilot_003_skip_players", {
+				"action_id": action.action_id,
+				"effect_id": effect.effect_id,
+				"player_ids": p003s_players,
+				"checked": _ActionPilotEffects.get_pilot_003_skip_players(p003s_source),
+				"player_id": p003s_pid,
+				"label": "勾选「抽牌跳过正面牌」的玩家（提交后生效）",
+			})
+			SLog.log_raw("[TIMING] %s pilot_003 复选框 players=%d effect=%s" % [String(action.action_id), p003s_players.size(), String(effect.effect_id)])
 			return
 		# UNITE_ATTACK_OFFER：联合状态效果1。unite机甲攻击结算时弹窗让 Target 选1张攻击牌联合攻击。
 		# 无攻击牌不弹窗（无事发生）；AI Target 跳过（暂不处理 AI 联合攻击）；人类弹单选窗。
@@ -2609,6 +2884,11 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 			})
 			SLog.log_raw("[TIMING] %s 挂起联合攻击选牌 effect=%s 候选=%d" % [String(action.action_id), String(effect.effect_id), uao_card_ids.size()])
 			return
+		# PILOT_006_FORCE_USE_ATTACK：pilot_006 e3 战后逼迫选牌（顶层防御；正常在 CHOOSE_ONE 分支内特判）
+		if act_type == &"PILOT_006_FORCE_USE_ATTACK":
+			if _handle_pilot_006_force_use_attack(act, effect, payload, action):
+				return
+			continue
 		# DRAW_EQUIPMENT_AND_IMMEDIATELY_SET / DRAW_EQUIPMENT_AND_CHOOSE_SET_OR_SELL 伪动作：
 		# 抽装备立即设置(或卖出)。可作顶层 action（effect_005 联邦左臂/近战左腿离场诱发），也可嵌套在
 		# CHOOSE_ONE 分支内（effect_065 王牌臂外层 optional CHOOSE_ONE）。嵌套时走 execute_sub_action
@@ -3055,6 +3335,15 @@ func _eval_expr(expr_str: String, payload: Dictionary, choice: Dictionary):
 			if p_ah != null:
 				ah_count = p_ah.action_hand.size()
 		s = s.replace("$binding_context.owner_action_hand_count", str(ah_count))
+	# $binding_context.mech_effective_armor 特殊：从 game_state 查机甲有效护甲（pilot_004 护甲转动力上限）
+	if s.find("$binding_context.mech_effective_armor") >= 0:
+		var mid_armor: StringName = bind_ctx.get("mech_id", &"")
+		var armor_val: int = 0
+		if mid_armor != &"" and context != null and context.game_state != null:
+			var m_arm = context.game_state.mechs.get(mid_armor)
+			if m_arm != null:
+				armor_val = m_arm.get_armor()
+		s = s.replace("$binding_context.mech_effective_armor", str(armor_val))
 	# 其他 $binding_context.xxx
 	for k in bind_ctx:
 		if String(k) == "owner_gold" or String(k) == "owner_action_hand_count":

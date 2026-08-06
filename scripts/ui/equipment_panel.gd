@@ -9,6 +9,7 @@ const _MechState = preload("res://scripts/runtime/MechState.gd")
 const _MechSlotState = preload("res://scripts/runtime/MechSlotState.gd")
 const _EquipmentCardDef = preload("res://scripts/card_defs/EquipmentCardDef.gd")
 const _GenEquipEffects = preload("res://scripts/generated_database/GeneratedEquipmentEffects.gd")
+const _ActionPilotEffects = preload("res://scripts/generated_database/ActionPilotEffects.gd")
 
 ## 备用区设置按钮被点击（参数：备用区槽位ID，如"reserve_1"）
 signal reserve_set_clicked(slot_id: StringName)
@@ -94,9 +95,10 @@ func _refresh() -> void:
 
 	# 生命/动力摘要
 	var summary = Label.new()
-	summary.text = "HP: %d/%d  动力: %d  护甲: %d" % [
+	summary.text = "HP: %d/%d  动力: %d  护甲: %d  攻击: %d/%d" % [
 		_mech.current_hp, _mech.max_hp,
-		_mech.power, _mech.get_armor()
+		_mech.power, _mech.get_armor(),
+		_mech.attack_count_this_turn, _mech.max_attacks_per_turn
 	]
 	summary.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	add_child(summary)
@@ -248,14 +250,38 @@ func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}) -
 	if not _is_enemy and slot.equipped_card != null and not active_by_card.is_empty():
 		var inst_id: StringName = slot.equipped_card.instance_id
 		if active_by_card.has(inst_id):
+			var _eff_index: int = 0
 			for item: Dictionary in active_by_card[inst_id]:
 				var eff = item.get("effect")
 				var bind_ctx: Dictionary = item.get("bind_ctx", {})
 				var btn = Button.new()
-				btn.text = "触发"
-				btn.tooltip_text = eff.description
-				# 与备用区「设置」按钮同尺寸，避免撑满屏幕；效果详情靠悬停浮框显示
-				btn.custom_minimum_size = Vector2(40, 20)
+				var is_pilot_btn: bool = String(bind_ctx.get("slot_id", &"")) == "pilot"
+				if is_pilot_btn:
+					# 机师槽效果按钮：不取名字，用 1/2/3 加粗圆形数字表示第几个效果
+					_eff_index += 1
+					btn.text = str(_eff_index)
+					btn.custom_minimum_size = Vector2(26, 26)
+					btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+					btn.add_theme_font_size_override("font_size", 15)
+					btn.add_theme_constant_override("outline_size", 4)
+					btn.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.7))
+					# 圆形样式（radius=边长一半）
+					var circle := StyleBoxFlat.new()
+					circle.bg_color = Color(0.16, 0.22, 0.32, 0.95)
+					circle.border_color = Color(0.5, 0.7, 0.9, 0.9)
+					circle.set_border_width_all(1)
+					circle.set_corner_radius_all(13)
+					circle.set_content_margin_all(0)
+					btn.add_theme_stylebox_override("normal", circle)
+					var circle_hover := circle.duplicate()
+					circle_hover.bg_color = Color(0.25, 0.32, 0.45, 1.0)
+					btn.add_theme_stylebox_override("hover", circle_hover)
+					var circle_dis := circle.duplicate()
+					circle_dis.bg_color = Color(0.1, 0.12, 0.16, 0.9)
+					btn.add_theme_stylebox_override("disabled", circle_dis)
+				else:
+					btn.text = "触发"
+					btn.custom_minimum_size = Vector2(40, 20)
 				# 按条件/每回合1次置灰：不满足（如帝国腿未移动8格）或已用满时 disabled，
 				# 避免点了才被 effect_fire 静默跳过（"点了没反应"）。
 				var can_trigger: bool = false
@@ -266,6 +292,10 @@ func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}) -
 				var cid: StringName = bind_ctx.get("card_instance_id", &"")
 				var eid: StringName = eff.effect_id
 				btn.pressed.connect(func(): equipment_active_clicked.emit(cid, eid))
+				# 机师效果按钮悬停：独立浮框显示 描述/可发动次数/发动条件（仿整行悬停浮框）
+				if is_pilot_btn:
+					btn.mouse_entered.connect(func(): _on_pilot_effect_button_hover_entered(eff, bind_ctx))
+					btn.mouse_exited.connect(Callable(self, "_on_equipment_hover_exited"))
 				hbox.add_child(btn)
 
 	# 悬停效果浮框：有装备牌且非「敌方备用区（隐藏信息）」时，整行可悬停查看效果
@@ -308,6 +338,40 @@ func _hide_tooltip() -> void:
 	if _tooltip_popup != null and is_instance_valid(_tooltip_popup):
 		_tooltip_popup.visible = false
 	set_process(false)
+
+
+## 机师效果按钮悬停浮框：显示该效果的描述、当前可发动次数、发动条件。
+## 独立于整行浮框（按钮粒度），复用 _tooltip_popup 定位/样式。
+func _on_pilot_effect_button_hover_entered(eff, bind_ctx: Dictionary) -> void:
+	if eff == null:
+		return
+	_ensure_tooltip()
+	var lines: Array = []
+	# 标题：效果名 + 模式
+	var mode_text := _mode_text(String(eff.mode))
+	lines.append("[color=#ffd][b]%s[/b][/color] [color=#aaa](%s)[/color]" % [String(eff.display_name), mode_text])
+	# 描述
+	if String(eff.description).strip_edges() != "":
+		lines.append("[color=#ccc]%s[/color]" % String(eff.description))
+	# 当前可发动次数（once_per_turn）
+	var te = _context.get("timing_engine") if _context != null else null
+	if te != null and te.has_method(&"_current_turn_number") and eff.once_per_turn_key != &"":
+		var cid: StringName = bind_ctx.get("card_instance_id", &"")
+		var turn_id: int = te._current_turn_number()
+		var key: String = "%s:%s" % [String(cid), String(eff.once_per_turn_key)]
+		var turn_map: Dictionary = te._once_per_turn_used.get(key, {})
+		var used: int = int(turn_map.get(turn_id, 0))
+		var maxu: int = int(eff.once_per_turn_max)
+		var remain: int = maxi(0, maxu - used)
+		var color := "#9c9" if remain > 0 else "#c66"
+		lines.append("[color=%s]本回合可发动：%d/%d[/color]" % [color, remain, maxu])
+	# 发动条件（conditions 简化为条数提示；具体由按钮置灰体现）
+	if eff.conditions != null and not eff.conditions.is_empty():
+		lines.append("[color=#888]发动条件：满足后按钮可用[/color]")
+	_tooltip_rich.text = "\n".join(lines)
+	_tooltip_popup.visible = true
+	_tooltip_popup.reset_size()
+	set_process(true)
 
 
 func _process(_delta: float) -> void:
@@ -446,6 +510,59 @@ func _build_tooltip_bbcode(slot, cid: StringName) -> String:
 			if bdesc.strip_edges() == "":
 				bdesc = String(b.get("display_name", ""))
 			lines.append("• [color=#bdf]%s[/color]: %s [color=#888](%s)[/color]" % [String(b.get("effect_id", "")), bdesc, mode_text])
+	# 机师牌状态：已用次数/剩余次数 + X 变量 + 特殊状态（pilot_008 X / pilot_006 悬赏 / pilot_009 控制）
+	if slot.slot_id == &"pilot":
+		var pstate := _build_pilot_status_bbcode(slot, cid)
+		if pstate != "":
+			lines.append("[color=#ccc]机师状态：[/color]")
+			lines.append(pstate)
+	return "\n".join(lines)
+
+
+## 机师牌状态 BBcode：once_per_turn 已用/剩余 + pilot_008 X + pilot_006 悬赏 + pilot_009 控制。
+## 从 timing_engine._once_per_turn_used 与 ActionPilotEffects 静态读（仿 _collect_bound_effects 遍历）。
+func _build_pilot_status_bbcode(slot, cid: StringName) -> String:
+	if slot == null or slot.equipped_card == null or _context == null:
+		return ""
+	var lines: Array = []
+	var te = _context.get("timing_engine")
+	var pfx = _ActionPilotEffects
+	# 1. once_per_turn 使用次数（遍历该牌所有绑定 effect，显示 已用/上限）
+	if te != null and te.has_method(&"_is_once_per_turn_used_up"):
+		var turn_id: int = te._current_turn_number()
+		for timing: StringName in te.permanent_listeners:
+			for entry in te.permanent_listeners[timing]:
+				if entry == null or not (entry is Dictionary):
+					continue
+				var bc: Dictionary = entry.get("binding_context", {})
+				if String(bc.get("card_instance_id", &"")) != String(cid):
+					continue
+				var eff = entry.get("effect")
+				if eff == null or eff.once_per_turn_key == &"":
+					continue
+				var key: String = "%s:%s" % [String(cid), String(eff.once_per_turn_key)]
+				var turn_map: Dictionary = te._once_per_turn_used.get(key, {})
+				var used: int = int(turn_map.get(turn_id, 0))
+				var maxu: int = int(eff.once_per_turn_max)
+				var color := "#9a9" if used < maxu else "#c66"
+				lines.append("• [color=%s]%s：%d/%d[/color]" % [color, String(eff.display_name), used, maxu])
+	# 2. pilot_008 X 变量
+	if _mech != null and _mech.slots.get(&"pilot") != null and _mech.slots[&"pilot"].equipped_card != null:
+		var pc: String = String(_mech.slots[&"pilot"].equipped_card.instance_id)
+		if String(pc) == String(cid):
+			var pdef = _mech.slots[&"pilot"].equipped_card.def
+			if pdef != null and String(pdef.card_id) == "pilot_008_安德洛美达":
+				lines.append("• [color=#9cf]X 变量：%d（回收维修次数，上限5）[/color]" % pfx.get_pilot_008_x(_mech.slots[&"pilot"].equipped_card))
+	# 3. pilot_006 悬赏标记
+	if String(cid) != &"":
+		var mark: StringName = pfx.get_pilot_006_mark(cid)
+		if mark != &"":
+			var target_name := ""
+			if _context != null and _context.get("game_state") != null:
+				var tm = _context.game_state.mechs.get(mark)
+				if tm != null:
+					target_name = String(tm.mech_id)
+			lines.append("• [color=#fc6]悬赏目标：%s[/color]" % target_name)
 	return "\n".join(lines)
 
 

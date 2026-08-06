@@ -12,6 +12,7 @@ class_name UseActionCardAction
 
 const _TimingConst = preload("res://scripts/action_core/TimingConst.gd")
 const SLog = preload("res://scripts/services/slog.gd")
+const _ActionPilotEffects = preload("res://scripts/generated_database/ActionPilotEffects.gd")
 
 ## 诊断开关（双连卡临时区排查遗留）。默认关闭：复现时再置 true。
 const _DIAG_USE_CARD := false
@@ -82,6 +83,21 @@ func _step_validate_card(action: Action) -> Dictionary:
 	# 同时记录 source_mech_id（用于效果动作参数提取）
 	result["source_mech_id"] = mech_id
 
+	# pilot_009 美杜莎受控使用：牌 owner（目标）!= executor（美杜莎）时，
+	# 校验 executor 对该类型有临时控制权（is_card_type_controlled_by）。
+	# 裁定：受控攻击牌扣美杜莎攻击数、用美杜莎装备/位置；牌物理在目标手牌。
+	var _ctrl_card = context.game_state.get_card(card_id)
+	var _ctrl_owner_pid: StringName = _ctrl_card.owner_player_id if _ctrl_card != null else &""
+	if _ctrl_owner_pid != &"" and _ctrl_owner_pid != player_id:
+		var _ctrl_owner_mech = context.game_state.get_mech_for_player(_ctrl_owner_pid)
+		if _ctrl_owner_mech == null:
+			return {"error": "受控牌持有者机甲不存在"}
+		if _ctrl_card.def == null:
+			return {"error": "受控牌无定义"}
+		var _ctrl_type: StringName = StringName(String(_ctrl_card.def.action_type))
+		if not _ActionPilotEffects.is_card_type_controlled_by(_ctrl_owner_mech.mech_id, _ctrl_type, player_id):
+			return {"error": "无权使用此受控牌（未控制该类型）"}
+
 	# 检查攻击牌的攻击次数限制
 	# 效果产生的使用攻击牌（联合攻击等，source_action_id 非空）不消耗攻击次数
 	# （_step_settle 对 source_action_id 非空不 +1），故跳过 attack_count 限制；
@@ -93,6 +109,10 @@ func _step_validate_card(action: Action) -> Dictionary:
 	if not _vt_transform and card.def and card.def.action_type == "攻击":
 		var mech = context.game_state.mechs.get(mech_id)
 		if mech:
+			# pilot_010 刻托 effect_03（权限型）：本回合已用3张实体攻击牌则禁止新的实体攻击牌 use_action。
+			# virtual_transform 虚拟当作攻击不进此分支（不计数/不限制，裁定歧义3）。
+			if not _ActionPilotEffects.can_pilot_010_use_physical_attack_card(context.game_state, mech_id):
+				return {"error": "刻托本回合已使用3张攻击牌，不能再使用"}
 			var src_action_id: StringName = action.source.get("source_action_id", &"") if action.source is Dictionary else &""
 			if src_action_id != &"":
 				if mech.destroyed or mech.has_status(&"cannot_attack"):
@@ -136,8 +156,14 @@ func _step_card_to_temp_zone(action: Action) -> Dictionary:
 	if player == null:
 		return result
 
-	# 从手牌移除
-	player.action_hand.erase(card_id)
+	# 从手牌移除：受控使用时牌在 owner 手牌（目标），非 executor（美杜莎）手牌
+	var _hand_card = context.game_state.get_card(card_id) if card_id != &"" else null
+	var _hand_owner_pid: StringName = _hand_card.owner_player_id if _hand_card != null else &""
+	var _hand_holder = player
+	if _hand_owner_pid != &"" and _hand_owner_pid != player_id:
+		_hand_holder = context.game_state.players.get(_hand_owner_pid)
+	if _hand_holder != null:
+		_hand_holder.action_hand.erase(card_id)
 
 	# 注销手牌中的AVAILABILITY监听器
 	if context.timing_engine != null:
@@ -284,9 +310,9 @@ func _step_execute_effects(action: Action) -> Dictionary:
 	# 注册延迟的LISTEN效果（绑定到DIRECT效果产生的效果动作）
 	_register_pending_listen_effects(action)
 
+	# pilot_001 effect_01：记录效果链已完成（USE_ACTION_AFTER 时点供 PAYLOAD_EFFECT_CHAIN_COMPLETED 检查）
+	action.record["effect_chain_completed"] = true
 	# 若 DIRECT 效果产生了未完成的效果动作（如破甲产生 attack A），通知 ActionEngine 暂停等待。
-	# 注意：效果动作可能已同步完成（如 stat_modify），此时 pending_effect_action_ids 在
-	# notify_effect_action_completed 中已被弹出，列表为空，不触发暂停。✓
 	if not action.pending_effect_action_ids.is_empty():
 		result["effect_action_created"] = true
 
@@ -408,7 +434,11 @@ func _step_settle(action: Action) -> Dictionary:
 		# 故此处跳过，交由 attack_action._step_cleanup 弃置（规则：行动牌所有效果执行完才结算弃置）。
 		# 转化行动牌(virtual_transform)：当作虚拟牌打出，非其原类型用途，无 bind_to_attack 延迟，直接弃置。
 		if card != null and String(card.zone) != &"discard" and (_vt_settle or not _has_bind_to_attack_action_effect(card)):
-			context.deck_service.discard_card(card_id, &"ACTION_CARD_PLAYED")
+			# pilot_007 夺取的牌跳过弃置（已被夺到手牌）；清除标记避免残留
+			if card.counters.get("claimed_by_pilot_007", false):
+				card.counters.erase("claimed_by_pilot_007")
+			else:
+				context.deck_service.discard_card(card_id, &"ACTION_CARD_PLAYED")
 				# 诊断：discard_card 是异步效果动作(fire DISCARD 时点)，此处 result 不声明 effect_action_created
 				# 若双连卡在此后仍停 temp_zone，说明 discard_card 效果动作未完成/settle 未等它。
 			if _DIAG_USE_CARD:

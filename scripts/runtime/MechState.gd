@@ -9,6 +9,7 @@ const _MechSlotState = preload("res://scripts/runtime/MechSlotState.gd")
 const _CardInstance = preload("res://scripts/runtime/CardInstance.gd")
 const _MechFrameDef = preload("res://scripts/card_defs/MechFrameDef.gd")
 const _GenEquipEffects = preload("res://scripts/generated_database/GeneratedEquipmentEffects.gd")
+const _ActionPilotEffects = preload("res://scripts/generated_database/ActionPilotEffects.gd")
 
 ## 机甲唯一 ID
 var mech_id: StringName = &""
@@ -102,6 +103,8 @@ func get_armor() -> int:
 				and String(st.get("duration", &"")) != "THIS_ATTACK":
 			am_bonus += int(st.get("delta", 0))
 	total += am_bonus
+	# pilot_002 莱比尔 联邦光环护甲+4（实时重算，每有效来源+4）
+	total += _ActionPilotEffects.get_pilot_002_federation_armor_bonus(self)
 	return total
 
 
@@ -117,6 +120,12 @@ func get_total_power() -> int:
 	# 各 slot 损伤阈值动力加成（重甲右臂/机动右腿 effect_016 阈值1，机动左腿 effect_021 阈值2）
 	for slot_id: StringName in [&"头部", &"躯干", &"右臂", &"左臂", &"右腿", &"左腿"]:
 		total += _GenEquipEffects.slot_damage_threshold_power_bonus(self, slot_id)
+	# pilot_004 玛沙 转换动力层（POWER_CAP_MODIFIER）：持久临时动力上限 +N（到下个我方回合前清）
+	for st: Dictionary in statuses:
+		if st.get("type", &"") == &"POWER_CAP_MODIFIER":
+			total += int(st.get("delta", 0))
+	# pilot_005 肯特 帝国光环动力+4（实时重算，每有效来源+4）
+	total += _ActionPilotEffects.get_pilot_005_empire_power_bonus(self)
 	return total
 
 

@@ -10,17 +10,22 @@ extends RefCounted
 var context = null  # type: GameContext
 
 const _EffectConst = preload("res://scripts/effect_core/EffectConst.gd")
+const _TimingConst = preload("res://scripts/action_core/TimingConst.gd")
+const _Action = preload("res://scripts/action_core/Action.gd")
 
 
 ## 从指定牌堆抽牌
 ## 如果牌堆为空，将弃牌堆洗入后再抽
 ## 返回抽到的卡牌 instance_id 列表
+## pilot_003 effect_02：抽到瑟尔基尔埋入的正面牌时，先 fire CARD_LEAVE_ACTION_DECK_BEFORE 拦截，
+## 拦截牌不交给调用方（改由瑟尔基尔拥有者立即使用/弃置+补抽），且不计入本次已抽数量（while 循环续抽）。
 func draw_from_deck(deck_key: StringName, count: int) -> Array[StringName]:
 	var gs: GameState = context.game_state
 	var deck_state: DeckState = gs.deck_state
 	var drawn: Array[StringName] = []
 
-	for i: int in range(count):
+	# while 而非 for：被拦截的正面牌弹出后不计入 drawn，需续抽补足 count。
+	while drawn.size() < count:
 		var deck: Array = _get_deck_array(deck_key)
 		if deck.is_empty():
 			# 尝试洗入弃牌堆
@@ -30,14 +35,47 @@ func draw_from_deck(deck_key: StringName, count: int) -> Array[StringName]:
 				break  # 无牌可抽
 
 		var card_id: StringName = deck.pop_front() as StringName
-		drawn.append(card_id)
-
-		# 更新卡牌实例的区域标记
 		var card: CardInstance = gs.get_card(card_id)
+
+		# pilot_003 effect_02：正面牌离开行动牌堆前 fire CARD_LEAVE_ACTION_DECK_BEFORE。
+		# 监听器（CANCEL_PARENT_CARD_TRANSFER + IMMEDIATELY_USE_DECK_CARD_OR_FALLBACK）同步执行；
+		# 拦截后该牌由独立顶层 use_action_card 使用（或弃置+补抽），不交给原获取者。
+		var intercepted := false
+		if deck_key == &"action_deck" and card != null and bool(card.counters.get("pilot_003_face_up_leave_use", false)):
+			intercepted = _fire_pilot_003_card_leave_deck(card_id)
+			if intercepted:
+				card.counters.erase("pilot_003_intercepted")
+				continue
+
+		drawn.append(card_id)
+		# 更新卡牌实例的区域标记
 		if card:
 			card.zone = &"hand"
 
 	return drawn
+
+
+## pilot_003 effect_02：用轻量虚拟 Action（仿 TurnService._fire_timing）fire CARD_LEAVE_ACTION_DECK_BEFORE。
+## 返回是否被拦截（监听器 CANCEL_PARENT_CARD_TRANSFER 在卡片 counters 写 pilot_003_intercepted）。
+func _fire_pilot_003_card_leave_deck(card_id: StringName) -> bool:
+	if context == null or context.timing_engine == null or context.game_state == null:
+		return false
+	var card: CardInstance = context.game_state.get_card(card_id)
+	if card == null:
+		return false
+	var virtual_action = _Action.new()
+	virtual_action.action_type = &"card_zone_change"
+	virtual_action.record = {
+		"card_instance_id": card_id,
+		"from_zone": &"action_deck",
+		"to_zone": &"hand",
+		# metadata owner（埋牌者/瑟尔基尔拥有者）作为 UI 路由归属；离堆牌原 owner_player_id 即埋牌者
+		"player_id": StringName(card.counters.get("pilot_003_leave_deck_owner_pid", card.owner_player_id)),
+	}
+	virtual_action.state = &"running"
+	virtual_action.context = context
+	context.timing_engine.fire_timing(_TimingConst.CARD_LEAVE_ACTION_DECK_BEFORE, virtual_action)
+	return bool(card.counters.get("pilot_003_intercepted", false))
 
 
 ## 将卡牌移到牌堆底部

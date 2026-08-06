@@ -22,6 +22,7 @@ const _MechState = preload("res://scripts/runtime/MechState.gd")
 const _MechSlotState = preload("res://scripts/runtime/MechSlotState.gd")
 const _CardInstance = preload("res://scripts/runtime/CardInstance.gd")
 const _MechFrameDef = preload("res://scripts/card_defs/MechFrameDef.gd")
+const _ActionPilotEffects = preload("res://scripts/generated_database/ActionPilotEffects.gd")
 
 
 # ═══════════════════════════════════════════
@@ -45,6 +46,8 @@ func serialize(context, viewer_pid: StringName = &"") -> Dictionary:
 	snap["shop"] = _serialize_shop(gs)
 	snap["log"] = gs.log.duplicate(true)
 	snap["temp_values"] = gs.temp_values.duplicate(true)
+	# 机师效果静态状态（悬赏/控制/批次/跳过）：不在 game_state 内，PvP 双端需随快照同步
+	snap["pilot_static"] = _ActionPilotEffects.serialize_pilot_static()
 	return snap
 
 
@@ -336,6 +339,9 @@ func apply_snapshot(context, snap: Dictionary) -> void:
 	# 8. 日志与临时值
 	gs.log = snap.get("log", []).duplicate(true)
 	gs.temp_values = snap.get("temp_values", {}).duplicate(true)
+
+	# 9. 机师效果静态状态恢复（PvP 双端同步）
+	_ActionPilotEffects.apply_pilot_static(snap.get("pilot_static", {}))
 
 
 func _reset_game_state(gs) -> void:

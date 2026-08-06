@@ -296,6 +296,11 @@ func _step_calculate_damage(action: Action) -> Dictionary:
 	var target_armor: int = 0
 	if target != null:
 		target_armor = target.get_armor()
+		# pilot_004 玛沙 effect_03：防御值来源替换为 current_power（动力代护甲）。
+		# effect_03a(攻击方)/effect_03b(被攻击方) 经 SET_ATTACK_DEFENSE_STAT_SOURCE 写入。
+		var _defense_override: Dictionary = action.record.get("defense_stat_override", {})
+		if String(_defense_override.get(target_id, &"")) == "current_power":
+			target_armor = target.power
 
 	# 加上临时护甲加成（防御牌等）
 	var temp_armor: int = action.record.get("temporary_armor_bonus", 0)

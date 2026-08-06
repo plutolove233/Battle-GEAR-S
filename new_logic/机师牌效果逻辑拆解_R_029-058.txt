@@ -1,0 +1,3591 @@
+﻿《Battle-GEAR-S（机斗战甲）》
+机师牌技能文本 -> ActionEffect 逻辑拆解
+R 档：pilot_029 ～ pilot_058
+版本：基于 2026-08-05 提供的四份权威文档
+
+========================================================================
+适用范围与共同约定
+========================================================================
+1. 本文只使用新 Action + Timing 体系；不调用旧 hook / legacy CardEffect / CUSTOM_EFFECT_CHECK_TEXT。
+2. 机师设置到 slot_id=&"pilot" 后，LISTEN / AVAILABILITY / DIRECT 均按 card_instance_id 注册；更换机师时先注销旧实例全部 permanent listener，再注册新实例。
+3. “可以/可”均提供取消路径。取消且尚未提交成本、牌转移或数值变动时，不消耗限次；不可逆子动作已结算后取消不回滚。
+4. “每回合”按当前活动玩家的回合分别计数；“我方回合”只允许机师拥有者回合发动。
+5. “当作”是出牌前转化：虚拟牌无实体、无行动牌类型，不触发 USE_ACTION_*；攻击类仍是主动攻击并消耗回合攻击数，迎击类只能在 ATTACK_AT 响应。
+6. “立即使用”实体行动牌走完整 use_action_card 链；由效果引出的攻击标记 passive=true，不消耗回合攻击数，但仍校验武器与合法目标。
+7. “X格范围”使用 _HexGrid.distance，不使用攻击范围 BFS。武器范围加成则接入攻击范围查询链。
+8. 动态值使用 "$payload.xxx" / "$binding_context.xxx" / "$result.xxx"；ActionEngine 在执行时解析。
+9. 同一技能跨多个时点时，通过 attack_id / discard_action_id / gain_action_id 及 record flag 绑定，禁止用“最近一次动作”全局变量猜测。
+10. 四份权威文档没有给出项目当前 pilot JSON / 旧 GeneratedPilotEffects.gd 的完整 effect_ids 数组。本文给出按既有命名格式可落码的“本拆解 effect_ids”；合入时只允许做 ID 名称映射，不得根据旧占位行为反改本文逻辑。
+11. 《行动牌的效果与逻辑》未提供“设陷”的完整基础效果链。pilot_057 只定义转化调用和陷阱移动扩展，不臆造设陷牌基础行为。
+12. 规则书定义商店购买，但四份文档未给出完整“卖出装备”“事件牌设置/失去”的动作生命周期。本档相关牌明确列出需新增时点及记录字段。
+
+========================================================================
+R 档（pilot_029-058）
+========================================================================
+
+
+═══════════════════════════════════════════════════════════
+[机师牌 029] 克劳德  （阵营:联邦 稀有度:R 费用:6 行动牌上限:4 回合攻击数:1）
+═══════════════════════════════════════════════════════════
+效果文本：我方远程武器范围+1。
+我方回合1次，可以将1张行动牌当作聚能使用。
+本拆解 effect_ids：["pilot_029_effect_01","pilot_029_effect_02"]
+
+──────────── 效果拆解（pilot_029_effect_01 远程武器范围+1）────────────
+首句：派生值型，不注册监听器。查询武器有效范围时实时重算。
+
+类型：派生值 / 装备属性修正
+helper：PilotDerivedStats.get_weapon_range_bonus(mech_id, weapon_instance_id)
+接入点：
+- WeaponState.get_effective_range()
+- AttackService 选武器后写入 attack.record.base_range / effective_range
+- 攻击牌可用性预检的“最大可能范围”计算
+
+公式：
+```
+bonus = 1 if (
+  pilot_029当前正面设置于该mech的pilot槽
+  and weapon.weapon_kind == &"RANGED"
+) else 0
+effective_range = weapon_base_range + equipment_modifiers + status_modifiers + bonus
+```
+统计口径：只检查攻击实际选中的武器类型；特殊武器不因名称或标签看似远程而自动命中，必须由 weapon_kind=&"RANGED" 判定。
+
+人类 UI：按钮1置灰；显示“远程武器范围 +1”。武器卡及攻击预览面板显示修正后的有效范围。
+
+──────────── 效果拆解（pilot_029_effect_02 1牌当作聚能）────────────
+首句：DIRECT，主阶段 skill_bar 按钮触发。消耗1张行动牌，当作聚能使用。
+
+优先级：10
+模式：DIRECT
+conditions：
+[
+  {"op": &"IS_OWNER_MAIN_PHASE"},  # 仅克劳德拥有者主阶段
+  {"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"count": 1}},  # 至少1张行动牌可作为转化成本
+  {"op": &"HAS_FACE_UP_WEAPON"},  # 【需新增】己方至少有1张正面设置的武器可接受聚能
+]
+target_rules：
+[
+  {"rule": &"NO_TARGET"},  # 聚能效果链内部选择己方正面武器
+]
+costs：
+[
+  {"cost_type": &"DISCARD_ACTION_CARD", "count": 1},  # 输入：克劳德手牌；原因=pilot_conversion_cost
+]
+once_per_turn_key=&"pilot_029_effect_02"
+once_per_turn_max=1
+
+actions：
+[
+  {
+    "type": &"TREAT_CARD_AS_NAMED_TYPE",  # 当作聚能；虚拟牌不触发USE_ACTION_*
+    "params": {
+      "named_type": &"聚能",
+      "count": 1,
+      "source_pilot_effect_id": &"pilot_029_effect_02"
+    }
+  }
+]
+
+执行顺序：点按钮→弃1张牌→聚能效果链弹出己方正面武器选择→对所选武器增加1层聚能状态→返回主阶段。武器选择窗口取消时，成本是否返还按共同约定：成本已提交，不返还，效果结束。
+
+人类 UI：按钮2“1牌当作聚能（本回合0/1）”；无武器、无手牌或非主阶段时禁用。
+
+──────────── 实现预告 ────────────
+- 复用：TREAT_CARD_AS_NAMED_TYPE、聚能完整效果链。
+- 新增条件【HAS_FACE_UP_WEAPON】；仿 HAS_EQUIPMENT_IN_SLOT，检查非备用武器槽。
+- 扩展 PilotDerivedStats / WeaponState 的远程范围派生值查询。
+- 需重写旧 pilot_029 占位。
+
+──────────── 顺序与坑 ────────────
+- 范围+1不是临时 status，也不随回合清除；换下克劳德后立即从查询结果消失。
+- 聚能转化不是使用辅助行动牌，不触发“使用辅助牌时”类效果。
+- 聚能层数仍按被选武器实例独立；武器被替换或弃置时按聚能既有清理规则处理。
+- 对“被临时转换为远程”的武器，查询当前 effective weapon_kind；若转换动作明确改 weapon_kind，则可获得+1。
+
+──────────── 测试场景 ────────────
+场景a：远程范围派生
+  前置：P1设置克劳德；武器A kind=RANGED、基础范围3；武器B kind=MELEE、基础范围1。
+  操作：查询两把武器有效范围。
+  断言：A=4，B=1；无永久modifier写入卡实例。
+场景b：当作聚能
+  前置：P1主阶段，手牌1，正面武器A，本回合未用。
+  操作：点按钮2→弃牌→选A。
+  断言：手牌-1；A.energy_stacks+1；无USE_ACTION_*；次数=1。
+场景c：取消武器选择
+  前置：同b。
+  操作：支付后在武器选择窗取消。
+  断言：不增加聚能；弃牌不返还；次数已消耗。
+场景d：无武器
+  前置：手牌充足但两个武器槽均空。
+  断言：按钮禁用。
+场景e：换机师
+  操作：克劳德换为其他机师。
+  断言：远程范围即时恢复原值；已存在聚能状态按状态自身规则保留或清理，不由派生值helper处理。
+
+歧义点：
+[歧义1] 临时由瓦恩等效果“类型转变为远程”的武器是否享受范围+1。智能体选择：享受（理由：查询当前有效weapon_kind，而非印刷类型）。候选：仅印刷类型为远程的武器享受。▶ 回答：__智能体选择正确__________________
+═══════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════
+[机师牌 030] 布鲁克  （阵营:联邦 稀有度:R 费用:6 行动牌上限:4 回合攻击数:1）
+═══════════════════════════════════════════════════════════
+效果文本：每回合1次，可以将1张行动牌当作防御使用，之后下一个我方回合的攻击数+1(可叠加)。
+相邻其他机甲被攻击时(我方需在此攻击范围内)，可以使用防御响应此攻击，并将目标改为我方。
+本拆解 effect_ids：["pilot_030_effect_01","pilot_030_effect_02"]
+
+──────────── 效果拆解（pilot_030_effect_01 1牌当作防御）────────────
+首句：AVAILABILITY，ATTACK_AT 响应窗口可选；消耗1张行动牌当作防御响应，防御链完成后给“下一个我方回合”增加1次攻击数，可叠加。
+
+优先级：10
+模式：AVAILABILITY
+availability_priority：5
+availability_condition：&"pilot_030_convert_to_defense_available"
+conditions：
+[
+  {"op": &"SELF_MECH_IS_ATTACK_TARGET"},
+  {"op": &"ATTACK_NOT_RESPONDED"},  # 【需新增】攻击尚未响应
+  {"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"count": 1}},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：
+[
+  {"cost_type": &"DISCARD_ACTION_CARD", "count": 1},
+]
+once_per_turn_key=&"pilot_030_effect_01"
+once_per_turn_max=1
+
+actions：
+[
+  {
+    "type": &"TREAT_CARD_AS_NAMED_TYPE",  # 防御：响应攻击、护甲+5、攻击损伤-1
+    "params": {
+      "named_type": &"防御",
+      "count": 1,
+      "responding_attack_id": "$payload.action_id",
+      "source_pilot_effect_id": &"pilot_030_effect_01"
+    }
+  },
+  {
+    "type": &"MODIFY_ATTACK_COUNT",  # 排入下一个布鲁克拥有者回合；多个来源独立叠加
+    "params": {
+      "target_id": "$binding_context.mech_id",
+      "delta": 1,
+      "duration": &"NEXT_OWNER_TURN",
+      "stackable": true,
+      "apply_at": &"TURN_START"
+    }
+  }
+]
+
+人类 UI：响应窗口按钮1“1牌当作防御”；悬停显示“成功结算后，下个我方回合攻击数+1”。
+
+──────────── 效果拆解（pilot_030_effect_02 替相邻机甲防御）────────────
+首句：AVAILABILITY，ATTACK_AT 响应窗口可选；相邻其他机甲被攻击且布鲁克在该攻击范围内时，可使用真实防御或 effect_01 转化防御响应，并把所保护目标替换为我方。
+
+优先级：20
+模式：AVAILABILITY
+availability_priority：10
+availability_condition：&"pilot_030_guard_adjacent_available"
+conditions：
+[
+  {"op": &"ATTACK_TARGET_IS_OTHER_MECH_ADJACENT_TO_SELF"},  # 【需新增】
+  {"op": &"SELF_MECH_IN_CURRENT_ATTACK_RANGE"},  # 【需新增】
+  {"op": &"ATTACK_NOT_RESPONDED"},
+  {"op": &"OWNER_CAN_USE_NAMED_COUNTER", "params": {"named_types": [&"防御"]}},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：[]
+actions：
+[
+  {
+    "type": &"CHOOSE_AND_USE_NAMED_COUNTER",  # 【需新增复杂动作】列出真实防御与可用虚拟来源
+    "params": {
+      "named_types": [&"防御"],
+      "responding_attack_id": "$payload.action_id",
+      "executor_mech_id": "$binding_context.mech_id",
+      "allow_virtual_sources": [&"pilot_030_effect_01"],
+      "before_use_actions": [
+        {
+          "type": &"REDIRECT_ATTACK_TARGET_TO_SELF",
+          "params": {
+            "attack_id": "$payload.action_id",
+            "protector_mech_id": "$binding_context.mech_id",
+            "replace_target_id": "$selected.protected_target_id"
+          }
+        }
+      ]
+    }
+  }
+]
+
+人类 UI：响应窗口按钮2“用防御替相邻机甲承受”；二级列表显示真实防御及转化能力。
+
+──────────── 实现预告 ────────────
+- 复用：防御完整效果链、TREAT_CARD_AS_NAMED_TYPE、MODIFY_ATTACK_COUNT。
+- 复用/统一 SR pilot_011 所需：ATTACK_NOT_RESPONDED、SELF_MECH_IN_CURRENT_ATTACK_RANGE、CHOOSE_AND_USE_NAMED_COUNTER、REDIRECT_ATTACK_TARGET_TO_SELF。
+- NEXT_OWNER_TURN攻击数modifier需按source实例叠加，并在对应回合结束后移除。
+- 需重写旧 pilot_030 占位。
+
+──────────── 顺序与坑 ────────────
+- 只有effect_01转化防御结算后才增加下回合攻击数；真实防御经effect_02使用不附带该奖励。
+- “每回合1次”按当前活动玩家回合重置，因此布鲁克可在自己的回合和对方回合各转化1次；两次奖励可叠到同一个下个我方回合。
+- 替相邻目标时先改attack.target_ids，再跑防御自身“目标是我方”检查。
+- 下个我方回合攻击数增加作用于当前基础攻击数结算后的可用次数，不永久改机师印刷值。
+
+──────────── 测试场景 ────────────
+场景a：对方回合转化防御
+  前置：P1布鲁克被攻击，手牌≥1，本活动回合未用。
+  操作：响应窗口选effect_01→弃1。
+  断言：攻击被响应；护甲+5、损伤-1；排入next_owner_turn_attack_count+1。
+场景b：跨两个回合叠加
+  前置：P1在自己回合被反击攻击时用一次，P2回合又用一次。
+  断言：P1下个TURN_START攻击数获得+2。
+场景c：取消
+  操作：在弃牌选择取消。
+  断言：无响应、无攻击数modifier、次数不消耗。
+场景d：保护相邻目标
+  前置：相邻M3被攻击，P1在范围内且持真实防御。
+  操作：按钮2→真实防御。
+  断言：目标改为P1；真实防御生效；不增加下回合攻击数。
+场景e：范围不足
+  断言：按钮2不显示。
+
+歧义点：
+[歧义1] “每回合1次”产生的下回合攻击数是否可跨自己与对手两个回合叠加。智能体选择：可（理由：文本明确可叠加，且每回合按活动回合重置）。候选：每个“下一个我方回合”最多只保留1层。▶ 回答：___智能体选择正确_________________
+[歧义2] 使用真实防御执行第二段时是否也获得攻击数+1。智能体选择：不获得（理由：“之后”直接承接第一段的当作防御）。候选：任何由布鲁克使用的防御都获得。▶ 回答：__智能体选择正确__________________
+═══════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════
+[机师牌 031] 莱特  （阵营:联邦 稀有度:R 费用:6 行动牌上限:5 回合攻击数:1）
+═══════════════════════════════════════════════════════════
+效果文本：我方回合1次，可以将任意张行动牌交给4格范围内1台其他机甲，每给出2张牌，之后我方和该机甲可以各抽1张行动牌，护甲+2（持续到下个我方回合开始）。
+本拆解 effect_ids：["pilot_031_effect_01"]
+
+──────────── 效果拆解（pilot_031_effect_01 交牌协防）────────────
+首句：DIRECT，主阶段 skill_bar 按钮触发；选择4格内其他机甲与任意数量手牌，转移后按 floor(给牌数/2) 同时给予双方抽牌及护甲奖励。
+
+优先级：10
+模式：DIRECT
+conditions：
+[
+  {"op": &"IS_OWNER_MAIN_PHASE"},
+  {"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"count": 1}},
+  {"op": &"OTHER_MECH_IN_HEX_RANGE", "params": {"range": 4}},  # 【需新增】
+]
+target_rules：
+[
+  {"rule": &"CHOOSE_OTHER_MECH"},
+  {"rule": &"TARGET_IN_RANGE", "params": {"range": 4}},
+]
+costs：[]
+once_per_turn_key=&"pilot_031_effect_01"
+once_per_turn_max=1
+
+actions：
+[
+  {
+    "type": &"CHOOSE_MANY_CARDS",
+    "params": {
+      "zone": &"OWNER_ACTION_HAND",
+      "min_count": 1,
+      "max_count": "$owner.action_hand_count",
+      "label": "选择要交给目标的行动牌",
+      "confirm_verb": "交付",
+      "cancel_label": "取消",
+      "store_cards_key": &"pilot_031_given_cards"
+    }
+  },
+  {
+    "type": &"TRANSFER_ACTION_CARDS",
+    "params": {
+      "cards": "$result.pilot_031_given_cards",
+      "from_mech_id": "$binding_context.mech_id",
+      "to_mech_id": "$selected_target.mech_id",
+      "tag_from_me": true,
+      "reason": &"pilot_031_transfer",
+      "store_count_key": &"pilot_031_given_count"
+    }
+  },
+  {
+    "type": &"SET_VARIABLE",
+    "params": {
+      "variable_name": &"reward_units",
+      "value_expr": "floor($result.pilot_031_given_count / 2)",
+      "scope": &"EFFECT_LOCAL"
+    }
+  },
+  {
+    "type": &"DRAW_ACTION",
+    "params": {
+      "target_ids": ["$binding_context.mech_id", "$selected_target.mech_id"],
+      "count": "$local.reward_units"
+    }
+  },
+  {
+    "type": &"MODIFY_ARMOR",
+    "params": {
+      "target_ids": ["$binding_context.mech_id", "$selected_target.mech_id"],
+      "delta_expr": "$local.reward_units * 2",
+      "duration": &"UNTIL_NEXT_OWNER_TURN",
+      "duration_owner_id": "$binding_context.player_id"
+    }
+  }
+]
+
+执行顺序：选目标→选牌→转移（挂起到全部卡实例归属更新）→计算奖励单位→双方分别抽牌→双方护甲加成。reward_units=0时后两步为no-op，但转移仍完成。
+
+人类 UI：按钮1“协防交牌（本回合0/1）”；目标与牌选择窗实时显示“交N张：双方抽floor(N/2)，护甲+2×floor(N/2)”。
+
+──────────── 实现预告 ────────────
+- 复用：CHOOSE_MANY_CARDS、TRANSFER_ACTION_CARDS、DRAW_ACTION、MODIFY_ARMOR。
+- 新增条件 OTHER_MECH_IN_HEX_RANGE。
+- 值解析器需支持简单整数表达式或新增 CALCULATE_INTEGER(store_key,op=floor_divide)。
+- 批量DRAW_ACTION对多个target_ids应拆成独立gain_card子动作，确保各自监听器正常触发。
+- 需重写旧 pilot_031 占位。
+
+──────────── 顺序与坑 ────────────
+- 奖励按实际成功转移数量计算；转移中若牌因其他效果离开，不按原选择数。
+- 护甲持续到“莱特的下个我方回合开始”，不是目标自己的下回合。
+- 给奇数张时余数不产生奖励。
+- 交牌本身不算弃置、不进入弃牌堆，并带“从我方处获得”标签，可触发塔莉娅/塔妮拉类效果。
+- 若选择1张，技能仍合法但无抽牌/护甲奖励。
+
+──────────── 测试场景 ────────────
+场景a：交4张
+  前置：P1莱特主阶段，手牌4，P2距4。
+  操作：选P2，选4牌确认。
+  断言：P2得4；双方各抽2；双方armor_modifier+4，expiry=P1 next TURN_START；次数=1。
+场景b：交3张
+  断言：双方各抽1、护甲+2。
+场景c：交1张
+  断言：仅转移；无抽牌、无护甲。
+场景d：取消选牌
+  断言：无转移、次数不消耗。
+场景e：目标距5
+  断言：不可选。
+场景f：到期
+  操作：到P1下个TURN_START。
+  断言：双方该source modifier同时移除。
+
+歧义点：
+[歧义1] “任意张”是否允许0张。智能体选择：至少1张（理由：0张不构成“交给”，也不应空耗限次）。候选：允许0张以主动消耗次数。▶ 回答：__智能体选择正确__________________
+[歧义2] 护甲+2是每给2张累计一次，还是无论给多少只+2。智能体选择：每个2张单位均使双方护甲+2（理由：“每给出2张牌，之后……护甲+2”与抽牌同为重复单位）。候选：抽牌按单位，护甲只加一次。▶ 回答：___智能体选择正确_________________
+═══════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════
+[机师牌 032] 爱瑞娅  （阵营:联邦 稀有度:R 费用:8 行动牌上限:2 回合攻击数:2）
+═══════════════════════════════════════════════════════════
+效果文本：我方回合2次，可以选择场上1张机师牌，弃置2张行动牌，使其行动牌上限+2（效果持续到下个我方回合开始）。
+本拆解 effect_ids：["pilot_032_effect_01"]
+
+──────────── 效果拆解（pilot_032_effect_01 临时扩充手牌上限）────────────
+首句：DIRECT，主阶段 skill_bar 按钮触发；选择场上任意机师牌对应的机甲，弃2张行动牌，使其行动牌上限+2，持续至爱瑞娅下个回合开始。
+
+优先级：10
+模式：DIRECT
+conditions：
+[
+  {"op": &"IS_OWNER_MAIN_PHASE"},
+  {"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"count": 2}},
+]
+target_rules：
+[
+  {"rule": &"CHOOSE_PILOT_CARD_ON_FIELD"},  # 【需新增】返回pilot card_instance及其所属mech
+]
+costs：
+[
+  {"cost_type": &"DISCARD_ACTION_CARD", "count": 2},
+]
+once_per_turn_key=&"pilot_032_effect_01"
+once_per_turn_max=2
+
+actions：
+[
+  {
+    "type": &"MODIFY_ACTION_HAND_LIMIT",
+    "params": {
+      "target_id": "$selected_target.owner_mech_id",
+      "delta": 2,
+      "duration": &"UNTIL_NEXT_OWNER_TURN",
+      "duration_owner_id": "$binding_context.player_id",
+      "source_card_instance_id": "$binding_context.card_instance_id"
+    }
+  }
+]
+
+人类 UI：按钮1“扩充机师手牌上限（本回合0/2）”；场上机师卡均可选，目标预览显示所属机甲与当前上限。
+
+──────────── 实现预告 ────────────
+- 复用：MODIFY_ACTION_HAND_LIMIT。
+- 新增目标规则 CHOOSE_PILOT_CARD_ON_FIELD；目标最终映射到owner_mech_id。
+- modifier到期锚定爱瑞娅拥有者的TURN_START。
+- 需重写旧 pilot_032 占位。
+
+──────────── 顺序与坑 ────────────
+- 可选自己、队友或敌方机师；文本未限定阵营/敌我。
+- 同回合两次可叠到同一机甲，形成+4。
+- 到期时只移除此技能产生的source-scoped层，不影响其他上限修正。
+- 当前手牌超过恢复后的上限，不在TURN_START立即弃牌；按规则仍在回合结束声明阶段处理超限。
+
+──────────── 测试场景 ────────────
+场景a：给自己+2
+  前置：P1手牌4，主阶段。
+  操作：选自己的机师，弃2。
+  断言：手牌-2；hand_limit+2；次数1/2。
+场景b：两次叠加敌方
+  操作：连续两次选P2机师。
+  断言：P2 hand_limit+4；P1弃牌4；次数2/2。
+场景c：取消目标
+  断言：不弃牌、不计次。
+场景d：只有1张手牌
+  断言：按钮禁用。
+场景e：到期
+  操作：P1下个TURN_START。
+  断言：所有由本实例添加的层移除。
+
+歧义点：
+[歧义1] “场上1张机师牌”是否包括我方自己。智能体选择：包括（理由：未写“其他”或“敌方”）。候选：仅其他机师。▶ 回答：__智能体选择正确__________________
+═══════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════
+[机师牌 033] 尤里  （阵营:联邦 稀有度:R 费用:7 行动牌上限:4 回合攻击数:1）
+═══════════════════════════════════════════════════════════
+效果文本：我方回合2次，可以弃置1张装备牌，之后抽1张装备牌。
+本局游戏1次，可以弃置2张装备牌，之后抽1张高级装备牌。
+本拆解 effect_ids：["pilot_033_effect_01","pilot_033_effect_02"]
+
+──────────── 效果拆解（pilot_033_effect_01 装备换抽）────────────
+首句：DIRECT，主阶段 skill_bar 按钮触发；弃置1张未设置装备牌，之后从基础装备牌堆抽1张。
+
+优先级：10
+模式：DIRECT
+conditions：
+[
+  {"op": &"IS_OWNER_MAIN_PHASE"},
+  {"op": &"HAS_UNSET_EQUIPMENT_CARD", "params": {"count": 1}},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：
+[
+  {"cost_type": &"DISCARD_EQUIPMENT_CARD", "count": 1},
+]
+once_per_turn_key=&"pilot_033_effect_01"
+once_per_turn_max=2
+actions：
+[
+  {"type": &"DRAW_EQUIPMENT", "params": {"count": 1, "deck": &"BASIC"}},
+]
+
+人类 UI：按钮1“装备换抽（本回合0/2）”。
+
+──────────── 效果拆解（pilot_033_effect_02 高级换抽）────────────
+首句：DIRECT，主阶段 skill_bar 按钮触发；本局1次，弃置2张未设置装备牌，之后抽1张高级装备牌。
+
+优先级：10
+模式：DIRECT
+conditions：
+[
+  {"op": &"IS_OWNER_MAIN_PHASE"},
+  {"op": &"HAS_UNSET_EQUIPMENT_CARD", "params": {"count": 2}},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：
+[
+  {"cost_type": &"DISCARD_EQUIPMENT_CARD", "count": 2},
+]
+once_per_game_key=&"pilot_033_effect_02"
+actions：
+[
+  {"type": &"DRAW_ADVANCED_EQUIPMENT", "params": {"count": 1}},
+]
+
+人类 UI：按钮2“高级换抽（本局未使用/已使用）”。
+
+──────────── 实现预告 ────────────
+- 复用：DISCARD_EQUIPMENT_CARD、DRAW_EQUIPMENT、DRAW_ADVANCED_EQUIPMENT。
+- 使用新增 once_per_game_key 字段及GameState实例计数。
+- HAS_UNSET_EQUIPMENT_CARD只统计玩家持有、未正面设置的装备；备用区背面牌是否可作成本见歧义1。
+- 需重写旧 pilot_033 占位。
+
+──────────── 顺序与坑 ────────────
+- “之后”要求弃置动作SETTLE后才抽牌。
+- 成本牌由尤里玩家选择；设置在部件/武器槽的牌不可弃置。
+- 基础装备牌堆与高级装备牌堆独立。
+- 本局次数绑定pilot card_instance_id；换入一张新的尤里按新增字段语义获得新实例次数。
+
+──────────── 测试场景 ────────────
+场景a：普通换抽
+  前置：P1有1张未设置装备，主阶段。
+  操作：按钮1→选牌。
+  断言：该牌进装备弃牌堆；基础装备+1；次数1/2。
+场景b：高级换抽
+  前置：有2张装备。
+  操作：按钮2→弃2。
+  断言：高级牌堆-1；P1获得1；once_per_game已用。
+场景c：取消成本
+  断言：无弃置、无抽牌、不计次。
+场景d：再次高级换抽
+  断言：按钮禁用。
+场景e：牌堆空
+  前置：高级牌堆空。
+  断言：按钮预检禁用，不能先弃成本再失败；若游戏规则支持重洗，则先执行重洗预检。
+
+歧义点：
+[歧义1] 备用区背面装备是否属于可弃置的“装备牌”。智能体选择：属于未设置装备牌，可作为成本（理由：规则把备用区牌视为背面设置，但技能未写“未设置”；然而成本若允许场上正面装备会过强，因此采用玩家持有及备用区，排除正面功能槽）。候选A：只允许手中未设置装备；候选B：任何区域装备都可弃置。▶ 回答：____候选B正确，没说就是所有区域的装备牌都能弃置之后抽，包括未设置、设置的、备用区的_______________
+═══════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════
+[机师牌 034] 塞万提斯  （阵营:联邦 稀有度:R 费用:6 行动牌上限:4 回合攻击数:1）
+═══════════════════════════════════════════════════════════
+效果文本：未对我方造成伤害的攻击产生的损伤-1。
+记录对我方造成过伤害的其他机甲，当我方对其攻击命中时，可额外造成3伤害，并回复我方3生命。
+本拆解 effect_ids：["pilot_034_effect_01","pilot_034_effect_02","pilot_034_effect_03"]
+
+──────────── 效果拆解（pilot_034_effect_01 无伤攻击损伤-1）────────────
+首句：机师设置后注册 permanent listener，监听 attack 的 ATTACK_AFTER；若本次攻击目标含我方且计算出的对我方生命伤害为0，则该目标份额的损伤-1，最低0。
+
+优先级：10
+模式：LISTEN
+listen_timing：TimingConst.ATTACK_AFTER
+listen_action_type：&"attack"
+conditions：
+[
+  {"op": &"SELF_MECH_IS_ATTACK_TARGET"},
+  {"op": &"ATTACK_DEALT_NO_HP_DAMAGE", "params": {"target_id": "$binding_context.mech_id"}},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：[]
+actions：
+[
+  {
+    "type": &"MODIFY_ATTACK_MARKERS",
+    "params": {
+      "delta": -1,
+      "target_id": "$binding_context.mech_id",
+      "min_value": 0
+    }
+  }
+]
+
+人类 UI：按钮1置灰，攻击预览/日志显示“塞万提斯：无伤，损伤-1”。
+
+──────────── 效果拆解（pilot_034_effect_02 记录伤害来源）────────────
+首句：机师设置后注册 permanent listener，监听 hp_change 的 HP_CHANGE_AFTER；我方因攻击伤害实际失去生命后，把攻击方机甲ID加入本机师实例的“伤害来源集合”。
+
+优先级：10
+模式：LISTEN
+listen_timing：TimingConst.HP_CHANGE_AFTER
+listen_action_type：&"hp_change"
+conditions：
+[
+  {"op": &"HP_CHANGE_TARGET_IS_SELF"},
+  {"op": &"HP_CHANGE_IS_DAMAGE"},
+  {"op": &"HP_CHANGE_ACTUAL_AMOUNT_ABOVE", "params": {"threshold": 0}},
+  {"op": &"HP_CHANGE_REASON_IS", "params": {"reason": &"ATTACK_DAMAGE"}},
+  {"op": &"SOURCE_ATTACKER_IS_OTHER_MECH"},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：[]
+actions：
+[
+  {
+    "type": &"ADD_ID_TO_VARIABLE_SET",  # 【需新增】集合按card_instance_id存储，重复来源不重复添加
+    "params": {
+      "variable_name": &"damaged_by_mech_ids",
+      "value": "$payload.source_attack.attacker_mech_id",
+      "scope_card_instance_id": "$binding_context.card_instance_id"
+    }
+  }
+]
+
+人类 UI：按钮2置灰，悬停列出已记录机甲。
+
+──────────── 效果拆解（pilot_034_effect_03 对记录目标复仇）────────────
+首句：机师设置后注册 permanent listener，监听 attack 的 ATTACK_AFTER；我方攻击命中已记录机甲时，可在原攻击伤害计算完成后额外对其造成3伤害，并回复我方3生命。
+
+优先级：10
+模式：LISTEN
+listen_timing：TimingConst.ATTACK_AFTER
+listen_action_type：&"attack"
+conditions：
+[
+  {"op": &"SELF_MECH_IS_ATTACKER"},
+  {"op": &"ATTACK_HIT"},
+  {"op": &"ATTACK_TARGET_ID_IN_VARIABLE_SET", "params": {"variable_name": &"damaged_by_mech_ids"}},
+]
+target_rules：
+[
+  {"rule": &"CHOOSE_MATCHING_ATTACK_TARGET"},  # 多目标命中多个已记录者时选1台
+]
+costs：[]
+actions：
+[
+  {
+    "type": &"CHOOSE_ONE",
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "额外造成3伤害并回复3生命",
+          "actions": [
+            {
+              "type": &"EXECUTE_HP_CHANGE",
+              "params": {
+                "target_id": "$selected_target.mech_id",
+                "value": 3,
+                "method": &"damage",
+                "reason": &"pilot_034_revenge_damage"
+              }
+            },
+            {
+              "type": &"EXECUTE_HP_CHANGE",
+              "params": {
+                "target_id": "$binding_context.mech_id",
+                "value": 3,
+                "method": &"restore",
+                "reason": &"pilot_034_revenge_heal"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+]
+
+执行顺序：ATTACK_AFTER原攻击数值已确定→玩家选择是否发动→额外伤害hp_change完整结算→之后回复hp_change。两个子动作串行，前者可能毁灭目标，但不阻止后者回复。
+
+人类 UI：按钮3置灰；命中记录目标时弹确认窗。
+
+──────────── 实现预告 ────────────
+- 复用：ATTACK_DEALT_NO_HP_DAMAGE、MODIFY_ATTACK_MARKERS、EXECUTE_HP_CHANGE。
+- 新增集合变量动作 ADD_ID_TO_VARIABLE_SET 及条件 ATTACK_TARGET_ID_IN_VARIABLE_SET。
+- hp_change record需保留source_attack_id / attacker_mech_id / reason / actual_delta。
+- 多目标攻击的damage/markers建议按target_id存map，effect_01只修改我方份额。
+- 需重写旧 pilot_034 占位。
+
+──────────── 顺序与坑 ────────────
+- 只记录攻击产生的生命伤害；陷阱、技能、自损不记录。
+- “造成过伤害”本局持续，不因回合重置；被记录者换机师不影响其mech_id记录。
+- effect_01判断的是最终计算生命伤害为0，不是攻击是否命中；未命中自然伤害0，但“攻击产生的损伤”也通常为0，减法仍最低0。
+- effect_03的额外3伤害不是增加原攻击威力，也不产生攻击损伤。
+- 回复上限遵循restore，不能超过最大生命。
+
+──────────── 测试场景 ────────────
+场景a：零伤减损伤
+  前置：攻击命中P1，计算damage=0、markers=2。
+  操作：ATTACK_AFTER。
+  断言：markers变1。
+场景b：有伤不减
+  前置：damage=1、markers=2。
+  断言：markers保持2；P2被加入记录集合。
+场景c：记录来源
+  操作：P2攻击造成实际3伤害。
+  断言：damaged_by_mech_ids含P2且无重复。
+场景d：复仇正常
+  前置：P2已记录；P1命中P2。
+  操作：确认发动。
+  断言：P2额外-3HP；P1回复最多3；原攻击伤害不被改写。
+场景e：取消复仇
+  断言：无额外伤害/回复。
+场景f：技能伤害不记录
+  操作：P2用非攻击效果伤P1。
+  断言：集合不变。
+
+歧义点：
+[歧义1] “未对我方造成伤害的攻击”是否包括未命中攻击。智能体选择：包括，但因未命中通常损伤为0，结果仍为0（理由：字面只检查未造成伤害）。候选：只限命中但被护甲完全抵消的攻击。▶ 回答：__智能体选择正确__________________
+[歧义2] 对已记录目标的每次命中是否都可发动且记录是否消耗。智能体选择：每次命中均可、记录不消耗（理由：文本未写限次或移除记录）。候选：触发一次后移除该目标记录。▶ 回答：___智能体选择正确_________________
+═══════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════
+[机师牌 035] 库马斯  （阵营:联邦 稀有度:R 费用:5 行动牌上限:4 回合攻击数:1）
+═══════════════════════════════════════════════════════════
+效果文本：每轮开始时，选择1台其他机甲，本轮中该机甲每次抽取行动牌时，我方可抽1张行动牌。
+本拆解 effect_ids：["pilot_035_effect_01","pilot_035_effect_02"]
+
+──────────── 效果拆解（pilot_035_effect_01 每轮指定）────────────
+首句：机师设置后注册 permanent listener，监听 ROUND_START；可选择1台其他机甲，记录为本轮目标。
+
+优先级：10
+模式：LISTEN
+listen_timing：TimingConst.ROUND_START
+listen_action_type：&"round"
+conditions：
+[
+  {"op": &"OTHER_MECH_EXISTS"},
+]
+target_rules：
+[
+  {"rule": &"CHOOSE_OTHER_MECH"},
+]
+costs：[]
+actions：
+[
+  {
+    "type": &"CHOOSE_ONE",
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "指定本轮抽牌目标",
+          "actions": [
+            {
+              "type": &"SET_ROUND_VARIABLE",
+              "params": {
+                "variable_name": &"pilot_035_target_mech_id",
+                "value": "$selected_target.mech_id",
+                "scope_card_instance_id": "$binding_context.card_instance_id"
+              }
+            }
+          ]
+        }
+      ],
+      "on_cancel_actions": [
+        {
+          "type": &"SET_ROUND_VARIABLE",
+          "params": {
+            "variable_name": &"pilot_035_target_mech_id",
+            "value": null,
+            "scope_card_instance_id": "$binding_context.card_instance_id"
+          }
+        }
+      ]
+    }
+  }
+]
+
+人类 UI：按钮1置灰；ROUND_START弹目标选择，卡面显示本轮指定者。
+
+──────────── 效果拆解（pilot_035_effect_02 目标抽牌时跟抽）────────────
+首句：机师设置后注册 permanent listener，监听 gain_card 的 GAIN_CARD_AFTER；本轮指定机甲的一次“抽取行动牌动作”成功获得至少1张行动牌后，我方可抽1张。
+
+优先级：10
+模式：LISTEN
+listen_timing：TimingConst.GAIN_CARD_AFTER
+listen_action_type：&"gain_card"
+conditions：
+[
+  {"op": &"ROUND_VARIABLE_IS_SET", "params": {"variable_name": &"pilot_035_target_mech_id"}},
+  {"op": &"GAIN_TARGET_EQUALS_ROUND_VARIABLE", "params": {"variable_name": &"pilot_035_target_mech_id"}},
+  {"op": &"GAIN_CARD_KIND_IS", "params": {"card_kind": &"ACTION"}},
+  {"op": &"GAIN_REASON_IS_DRAW"},
+  {"op": &"GAIN_ACTUAL_COUNT_ABOVE", "params": {"threshold": 0}},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：[]
+actions：
+[
+  {
+    "type": &"CHOOSE_ONE",
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "跟随抽1张行动牌",
+          "actions": [
+            {"type": &"DRAW_ACTION", "params": {"count": 1}}
+          ]
+        }
+      ]
+    }
+  }
+]
+
+人类 UI：按钮2置灰；触发时库马斯玩家弹“目标刚抽牌，是否抽1”。
+
+──────────── 实现预告 ────────────
+- 复用：ROUND_START、DRAW_ACTION。
+- 新增/复用 SR pilot_028 的SET_ROUND_VARIABLE与round-scoped查询条件。
+- gain_card record需区分一次批次及reason=&"DRAW"；一次抽3张只触发一次。
+- 需重写旧 pilot_035 占位。
+
+──────────── 顺序与坑 ────────────
+- 只对“抽取行动牌”触发；转移、偷取、从弃牌堆获得不触发，除非权威动作把其reason也定义为抽牌。
+- 库马斯跟抽产生的新gain_card若指定目标不是库马斯自己，不会递归；即使另一库马斯指定他，可正常形成有限的跨玩家链。
+- 每轮新选择前先清空旧目标；取消则本轮无目标。
+- 目标毁灭后变量保留但不再触发，至下轮清空。
+
+──────────── 测试场景 ────────────
+场景a：指定并跟抽
+  前置：ROUND_START，P1库马斯，选P2。
+  操作：P2一次抽2行动牌。
+  断言：P1只弹1次；确认后抽1。
+场景b：取消跟抽
+  断言：P1不抽，目标原抽牌不受影响。
+场景c：牌转移
+  操作：P2从P3获得2张行动牌，reason=TRANSFER。
+  断言：不触发。
+场景d：取消轮目标
+  断言：本轮effect_02不触发。
+场景e：抽牌动作实际0张
+  前置：牌堆空且无法重洗。
+  断言：不触发。
+
+歧义点：
+[歧义1] 一次抽取多张牌时是触发1次还是按每张触发。智能体选择：按一次抽牌行为触发1次（理由：“每次抽取行动牌时”对应一次gain_card动作，而非“每抽1张”）。候选：抽N张触发N次。▶ 回答：___智能体选择正确_________________
+
+补充：回忆的效果也会触发此效果（虽然是从弃牌堆里随机抽，但还是算抽取行动牌）
+═══════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════
+[机师牌 036] 菲丽丝  （阵营:联邦 稀有度:R 费用:5 行动牌上限:4 回合攻击数:1）
+═══════════════════════════════════════════════════════════
+效果文本：我方回合2次，可以消耗2金币抽1张行动牌。
+我方回合1次，可以弃置2张行动牌获得4金币。
+本拆解 effect_ids：["pilot_036_effect_01","pilot_036_effect_02"]
+
+──────────── 效果拆解（pilot_036_effect_01 金币抽牌）────────────
+首句：DIRECT，主阶段按钮；支付2金币后抽1张行动牌，每个我方回合最多2次。
+
+优先级：10
+模式：DIRECT
+conditions：
+[
+  {"op": &"IS_OWNER_MAIN_PHASE"},
+  {"op": &"GOLD_ABOVE", "params": {"threshold": 2}},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：
+[
+  {"cost_type": &"SPEND_GOLD", "amount": 2},
+]
+once_per_turn_key=&"pilot_036_effect_01"
+once_per_turn_max=2
+actions：
+[
+  {"type": &"DRAW_ACTION", "params": {"count": 1}},
+]
+
+人类 UI：按钮1“2金币抽1牌（0/2）”，显示当前金币。
+
+──────────── 效果拆解（pilot_036_effect_02 弃牌换金币）────────────
+首句：DIRECT，主阶段按钮；弃置2张行动牌后获得4金币，每个我方回合1次。
+
+优先级：10
+模式：DIRECT
+conditions：
+[
+  {"op": &"IS_OWNER_MAIN_PHASE"},
+  {"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"count": 2}},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：
+[
+  {"cost_type": &"DISCARD_ACTION_CARD", "count": 2},
+]
+once_per_turn_key=&"pilot_036_effect_02"
+once_per_turn_max=1
+actions：
+[
+  {"type": &"GAIN_GOLD", "params": {"amount": 4}},
+]
+
+人类 UI：按钮2“弃2牌得4金币（0/1）”。
+
+──────────── 实现预告 ────────────
+- 全部复用：SPEND_GOLD、DRAW_ACTION、DISCARD_ACTION_CARD、GAIN_GOLD。
+- 金币条件应使用>=2；若现有GOLD_ABOVE语义是严格大于，需改用GOLD_ABOVE_OR_EQUAL或threshold=1并明确，推荐新增通用GOLD_ABOVE_OR_EQUAL。
+- 需重写旧 pilot_036 占位。
+
+──────────── 顺序与坑 ────────────
+- 两个主动技能次数独立。
+- 成本先支付，之后动作执行；牌堆空时应在按钮预检处理，避免无牌仍扣金币。
+- effect_02弃牌可触发其他“行动牌被弃置”监听器。
+- 菲丽丝自带的抽牌能力与规则基础“2金币抽1张、每回合1次”是两个独立按钮和次数。
+
+──────────── 测试场景 ────────────
+场景a：连续两次金币抽牌
+  前置：P1金币4。
+  操作：按钮1两次。
+  断言：金币0、抽2、次数2/2。
+场景b：第三次
+  断言：按钮禁用。
+场景c：弃牌换金币
+  操作：按钮2弃2。
+  断言：弃牌堆+2、金币+4。
+场景d：取消弃牌
+  断言：无变化、不计次。
+场景e：金币不足
+  前置：金币1。
+  断言：按钮1禁用。
+
+歧义点：
+[歧义1] 无实质歧义。智能体选择：两个技能分别计次（理由：分行独立叙述且次数不同）。候选：共享总次数。▶ 回答：___智能体选择正确_________________
+═══════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════
+[机师牌 037] 青瞳  （阵营:联邦 稀有度:R 费用:6 行动牌上限:4 回合攻击数:1）
+═══════════════════════════════════════════════════════════
+效果文本：每回合2次，查看对我方发动攻击的机甲的所持行动牌，并选择获得其中1张，若之后我方所持行动牌数大于攻击方，则该攻击威力-4。
+本拆解 effect_ids：["pilot_037_effect_01"]
+
+──────────── 效果拆解（pilot_037_effect_01 看牌夺取并减威力）────────────
+首句：机师设置后注册 permanent listener，监听 attack 的 ATTACK_PRE；我方被指定为目标后，可查看攻击方全部行动牌并取得其中1张，随后比较双方当前手牌数，若我方更多则本攻击威力-4。
+
+优先级：20（先于普通ATTACK_PRE威力修正和掩护窗口完成夺牌与数量比较）
+模式：LISTEN
+listen_timing：TimingConst.ATTACK_PRE
+listen_action_type：&"attack"
+conditions：
+[
+  {"op": &"SELF_MECH_IS_ATTACK_TARGET"},
+  {"op": &"SOURCE_ATTACKER_IS_OTHER_MECH"},
+  {"op": &"ATTACKER_HAS_ACTION_CARD", "params": {"count": 1}},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：[]
+once_per_turn_key=&"pilot_037_effect_01"
+once_per_turn_max=2
+
+actions：
+[
+  {
+    "type": &"CHOOSE_ONE",
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "查看攻击方手牌并获得1张",
+          "actions": [
+            {
+              "type": &"EXECUTE_SHOW_CARD",
+              "params": {
+                "mode": &"reveal_hand",
+                "owner_mech_id": "$payload.attacker_mech_id",
+                "viewer_mech_ids": ["$binding_context.mech_id"],
+                "persistent": false
+              }
+            },
+            {
+              "type": &"EXECUTE_STEAL",
+              "params": {
+                "from_target": "$payload.attacker_mech_id",
+                "to_target": "$binding_context.mech_id",
+                "count": 1,
+                "choose": true,
+                "cards_are_known": true,
+                "reason": &"pilot_037_steal"
+              }
+            },
+            {
+              "type": &"CONDITIONAL_ACTIONS",  # 【需新增通用动作】转移完成后即时比较
+              "params": {
+                "conditions": [
+                  {
+                    "op": &"OWNER_ACTION_HAND_GREATER_THAN_MECH",
+                    "params": {"other_mech_id": "$payload.attacker_mech_id"}
+                  }
+                ],
+                "actions": [
+                  {
+                    "type": &"MODIFY_ATTACK_MIGHT",
+                    "params": {"delta": -4, "attack_id": "$payload.action_id"}
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+]
+
+执行顺序：确认发动→展示窗口关闭→选择并转移1张→GAIN_CARD/转移链SETTLE→重新读取双方当前手牌数→符合则改attack.extra_might -=4→返回ATTACK_PRE。
+
+人类 UI：按钮1置灰；被攻击时弹“青瞳（本回合剩余N次）”；展示窗仅青瞳玩家可见。
+
+──────────── 实现预告 ────────────
+- 复用：EXECUTE_SHOW_CARD、EXECUTE_STEAL、MODIFY_ATTACK_MIGHT。
+- 新增条件 OWNER_ACTION_HAND_GREATER_THAN_MECH；或扩展VARIABLE比较。
+- 新增通用CONDITIONAL_ACTIONS，仿CHOOSE_ONE内层条件执行，不弹额外UI。
+- attack record需在ATTACK_PRE允许多监听器串行修改威力。
+- 需重写旧 pilot_037 占位。
+
+──────────── 顺序与坑 ────────────
+- 限次在玩家确认发动后占用；只查看而在偷牌选择取消，按本拆解仍视为已发动，因已获得隐藏信息。
+- 若展示后攻击方手牌被其他高优先级效果改变，选择列表必须基于当前仍在其手中的牌刷新。
+- 比较发生在获得牌之后。
+- 多攻击者动作时需选定本目标对应的攻击方；当前1v1基础通常只有一个攻击方。
+- 攻击方无行动牌时不可发动，不能只查看空手并消耗次数。
+
+──────────── 测试场景 ────────────
+场景a：夺牌后手牌更多
+  前置：P2手3，P1手2；P2攻击P1。
+  操作：P1发动并取1。
+  断言：P1手3、P2手2；attack.might-4；次数1/2。
+场景b：仍不更多
+  前置：P2手5、P1手1。
+  断言：夺取后P1=2、P2=4；威力不变。
+场景c：取消发动
+  断言：不展示、不夺牌、不计次。
+场景d：展示后取消选牌
+  断言：不转移、不减威力；次数消耗1。
+场景e：攻击方空手
+  断言：不弹技能。
+场景f：同活动回合第三次
+  断言：不触发。
+
+歧义点：
+[歧义1] 展示手牌后取消选取是否消耗次数。智能体选择：消耗（理由：查看隐藏信息本身已产生不可逆收益）。候选：只有成功获得牌后才计次。▶ 回答：__智能体选择正确__________________
+[歧义2] “查看”是否向所有玩家公开。智能体选择：只向青瞳拥有者展示（理由：通常“查看”区别于“展示”）。候选：公开展示。▶ 回答：__智能体选择正确__________________
+═══════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════
+[机师牌 038] 奥黛尔  （阵营:联邦 稀有度:R 费用:6 行动牌上限:5 回合攻击数:1）
+═══════════════════════════════════════════════════════════
+效果文本：我方回合1次，可以选择最多2台4格范围内的机甲（可以包括我方），使其抽2张行动牌，回复3动力。
+本拆解 effect_ids：["pilot_038_effect_01"]
+
+──────────── 效果拆解（pilot_038_effect_01 双目标补给）────────────
+首句：DIRECT，主阶段按钮；选择1至2台距我方4格内的机甲，可含我方，使每个目标依次抽2张行动牌并回复3当前动力。
+
+优先级：10
+模式：DIRECT
+conditions：
+[
+  {"op": &"IS_OWNER_MAIN_PHASE"},
+  {"op": &"MECH_IN_HEX_RANGE_EXISTS", "params": {"range": 4, "include_self": true}},
+]
+target_rules：
+[
+  {
+    "rule": &"CHOOSE_MULTIPLE_MECHS_IN_RANGE",  # 【需新增/扩展】
+    "params": {"range": 4, "min_count": 1, "max_count": 2, "include_self": true}
+  }
+]
+costs：[]
+once_per_turn_key=&"pilot_038_effect_01"
+once_per_turn_max=1
+
+actions：
+[
+  {
+    "type": &"FOR_EACH_SELECTED_TARGET",  # 【需新增通用迭代动作】按选择确认顺序串行
+    "params": {
+      "actions": [
+        {
+          "type": &"DRAW_ACTION",
+          "params": {"target_id": "$current_target.mech_id", "count": 2}
+        },
+        {
+          "type": &"RESTORE_POWER",
+          "params": {"target_id": "$current_target.mech_id", "amount": 3}
+        }
+      ]
+    }
+  }
+]
+
+执行顺序：选1或2台→目标1抽2并完成gain链→目标1回3动力→目标2抽2→目标2回3。按串行而非合并批次，确保目标1的抽牌监听全部结算后再处理目标2。
+
+人类 UI：按钮1“双目标补给（0/1）”；目标高亮显示六角距离与当前动力。
+
+──────────── 实现预告 ────────────
+- 复用：DRAW_ACTION、RESTORE_POWER。
+- 新增/扩展目标规则 CHOOSE_MULTIPLE_MECHS_IN_RANGE。
+- 新增通用FOR_EACH_SELECTED_TARGET，或在效果生成时展开固定最多2个目标的子动作。
+- 需重写旧 pilot_038 占位。
+
+──────────── 顺序与坑 ────────────
+- “最多2台”按至少1台解释；不能以0目标空发动。
+- 可只选自己；也可选择敌我各1。
+- 回复遵循当前动力上限，超出部分不保留。
+- 目标在选择后被移动不重新校验距离；合法性在提交目标时确定。
+- 两目标的抽牌分别触发各自的gain_card监听。
+
+──────────── 测试场景 ────────────
+场景a：选择自己和敌方
+  前置：P1、P2均距4内。
+  操作：选P1/P2。
+  断言：双方各抽2、各回复最多3；次数1。
+场景b：只选1台
+  断言：仅该目标获得效果。
+场景c：取消目标选择
+  断言：无效果、不计次。
+场景d：距5目标
+  断言：不能选择。
+场景e：动力已满
+  断言：仍可抽牌，回复实际0。
+场景f：第二次
+  断言：按钮禁用。
+
+歧义点：
+[歧义1] “最多2台”是否允许0台并消耗次数。智能体选择：不允许（理由：主动技能需要至少一个合法对象）。候选：允许0目标。▶ 回答：__候选正确，允许0台并消耗次数--就不执行效果呗，这个选项虽然蠢但是确实可能存在__________________
+═══════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════
+[机师牌 039] 铠威  （阵营:联邦 稀有度:R 费用:6 行动牌上限:4 回合攻击数:1）
+═══════════════════════════════════════════════════════════
+效果文本：若发动的攻击被响应，则可以抽1张行动牌，之后再立即发动1次攻击。
+本拆解 effect_ids：["pilot_039_effect_01"]
+
+──────────── 效果拆解（pilot_039_effect_01 被响应后追击）────────────
+首句：机师设置后注册 permanent listener，监听 attack 的 ATTACK_SETTLE；我方发动的该次攻击若被响应，可抽1张行动牌，之后立即发动一次被动攻击。
+
+优先级：10
+模式：LISTEN
+listen_timing：TimingConst.ATTACK_SETTLE
+listen_action_type：&"attack"
+conditions：
+[
+  {"op": &"SELF_MECH_IS_ATTACKER"},
+  {"op": &"ATTACK_WAS_RESPONDED"},
+  {"op": &"SELF_MECH_ALIVE"},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：[]
+actions：
+[
+  {
+    "type": &"CHOOSE_ONE",
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "抽1张行动牌，之后立即再攻击1次",
+          "actions": [
+            {"type": &"DRAW_ACTION", "params": {"count": 1}},
+            {
+              "type": &"EXECUTE_ATTACK",
+              "params": {
+                "attacker_mech_id": "$binding_context.mech_id",
+                "passive": true,
+                "target_count": 1,
+                "use_previous_weapon": false,
+                "skip_weapon_select": false,
+                "choose_new_target": true,
+                "source_effect_id": &"pilot_039_effect_01"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+]
+
+执行顺序：原攻击ATTACK_SETTLE暂停→铠威确认→抽牌gain链完整SETTLE→创建新attack（选武器与目标，UI允许取消）→新攻击完整结算→返回原攻击清理。新攻击是被动攻击，不扣回合攻击数。
+
+人类 UI：按钮1置灰；满足时弹“攻击被响应：抽1牌并追击？”。
+
+──────────── 实现预告 ────────────
+- 复用：ATTACK_WAS_RESPONDED、DRAW_ACTION、EXECUTE_ATTACK(passive=true)。
+- attack父子链要允许在ATTACK_SETTLE创建并等待新attack；原attack record在子动作结束前不可清理。
+- 可用性预览：若当前无任何可用武器/目标，仍允许选择是否只抽牌见歧义1；本拆解默认整项不可发动。
+- 需重写旧 pilot_039 占位。
+
+──────────── 顺序与坑 ────────────
+- “之后”要求先抽牌再攻击；抽到的牌可影响后续攻击，但追击本身不是使用该牌。
+- 追击若也被响应，会再次满足本效果，可继续形成追击链；每个attack_id只触发一次。
+- 追击选择攻击时可取消；取消后已抽牌保留。
+- 不复用前次武器或目标，按普通攻击动作重新选择。
+- 被锁定不影响发动攻击，只影响目标响应权限。
+
+──────────── 测试场景 ────────────
+场景a：正常追击
+  前置：P1铠威攻击被响应，仍存活且有合法攻击目标。
+  操作：ATTACK_SETTLE确认→抽牌→选武器/目标。
+  断言：抽1；新attack.passive=true；攻击数不减少。
+场景b：取消技能
+  断言：不抽牌、不追击。
+场景c：确认后取消攻击UI
+  断言：抽牌保留；无第二次攻击；原attack继续清理。
+场景d：原攻击未响应
+  断言：不触发。
+场景e：追击再次被响应
+  断言：第二个attack_id结算时可再次弹窗，不被原attack的“已触发”标记阻止。
+场景f：机甲已毁灭
+  断言：不触发。
+
+歧义点：
+[歧义1] 无合法追击目标时是否仍可只抽1张牌。智能体选择：不可发动整项（理由：“抽1张，之后再攻击”为同一可选效果，后半无法执行时不应只取前半收益）。候选：仍抽牌，攻击步骤跳过。▶ 回答：____候选正确________________
+[歧义2] 追击被响应后是否可递归再追击。智能体选择：可以（理由：新攻击同样是“我方发动的攻击”，文本无每回合限次）。候选：由本效果发动的攻击不再触发自身。▶ 回答：___智能体选择正确_________________
+
+重要补充：更改铠威的效果与描述文本为“若发动的攻击被响应，则此攻击结算后可以抽1张行动牌，之后再立即发动1次攻击。”抽牌和追击的效果需要等刚才的攻击结算完成，优先级设为5，需要慢过反击和闪击的额外攻击效果。
+═══════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════
+[机师牌 040] 泰格  （阵营:帝国 稀有度:R 费用:6 行动牌上限:4 回合攻击数:1）
+═══════════════════════════════════════════════════════════
+效果文本：使用近战武器攻击时，可弃置1张行动牌对目标施加锁定效果(目标可以弃置1张正面设置的装备牌取消此效果)。
+本拆解 effect_ids：["pilot_040_effect_01"]
+
+──────────── 效果拆解（pilot_040_effect_01 近战锁定）────────────
+首句：机师设置后注册 permanent listener，监听 attack 的 ATTACK_PRE；我方使用近战武器且目标已选定时，可弃1张行动牌尝试对1个目标施加锁定，目标可弃1张正面设置装备取消。
+
+优先级：20（在ATTACK_AT响应窗口前完成锁定或取消流程）
+模式：LISTEN
+listen_timing：TimingConst.ATTACK_PRE
+listen_action_type：&"attack"
+conditions：
+[
+  {"op": &"SELF_MECH_IS_ATTACKER"},
+  {"op": &"ATTACK_EFFECTIVE_WEAPON_KIND", "params": {"weapon_kind": &"MELEE"}},
+  {"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"count": 1}},
+  {"op": &"ATTACK_HAS_TARGET"},
+]
+target_rules：
+[
+  {"rule": &"CHOOSE_CURRENT_ATTACK_TARGET"},
+]
+costs：[]
+actions：
+[
+  {
+    "type": &"CHOOSE_ONE",
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "弃1张行动牌，对目标施加锁定",
+          "actions": [
+            {
+              "type": &"EXECUTE_DISCARD",
+              "params": {
+                "from_target": "$binding_context.mech_id",
+                "count": 1,
+                "choose": true,
+                "card_kind": &"ACTION",
+                "reason": &"pilot_040_lock_cost"
+              }
+            },
+            {
+              "type": &"TARGET_CANCEL_OR_ACCEPT",
+              "params": {
+                "target_id": "$selected_target.mech_id",
+                "cancel_label": "弃置1张正面装备，取消锁定",
+                "cancel_conditions": [
+                  {"op": &"TARGET_HAS_FACE_UP_EQUIPMENT", "params": {"count": 1}}
+                ],
+                "cancel_actions": [
+                  {
+                    "type": &"EXECUTE_DISCARD",
+                    "params": {
+                      "from_target": "$selected_target.mech_id",
+                      "count": 1,
+                      "choose": true,
+                      "zone": &"FACE_UP_EQUIPMENT_SLOTS",
+                      "reason": &"effect_self_discard"
+                    }
+                  }
+                ],
+                "accept_actions": [
+                  {
+                    "type": &"ADD_STATUS",
+                    "params": {
+                      "target_id": "$selected_target.mech_id",
+                      "status_type": &"LOCKED",
+                      "locker_mech_id": "$binding_context.mech_id",
+                      "duration": 1,
+                      "source_effect_id": &"pilot_040_effect_01"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+]
+
+执行顺序：泰格确认→选择并弃行动牌→目标弹取消窗→若弃正面装备，等待装备弃置完整结算后不加锁；否则施加LOCKED→返回ATTACK_PRE→随后进入ATTACK_AT。
+
+人类 UI：按钮1置灰；攻击选定目标后泰格弹确认；目标取消窗显示可弃装备及其耐久/损伤后果。
+
+──────────── 实现预告 ────────────
+- 复用：EXECUTE_DISCARD、ADD_STATUS(LOCKED)。
+- 新增复杂动作 TARGET_CANCEL_OR_ACCEPT；可用CHOOSE_ONE指定decision_owner=target实现。
+- 新增条件 TARGET_HAS_FACE_UP_EQUIPMENT；区域排除备用、机师、事件。
+- 多目标攻击需先选一个目标，锁定只施加该目标。
+- 需重写旧 pilot_040 占位。
+
+──────────── 顺序与坑 ────────────
+- 泰格弃牌是发动成本；目标即使取消，泰格牌不返还。
+- 目标弃置正面装备会走正常装备弃置动作与其监听器，损伤保留按规则处理。
+- 锁定状态在后续ATTACK_AT以优先级20排除普通响应。
+- 若目标在取消窗期间因装备弃置效果毁灭，锁定不再施加，原攻击后续按目标存活规则继续。
+- 临时转为近战的武器按当前effective weapon_kind命中。
+
+──────────── 测试场景 ────────────
+场景a：目标接受锁定
+  前置：P1泰格用近战攻击P2，P1有手牌。
+  操作：P1弃1；P2不取消。
+  断言：P2获得来自P1的LOCKED；ATTACK_AT普通迎击不可选。
+场景b：目标弃装备取消
+  操作：P2选择正面武器并弃置。
+  断言：装备进弃牌堆；无LOCKED；P1成本仍弃。
+场景c：泰格取消
+  断言：不弃牌、不加锁。
+场景d：远程武器
+  断言：不触发。
+场景e：多目标攻击
+  操作：选择其中1目标。
+  断言：只该目标进入取消/锁定流程。
+场景f：目标无正面装备
+  断言：取消选项不可用，只能接受。
+
+歧义点：
+[歧义1] 多目标攻击是否对所有目标施加锁定。智能体选择：选择1个目标（理由：单数“目标”且成本固定1张）。候选：所有目标同时锁定，每个目标均可各弃1装备取消。▶ 回答：_候选正确___________________
+[歧义2] 目标弃置的装备是否可为武器或部件任意正面槽。智能体选择：可以（理由：文本只写“正面设置的装备牌”）。候选：只允许部件。▶ 回答：__智能体选择正确__________________
+═══════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════
+[机师牌 041] 盖奇特  （阵营:帝国 稀有度:R 费用:7 行动牌上限:2 回合攻击数:2）
+═══════════════════════════════════════════════════════════
+效果文本：我方回合1次，可以花费3金币抽2张行动牌。
+本拆解 effect_ids：["pilot_041_effect_01"]
+
+──────────── 效果拆解（pilot_041_effect_01 金币补牌）────────────
+首句：DIRECT，主阶段 skill_bar 按钮触发；支付3金币，抽2张行动牌。
+
+优先级：10
+模式：DIRECT
+conditions：
+[
+  {"op": &"IS_OWNER_MAIN_PHASE"},
+  {"op": &"GOLD_ABOVE_OR_EQUAL", "params": {"threshold": 3}},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：
+[
+  {"cost_type": &"SPEND_GOLD", "amount": 3},
+]
+once_per_turn_key=&"pilot_041_effect_01"
+once_per_turn_max=1
+actions：
+[
+  {"type": &"DRAW_ACTION", "params": {"count": 2}},
+]
+
+人类 UI：按钮1“3金币抽2牌（本回合0/1）”。
+
+──────────── 实现预告 ────────────
+- 复用：SPEND_GOLD、DRAW_ACTION。
+- 若ConditionChecker只有严格GOLD_ABOVE，新增GOLD_ABOVE_OR_EQUAL。
+- 需重写旧 pilot_041 占位。
+
+──────────── 顺序与坑 ────────────
+- 支付后再抽；牌堆无法提供任何牌时应预检禁用。
+- 抽牌可使手牌超过上限，至回合结束清理。
+- 与规则基础2金币抽1牌的按钮、次数相互独立。
+
+──────────── 测试场景 ────────────
+场景a：正常
+  前置：金币3。
+  操作：按钮1。
+  断言：金币0、抽2、次数1。
+场景b：金币2
+  断言：按钮禁用。
+场景c：取消支付确认
+  断言：无变化、不计次。
+场景d：第二次
+  断言：按钮禁用。
+
+歧义点：
+[歧义1] 无实质歧义。智能体选择：费用必须一次性支付3金币（理由：牌面明确）。候选：无。▶ 回答：___智能体选择正确_________________
+═══════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════
+[机师牌 042] 德伦迪  （阵营:帝国 稀有度:R 费用:6 行动牌上限:4 回合攻击数:1）
+═══════════════════════════════════════════════════════════
+效果文本：每次弃置行动牌后，可以抽1张行动牌。
+我方回合2次，可以弃置1张或所有行动牌，若弃置所有行动牌则之后可再抽1张行动牌。
+本拆解 effect_ids：["pilot_042_effect_01","pilot_042_effect_02"]
+
+──────────── 效果拆解（pilot_042_effect_01 每次弃牌后抽1）────────────
+首句：机师设置后注册 permanent listener，监听 discard 的 DISCARD_SETTLE；一次弃置动作中我方实际弃置至少1张行动牌后，可抽1张行动牌。
+
+优先级：10
+模式：LISTEN
+listen_timing：TimingConst.DISCARD_SETTLE
+listen_action_type：&"discard"
+conditions：
+[
+  {"op": &"OWNER_DISCARDED_ACTION_CARD_IN_THIS_ACTION"},
+  {"op": &"OWNER_ACTUAL_DISCARD_COUNT_ABOVE", "params": {"threshold": 0}},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：[]
+actions：
+[
+  {
+    "type": &"CHOOSE_ONE",
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "弃牌后抽1张行动牌",
+          "actions": [
+            {"type": &"DRAW_ACTION", "params": {"count": 1}}
+          ]
+        }
+      ]
+    }
+  }
+]
+
+人类 UI：按钮1置灰；每个符合的discard动作结算后弹一次，不按弃牌张数重复。
+
+──────────── 效果拆解（pilot_042_effect_02 主动弃1或全部）────────────
+首句：DIRECT，主阶段按钮；每个我方回合2次，选择弃1张或弃置当前全部行动牌；选择全部时，该弃置完成后额外再抽1张。
+
+优先级：10
+模式：DIRECT
+conditions：
+[
+  {"op": &"IS_OWNER_MAIN_PHASE"},
+  {"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"count": 1}},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：[]
+once_per_turn_key=&"pilot_042_effect_02"
+once_per_turn_max=2
+actions：
+[
+  {
+    "type": &"CHOOSE_ONE",
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "弃置1张行动牌",
+          "actions": [
+            {
+              "type": &"EXECUTE_DISCARD",
+              "params": {
+                "from_target": "$binding_context.mech_id",
+                "count": 1,
+                "choose": true,
+                "card_kind": &"ACTION",
+                "reason": &"pilot_042_active_discard"
+              }
+            }
+          ]
+        },
+        {
+          "label": "弃置全部行动牌，之后额外抽1张",
+          "actions": [
+            {
+              "type": &"EXECUTE_DISCARD",
+              "params": {
+                "from_target": "$binding_context.mech_id",
+                "count": &"ALL",
+                "choose": false,
+                "card_kind": &"ACTION",
+                "reason": &"pilot_042_active_discard_all",
+                "store_discard_action_id": &"pilot_042_all_discard_id"
+              }
+            },
+            {
+              "type": &"DRAW_ACTION",
+              "params": {"count": 1, "reason": &"pilot_042_all_bonus"}
+            }
+          ]
+        }
+      ]
+    }
+  }
+]
+
+执行顺序：
+- 弃1：discard SETTLE会先触发effect_01可抽1，然后返回DIRECT结束。
+- 弃全部：discard SETTLE先触发effect_01可抽1；该监听链完成后返回父DIRECT，再执行牌面“可再抽1”。因此选择两次均确认时总计抽2。
+
+人类 UI：按钮2“主动弃牌（本回合0/2）”；二选一窗显示当前手牌数与预期额外抽牌。
+
+──────────── 实现预告 ────────────
+- 复用：EXECUTE_DISCARD、DRAW_ACTION、CHOOSE_ONE。
+- 新增条件 OWNER_DISCARDED_ACTION_CARD_IN_THIS_ACTION / 实际数量读取；discard record需按原持有者汇总。
+- once_per_turn在DIRECT分支确认后计次；选择窗取消不计。
+- 需重写旧 pilot_042 占位。
+
+──────────── 顺序与坑 ────────────
+- effect_01适用于成本弃牌、对手技能弃牌、回合结束超限弃牌等所有弃置原因。
+- 一次动作弃5张只弹1次。
+- “全部”在结算开始时冻结牌列表；effect_01抽到的牌不属于刚才的全部弃置，也不会被追溯弃掉。
+- 手牌仅1张时两个选项结果不同：全弃分支有额外抽1。
+- effect_01是“可以”，其抽牌与全弃额外抽牌分别可独立选择；后者文本也写“可再抽”。
+
+──────────── 测试场景 ────────────
+场景a：外部弃牌触发
+  前置：P2效果令P1一次弃2。
+  断言：P1只弹一次；确认抽1。
+场景b：主动弃1
+  操作：按钮2→弃1→确认effect_01。
+  断言：净手牌变化按弃1抽1；次数1/2。
+场景c：主动全弃
+  前置：手3。
+  操作：全弃→effect_01确认→额外抽牌执行。
+  断言：弃3，之后共抽2。
+场景d：取消主动窗
+  断言：不计次。
+场景e：回合结束超限
+  断言：清理discard SETTLE后仍可抽1；该新牌不再参加已结束的同一次超限弃置。
+场景f：第三次主动
+  断言：按钮禁用。
+
+歧义点：
+[歧义1] “每次弃置行动牌后”是按弃置动作还是按每张牌。智能体选择：按一次弃置动作触发1次（理由：动作生命周期以一次discard为行为单位，文本未写“每弃置1张”）。候选：弃N张抽N张。▶ 回答：__智能体选择正确，使用行动牌结算后进入弃牌堆的不算这里的“弃置”，“联合”的弃置此牌抽1的操作算这里的“弃置”，超上限弃牌、预判等效果弃牌都算__________________
+[歧义2] 选择“弃置所有”时是否总计可抽2张（通用触发1 + 额外1）。智能体选择：是（理由：第二句明确“再抽1张”，叠加第一句）。候选：总共只抽1张。▶ 回答：__智能体选择正确__________________
+═══════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════
+[机师牌 043] 格温  （阵营:帝国 稀有度:R 费用:6 行动牌上限:4 回合攻击数:1）
+═══════════════════════════════════════════════════════════
+效果文本：即将抽取行动牌时，可以宣言1种行动牌类型(攻击，迎击，辅助)，若之后抽到的牌中存在宣言类型，则可以再抽1张行动牌。
+本拆解 effect_ids：["pilot_043_effect_01","pilot_043_effect_02"]
+
+──────────── 效果拆解（pilot_043_effect_01 抽牌前宣言）────────────
+首句：机师设置后注册 permanent listener，监听 gain_card 的 GAIN_CARD_BEFORE；当我方即将通过“抽牌”获得至少1张行动牌时，可宣言攻击/迎击/辅助，并把宣言写入该gain_action记录。
+
+优先级：20
+模式：LISTEN
+listen_timing：TimingConst.GAIN_CARD_BEFORE
+listen_action_type：&"gain_card"
+conditions：
+[
+  {"op": &"GAIN_TARGET_IS_SELF"},
+  {"op": &"GAIN_CARD_KIND_IS", "params": {"card_kind": &"ACTION"}},
+  {"op": &"GAIN_REASON_IS_DRAW"},
+  {"op": &"GAIN_PLANNED_COUNT_ABOVE", "params": {"threshold": 0}},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：[]
+actions：
+[
+  {
+    "type": &"DECLARE_CARD_TYPE",
+    "params": {
+      "optional": true,
+      "allowed_types": [&"ATTACK", &"COUNTER", &"SUPPORT"],
+      "store_in_action_record_key": &"pilot_043_declared_type",
+      "source_card_instance_id": "$binding_context.card_instance_id"
+    }
+  }
+]
+
+人类 UI：按钮1置灰；每次抽牌前弹三类型+取消。
+
+──────────── 效果拆解（pilot_043_effect_02 命中宣言后再抽1）────────────
+首句：机师设置后注册 permanent listener，监听同一 gain_card 的 GAIN_CARD_AFTER；若该动作记录了本机师宣言，且实际抽到的牌中至少1张原始类型匹配，则可再创建一次抽1张行动牌动作。
+
+优先级：10
+模式：LISTEN
+listen_timing：TimingConst.GAIN_CARD_AFTER
+listen_action_type：&"gain_card"
+conditions：
+[
+  {"op": &"GAIN_ACTION_HAS_PILOT_DECLARATION", "params": {"record_key": &"pilot_043_declared_type"}},
+  {"op": &"GAIN_ACTUAL_CARDS_CONTAIN_DECLARED_TYPE", "params": {"record_key": &"pilot_043_declared_type"}},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：[]
+actions：
+[
+  {
+    "type": &"CHOOSE_ONE",
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "宣言命中：再抽1张行动牌",
+          "actions": [
+            {
+              "type": &"DRAW_ACTION",
+              "params": {
+                "count": 1,
+                "reason": &"pilot_043_bonus_draw",
+                "parent_gain_action_id": "$payload.action_id"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+]
+
+执行顺序：GAIN_CARD_BEFORE宣言→原批次抽牌→GAIN_CARD_AFTER检查整批实际牌→确认后创建新的gain_card。新gain_card是独立动作，按本拆解也可再次触发宣言，形成“命中则继续”的有限链。
+
+人类 UI：按钮2置灰；命中后弹奖励确认，日志显示本次宣言与抽到类型。
+
+──────────── 实现预告 ────────────
+- 复用：DECLARE_CARD_TYPE、DRAW_ACTION。
+- gain_card record需保存actual_card_instance_ids与每张card_type。
+- 新增条件 GAIN_ACTION_HAS_PILOT_DECLARATION、GAIN_ACTUAL_CARDS_CONTAIN_DECLARED_TYPE。
+- 宣言按gain_action_id存，不使用机师全局变量，避免嵌套抽牌覆盖。
+- 需重写旧 pilot_043 占位。
+
+──────────── 顺序与坑 ────────────
+- 一次抽3张，只要至少1张匹配就只奖励抽1张。
+- 类型按卡牌印刷大类型判断，不按被其他技能视为/当作后的具名效果。
+- “获得/偷取/交付”不是抽取，不触发。
+- 奖励抽牌若再次宣言并命中，可继续奖励；玩家可在任一宣言或奖励确认处取消停止。
+- 多个格温监听同一抽牌时，各自宣言独立写source-scoped记录。
+
+──────────── 测试场景 ────────────
+场景a：批量命中
+  前置：P1将抽2，牌为攻击+辅助。
+  操作：宣言攻击。
+  断言：原抽2后只弹一次奖励；确认再抽1。
+场景b：未命中
+  断言：无奖励窗。
+场景c：取消宣言
+  断言：正常抽牌但effect_02不触发。
+场景d：奖励链
+  操作：奖励抽1前再次宣言且命中。
+  断言：可再次获得下一次抽1。
+场景e：转移获得
+  断言：不弹宣言。
+场景f：牌堆实际只抽0
+  断言：无奖励。
+
+歧义点：
+[歧义1] 奖励抽1是否可再次触发格温自身。智能体选择：可以（理由：它仍是“即将抽取行动牌”，且文本无每回合/每链限制）。候选：由本效果产生的抽牌不再触发。▶ 回答：__智能体选择正确__________________
+[歧义2] 一批抽到多张宣言类型是否奖励多次。智能体选择：只1次（理由：“存在宣言类型，则可以再抽1张”）。候选：每张匹配牌各抽1。▶ 回答：__智能体选择正确__________________
+
+补充：回忆的效果也会触发此效果（虽然是从弃牌堆里随机抽，但还是算抽取行动牌），但是触发的抽取1行动牌还是从行动牌堆里抽
+═══════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════
+[机师牌 044] 索伦  （阵营:帝国 稀有度:R 费用:6 行动牌上限:4 回合攻击数:1）
+═══════════════════════════════════════════════════════════
+效果文本：我方回合开始时与回合结束后，记录机甲所有区域的损伤数为X，之后抽X+1张行动牌，再弃置X张行动牌。
+本拆解 effect_ids：["pilot_044_effect_01","pilot_044_effect_02"]
+
+──────────── 效果拆解（pilot_044_effect_01 回合开始损伤换牌）────────────
+首句：机师设置后注册 permanent listener，监听我方 TURN_START；快照统计我方所有区域当前损伤总数X，抽X+1张，之后弃置X张。
+
+优先级：10
+模式：LISTEN
+listen_timing：TimingConst.TURN_START
+listen_action_type：&"turn"
+conditions：
+[
+  {"op": &"TURN_OWNER_IS_SELF"},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：[]
+actions：
+[
+  {
+    "type": &"CALCULATE_SELF_DAMAGE_TOKENS",
+    "params": {
+      "include_all_slots": true,
+      "store_key": &"pilot_044_x"
+    }
+  },
+  {
+    "type": &"DRAW_ACTION",
+    "params": {"count_expr": "$local.pilot_044_x + 1"}
+  },
+  {
+    "type": &"EXECUTE_DISCARD",
+    "params": {
+      "from_target": "$binding_context.mech_id",
+      "count": "$local.pilot_044_x",
+      "choose": true,
+      "card_kind": &"ACTION",
+      "reason": &"pilot_044_cycle"
+    }
+  }
+]
+
+执行顺序：TURN_START发出→冻结X→抽牌完整结算→再弹弃X窗口。X不因抽牌期间损伤变化而重算。
+
+人类 UI：按钮1置灰；显示“开始时X=当前总损伤”。
+
+──────────── 效果拆解（pilot_044_effect_02 回合结束后损伤换牌）────────────
+首句：机师设置后注册 permanent listener，监听我方 TURN_AFTER_END；在常规超限弃牌及未设置装备清理完成后，重新统计X，抽X+1，再弃X。
+
+优先级：10
+模式：LISTEN
+listen_timing：TimingConst.TURN_AFTER_END
+listen_action_type：&"turn"
+conditions：
+[
+  {"op": &"TURN_OWNER_IS_SELF"},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：[]
+actions：与effect_01相同，但本地store_key=&"pilot_044_end_x"，弃置reason=&"pilot_044_end_cycle"。
+
+GDScript：
+[
+  {"type": &"CALCULATE_SELF_DAMAGE_TOKENS", "params": {"include_all_slots": true, "store_key": &"pilot_044_end_x"}},
+  {"type": &"DRAW_ACTION", "params": {"count_expr": "$local.pilot_044_end_x + 1"}},
+  {
+    "type": &"EXECUTE_DISCARD",
+    "params": {
+      "from_target": "$binding_context.mech_id",
+      "count": "$local.pilot_044_end_x",
+      "choose": true,
+      "card_kind": &"ACTION",
+      "reason": &"pilot_044_end_cycle"
+    }
+  }
+]
+
+人类 UI：按钮2置灰；TURN_AFTER_END自动弹弃牌选择。
+
+──────────── 实现预告 ────────────
+- 新增/复用 CALCULATE_SELF_DAMAGE_TOKENS，统计区域damage_tokens总和，包括装备已弃但保留在槽位区域上的损伤。
+- 值解析支持count_expr；或用SET_VARIABLE + arithmetic evaluator。
+- EXECUTE_DISCARD count=0时直接no-op，不弹窗。
+- 需重写旧 pilot_044 占位。
+
+──────────── 顺序与坑 ────────────
+- TURN_START位于常规回合抽牌之前，因此先结算索伦，再进行规则抽2行动牌等TURN_AFTER_START内容。
+- TURN_AFTER_END晚于常规手牌上限清理；本技能结束后新手牌可暂时超过上限，直到下次对应清理。
+- X是每次触发的局部快照，不是本局持续变量。
+- 抽牌期间若触发其他效果设置/移除损伤，不改变本次需弃数量。
+- 若牌堆不足导致实际抽牌少于X，仍按记录X弃牌；实际手牌不足时弃置全部并记录shortfall，不产生额外惩罚。
+
+──────────── 测试场景 ────────────
+场景a：开始时X=3
+  操作：TURN_START。
+  断言：先抽4，再选弃3；随后才进入常规回合抽牌。
+场景b：X=0
+  断言：抽1，不弹弃牌窗。
+场景c：结束后
+  前置：常规超限清理完成后X=2。
+  断言：抽3、弃2；新手牌不再次触发同回合上限清理。
+场景d：中途损伤变化
+  前置：快照X=2，抽牌监听移除1损伤。
+  断言：本次仍弃2。
+场景e：弃牌窗取消
+  断言：此处为强制弃置，不提供取消；必须选足X或全部可用牌。
+
+歧义点：
+[歧义1] “所有区域的损伤”是否包括没有装备牌但保留在区域上的损伤。智能体选择：包括（理由：规则明确装备弃置后损伤保留在区域）。候选：只统计正面装备上的损伤。▶ 回答：__智能体选择正确__________________
+[歧义2] TURN_AFTER_END抽牌后是否立即再做一次上限清理。智能体选择：不做（理由：该技能发生在规则清理后的时点，生命周期没有第二次清理步骤）。候选：技能结算后立即按上限弃牌。▶ 回答：_智能体选择正确___________________
+═══════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════
+[机师牌 045] 肯兹尔  （阵营:帝国 稀有度:R 费用:7 行动牌上限:3 回合攻击数:1）
+═══════════════════════════════════════════════════════════
+效果文本：我方回合1次，可以弃置4格范围内所有其他机甲3张行动牌，之后获得被弃置牌中的所有攻击牌，本回合攻击数+1，我方也将受到3伤害。
+本拆解 effect_ids：["pilot_045_effect_01"]
+
+──────────── 效果拆解（pilot_045_effect_01 范围掠夺）────────────
+首句：DIRECT，主阶段按钮；对距我方4格内所有其他机甲分别执行至多3张行动牌弃置，之后取得本次实际弃置牌中的全部攻击牌，当前回合攻击数+1，最后我方受到3伤害。
+
+优先级：10
+模式：DIRECT
+conditions：
+[
+  {"op": &"IS_OWNER_MAIN_PHASE"},
+  {"op": &"OTHER_MECH_IN_HEX_RANGE", "params": {"range": 4}},
+]
+target_rules：
+[
+  {"rule": &"ALL_OTHER_MECHS_IN_RANGE", "params": {"range": 4}},
+]
+costs：[]
+once_per_turn_key=&"pilot_045_effect_01"
+once_per_turn_max=1
+
+actions：
+[
+  {
+    "type": &"EXECUTE_DISCARD",
+    "params": {
+      "from_target_ids": "$selected_targets.mech_ids",
+      "count_per_target": 3,
+      "if_insufficient": &"DISCARD_ALL",
+      "choose": true,
+      "executor_mech_id": "$binding_context.mech_id",
+      "card_kind": &"ACTION",
+      "reason": &"pilot_045_mass_discard",
+      "store_actual_discarded_ids": &"pilot_045_discarded_cards"
+    }
+  },
+  {
+    "type": &"GAIN_CARDS_BY_INSTANCE_IDS",  # 【需新增/扩展】从行动弃牌堆取回匹配实例
+    "params": {
+      "card_instance_ids": "$result.pilot_045_discarded_cards",
+      "filter_card_type": &"ATTACK",
+      "to_mech_id": "$binding_context.mech_id",
+      "from_zone": &"ACTION_DISCARD",
+      "reason": &"pilot_045_gain_discarded_attacks"
+    }
+  },
+  {
+    "type": &"MODIFY_ATTACK_COUNT",
+    "params": {
+      "target_id": "$binding_context.mech_id",
+      "delta": 1,
+      "duration": &"THIS_TURN"
+    }
+  },
+  {
+    "type": &"EXECUTE_HP_CHANGE",
+    "params": {
+      "target_id": "$binding_context.mech_id",
+      "value": 3,
+      "method": &"damage",
+      "reason": &"pilot_045_self_damage"
+    }
+  }
+]
+
+执行顺序：冻结范围内目标列表→逐目标弃牌并等全部discard SETTLE→从本批实例中过滤攻击牌取回→攻击数+1→自伤3。任一中间弹窗会挂起父effect。
+
+人类 UI：按钮1“范围掠夺（0/1）”；预览列出受影响机甲与各自手牌数，但未知牌不显示类型。
+
+──────────── 实现预告 ────────────
+- 复用：EXECUTE_DISCARD、MODIFY_ATTACK_COUNT、EXECUTE_HP_CHANGE。
+- 新增/扩展 GAIN_CARDS_BY_INSTANCE_IDS；必须在discard record保留实际card_instance_ids与原持有者。
+- 多目标discard支持count_per_target及一个执行者对未知牌进行选择。
+- 需重写旧 pilot_045 占位。
+
+──────────── 顺序与坑 ────────────
+- 1v1中通常只有敌方1台；规格仍支持未来多机甲。
+- 对不足3张的目标弃置其全部，缺少数量不产生额外惩罚。
+- 被取回的攻击牌先进入弃牌堆再由gain动作取得，因此“弃置后”监听正常触发。
+- 自伤属于效果伤害，可被免疫/转移类效果处理；即使因此毁灭，前面的牌与攻击数变动已完成。
+- 攻击数+1只到当前回合结束；若本回合不是P1主阶段无法发动。
+
+──────────── 测试场景 ────────────
+场景a：弃3中2张攻击
+  前置：P2距4，手3。
+  操作：P1发动并选择3张未知牌。
+  断言：3张先弃；其中2攻击转给P1；P1攻击数+1；P1受3伤。
+场景b：目标仅1张
+  断言：弃1；若为攻击则取得；无缺额伤害。
+场景c：取消弃牌选择
+  断言：整个效果取消，不计次、不自伤。
+场景d：无范围内目标
+  断言：按钮禁用。
+场景e：自伤被转移
+  断言：hp_change监听可介入，但此前奖励不回滚。
+场景f：多目标
+  断言：每个目标最多弃3，取回全部本批攻击牌。
+
+歧义点：
+[歧义1] “弃置所有其他机甲3张”在目标不足3张时是否不能发动。智能体选择：该目标弃置全部现有牌（理由：后续效果天然可处理不同数量，且不应因少牌免疫）。候选：任何目标不足3张则整项不可发动。▶ 回答：___智能体选择正确_________________
+[歧义2] 被弃牌由肯兹尔选择还是目标自行选择。智能体选择：肯兹尔选择（理由：无主语动作默认我方为执行者，且弃置动作支持对未知牌选位）。候选：各目标选择自己的3张。▶ 回答：_智能体选择正确___________________
+═══════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════
+[机师牌 046] 霍恩  （阵营:帝国 稀有度:R 费用:6 行动牌上限:4 回合攻击数:1）
+═══════════════════════════════════════════════════════════
+效果文本：我方可以无条件查看商店和其他机甲备用区内的隐藏装备牌（背面朝上）。我方回合1次，可以消耗上述隐藏装备牌记述的金币并获得该牌，之后将其背面朝上设置于我方或其他机甲的备用区域上。
+本拆解 effect_ids：["pilot_046_effect_01","pilot_046_effect_02"]
+
+──────────── 效果拆解（pilot_046_effect_01 查看隐藏装备权限）────────────
+首句：权限型，不注册时点监听器。商店与机甲信息面板查询可见性时，霍恩拥有者可查看商店隐藏高级装备和其他机甲备用区背面装备的真实信息。
+
+helper：HiddenCardVisibility.can_view_equipment(viewer_player_id, card_instance_id, zone)
+接入点：
+- ShopPanel隐藏高级装备卡面
+- MechInfoPanel备用区
+- 目标选择器的费用/类型预览
+
+规则：
+```
+return pilot_046正面设置于viewer所属mech的pilot槽
+  and (
+    zone == &"SHOP_HIDDEN_ADVANCED"
+    or (zone == &"RESERVE" and reserve_owner_player_id != viewer_player_id)
+  )
+```
+只改变客户端可见性，不把卡改为公开展示；其他玩家仍看到背面。
+
+人类 UI：按钮1置灰“隐藏装备可见”；卡面显示眼睛图标，仅霍恩玩家客户端展开详情。
+
+──────────── 效果拆解（pilot_046_effect_02 购买并转置隐藏装备）────────────
+首句：DIRECT，主阶段按钮；选择商店隐藏牌或其他机甲备用区背面牌，支付其印刷金币，获得该牌，之后选择任一机甲备用区域背面设置。
+
+优先级：10
+模式：DIRECT
+conditions：
+[
+  {"op": &"IS_OWNER_MAIN_PHASE"},
+  {"op": &"AFFORDABLE_HIDDEN_EQUIPMENT_EXISTS"},  # 【需新增】按印刷cost检查上述区域
+  {"op": &"RESERVE_SLOT_EXISTS_ON_FIELD"},
+]
+target_rules：
+[
+  {"rule": &"CHOOSE_VIEWABLE_HIDDEN_EQUIPMENT"},  # 【需新增】来源限商店隐藏/其他机甲备用
+]
+costs：[]
+once_per_turn_key=&"pilot_046_effect_02"
+once_per_turn_max=1
+actions：
+[
+  {
+    "type": &"SPEND_GOLD",
+    "params": {
+      "amount": "$selected_card.printed_cost",
+      "payer_mech_id": "$binding_context.mech_id"
+    }
+  },
+  {
+    "type": &"EXECUTE_GAIN_CARD",
+    "params": {
+      "card_instance_ids": ["$selected_card.card_instance_id"],
+      "target_id": "$binding_context.mech_id",
+      "from_zone": "$selected_card.zone",
+      "reason": &"pilot_046_hidden_acquire",
+      "keep_hidden_to_others": true
+    }
+  },
+  {
+    "type": &"EXECUTE_SET_EQUIP",
+    "params": {
+      "card_instance_id": "$selected_card.card_instance_id",
+      "target_rule": &"CHOOSE_ANY_MECH_RESERVE_SLOT",
+      "face_up": false,
+      "allow_replace": true,
+      "reason": &"pilot_046_set_reserve"
+    }
+  }
+]
+
+执行顺序：选隐藏牌→支付金币→牌从原来源转移给霍恩→选择任意机甲的备用槽→若替换则先弃旧牌→新牌背面设置。设置窗口取消时，已获得的牌如何处理见歧义2；本拆解采用必须完成设置、不可取消。
+
+人类 UI：按钮2“调度隐藏装备（0/1）”；只列付得起的牌，费用按牌面原值而非商店1.5倍。
+
+──────────── 实现预告 ────────────
+- 新增权限helper HiddenCardVisibility.can_view_equipment。
+- 新增条件 AFFORDABLE_HIDDEN_EQUIPMENT_EXISTS；目标规则 CHOOSE_VIEWABLE_HIDDEN_EQUIPMENT、CHOOSE_ANY_MECH_RESERVE_SLOT。
+- EXECUTE_GAIN_CARD需支持从商店槽/其他机甲备用槽直接移除特定实例。
+- EXECUTE_SET_EQUIP扩展reserve、face_up=false与跨机甲设置。
+- 需重写旧 pilot_046 占位。
+
+──────────── 顺序与坑 ────────────
+- 支付的是印刷金币，不乘1.5，也不触发普通SHOP_BUY流程，除非歧义裁定相反。
+- 从其他机甲备用区取得属于效果获取，不是偷取行动牌；原拥有者不获金币。
+- 新牌最终可背面设置到敌方备用区；所有权/控制权建议跟随所在机甲，来源记录保留霍恩。
+- 查看权限不等于公开，日志不可泄露牌名给对手。
+- 霍恩换下后立刻失去查看权限，但已经知道的信息是否在客户端知识记录中保留见歧义3。
+
+──────────── 测试场景 ────────────
+场景a：查看商店隐藏牌
+  断言：仅P1客户端显示真实牌，P2仍背面。
+场景b：取得商店牌并放自己备用
+  前置：牌cost6，P1金币6，有备用槽。
+  操作：按钮2→选牌→付6→选自己备用。
+  断言：金币0；牌离开商店并补位按商店规则；背面设置。
+场景c：取得敌方备用牌放回敌方另一槽
+  断言：原槽清空；新槽背面；牌控制权按目标槽规则更新。
+场景d：金币不足
+  断言：该牌不可选；若无可负担牌按钮禁用。
+场景e：替换备用牌
+  断言：旧备用牌按替换原因弃置，新牌设置。
+场景f：取消选牌
+  断言：不支付、不计次。
+
+歧义点：
+[歧义1] 该效果是否算“从商店购买”，从而触发购买类技能。智能体选择：不算（理由：文本使用“消耗记述金币并获得”，未走1.5倍商店购买流程）。候选：来源为商店时算购买。▶ 回答：_智能体选择正确___________________
+[歧义2] 获得牌后是否允许取消备用区设置。智能体选择：不允许，必须选合法备用槽完成“之后设置”（理由：防止牌留在未设置区规避文本）。候选：可取消，牌留在持有区。▶ 回答：_智能体选择正确，如果选择的备用区上已经有牌会将原来的牌弃置___________________
+[歧义3] 霍恩离场后，玩家此前查看过的背面牌是否继续保持“已知”。智能体选择：继续作为玩家知识保留，直到牌换区/洗牌（理由：已经看到的信息不能现实地遗忘）。候选：UI重新隐藏。▶ 回答：__智能体选择正确__________________
+═══════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════
+[机师牌 047] 里欧娜  （阵营:帝国 稀有度:R 费用:6 行动牌上限:4 回合攻击数:1）
+═══════════════════════════════════════════════════════════
+效果文本：我方攻击结算后，可以选择1台4格范围内的其他机甲，其选择立即使用1张攻击牌，否则必须交给我方3张行动牌，若数量不足则每少1张该机甲将受到2伤害。
+本拆解 effect_ids：["pilot_047_effect_01"]
+
+──────────── 效果拆解（pilot_047_effect_01 攻击后逼迫）────────────
+首句：机师设置后注册 permanent listener，监听 attack 的 ATTACK_SETTLE；我方攻击结算后可选择4格内其他机甲，由该机甲选择立即使用一张可用攻击牌，或交给我方3张行动牌；不足部分每张承受2伤害。
+
+优先级：10
+模式：LISTEN
+listen_timing：TimingConst.ATTACK_SETTLE
+listen_action_type：&"attack"
+conditions：
+[
+  {"op": &"SELF_MECH_IS_ATTACKER"},
+  {"op": &"SELF_MECH_ALIVE"},
+  {"op": &"OTHER_MECH_IN_HEX_RANGE", "params": {"range": 4}},
+]
+target_rules：
+[
+  {"rule": &"CHOOSE_OTHER_MECH"},
+  {"rule": &"TARGET_IN_RANGE", "params": {"range": 4}},
+]
+costs：[]
+actions：
+[
+  {
+    "type": &"CHOOSE_ONE",
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "选择1台机甲接受要求",
+          "actions": [
+            {
+              "type": &"TARGET_CHOOSE_ONE",
+              "params": {
+                "decision_owner_mech_id": "$selected_target.mech_id",
+                "options": [
+                  {
+                    "label": "立即使用1张攻击牌",
+                    "condition": {
+                      "op": &"TARGET_HAS_USABLE_ATTACK_CARD",
+                      "params": {"passive_attack": true}
+                    },
+                    "actions": [
+                      {
+                        "type": &"FORCE_CHOOSE_AND_USE_ACTION_CARD",
+                        "params": {
+                          "user_mech_id": "$selected_target.mech_id",
+                          "card_type": &"ATTACK",
+                          "passive_attack": true,
+                          "cancel_after_branch_commit": false,
+                          "reason": &"pilot_047_forced_attack"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "label": "交出3张行动牌；不足部分每张受2伤害",
+                    "actions": [
+                      {
+                        "type": &"TRANSFER_UP_TO_ACTION_CARDS",
+                        "params": {
+                          "from_mech_id": "$selected_target.mech_id",
+                          "to_mech_id": "$binding_context.mech_id",
+                          "requested_count": 3,
+                          "choose": true,
+                          "tag_from_me": false,
+                          "store_actual_count": &"pilot_047_paid_count"
+                        }
+                      },
+                      {
+                        "type": &"EXECUTE_HP_CHANGE",
+                        "params": {
+                          "target_id": "$selected_target.mech_id",
+                          "value_expr": "(3 - $result.pilot_047_paid_count) * 2",
+                          "method": &"damage",
+                          "reason": &"pilot_047_payment_shortfall"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+]
+
+执行顺序：原攻击SETTLE暂停→里欧娜选目标/可取消→目标二选一：
+A. 选择并立即使用实体攻击牌，完整use_action_card链；其attack passive=true；
+B. 选择至多3张交给里欧娜→转移SETTLE→按缺额执行一次hp_change。
+子链结束后返回原attack清理。
+
+人类 UI：按钮1置灰；里欧娜先选目标，目标玩家再看到强制二选一窗及当前可支付数量。
+
+──────────── 实现预告 ────────────
+- 复用：TRANSFER_ACTION_CARDS、EXECUTE_HP_CHANGE、EXECUTE_USE_ACTION_CARD。
+- 新增复杂动作 TARGET_CHOOSE_ONE、FORCE_CHOOSE_AND_USE_ACTION_CARD、TRANSFER_UP_TO_ACTION_CARDS。
+- 攻击牌可用性检查使用passive=true：不检查回合攻击数，但仍检查武器和目标。
+- 父attack record需存活到目标的完整use链结束。
+- 需重写旧 pilot_047 占位。
+
+──────────── 顺序与坑 ────────────
+- 目标可为原攻击目标或任意4格内其他机甲。
+- “其选择”由目标玩家操作，不由里欧娜选择分支。
+- 目标选立即攻击后必须完成一张可用攻击牌的使用；不能在选牌阶段再取消退回交牌分支。
+- 支付不足时先交全部现有行动牌，再按缺额伤害；0张时受6伤害。
+- 交牌不是弃置，不触发弃牌效果；是否打“从我方处获得”标签默认否，因为是强制支付。
+- 被迫使用的攻击牌为实体牌，触发USE_ACTION_*；其攻击不计目标机甲的回合攻击数。
+
+──────────── 测试场景 ────────────
+场景a：目标立即攻击
+  前置：P2有可用攻击牌。
+  操作：P1攻击SETTLE选P2；P2选攻击并使用。
+  断言：实体牌进入临时区/弃牌堆；新attack.passive=true；P2攻击数不减。
+场景b：交足3张
+  断言：3牌转给P1；P2不受伤。
+场景c：只有1张
+  断言：转1；缺2，P2受4伤。
+场景d：0张且无可用攻击
+  断言：只能交牌分支，受6伤。
+场景e：里欧娜取消
+  断言：无后续。
+场景f：目标距5
+  断言：不可选。
+
+歧义点：
+[歧义1] 目标选择立即攻击后，是否可在普通“确定使用/取消使用”窗口取消。智能体选择：不可取消，分支提交即必须选并使用一张合法攻击牌（理由：“其选择立即使用”已是决定）。候选：仍可取消，随后效果结束或改交牌。▶ 回答：____智能体选择正确，取消选择目标本身就是不合法的，而且普通“确定使用/取消使用”窗口是主动使用攻击牌的窗口，这里应该是被动选择________________
+[歧义2] 交给里欧娜的牌是否算“从该机甲处获得”标签。智能体选择：记录来源但不打自愿赠予tag_from_me（理由：这是强制支付）。候选：所有转移都打该标签。▶ 回答：___当然算了_________________
+═══════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════
+[机师牌 048] 赤牙  （阵营:帝国 稀有度:R 费用:8 行动牌上限:3 回合攻击数:2）
+═══════════════════════════════════════════════════════════
+效果文本：我方攻击造成的损伤+1。我方发动的攻击即使被目标响应，也依然由我方来决定损伤设置的位置。
+本拆解 effect_ids：["pilot_048_effect_01","pilot_048_effect_02"]
+
+──────────── 效果拆解（pilot_048_effect_01 攻击损伤+1）────────────
+首句：机师设置后注册 permanent listener，监听 attack 的 ATTACK_AFTER；我方攻击命中后，使每个命中目标的攻击损伤数+1。
+
+优先级：10
+模式：LISTEN
+listen_timing：TimingConst.ATTACK_AFTER
+listen_action_type：&"attack"
+conditions：
+[
+  {"op": &"SELF_MECH_IS_ATTACKER"},
+  {"op": &"ATTACK_HIT"},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：[]
+actions：
+[
+  {
+    "type": &"MODIFY_ATTACK_MARKERS",
+    "params": {
+      "delta": 1,
+      "target_scope": &"ALL_HIT_TARGETS"
+    }
+  }
+]
+
+人类 UI：按钮1置灰；攻击伤害预览显示“赤牙 +1损伤”。
+
+──────────── 效果拆解（pilot_048_effect_02 响应后仍由攻击方放损伤）────────────
+首句：权限/执行者派生型，不注册独立监听器。创建攻击造成的 damage_change 子动作时，若攻击者机师为赤牙，则损伤设置执行者固定为攻击方，不因目标用迎击牌响应而改为目标。
+
+helper：AttackDamagePlacementResolver.get_executor(attack_record, target_id)
+接入点：AttackService步骤7创建EXECUTE_DAMAGE_CHANGE前。
+
+公式：
+```
+if attack_record.attacker_mech_id has active pilot_048:
+    return attack_record.attacker_mech_id
+return (
+    target_id if attack_record.responded_by_target_counter_card
+    else attack_record.attacker_mech_id
+)
+```
+
+多目标：对每个目标独立创建损伤放置动作，但执行者均为赤牙机甲；只有命中且损伤>0的目标弹放置UI。
+
+人类 UI：按钮2置灰；攻击日志显示“损伤位置决定者：赤牙”。
+
+──────────── 实现预告 ────────────
+- 复用：ATTACK_HIT、MODIFY_ATTACK_MARKERS。
+- 扩展 AttackDamagePlacementResolver，在规则默认分支前查询pilot权限。
+- 多目标attack record的hit与markers需按target_id保存。
+- 需重写旧 pilot_048 占位。
+
+──────────── 顺序与坑 ────────────
+- 未命中攻击不因+1产生凭空损伤。
+- +1在ATTACK_AFTER修改已计算markers，之后步骤7按新值放置。
+- effect_02只改变谁操作损伤UI，不改变“优先设置在有装备牌区域”等合法性。
+- 识破等使攻击无效且markers=0时不放损伤。
+- 赤牙换下后，只影响尚未创建damage_change的攻击；已经进入放置子动作的执行者快照不回改。
+
+──────────── 测试场景 ────────────
+场景a：命中损伤+1
+  前置：原markers=2。
+  断言：ATTACK_AFTER后=3。
+场景b：未命中
+  断言：markers保持0。
+场景c：目标用迎击响应
+  前置：攻击markers=2。
+  操作：进入损伤放置。
+  断言：执行者为P1赤牙而非P2目标。
+场景d：未响应
+  断言：仍由P1放置，与基础规则一致。
+场景e：多目标
+  断言：每个命中目标markers各+1，均由P1依次放置。
+场景f：换机师时点
+  操作：ATTACK_AFTER前换下赤牙（测试入口模拟）。
+  断言：不再+1；若damage_change已创建则执行者保持创建时快照。
+
+歧义点：
+[歧义1] 双连等多目标攻击的“损伤+1”是每个目标各+1，还是整次攻击总计+1再分配。智能体选择：每个命中目标各+1（理由：基础攻击对每个目标独立计算伤害与损伤）。候选：整次攻击只增加1。▶ 回答：_智能体选择正确__________________
+
+补充：赤牙攻击造成的损伤依然可以被合金盾牌类效果转移，因为赤牙只是优先享用正常流程的损伤设置。
+═══════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════
+[机师牌 049] 杰狞  （阵营:帝国 稀有度:R 费用:6 行动牌上限:4 回合攻击数:1）
+═══════════════════════════════════════════════════════════
+效果文本：4格范围内其他机甲即将受到伤害时，可以将该伤害转移由我方承受。
+我方受到伤害后，使下次我方造成的伤害+4（可叠加）。
+本拆解 effect_ids：["pilot_049_effect_01","pilot_049_effect_02","pilot_049_effect_03"]
+
+──────────── 效果拆解（pilot_049_effect_01 代受生命伤害）────────────
+首句：机师设置后注册 permanent listener，监听 hp_change 的 HP_CHANGE_BEFORE；4格内其他机甲即将受到正数生命伤害时，可把该次hp_change目标改为杰狞。
+
+优先级：20
+模式：LISTEN
+listen_timing：TimingConst.HP_CHANGE_BEFORE
+listen_action_type：&"hp_change"
+conditions：
+[
+  {"op": &"HP_CHANGE_IS_DAMAGE"},
+  {"op": &"HP_CHANGE_AMOUNT_ABOVE", "params": {"threshold": 0}},
+  {"op": &"HP_CHANGE_TARGET_IS_OTHER_MECH"},
+  {
+    "op": &"HP_CHANGE_TARGET_IN_HEX_RANGE_OF_SELF",
+    "params": {"range": 4}
+  },
+  {"op": &"SELF_MECH_ALIVE"},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：[]
+actions：
+[
+  {
+    "type": &"CHOOSE_ONE",
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "由我方承受该次伤害",
+          "actions": [
+            {
+              "type": &"REDIRECT_HP_CHANGE_TARGET",  # 【需新增】保留数值/原因/来源，只改target并记录原目标
+              "params": {
+                "hp_change_action_id": "$payload.action_id",
+                "new_target_id": "$binding_context.mech_id",
+                "redirect_source_effect_id": &"pilot_049_effect_01"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+]
+
+人类 UI：按钮1置灰；其他机甲伤害发生前杰狞玩家弹“代受N伤害（来源：…）”。
+
+──────────── 效果拆解（pilot_049_effect_02 受伤积累下次伤害）────────────
+首句：机师设置后注册 permanent listener，监听 hp_change 的 HP_CHANGE_AFTER；杰狞实际受到正数伤害后，为“下次我方造成的伤害”增加1层，每层+4，可叠加。
+
+优先级：10
+模式：LISTEN
+listen_timing：TimingConst.HP_CHANGE_AFTER
+listen_action_type：&"hp_change"
+conditions：
+[
+  {"op": &"HP_CHANGE_TARGET_IS_SELF"},
+  {"op": &"HP_CHANGE_IS_DAMAGE"},
+  {"op": &"HP_CHANGE_ACTUAL_AMOUNT_ABOVE", "params": {"threshold": 0}},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：[]
+actions：
+[
+  {
+    "type": &"ADD_STATUS",
+    "params": {
+      "target_id": "$binding_context.mech_id",
+      "status_type": &"NEXT_DAMAGE_DEALT_PLUS_4",
+      "stacks": 1,
+      "duration": &"UNTIL_CONSUMED",
+      "source_card_instance_id": "$binding_context.card_instance_id"
+    }
+  }
+]
+
+人类 UI：按钮2置灰；显示待消费层数与总加成4×层数。
+
+──────────── 效果拆解（pilot_049_effect_03 消费伤害加成）────────────
+首句：机师设置后注册 permanent listener，监听 hp_change 的 HP_CHANGE_BEFORE；我方即将对其他机甲造成正数伤害且存在待消费层时，把全部层数×4加到该次伤害，并清空层数。
+
+优先级：20
+模式：LISTEN
+listen_timing：TimingConst.HP_CHANGE_BEFORE
+listen_action_type：&"hp_change"
+conditions：
+[
+  {"op": &"HP_CHANGE_SOURCE_OWNER_IS_SELF"},
+  {"op": &"HP_CHANGE_TARGET_IS_OTHER_MECH"},
+  {"op": &"HP_CHANGE_IS_DAMAGE"},
+  {"op": &"HP_CHANGE_AMOUNT_ABOVE", "params": {"threshold": 0}},
+  {"op": &"SOURCE_OWNER_HAS_STATUS", "params": {"status": &"NEXT_DAMAGE_DEALT_PLUS_4"}},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：[]
+actions：
+[
+  {
+    "type": &"MODIFY_HP_CHANGE_AMOUNT",  # 【需新增/扩展】在HP_CHANGE_BEFORE改record.amount
+    "params": {
+      "delta_expr": "4 * $status.NEXT_DAMAGE_DEALT_PLUS_4.stacks",
+      "hp_change_action_id": "$payload.action_id"
+    }
+  },
+  {
+    "type": &"REMOVE_STATUS",
+    "params": {
+      "target_id": "$binding_context.mech_id",
+      "status_type": &"NEXT_DAMAGE_DEALT_PLUS_4",
+      "remove_all": true
+    }
+  }
+]
+
+人类 UI：按钮3置灰；伤害预览显示本次将消费的总加成。
+
+──────────── 实现预告 ────────────
+- 新增原子动作 REDIRECT_HP_CHANGE_TARGET、MODIFY_HP_CHANGE_AMOUNT。
+- 复用ADD_STATUS/REMOVE_STATUS，状态按pilot实例来源聚合或独立存层。
+- hp_change record需包含source_owner_mech_id、original_target_id、redirect_history，防止循环转移。
+- 多个伤害转移监听器同一时点按优先级/注册序执行；目标已改为杰狞后其他“保护原目标”的条件重新校验。
+- 需重写旧 pilot_049 占位。
+
+──────────── 顺序与坑 ────────────
+- 只转移生命伤害，不转移攻击产生的损伤标记。
+- 伤害数值、类型与来源保持不变；因此杰狞受伤后可正常积累+4层。
+- 只有实际HP减少>0才加层；被免疫/减到0不积累。
+- 下次造成伤害包括攻击伤害和技能伤害；自伤不算“对其他机甲造成”。
+- 所有层一次性加到下一次hp_change并清空。
+- 若加成后的伤害被后续效果转移，层仍已消费并跟随该次hp_change。
+
+──────────── 测试场景 ────────────
+场景a：代受
+  前置：P2距P1杰狞4，P2将受5伤。
+  操作：HP_CHANGE_BEFORE确认。
+  断言：原目标=P2，新目标=P1，P1实际受5，P2不受。
+场景b：取消代受
+  断言：目标不变。
+场景c：积层
+  操作：P1分别实际受2、3伤。
+  断言：状态2层，总加成+8。
+场景d：消费
+  操作：P1下一次对P2造成基础1伤。
+  断言：record.amount变9；状态清空。
+场景e：0伤
+  操作：伤害被减为0。
+  断言：不积层。
+场景f：范围外
+  断言：不弹代受。
+
+歧义点：
+[歧义1] 可叠加的+4是全部层一次性用于“下次伤害”，还是每层分别用于之后多次伤害。智能体选择：全部层叠到同一次下次伤害（理由：“使下次…+4（可叠加）”通常指下一次数值累计）。候选：每层供一次伤害，各+4。▶ 回答：______智能体选择正确______________
+[歧义2] 多目标攻击产生多个hp_change时，加成作用于第一个目标还是所有目标。智能体选择：第一个实际创建的伤害动作消费（理由：“下次…伤害”是单次hp_change）。候选：同一攻击的所有目标均+4×层。▶ 回答：_智能体选择正确___________________
+═══════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════
+[机师牌 050] 杰西卡  （阵营:帝国 稀有度:R 费用:6 行动牌上限:4 回合攻击数:1）
+═══════════════════════════════════════════════════════════
+效果文本：其他机甲在我方4+X格范围内每消耗2动力，可以使该机甲和我方各受到2伤害（X初始为0）。
+每回合1次，我方受到伤害后X+1，之后可以弃置我方和4+X格范围内的1台其他机甲各2张行动牌。
+本拆解 effect_ids：["pilot_050_effect_01","pilot_050_effect_02"]
+
+──────────── 效果拆解（pilot_050_effect_01 动力阈值双伤）────────────
+首句：机师设置后注册 permanent listener，监听 stat_modify 的 STAT_MOD_AFTER；其他机甲在当前4+X六角距离内实际消耗动力时，按每累计2点形成1个可选触发单位，每单位可令该机甲与杰西卡各受到2伤害。
+
+优先级：10
+模式：LISTEN
+listen_timing：TimingConst.STAT_MOD_AFTER
+listen_action_type：&"stat_modify"
+conditions：
+[
+  {"op": &"STAT_MOD_TYPE_IS", "params": {"stat_type": &"power"}},
+  {"op": &"STAT_MOD_IS_SPEND"},
+  {"op": &"STAT_MOD_TARGET_IS_OTHER_MECH"},
+  {
+    "op": &"STAT_MOD_TARGET_IN_VARIABLE_HEX_RANGE_OF_SELF",
+    "params": {"base_range": 4, "variable_name": &"X"}
+  },
+  {"op": &"STAT_MOD_ACTUAL_SPENT_ABOVE", "params": {"threshold": 0}},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：[]
+actions：
+[
+  {
+    "type": &"ACCUMULATE_THRESHOLD_AND_REPEAT",  # 【需新增】
+    "params": {
+      "counter_key": &"pilot_050_power_remainder",
+      "counter_scope": ["$binding_context.card_instance_id", "$payload.target_mech_id"],
+      "add_value": "$payload.actual_delta_abs",
+      "threshold": 2,
+      "per_unit_optional": true,
+      "per_unit_label": "该机甲累计消耗2动力：双方各受2伤害",
+      "per_unit_actions": [
+        {
+          "type": &"EXECUTE_HP_CHANGE",
+          "params": {
+            "target_id": "$payload.target_mech_id",
+            "value": 2,
+            "method": &"damage",
+            "reason": &"pilot_050_power_damage"
+          }
+        },
+        {
+          "type": &"EXECUTE_HP_CHANGE",
+          "params": {
+            "target_id": "$binding_context.mech_id",
+            "value": 2,
+            "method": &"damage",
+            "reason": &"pilot_050_self_damage"
+          }
+        }
+      ]
+    }
+  }
+]
+
+执行顺序：动力扣除已完成但移动位置尚未更新时检查范围→累加目标独立余数→每凑2弹一次确认→确认则目标受2，再杰西卡受2；拒绝仍消费该2点阈值单位，剩余不足2保留。
+
+人类 UI：按钮1置灰；显示X、范围4+X及每台其他机甲的动力余数0/1。
+
+──────────── 效果拆解（pilot_050_effect_02 受伤成长并双弃）────────────
+首句：机师设置后注册 permanent listener，监听 hp_change 的 HP_CHANGE_AFTER；每个活动回合1次，我方实际受到伤害后X+1，之后可选择更新后4+X格内1台其他机甲，弃置我方与其各2张行动牌。
+
+优先级：10
+模式：LISTEN
+listen_timing：TimingConst.HP_CHANGE_AFTER
+listen_action_type：&"hp_change"
+conditions：
+[
+  {"op": &"HP_CHANGE_TARGET_IS_SELF"},
+  {"op": &"HP_CHANGE_IS_DAMAGE"},
+  {"op": &"HP_CHANGE_ACTUAL_AMOUNT_ABOVE", "params": {"threshold": 0}},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：[]
+once_per_turn_key=&"pilot_050_effect_02"
+once_per_turn_max=1
+actions：
+[
+  {
+    "type": &"INCREMENT_VARIABLE",
+    "params": {
+      "variable_name": &"X",
+      "delta": 1,
+      "scope_card_instance_id": "$binding_context.card_instance_id"
+    }
+  },
+  {
+    "type": &"CHOOSE_ONE",
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "弃置我方与范围内1台其他机甲各2张行动牌",
+          "condition": {
+            "op": &"SELF_AND_OTHER_MECH_HAVE_ACTION_CARDS_IN_VARIABLE_RANGE",
+            "params": {"base_range": 4, "variable_name": &"X", "count_each": 2}
+          },
+          "actions": [
+            {
+              "type": &"CHOOSE_OTHER_MECH_IN_VARIABLE_RANGE",
+              "params": {
+                "base_range": 4,
+                "variable_name": &"X",
+                "require_action_cards": 2,
+                "store_target_key": &"pilot_050_discard_target"
+              }
+            },
+            {
+              "type": &"EXECUTE_DISCARD",
+              "params": {
+                "from_target_ids": [
+                  "$binding_context.mech_id",
+                  "$result.pilot_050_discard_target.mech_id"
+                ],
+                "count_per_target": 2,
+                "choose": true,
+                "executor_mech_id": "$binding_context.mech_id",
+                "card_kind": &"ACTION",
+                "reason": &"pilot_050_double_discard"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+]
+
+人类 UI：按钮2置灰；显示本活动回合0/1及当前X。受伤后先更新X再计算可选目标范围。
+
+──────────── 实现预告 ────────────
+- X按pilot card_instance_id本局持续，初始0、无文本上限。
+- 新增 ACCUMULATE_THRESHOLD_AND_REPEAT；阈值余数按来源机师实例+被观察机甲存储。
+- 新增条件/选择动作 STAT_MOD_TARGET_IN_VARIABLE_HEX_RANGE_OF_SELF、SELF_AND_OTHER_MECH_HAVE_ACTION_CARDS_IN_VARIABLE_RANGE、CHOOSE_OTHER_MECH_IN_VARIABLE_RANGE。
+- stat_modify record需区分spend与普通降低、actual_delta及发生时目标当前位置。
+- 需重写旧 pilot_050 占位。
+
+──────────── 顺序与坑 ────────────
+- 只统计“消耗动力”，不统计敌方效果直接降低动力或回合开始回复。
+- 普通格连续移动两次各耗1，第二次凑满阈值；绿格一次耗2立即形成单位。
+- 各其他机甲余数独立；默认跨回合保留。
+- effect_01造成杰西卡自伤可触发effect_02，但每活动回合最多成长1。
+- effect_02先X+1，双弃范围使用新X。
+- 双弃分支只有双方均至少2牌时才可选；X成长不依赖是否执行双弃。
+
+──────────── 测试场景 ────────────
+场景a：两次耗1
+  前置：P2在范围内，余数0。
+  操作：P2连续两次各耗1动力。
+  断言：第一次余数1无窗；第二次弹1次；确认双方各受2，余数0。
+场景b：一次耗5
+  断言：形成2个单位，依次可选2次，余数1。
+场景c：范围外消耗
+  断言：不累计。
+场景d：受伤成长
+  操作：P1实际受伤。
+  断言：X从0到1；本回合后续受伤不再增长。
+场景e：双弃
+  前置：双方各≥2牌，P2在新范围5。
+  操作：选择P2并由P1选择双方各2。
+  断言：各弃2。
+场景f：取消双弃
+  断言：X仍已+1，牌不弃。
+
+歧义点：
+[歧义1] 消耗动力余数是否跨回合保留。智能体选择：保留（理由：文本没有“本回合累计”或重置语句，“每消耗2”按连续累计）。候选：每个机甲回合结束清零余数。▶ 回答：___智能体选择正确_________________
+[歧义2] 一次消耗2动力后选择不发动伤害，是否保留这2点以便以后再选。智能体选择：不保留，阈值单位已发生并被放弃（理由：否则可无限延后触发）。候选：拒绝时余数仍为2。▶ 回答：__智能体选择正确__________________
+[歧义3] 双弃时目标不足2张是否弃其全部。智能体选择：该分支不可选（理由：“各2张”要求双方精确支付，且为可选后续）。候选：不足者弃全部。▶ 回答：__候选正确__________________
+═══════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════
+[机师牌 051] 李  （阵营:秩序 稀有度:R 费用:5 行动牌上限:4 回合攻击数:1）
+═══════════════════════════════════════════════════════════
+效果文本：每回合1次，失去事件牌后可以立即抽1张事件牌设置到区域上。
+本局游戏1次，当1张事件牌被设置时，可以立即取消其效果，并弃置或设置到我方区域。
+本拆解 effect_ids：["pilot_051_effect_01","pilot_051_effect_02"]
+
+──────────── 效果拆解（pilot_051_effect_01 失去事件后补设）────────────
+首句：机师设置后注册 permanent listener，监听新增 EVENT_LOST_AFTER；我方事件区域的事件牌离开后，每个活动回合1次，可从事件牌堆抽1张并立即设置到我方事件区域。
+
+优先级：10
+模式：LISTEN
+listen_timing：TimingConst.EVENT_LOST_AFTER  # 【需新增】
+listen_action_type：&"event_change"
+conditions：
+[
+  {"op": &"EVENT_LOST_OWNER_IS_SELF"},
+  {"op": &"EVENT_CARD_ACTUALLY_LEFT_SLOT"},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：[]
+once_per_turn_key=&"pilot_051_effect_01"
+once_per_turn_max=1
+actions：
+[
+  {
+    "type": &"CHOOSE_ONE",
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "抽1张事件牌并立即设置",
+          "actions": [
+            {
+              "type": &"EXECUTE_DRAW_AND_SET_EVENT",  # 【需新增】
+              "params": {
+                "target_mech_id": "$binding_context.mech_id",
+                "count": 1,
+                "from_zone": &"EVENT_DECK",
+                "reason": &"pilot_051_replace_event"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+]
+
+人类 UI：按钮1置灰；事件离场后弹“补设事件（本回合0/1）”。
+
+──────────── 效果拆解（pilot_051_effect_02 取消并处置新事件）────────────
+首句：机师设置后注册 permanent listener，监听新增 EVENT_SET_BEFORE_EFFECT；任意事件牌刚被设置但其即时/持续效果尚未注册时，本局1次可取消这次设置所产生的效果，然后选择弃置该牌或把它重新设置到我方事件区域。
+
+优先级：30
+模式：LISTEN
+listen_timing：TimingConst.EVENT_SET_BEFORE_EFFECT  # 【需新增，必须先于事件效果注册】
+listen_action_type：&"set_event"
+conditions：
+[
+  {"op": &"EVENT_CARD_JUST_SET"},
+  {"op": &"EVENT_SET_NOT_CREATED_BY_THIS_EFFECT"},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：[]
+once_per_game_key=&"pilot_051_effect_02"
+actions：
+[
+  {
+    "type": &"CHOOSE_ONE",
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "取消该事件效果并处置此牌",
+          "actions": [
+            {
+              "type": &"CANCEL_EVENT_EFFECT_REGISTRATION",  # 【需新增】
+              "params": {
+                "set_event_action_id": "$payload.action_id",
+                "card_instance_id": "$payload.event_card_instance_id"
+              }
+            },
+            {
+              "type": &"TARGET_CHOOSE_ONE",
+              "params": {
+                "decision_owner_mech_id": "$binding_context.mech_id",
+                "options": [
+                  {
+                    "label": "弃置该事件牌",
+                    "actions": [
+                      {
+                        "type": &"EXECUTE_DISCARD_EVENT",
+                        "params": {
+                          "card_instance_id": "$payload.event_card_instance_id",
+                          "reason": &"pilot_051_cancel_event"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "label": "设置到我方事件区域",
+                    "actions": [
+                      {
+                        "type": &"EXECUTE_SET_EVENT",
+                        "params": {
+                          "card_instance_id": "$payload.event_card_instance_id",
+                          "target_mech_id": "$binding_context.mech_id",
+                          "reason": &"pilot_051_take_event",
+                          "created_by_effect_id": &"pilot_051_effect_02",
+                          "resolve_effect_normally": true
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+]
+
+执行顺序：EVENT_SET_BEFORE_EFFECT暂停→李确认（此时立即标记once_per_game已用，避免递归）→取消原设置的效果注册→二选一：
+- 弃置：事件离开原槽，触发对应EVENT_LOST链；
+- 设置我方：先处理我方旧事件替换/失去，再把该牌设到我方；新set_event带created_by标记，不再次触发本effect，事件效果按本拆解正常生效。
+
+人类 UI：按钮2置灰；任意事件设置时李玩家弹确认，显示事件完整信息与原目标机甲。
+
+──────────── 实现预告 ────────────
+- 四份文档未定义事件牌动作生命周期，需新增：
+  EVENT_SET_BEFORE_EFFECT / EVENT_SET_AFTER / EVENT_SET_SETTLE；
+  EVENT_LOST_BEFORE / EVENT_LOST_AFTER / EVENT_LOST_SETTLE。
+- 新增动作 EXECUTE_DRAW_AND_SET_EVENT、CANCEL_EVENT_EFFECT_REGISTRATION、EXECUTE_DISCARD_EVENT、EXECUTE_SET_EVENT。
+- 事件效果注册必须可延迟到EVENT_SET_BEFORE_EFFECT窗口关闭后。
+- 复用once_per_game_key。
+- 需重写旧 pilot_051 占位。
+
+──────────── 顺序与坑 ────────────
+- effect_02监听场上任意机甲的事件设置，包括李自己。
+- once_per_game在确认发动时立即占用，防止把牌重设到自己时再次拦截。
+- 选择设置到自己时，若自己已有事件，旧事件离场可触发effect_01；嵌套动作须串行。
+- 事件牌堆为空时effect_01不可选。
+- “失去”包括计时归0弃置、被替换、被效果移走/弃置；是否包括机甲毁灭清区见歧义2。
+
+──────────── 测试场景 ────────────
+场景a：旧事件计时归0
+  操作：EVENT_LOST_AFTER确认补设。
+  断言：抽1事件并设置；次数1。
+场景b：取消补设
+  断言：不抽、不计次。
+场景c：拦截敌方事件并弃置
+  操作：敌方set_event→李确认→选择弃置。
+  断言：原事件效果未注册/未执行；牌进事件弃牌堆；once_per_game已用。
+场景d：拦截并设置给自己
+  断言：原目标不受事件；牌进入李事件槽；新设置效果按裁定执行一次；不递归弹effect_02。
+场景e：再次拦截
+  断言：不触发。
+场景f：自己旧事件被替换
+  断言：EVENT_LOST可触发effect_01，但每活动回合最多一次。
+
+歧义点：
+[歧义1] 被李设置到自己区域后，该事件的效果是否重新生效。智能体选择：作为一次新的设置正常生效（理由：“设置到我方区域”通常必须使事件牌具有实际功能，原取消针对原设置）。候选：该牌效果被永久取消，仅占据事件槽。▶ 回答：__智能体选择正确__________________
+[歧义2] 机甲毁灭导致事件区域清空是否算“失去事件牌”并允许补设。智能体选择：不允许（理由：机甲已毁灭，无合法区域可设置）。候选：仍触发但动作因无目标失败。▶ 回答：____智能体选择正确________________
+[歧义3] effect_02是否可在事件效果已开始执行后取消。智能体选择：不可，必须在专用BEFORE_EFFECT时点拦截（理由：“立即取消”需要避免回滚已执行子动作）。候选：EVENT_SET_AFTER回滚。▶ 回答：___智能体选择正确_________________
+═══════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════
+[机师牌 052] 萨伊  （阵营:秩序 稀有度:R 费用:6 行动牌上限:4 回合攻击数:1）
+═══════════════════════════════════════════════════════════
+效果文本：我方回合2次，可以弃置1张行动牌，之后抽1张装备牌。
+本拆解 effect_ids：["pilot_052_effect_01"]
+
+──────────── 效果拆解（pilot_052_effect_01 弃行动换装备）────────────
+首句：DIRECT，主阶段按钮；弃置1张行动牌，之后从基础装备牌堆抽1张装备牌，每个我方回合2次。
+
+优先级：10
+模式：DIRECT
+conditions：
+[
+  {"op": &"IS_OWNER_MAIN_PHASE"},
+  {"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"count": 1}},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：
+[
+  {"cost_type": &"DISCARD_ACTION_CARD", "count": 1},
+]
+once_per_turn_key=&"pilot_052_effect_01"
+once_per_turn_max=2
+actions：
+[
+  {"type": &"DRAW_EQUIPMENT", "params": {"count": 1, "deck": &"BASIC"}},
+]
+
+人类 UI：按钮1“弃1行动抽1装备（本回合0/2）”。
+
+──────────── 实现预告 ────────────
+- 全部复用：DISCARD_ACTION_CARD、DRAW_EQUIPMENT。
+- 按“之后”在discard SETTLE后创建gain_card。
+- 需重写旧 pilot_052 占位。
+
+──────────── 顺序与坑 ────────────
+- 弃牌会触发德伦迪、肯尼斯等通用弃置监听。
+- 抽的是基础装备牌堆，不是高级装备。
+- 装备牌堆无法提供牌时应在按钮预检禁用或按统一重洗规则处理。
+- 两次次数独立于规则商店行为。
+
+──────────── 测试场景 ────────────
+场景a：正常
+  操作：弃1→抽1装备。
+  断言：discard先SETTLE；equipment deck-1；次数1。
+场景b：两次
+  断言：可连续发动2次。
+场景c：第三次
+  断言：禁用。
+场景d：取消弃牌
+  断言：不抽、不计次。
+场景e：无手牌
+  断言：禁用。
+
+歧义点：
+[歧义1] 无实质歧义。智能体选择：抽基础装备牌（理由：规则未说明时默认装备牌堆）。候选：可选基础或高级。▶ 回答：__智能体选择正确__________________
+═══════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════
+[机师牌 053] 亚林  （阵营:秩序 稀有度:R 费用:6 行动牌上限:4 回合攻击数:1）
+═══════════════════════════════════════════════════════════
+效果文本：每回合2次，我方区域有正面朝上的装备牌被设置/弃置时，可以抽2张行动牌，行动牌上限+1（效果持续到下个我方回合开始）。
+本拆解 effect_ids：["pilot_053_effect_01","pilot_053_effect_02"]
+
+──────────── 效果拆解（pilot_053_effect_01 正面装备设置时奖励）────────────
+首句：机师设置后注册 permanent listener，监听 set_equipment 的 SET_EQUIP_AFTER；装备在我方非备用功能槽正式正面设置后，可抽2张并使我方手牌上限+1至下个我方回合开始。
+
+优先级：10
+模式：LISTEN
+listen_timing：TimingConst.SET_EQUIP_AFTER
+listen_action_type：&"set_equipment"
+conditions：
+[
+  {"op": &"SET_EQUIP_TARGET_IS_SELF"},
+  {"op": &"SET_EQUIP_CARD_IS_FACE_UP"},
+  {"op": &"SET_EQUIP_SLOT_KIND_IN", "params": {"slot_kinds": [&"PART", &"WEAPON"]}},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：[]
+once_per_turn_key=&"pilot_053_effect_shared"
+once_per_turn_max=2
+actions：
+[
+  {
+    "type": &"CHOOSE_ONE",
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "抽2张，行动牌上限+1",
+          "actions": [
+            {"type": &"DRAW_ACTION", "params": {"count": 2}},
+            {
+              "type": &"MODIFY_ACTION_HAND_LIMIT",
+              "params": {
+                "target_id": "$binding_context.mech_id",
+                "delta": 1,
+                "duration": &"UNTIL_NEXT_OWNER_TURN",
+                "duration_owner_id": "$binding_context.player_id"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+]
+
+人类 UI：按钮1置灰；显示共享次数0/2。
+
+──────────── 效果拆解（pilot_053_effect_02 正面装备弃置时奖励）────────────
+首句：机师设置后注册 permanent listener，监听 discard 的 DISCARD_AFTER；若本次离开我方区域的装备在弃置前为正面设置于部件/武器槽，可发动同样奖励，与effect_01共享每回合2次。
+
+优先级：10
+模式：LISTEN
+listen_timing：TimingConst.DISCARD_AFTER
+listen_action_type：&"discard"
+conditions：
+[
+  {"op": &"DISCARDED_CARD_WAS_FACE_UP_EQUIPMENT_OF_SELF"},
+  {"op": &"DISCARDED_EQUIPMENT_PREVIOUS_SLOT_KIND_IN", "params": {"slot_kinds": [&"PART", &"WEAPON"]}},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：[]
+once_per_turn_key=&"pilot_053_effect_shared"
+once_per_turn_max=2
+actions：与effect_01相同。
+
+GDScript：
+[
+  {
+    "type": &"CHOOSE_ONE",
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "抽2张，行动牌上限+1",
+          "actions": [
+            {"type": &"DRAW_ACTION", "params": {"count": 2}},
+            {
+              "type": &"MODIFY_ACTION_HAND_LIMIT",
+              "params": {
+                "target_id": "$binding_context.mech_id",
+                "delta": 1,
+                "duration": &"UNTIL_NEXT_OWNER_TURN",
+                "duration_owner_id": "$binding_context.player_id"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+]
+
+──────────── 实现预告 ────────────
+- 复用：SET_EQUIP_AFTER、DISCARD_AFTER、DRAW_ACTION、MODIFY_ACTION_HAND_LIMIT。
+- discard record必须保留previous_owner_mech_id、previous_slot_id、was_face_up、card_kind。
+- 两effect共享once_per_turn_key=&"pilot_053_effect_shared"。
+- 需重写旧 pilot_053 占位。
+
+──────────── 顺序与坑 ────────────
+- 设置新装备替换旧牌时：旧牌DISCARD_AFTER可触发一次，新牌SET_EQUIP_AFTER再触发一次，可能正好用完共享2次。
+- 备用区背面牌设置/弃置不触发；从备用区翻到正面功能槽时触发设置。
+- 每次确认发动后上限层可叠加，最多因本技能本活动回合+2。
+- 到期锚定亚林下个TURN_START。
+- 由装备耐久损坏、替换、出售或效果弃置，只要离开前正面设置均可触发。
+
+──────────── 测试场景 ────────────
+场景a：设置装备
+  断言：确认后抽2，上限+1，共享次数1。
+场景b：替换装备
+  操作：旧牌弃置触发并确认，新牌设置触发并确认。
+  断言：总抽4、上限+2、次数2。
+场景c：第三个事件
+  断言：不再弹。
+场景d：取消第一次
+  断言：不抽、不加上限、不占次数；后续仍有2次。
+场景e：弃备用背面牌
+  断言：不触发。
+场景f：到期
+  断言：P1下个TURN_START移除所有本source层。
+
+歧义点：
+[歧义1] 设置替换装备产生的“旧牌弃置+新牌设置”是否算两次。智能体选择：算两次（理由：文本并列两个独立事件，动作生命周期也分别发时点）。候选：一次设置操作最多触发一次。▶ 回答：__智能体选择正确__________________
+[歧义2] “我方区域”是否包括备用区。智能体选择：区域包括，但条件要求牌正面朝上；常规备用牌背面，因此不触发（理由：保留未来正面备用特殊情况）。候选：备用区永远排除。▶ 回答：_智能体选择正确___________________
+═══════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════
+[机师牌 054] 莉卡尔  （阵营:秩序 稀有度:R 费用:6 行动牌上限:4 回合攻击数:1）
+═══════════════════════════════════════════════════════════
+效果文本：我方回合2次，从商店购买装备牌后可以获得3金币，若购买的是高级装备牌，则可再抽2张行动牌。
+本拆解 effect_ids：["pilot_054_effect_01"]
+
+──────────── 效果拆解（pilot_054_effect_01 购买返利）────────────
+首句：机师设置后注册 permanent listener，监听 shop_buy 的 SHOP_BUY_AFTER；我方成功从商店购买并获得装备牌后，每个我方回合2次可得3金币，若该牌来自高级装备区域，再抽2张行动牌。
+
+优先级：10
+模式：LISTEN
+listen_timing：TimingConst.SHOP_BUY_AFTER
+listen_action_type：&"shop_buy"
+conditions：
+[
+  {"op": &"SHOP_BUY_BUYER_IS_SELF"},
+  {"op": &"SHOP_BUY_SUCCEEDED"},
+  {"op": &"SHOP_BUY_CARD_KIND_IS", "params": {"card_kind": &"EQUIPMENT"}},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：[]
+once_per_turn_key=&"pilot_054_effect_01"
+once_per_turn_max=2
+actions：
+[
+  {
+    "type": &"CHOOSE_ONE",
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "购买返利：获得3金币",
+          "actions": [
+            {"type": &"GAIN_GOLD", "params": {"amount": 3}},
+            {
+              "type": &"CONDITIONAL_ACTIONS",
+              "params": {
+                "conditions": [
+                  {"op": &"SHOP_BUY_CARD_IS_ADVANCED"}
+                ],
+                "actions": [
+                  {"type": &"DRAW_ACTION", "params": {"count": 2}}
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+]
+
+人类 UI：按钮1置灰；购买完成后弹返利确认，显示本回合剩余次数及是否含高级奖励。
+
+──────────── 实现预告 ────────────
+- 复用：SHOP_BUY_AFTER、GAIN_GOLD、DRAW_ACTION。
+- 新增/复用CONDITIONAL_ACTIONS、SHOP_BUY_CARD_IS_ADVANCED。
+- shop_buy record需记录shop_slot_kind / deck_kind / card_rarity / actual_price。
+- 需重写旧 pilot_054 占位。
+
+──────────── 顺序与坑 ────────────
+- 必须在购买成功、牌已归属我方后触发；取消购买不触发。
+- 返利不降低购买前置金币要求，必须先付得起原价/折扣价。
+- “高级装备牌”按来源高级装备牌堆或rarity SR/SSR统一判定；建议用deck_kind=&"ADVANCED"。
+- 若霍恩效果取得商店隐藏牌按本档pilot_046选择不算SHOP_BUY，则不触发。
+- 两次可选择性使用，取消不占次数。
+
+──────────── 测试场景 ────────────
+场景a：基础装备
+  断言：购买后确认得3金，不抽牌。
+场景b：高级装备
+  断言：得3金并抽2。
+场景c：取消返利
+  断言：无奖励、不计次。
+场景d：第三次购买
+  断言：不弹技能。
+场景e：购买取消/失败
+  断言：不触发。
+场景f：折扣购买高级
+  断言：仍按高级判定并奖励。
+
+歧义点：
+[歧义1] 隐藏高级装备花10金币直接购买是否属于高级购买。智能体选择：属于（理由：牌来源高级装备牌堆，隐藏状态不改变类别）。候选：隐藏购买不触发。▶ 回答：_智能体选择正确___________________
+═══════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════
+[机师牌 055] 霍克  （阵营:混乱 稀有度:R 费用:6 行动牌上限:4 回合攻击数:1）
+═══════════════════════════════════════════════════════════
+效果文本：每回合1次，卖出装备牌获得的金币*2，若卖出的是高级装备牌，则可再获得3金币。
+本拆解 effect_ids：["pilot_055_effect_01a","pilot_055_effect_01b"]
+
+──────────── 效果拆解（pilot_055_effect_01a 选择双倍卖价）────────────
+首句：机师设置后注册 permanent listener，监听新增 SHOP_SELL_BEFORE；我方即将卖出1张装备牌时，每个活动回合1次可令本次卖出基础金币收益×2，并在sell record写入霍克已发动标记。
+
+优先级：20
+模式：LISTEN
+listen_timing：TimingConst.SHOP_SELL_BEFORE  # 【需新增】
+listen_action_type：&"shop_sell"
+conditions：
+[
+  {"op": &"SHOP_SELL_SELLER_IS_SELF"},
+  {"op": &"SHOP_SELL_CARD_KIND_IS_EQUIPMENT"},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：[]
+once_per_turn_key=&"pilot_055_effect_01"
+once_per_turn_max=1
+actions：
+[
+  {
+    "type": &"CHOOSE_ONE",
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "本次卖出金币收益×2",
+          "actions": [
+            {
+              "type": &"MODIFY_SHOP_SELL_PAYOUT",  # 【需新增】
+              "params": {
+                "sell_action_id": "$payload.action_id",
+                "multiplier": 2
+              }
+            },
+            {
+              "type": &"SET_ACTION_RECORD_FLAG",
+              "params": {
+                "action_id": "$payload.action_id",
+                "flag": &"pilot_055_activated",
+                "value": true,
+                "source_card_instance_id": "$binding_context.card_instance_id"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+]
+
+人类 UI：按钮1置灰；确认卖出前弹“霍克：本次收益X→2X”。
+
+──────────── 效果拆解（pilot_055_effect_01b 高级额外3金币）────────────
+首句：机师设置后注册 permanent listener，监听新增 SHOP_SELL_AFTER；同一卖出动作已发动effect_01a且卖出牌为高级装备时，可再获得3金币。
+
+优先级：10
+模式：LISTEN
+listen_timing：TimingConst.SHOP_SELL_AFTER  # 【需新增】
+listen_action_type：&"shop_sell"
+conditions：
+[
+  {"op": &"ACTION_RECORD_FLAG_IS", "params": {"flag": &"pilot_055_activated", "value": true}},
+  {"op": &"SHOP_SELL_CARD_IS_ADVANCED"},
+  {"op": &"SHOP_SELL_SUCCEEDED"},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：[]
+requires_effect=&"pilot_055_effect_01a"
+actions：
+[
+  {
+    "type": &"CHOOSE_ONE",
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "高级装备额外获得3金币",
+          "actions": [
+            {"type": &"GAIN_GOLD", "params": {"amount": 3}}
+          ]
+        }
+      ]
+    }
+  }
+]
+
+人类 UI：按钮2置灰；高级卖出完成后弹额外奖励确认。
+
+──────────── 实现预告 ────────────
+- 四份文档没有卖出动作时点，新增SHOP_SELL_BEFORE/AFTER/SETTLE及shop_sell record。
+- 新增MODIFY_SHOP_SELL_PAYOUT，仿SHOP_BUY_MODIFIER但修正payout。
+- 高级判定按deck_kind/rareness统一。
+- 需重写旧 pilot_055 占位。
+
+──────────── 顺序与坑 ────────────
+- 双倍作用于规则卖出所得“牌面金币”，不是当前总金币。
+- 高级额外3在双倍之外相加：最终=基础卖价×2+3。
+- 只有确认使用双倍的那次高级卖出才可再+3。
+- 取消effect_01a不占次数，可留给本活动回合后续卖牌。
+- 规则每位玩家自己回合最多卖2张；霍克技能的“每回合”虽按任意活动回合，但普通卖出通常只会在我方主阶段发生。
+
+──────────── 测试场景 ────────────
+场景a：基础牌cost4
+  断言：发动后卖出收益8，无额外3。
+场景b：高级牌cost6
+  断言：收益12，确认后再+3，总15。
+场景c：取消双倍
+  断言：正常收益6，不触发额外3，次数未用。
+场景d：本回合第二次卖出
+  断言：若第一次已发动，第二次不弹。
+场景e：卖出动作取消
+  断言：若在霍克确认前取消不计次；若霍克已确认后底层卖出因非法失败，次数是否返还按统一不可逆规则，建议返还因无收益实际发生。
+
+歧义点：
+[歧义1] 高级装备额外3是否必须先使用双倍效果。智能体选择：必须（理由：同一句“若卖出的是高级……再获得”，承接每回合1次的该次卖出）。候选：任何高级卖出都可+3，即使本回合双倍用在另一张牌。▶ 回答：__智能体选择正确__________________
+[歧义2] 双倍是否也乘高级额外3。智能体选择：不乘，先基础收益×2，再+3（理由：“若…则可再获得3”是独立追加）。候选：(基础+3)×2。▶ 回答：____智能体选择正确________________
+═══════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════
+[机师牌 056] 铠厉  （阵营:混乱 稀有度:R 费用:6 行动牌上限:4 回合攻击数:1）
+═══════════════════════════════════════════════════════════
+效果文本：若发动的攻击被响应，则可以抽2张装备牌，若不立即设置，则需要直接弃置并获得牌面记述数量的金币。
+本拆解 effect_ids：["pilot_056_effect_01"]
+
+──────────── 效果拆解（pilot_056_effect_01 被响应后装备处置）────────────
+首句：机师设置后注册 permanent listener，监听 attack 的 ATTACK_SETTLE；我方攻击被响应时，可从基础装备牌堆抽至多2张到临时区，并对每张依次选择立即设置，或直接弃置并获得其印刷金币。
+
+优先级：10
+模式：LISTEN
+listen_timing：TimingConst.ATTACK_SETTLE
+listen_action_type：&"attack"
+conditions：
+[
+  {"op": &"SELF_MECH_IS_ATTACKER"},
+  {"op": &"ATTACK_WAS_RESPONDED"},
+  {"op": &"SELF_MECH_ALIVE"},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：[]
+actions：
+[
+  {
+    "type": &"CHOOSE_ONE",
+    "params": {
+      "optional": true,
+      "options": [
+        {
+          "label": "抽2张装备牌并立即处置",
+          "actions": [
+            {
+              "type": &"DRAW_EQUIPMENT_TO_TEMP",  # 【需新增/扩展】不进入普通未设置持有区
+              "params": {
+                "count": 2,
+                "deck": &"BASIC",
+                "store_cards_key": &"pilot_056_drawn_equipment"
+              }
+            },
+            {
+              "type": &"FOR_EACH_CARD",
+              "params": {
+                "cards": "$result.pilot_056_drawn_equipment",
+                "actions": [
+                  {
+                    "type": &"CHOOSE_ONE",
+                    "params": {
+                      "optional": false,
+                      "options": [
+                        {
+                          "label": "立即设置此装备",
+                          "condition": {
+                            "op": &"CURRENT_CARD_HAS_LEGAL_EQUIPMENT_SLOT",
+                            "params": {"target_mech_id": "$binding_context.mech_id"}
+                          },
+                          "actions": [
+                            {
+                              "type": &"EXECUTE_SET_EQUIP",
+                              "params": {
+                                "card_instance_id": "$current_card.card_instance_id",
+                                "target_mech_id": "$binding_context.mech_id",
+                                "face_up": true,
+                                "reason": &"pilot_056_immediate_set"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "label": "弃置此装备并获得牌面金币",
+                          "actions": [
+                            {
+                              "type": &"EXECUTE_DISCARD",
+                              "params": {
+                                "card_instance_ids": ["$current_card.card_instance_id"],
+                                "reason": &"pilot_056_cash_out"
+                              }
+                            },
+                            {
+                              "type": &"GAIN_GOLD",
+                              "params": {"amount": "$current_card.printed_cost"}
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+]
+
+执行顺序：原攻击SETTLE暂停→确认→抽牌到临时区→牌1强制二选一并完整结算→牌2强制二选一→临时区清空→返回原attack。无法设置的牌只显示弃置换金币选项。
+
+人类 UI：按钮1置灰；确认后逐张显示卡面、合法设置槽及“弃置得N金币”。
+
+──────────── 实现预告 ────────────
+- 复用：ATTACK_WAS_RESPONDED、EXECUTE_SET_EQUIP、EXECUTE_DISCARD、GAIN_GOLD。
+- 新增/扩展 DRAW_EQUIPMENT_TO_TEMP、FOR_EACH_CARD、CURRENT_CARD_HAS_LEGAL_EQUIPMENT_SLOT。
+- 临时装备在效果结束前不能卖出、设置到备用或被其他普通操作使用。
+- 需重写旧 pilot_056 占位。
+
+──────────── 顺序与坑 ────────────
+- 每张牌独立选择；可设置1张、兑现1张。
+- “立即设置”按普通设置规则，可替换旧装备并移除对应耐久数量损伤。
+- 弃置换金币不是“卖出”，不触发霍克或每回合卖出次数。
+- 牌面金币使用printed_cost，不乘1.5。
+- 装备牌堆不足2时处理实际抽到数量；0张时技能不应允许发动或确认后无收益见统一牌堆预检。
+- 由本效果设置装备可触发亚林。
+
+──────────── 测试场景 ────────────
+场景a：一设一卖
+  前置：抽到部件cost4、武器cost6。
+  操作：设置部件，弃武器。
+  断言：部件正面入槽；武器弃置；金币+6。
+场景b：两张都设置
+  断言：依序完成设置，可能触发两次亚林。
+场景c：无合法槽
+  断言：该牌只能弃置换金币。
+场景d：取消整项
+  断言：不抽牌。
+场景e：攻击未响应
+  断言：不触发。
+场景f：牌堆只剩1张
+  断言：只处理1张。
+
+歧义点：
+[歧义1] 抽到的装备能否设置到备用区。智能体选择：不能，必须立即正面设置到其合法功能槽；否则弃置换金币（理由：“立即设置”与“备用区背面设置”通常有明确区分）。候选：可背面放备用。▶ 回答：__候选正确，没说是“正面设置”，可以设置到备用区__________________
+[歧义2] 选择装备设置窗口取消时如何处理。智能体选择：等同“不立即设置”，强制弃置并得金币（理由：牌面不允许留在持有区）。候选：整张牌留在未设置装备区。▶ 回答：__智能体选择正确__________________
+═══════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════
+[机师牌 057] 格雷厄姆  （阵营:混乱 稀有度:R 费用:6 行动牌上限:4 回合攻击数:1）
+═══════════════════════════════════════════════════════════
+效果文本：我方回合1次，可以将1张行动牌当作设陷使用。
+我方回合1次，可以选择4格范围内的1个陷阱，弃置任意张行动牌，每弃置1张牌就可使该陷阱移动4格。
+本拆解 effect_ids：["pilot_057_effect_01","pilot_057_effect_02"]
+
+──────────── 效果拆解（pilot_057_effect_01 1牌当作设陷）────────────
+首句：DIRECT，主阶段按钮；弃置1张行动牌，当作设陷使用。
+
+优先级：10
+模式：DIRECT
+conditions：
+[
+  {"op": &"IS_OWNER_MAIN_PHASE"},
+  {"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"count": 1}},
+  {"op": &"NAMED_ACTION_IS_USABLE", "params": {"named_type": &"设陷"}},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：
+[
+  {"cost_type": &"DISCARD_ACTION_CARD", "count": 1},
+]
+once_per_turn_key=&"pilot_057_effect_01"
+once_per_turn_max=1
+actions：
+[
+  {
+    "type": &"TREAT_CARD_AS_NAMED_TYPE",
+    "params": {
+      "named_type": &"设陷",
+      "count": 1,
+      "source_pilot_effect_id": &"pilot_057_effect_01"
+    }
+  }
+]
+
+人类 UI：按钮1“1牌当作设陷（0/1）”。
+
+权威缺口说明：《行动牌的效果与逻辑》未提供设陷的基础目标、范围、陷阱生成与触发链；本效果只能调用补齐后的named_type=&"设陷"，不得以CUSTOM文本替代。
+
+──────────── 效果拆解（pilot_057_effect_02 弃牌移动陷阱）────────────
+首句：DIRECT，主阶段按钮；选择距我方4格内任意1个陷阱标记，弃置至少1张、至多全部行动牌；每张牌获得一次令该陷阱移动最多4格的串行移动机会。
+
+优先级：10
+模式：DIRECT
+conditions：
+[
+  {"op": &"IS_OWNER_MAIN_PHASE"},
+  {"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"count": 1}},
+  {"op": &"TRAP_MARKER_IN_HEX_RANGE", "params": {"range": 4}},
+]
+target_rules：
+[
+  {"rule": &"CHOOSE_TRAP_MARKER_IN_RANGE", "params": {"range": 4}},
+]
+costs：[]
+once_per_turn_key=&"pilot_057_effect_02"
+once_per_turn_max=1
+actions：
+[
+  {
+    "type": &"CHOOSE_MANY_CARDS",
+    "params": {
+      "zone": &"OWNER_ACTION_HAND",
+      "min_count": 1,
+      "max_count": "$owner.action_hand_count",
+      "label": "每弃1张，使所选陷阱移动最多4格",
+      "store_cards_key": &"pilot_057_move_cost_cards"
+    }
+  },
+  {
+    "type": &"EXECUTE_DISCARD",
+    "params": {
+      "card_instance_ids": "$result.pilot_057_move_cost_cards",
+      "reason": &"pilot_057_move_trap_cost",
+      "store_actual_count": &"pilot_057_move_units"
+    }
+  },
+  {
+    "type": &"REPEAT_ACTION",
+    "params": {
+      "count": "$result.pilot_057_move_units",
+      "actions": [
+        {
+          "type": &"EXECUTE_MOVE_MAP_MARKER",  # 【需新增】
+          "params": {
+            "marker_id": "$selected_target.marker_id",
+            "marker_type": &"TRAP",
+            "max_distance": 4,
+            "distance_metric": &"HEX",
+            "allow_cancel_each_unit": true,
+            "trigger_on_move": false
+          }
+        }
+      ]
+    }
+  }
+]
+
+执行顺序：选陷阱→选牌→弃牌SETTLE→按实际弃牌数逐次弹陷阱移动路径；每次最多4格，可提前取消该次或剩余次数。已弃牌不返还。
+
+人类 UI：按钮2“移动陷阱（0/1）”；陷阱目标高亮，卡牌选择实时显示总移动机会。
+
+──────────── 实现预告 ────────────
+- 复用：TREAT_CARD_AS_NAMED_TYPE、CHOOSE_MANY_CARDS、EXECUTE_DISCARD。
+- 新增地图目标规则 CHOOSE_TRAP_MARKER_IN_RANGE、条件TRAP_MARKER_IN_HEX_RANGE。
+- 新增EXECUTE_MOVE_MAP_MARKER及REPEAT_ACTION；接入MapState markers与_HexGrid。
+- 必须先补齐设陷行动牌权威定义。
+- 需重写旧 pilot_057 占位。
+
+──────────── 顺序与坑 ────────────
+- 可选择场上任意归属的陷阱，文本未限制我方。
+- 陷阱移动不等同机甲移入/攻击/爆炸，默认不触发陷阱；只更新marker cell。
+- 每张牌对应独立4格机会，而非把总距离简单合并后一次选终点；这样中途可改方向。
+- 陷阱若被其他嵌套效果移除，剩余移动单位终止。
+- 弃牌动作可触发其他弃牌监听。
+- 第二技能与当作设陷次数独立。
+
+──────────── 测试场景 ────────────
+场景a：弃2牌移动两次
+  操作：选陷阱→弃2→第一次移4→第二次移3并取消。
+  断言：最终位置按两段路径；弃牌2；次数1。
+场景b：取消选牌
+  断言：不弃牌、不计次。
+场景c：弃牌后取消全部移动
+  断言：牌不返还，陷阱不动，次数已用。
+场景d：范围外陷阱
+  断言：不可选。
+场景e：敌方陷阱
+  断言：可选并移动。
+场景f：当作设陷
+  断言：无USE_ACTION_*；调用权威设陷链；本技能01计次。
+
+歧义点：
+[歧义1] “移动4格”是必须恰好4格还是最多4格。智能体选择：最多4格（理由：地图障碍/边界可能不足，且“可使”允许提前结束）。候选：每张牌必须移动恰好4格，否则该次不可执行。▶ 回答：__智能体选择正确__________________
+[歧义2] 移动陷阱经过或落到机甲格是否立即爆炸。智能体选择：不触发（理由：规则只写机甲移至、陷阱被攻击/爆炸时触发，未写标记被效果移动）。候选：落到机甲所在格立即触发。▶ 回答：_____候选正确，可以落到机甲所在格_______________
+[歧义3] 可否移动敌方设置的陷阱。智能体选择：可以（理由：文本只写“1个陷阱”）。候选：只能我方陷阱。▶ 回答：__智能体选择正确__________________
+═══════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════
+[机师牌 058] 卡米拉  （阵营:混乱 稀有度:R 费用:6 行动牌上限:4 回合攻击数:1）
+═══════════════════════════════════════════════════════════
+效果文本：发动攻击时可以展示我方任意张行动牌，其中每包含1种类型(攻击，迎击，辅助)，则本次攻击威力+2；若包含3种类型，则本次攻击范围+2。
+本拆解 effect_ids：["pilot_058_effect_01"]
+
+──────────── 效果拆解（pilot_058_effect_01 展示手牌强化攻击）────────────
+首句：机师设置后注册 permanent listener，监听 attack 的 ATTACK_BEFORE；选定武器后、选择目标前，可展示手中至少1张行动牌，按展示牌中不同原始大类型数量N使本攻击威力+2N；N=3时再使范围+2。
+
+优先级：20（必须在目标选择与范围合法性检查前完成）
+模式：LISTEN
+listen_timing：TimingConst.ATTACK_BEFORE
+listen_action_type：&"attack"
+conditions：
+[
+  {"op": &"SELF_MECH_IS_ATTACKER"},
+  {"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"count": 1}},
+]
+target_rules：[{"rule": &"NO_TARGET"}]
+costs：[]
+actions：
+[
+  {
+    "type": &"CHOOSE_MANY_CARDS",
+    "params": {
+      "zone": &"OWNER_ACTION_HAND",
+      "min_count": 1,
+      "max_count": "$owner.action_hand_count",
+      "optional": true,
+      "label": "展示行动牌；每种类型威力+2，三种齐全范围+2",
+      "store_cards_key": &"pilot_058_revealed_cards"
+    }
+  },
+  {
+    "type": &"EXECUTE_SHOW_CARD",
+    "params": {
+      "card_instance_ids": "$result.pilot_058_revealed_cards",
+      "viewer_scope": &"ALL_PLAYERS",
+      "persistent": false,
+      "reason": &"pilot_058_attack_reveal"
+    }
+  },
+  {
+    "type": &"COUNT_DISTINCT_CARD_TYPES",
+    "params": {
+      "card_instance_ids": "$result.pilot_058_revealed_cards",
+      "allowed_types": [&"ATTACK", &"COUNTER", &"SUPPORT"],
+      "store_key": &"pilot_058_type_count"
+    }
+  },
+  {
+    "type": &"MODIFY_ATTACK_MIGHT",
+    "params": {
+      "delta_expr": "$local.pilot_058_type_count * 2",
+      "attack_id": "$payload.action_id"
+    }
+  },
+  {
+    "type": &"CONDITIONAL_ACTIONS",
+    "params": {
+      "conditions": [
+        {"op": &"LOCAL_VARIABLE_EQUALS", "params": {"variable_name": &"pilot_058_type_count", "value": 3}}
+      ],
+      "actions": [
+        {
+          "type": &"MODIFY_ATTACK_RANGE",
+          "params": {
+            "delta": 2,
+            "min_value": 1,
+            "attack_id": "$payload.action_id"
+          }
+        }
+      ]
+    }
+  }
+]
+
+执行顺序：ATTACK_BEFORE暂停→选牌/可取消→向双方展示并关闭展示框→统计不同类型→先威力修正，再范围修正→返回攻击动作选择目标。牌始终留在手中。
+
+人类 UI：按钮1置灰；攻击时弹多选框，每张显示类型；侧栏实时预览“N种：威力+2N，三种：范围+2”。
+
+──────────── 实现预告 ────────────
+- 复用：CHOOSE_MANY_CARDS、EXECUTE_SHOW_CARD、MODIFY_ATTACK_MIGHT、MODIFY_ATTACK_RANGE。
+- 新增COUNT_DISTINCT_CARD_TYPES、LOCAL_VARIABLE_EQUALS或通用表达式条件。
+- 展示动作需支持viewer_scope=ALL_PLAYERS且不移动卡实例。
+- 攻击可用性预检需把卡米拉最大可能范围+2计入，避免原范围无目标时无法进入攻击再展示。
+- 需重写旧 pilot_058 占位。
+
+──────────── 顺序与坑 ────────────
+- 同类型展示多张只算1种；最多N=3，威力最高+6。
+- 范围+2只在三种齐全时获得，不是每种额外范围。
+- 类型按实体牌印刷大类型判断；不考虑未来当作/视为。
+- 展示后玩家在目标选择界面取消攻击，公开信息不会回滚，牌仍在手。
+- 每次发动攻击均可使用，包括效果引出的被动攻击。
+- 攻击预检必须允许玩家利用潜在+2范围；但只有确实持有三种类型时才把+2计入最大范围。
+
+──────────── 测试场景 ────────────
+场景a：展示攻击+迎击
+  断言：type_count=2，威力+4，范围不变。
+场景b：三种齐全
+  断言：威力+6、范围+2；新增范围内目标可选。
+场景c：重复3张攻击
+  断言：只威力+2。
+场景d：取消展示
+  断言：攻击继续，数值不变。
+场景e：展示后取消攻击
+  断言：牌未离手、展示日志保留、无攻击结算。
+场景f：被动攻击
+  断言：同样在ATTACK_BEFORE可展示并加成，不扣攻击数。
+
+歧义点：
+[歧义1] “任意张”是否允许0张并视为发动。智能体选择：通过取消表示0张，不产生效果也不记录发动（理由：技能无限次，无需空发动状态）。候选：可确认0张并记录日志。▶ 回答：_智能体选择正确___________________
+[歧义2] 展示给谁。智能体选择：向所有玩家公开（理由：规则术语“展示”区别于“查看”）。候选：只自己确认所选牌，无需对手可见。▶ 回答：__智能体选择正确__________________
+═══════════════════════════════════════════════════════════
+
+
+========================================================================
+R 档一致性检查（pilot_029-058）
+========================================================================
+1. 牌号连续：029～058，共30张；阵营分布为联邦029-039、帝国040-050、秩序051-054、混乱055-058。
+2. 每张均包含牌头、技能原文、本拆解effect_ids、ActionEffect/派生权限规格、实现预告、顺序与坑、测试场景、歧义回答行。
+3. 当作与立即使用：
+   - 029聚能、030防御、057设陷为“当作”虚拟具名效果，不触发USE_ACTION_*；
+   - 039追击、047目标立即攻击为效果引出的被动攻击，不扣回合攻击数；
+   - 047目标使用的实体攻击牌仍走完整USE_ACTION_*。
+4. 关键时点：
+   - ATTACK_BEFORE：058展示加范围，确保目标选择前完成；
+   - ATTACK_PRE：037夺牌比较、040近战锁定；
+   - ATTACK_AFTER：034无伤减损伤/复仇、048损伤+1；
+   - ATTACK_SETTLE：039追击、047逼迫、056装备处置；
+   - HP_CHANGE_BEFORE/AFTER：049伤害转移与加成、050受伤成长；
+   - STAT_MOD_AFTER：050累计实际动力消耗；
+   - TURN_START/TURN_AFTER_END：044两次损伤换牌。
+5. 每回合/我方回合：
+   - 030、037、049、050、053、055的“每回合”按任意活动玩家回合重置；
+   - 029、031-033、036、038、041、042主动、045-047主动、052、054、057为我方主阶段限次。
+6. 本局变量：
+   - 034的受伤来源集合按pilot card_instance_id持续；
+   - 050的X按实例持续、初始0无上限；动力阈值余数按实例+目标机甲持续；
+   - 049待消费伤害层以状态保存，直到造成下一次伤害。
+7. 派生/权限型：
+   - 029接入WeaponState有效范围；
+   - 046接入隐藏卡可见性；
+   - 048接入攻击损伤放置执行者解析。
+8. 新增商店/事件生命周期：
+   - pilot_055需要SHOP_SELL_BEFORE/AFTER/SETTLE及卖价modifier；
+   - pilot_051需要EVENT_SET_BEFORE_EFFECT/AFTER/SETTLE与EVENT_LOST_*，事件效果注册必须可被前置取消。
+9. 地图机制：
+   - pilot_057的陷阱移动使用MapState.marker与_HexGrid；默认移动本身不触发陷阱；
+   - 设陷基础行动牌在权威文档缺失，落码前必须补齐，本文不使用CUSTOM占位。
+10. 多目标/批次：
+   - 034/048按target_id维护攻击damage/markers；
+   - 035/043按一次gain_card批次触发，不按单张重复；
+   - 045批量弃置保留实际card_instance_ids；
+   - 053装备替换可由旧牌弃置与新牌设置各触发一次。
+11. 人类PvP UI：
+   - 所有可选监听均明确决策玩家；
+   - 隐藏信息只在“查看”时给技能拥有者，在“展示”时公开；
+   - 所有选择窗口挂起父动作，确认/取消后才恢复。
+12. 机师更换：
+   - 注销旧实例全部permanent listener与主动按钮；
+   - 派生权限立即失效；
+   - 已建立且具有独立持续期的modifier/status按其source与到期规则处理；
+   - 旧实例的X、集合、once_per_game记录不转移给新实例。
+13. effect_ids说明：四份权威文档未含项目当前JSON数组；本文ID按既有格式给出，合入前仅做名称映射，不根据旧占位逻辑修改行为。
+
+—— R 档结束。下一档：N pilot_059-088 ——

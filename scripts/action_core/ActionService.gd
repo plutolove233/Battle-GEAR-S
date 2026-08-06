@@ -14,6 +14,8 @@ extends RefCounted
 class_name ActionService
 const SLog = preload("res://scripts/services/slog.gd")
 const _GenEquipEffects = preload("res://scripts/generated_database/GeneratedEquipmentEffects.gd")
+const _GeneratedActionEffects = preload("res://scripts/action_core/GeneratedActionEffects.gd")
+const _RangeCalculator = preload("res://scripts/battle/RangeCalculator.gd")
 # 新增动作类用 preload 引用，避免 headless -s 模式下新 class_name 尚未注册到全局缓存
 const _AwakenAction = preload("res://scripts/action_defs/awaken_action.gd")
 const _TrapExplosionAction = preload("res://scripts/action_defs/trap_explosion_action.gd")
@@ -165,6 +167,8 @@ func _map_sub_action_type(act_type: StringName) -> StringName:
 			return &"effect_fire"
 		&"EXECUTE_USE_ACTION_CARD":
 			return &"use_action_card"
+		&"PILOT_002_USE_BATCH_AS_NAMED":
+			return &"use_action_card"
 		_:
 			return act_type
 
@@ -191,7 +195,7 @@ func _is_atomic_action(act_type: StringName) -> bool:
 		&"CUSTOM_EFFECT_CHECK_TEXT", &"CHOOSE_ONE", &"MODIFY_ATTACK_COUNT", \
 		&"MODIFY_ACTION_HAND_LIMIT", &"INCREMENT_VARIABLE", &"ADD_WEAPON_TAG", \
 		&"CONVERT_WEAPON_KIND", &"NEGATE_EQUIPMENT_EFFECT", &"MODIFY_WEAPON_POWER", \
-		&"SET_WEAPON_STATS", &"SHOP_BUY_MODIFIER", &"SWAP_HAND_LIMIT_AND_ATTACK_COUNT", \
+		&"SET_WEAPON_STATS", &"SHOP_BUY_MODIFIER", &"SWAP_HAND_LIMIT_AND_ATTACK_COUNT", &"REPLACE_USED_ACTION_EFFECT_BY_SEQUENCE", &"CLEAR_SOURCE_STAT_MODIFIERS", &"SET_ATTACK_DEFENSE_STAT_SOURCE", &"PILOT_005_DISCARD_OPPOSING", &"PILOT_008_RECOVER_REPAIR", &"SET_ROUND_MARKED_TARGET", &"DRAW_ACTION_AND_TAG_IF_ATTACK", &"CLAIM_RESOLVED_ATTACK_SOURCE_CARD", &"GRANT_TEMP_CARD_CONTROL", &"PILOT_009_DISCARD_ALL_CONTROLLED_TYPE", &"PILOT_007_TYPE_FLAW", &"PILOT_006_DEAL_4_DAMAGE", &"GRANT_TRANSFER_BATCH_AS_NAMED_TYPE", &"INSERT_ACTION_CARDS_FACE_UP_RANDOM", &"TOGGLE_PILOT_003_SKIP", &"SET_PILOT_003_SKIP_PLAYERS", &"REPEAT_USED_ACTION_EFFECT_CHAIN", \
 		&"OPEN_OR_USE_RESPONSE", &"REDIRECT_DAMAGE_TOKENS", \
 		&"REDIRECT_HEAL_TO_DAMAGE", &"REDIRECT_REMOVE_TO_PLACE_TOKENS", \
 		&"MODIFY_NEXT_DAMAGE_DEALT", &"DECLARE_CARD_TYPE", \
@@ -202,7 +206,8 @@ func _is_atomic_action(act_type: StringName) -> bool:
 		&"DISCARD_SELF_AND_REDUCE_ATTACK_MARKERS", &"DISCARD_SELF_FROM_SLOT", &"REMOVE_DAMAGE_TOKENS_OTHER_SLOTS", \
 		&"RANDOM_DISCARD_ACTION_CARD", &"SET_WEAPON_MODE", &"SET_WEAPON_COOLDOWN", \
 		&"SET_ATTACK_MIGHT_FROM_PRINTED_WEAPON", &"DISCARD_ALL_FACE_UP_PARTS", \
-		&"SET_WEAPON_LOCK", &"SET_WEAPON_CONVERSION":
+		&"SET_WEAPON_LOCK", &"SET_WEAPON_CONVERSION", \
+		&"CANCEL_PARENT_CARD_TRANSFER", &"IMMEDIATELY_USE_DECK_CARD_OR_FALLBACK":
 			return true
 		_:
 			return false
@@ -239,6 +244,8 @@ func _extract_sub_action_params(act_type: StringName, action_def: Dictionary, pa
 			return _extract_effect_fire_params(action_def, payload, parent_action)
 		&"EXECUTE_USE_ACTION_CARD":
 			return _extract_use_action_card_params(action_def, payload, parent_action)
+		&"PILOT_002_USE_BATCH_AS_NAMED":
+			return _extract_pilot_002_batch_use_params(action_def, payload, parent_action)
 		_:
 			return action_def.get("params", {})
 
@@ -300,6 +307,145 @@ func _build_source_from_params(params: Dictionary) -> Dictionary:
 func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payload: Dictionary, parent_action) -> Dictionary:
 	if context == null or context.game_actions == null:
 		return {"state": &"error", "message": "context 或 game_actions 未初始化"}
+
+	# pilot_010 effect_02：按序号替换 effect 链为强袭/闪击/预判 + 计数。需 parent_action 设 record。
+	if act_type == &"REPLACE_USED_ACTION_EFFECT_BY_SEQUENCE":
+		context.game_actions.replace_used_action_effect_by_sequence(action_def.get("params", {}), payload, parent_action)
+		return {"state": &"completed"}
+
+	# pilot_004 effect_03：改 attack record 防御值来源（动力代护甲）。需 parent_action 设 record。
+	if act_type == &"SET_ATTACK_DEFENSE_STAT_SOURCE":
+		context.game_actions.set_attack_defense_stat_source(action_def.get("params", {}), payload, parent_action)
+		return {"state": &"completed"}
+
+	# pilot_005 effect_01 授予能力：弃对侧2张行动牌。需 payload（attacker/target）+ binding_context.mech_id。
+	if act_type == &"PILOT_005_DISCARD_OPPOSING":
+		context.game_actions.pilot_005_discard_opposing(action_def.get("params", {}), payload, parent_action)
+		return {"state": &"completed"}
+
+	# pilot_008 effect_01a/01b：回收弃牌堆维修 + X+1。需 payload.binding_context。
+	if act_type == &"PILOT_008_RECOVER_REPAIR":
+		context.game_actions.pilot_008_recover_repair(action_def.get("params", {}), payload)
+		return {"state": &"completed"}
+
+	# pilot_006 effect_01：设置本轮悬赏目标。需 payload.binding_context + target_id。
+	if act_type == &"SET_ROUND_MARKED_TARGET":
+		context.game_actions.set_round_marked_target(action_def.get("params", {}), payload)
+		return {"state": &"completed"}
+
+	# pilot_006 effect_02：攻击方抽1，若攻击牌挂标记。需 payload.attacker_id + binding_context。
+	if act_type == &"DRAW_ACTION_AND_TAG_IF_ATTACK":
+		context.game_actions.draw_action_and_tag_if_attack(action_def.get("params", {}), payload)
+		return {"state": &"completed"}
+
+	# pilot_007 effect_01：夺取攻击来源牌。需 payload.attack_card_id + binding_context.player_id。
+	if act_type == &"CLAIM_RESOLVED_ATTACK_SOURCE_CARD":
+		context.game_actions.claim_resolved_attack_source_card(action_def.get("params", {}), payload)
+		return {"state": &"completed"}
+
+	# pilot_009 effect_01：授予临时卡牌控制。需 payload.target_id + binding_context + params.card_type。
+	if act_type == &"GRANT_TEMP_CARD_CONTROL":
+		context.game_actions.grant_temp_card_control(action_def.get("params", {}), payload)
+		return {"state": &"completed"}
+
+	# pilot_009 effect_01：立即弃置目标当前全部该类型受控牌（全弃，持续光环保留）。
+	if act_type == &"PILOT_009_DISCARD_ALL_CONTROLLED_TYPE":
+		context.game_actions.pilot_009_discard_all_controlled_type(action_def.get("params", {}), payload)
+		return {"state": &"completed"}
+
+	# pilot_007 effect_02 类型破绽：对每攻击目标 peek+算X+弃X+1+抽X+1（多目标全部结算）。
+	if act_type == &"PILOT_007_TYPE_FLAW":
+		context.game_actions.pilot_007_type_flaw(action_def.get("params", {}), payload)
+		return {"state": &"completed"}
+
+	# pilot_006 e3 战后逼迫4伤害（选项2/回落，直接减 HP，不走 fire_hook）。
+	if act_type == &"PILOT_006_DEAL_4_DAMAGE":
+		context.game_actions.pilot_006_deal_4_damage(action_def.get("params", {}))
+		return {"state": &"completed"}
+
+	# pilot_002 effect_01：登记批次转化权限（接收者获一次性"当作具名牌使用"权限）。
+	if act_type == &"GRANT_TRANSFER_BATCH_AS_NAMED_TYPE":
+		var p002_grant_params: Dictionary = _resolve_atomic_params(action_def.get("params", {}), payload, parent_action)
+		context.game_actions.pilot_002_grant_transfer_batch(p002_grant_params, payload)
+		return {"state": &"completed"}
+
+	# pilot_002 effect_01：转移行动牌到目标手牌（card_ids/target_mech_id 可能是 $runtime/$payload，需解析）。
+	if act_type == &"TRANSFER_ACTION_CARDS":
+		var p002_xfer_params: Dictionary = _resolve_atomic_params(action_def.get("params", {}), payload, parent_action)
+		# target_mech_id -> to_player_id 转换（transfer_action_cards 按 player 转移手牌）
+		if not p002_xfer_params.has("to_player_id") and p002_xfer_params.has("target_mech_id"):
+			var p002_to_mid: StringName = p002_xfer_params["target_mech_id"]
+			if p002_to_mid != &"" and context.game_state != null:
+				var p002_to_player = context.game_state.get_player_for_mech(p002_to_mid)
+				if p002_to_player != null:
+					p002_xfer_params["to_player_id"] = p002_to_player.player_id
+		# batch_tag：标记转移的牌（pilot_002 批次不可拆分）
+		var p002_batch_tag: StringName = p002_xfer_params.get("batch_tag", &"")
+		if p002_batch_tag != &"":
+			var p002_card_ids: Array = p002_xfer_params.get("card_ids", [])
+			for p002_cid in p002_card_ids:
+				var p002_c = context.game_state.get_card(p002_cid) if context.game_state != null else null
+				if p002_c != null:
+					if not "counters" in p002_c:
+						p002_c.counters = {}
+					p002_c.counters["pilot_002_batch_tag"] = p002_batch_tag
+		context.game_actions.transfer_action_cards(p002_xfer_params)
+		return {"state": &"completed"}
+
+	# pilot_003 effect_01：将手牌正面朝上随机插入行动牌堆。
+	if act_type == &"INSERT_ACTION_CARDS_FACE_UP_RANDOM":
+		var p003_ins_params: Dictionary = _resolve_atomic_params(action_def.get("params", {}), payload, parent_action)
+		context.game_actions.pilot_003_insert_face_up_random(p003_ins_params, payload)
+		return {"state": &"completed"}
+
+	# pilot_003 effect_03：切换跳过正面牌设置。
+	if act_type == &"TOGGLE_PILOT_003_SKIP":
+		context.game_actions.toggle_pilot_003_skip(action_def.get("params", {}), payload)
+		return {"state": &"completed"}
+
+	# pilot_003 effect_03 复选框提交：整组覆盖跳过玩家集合（need_input resume 后执行）。
+	if act_type == &"SET_PILOT_003_SKIP_PLAYERS":
+		context.game_actions.set_pilot_003_skip_players(action_def.get("params", {}), payload)
+		return {"state": &"completed"}
+
+	# pilot_003 effect_02：CANCEL_PARENT_CARD_TRANSFER —— 标记该牌已被瑟尔基尔拦截，
+	# 原抽牌/取牌动作不得把它交给原目标（draw_from_deck 在 fire 后读此标记跳过入手的牌）。
+	if act_type == &"CANCEL_PARENT_CARD_TRANSFER":
+		var cancel_params: Dictionary = _resolve_atomic_params(action_def.get("params", {}), payload, parent_action)
+		var cancel_card_id: StringName = cancel_params.get("card_instance_id", &"")
+		var cancel_card = context.game_state.get_card(cancel_card_id) if cancel_card_id != &"" else null
+		if cancel_card != null:
+			if not "counters" in cancel_card:
+				cancel_card.counters = {}
+			cancel_card.counters["pilot_003_intercepted"] = true
+		return {"state": &"completed"}
+
+	# pilot_003 effect_02：IMMEDIATELY_USE_DECK_CARD_OR_FALLBACK —— 由瑟尔基尔拥有者立即完整使用；
+	# 无法合法使用（迎击牌/攻击牌无合法武器目标/机甲不可用）则公开弃置该牌 + 拥有者抽1。
+	if act_type == &"IMMEDIATELY_USE_DECK_CARD_OR_FALLBACK":
+		var iu_params: Dictionary = _resolve_atomic_params(action_def.get("params", {}), payload, parent_action)
+		_handle_pilot_003_immediately_use(iu_params)
+		return {"state": &"completed"}
+
+	# pilot_001 effect_01：重复执行行动牌效果链（克隆 DIRECT effect，不重发 USE_ACTION_*，attack 不计攻击数）。
+	# 裁定：迎击牌不可重复（条件拦截）；第2次重新选目标；失败不返还次数；repeat_depth 防递归。
+	if act_type == &"REPEAT_USED_ACTION_EFFECT_CHAIN":
+		var rp_payload: Dictionary = payload.duplicate()
+		rp_payload["repeat_depth"] = int(payload.get("repeat_depth", 0)) + 1
+		var rp_card_id: StringName = payload.get("card_instance_id", &"")
+		var rp_action_id: StringName = payload.get("action_id", &"")
+		if rp_card_id != &"" and rp_action_id != &"" and context.action_registry != null:
+			var rp_source_action = context.action_registry.get_action(rp_action_id)
+			var rp_card = context.game_state.get_card(rp_card_id)
+			if rp_source_action != null and rp_card != null and rp_card.def != null:
+				var rp_mappings: Array = _GeneratedActionEffects.get_effects_for_card(rp_card.def.card_id)
+				var rp_all_effects: Dictionary = _GeneratedActionEffects.build_all_effects()
+				for mapping in rp_mappings:
+					var eid: StringName = mapping.get("effect_id", &"") if mapping is Dictionary else &""
+					var eff = rp_all_effects.get(eid)
+					if eff != null and eff.mode == &"DIRECT":
+						context.timing_engine._execute_effect(eff, rp_payload, rp_source_action)
+		return {"state": &"completed"}
 
 	# 特殊处理 MODIFY_ATTACK_MARKERS：把 delta 累加到攻击动作（attack A）的 record["extra_markers"]。
 	# LISTEN 效果（破甲 effect2 / 联邦左腿）在 attack A 时点触发，parent_action 即 attack A，直接写。
@@ -547,6 +693,10 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 				var iv_prev: int = int(parent_action.record["variables"].get(iv_name, 0))
 				parent_action.record["variables"][iv_name] = iv_prev + iv_delta
 				return {"state": &"completed"}
+		# pilot_008 X 绑 card_instance_id + max_value：传 payload 让 increment_variable 从 binding_context 取
+		if iv_params.has("source_card_instance_id") or iv_params.has("max_value"):
+			context.game_actions.increment_variable(iv_params, payload)
+			return {"state": &"completed"}
 
 	# SET_ATTACK_MIGHT_FROM_PRINTED_WEAPON：本次攻击威力覆盖为 牌面威力+bonus，
 	# 忽略本牌损伤惩罚（effect_121 大型光束炮回复全值+2）。仅改本次 attack.record["weapon_might"]。
@@ -695,6 +845,149 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 	return {"state": &"completed"}
 
 
+## ── pilot_003 effect_02 离堆强制使用 helper ──
+
+## IMMEDIATELY_USE_DECK_CARD_OR_FALLBACK：由瑟尔基尔拥有者立即完整使用离堆的正面牌。
+## 无法合法使用（迎击牌无响应窗口 / 攻击牌无合法武器目标 / 机甲不可用）→ 公开弃置 + 拥有者抽1。
+## 卡片已被 draw_from_deck 弹出（不在任何区域数组），此处不重复处理区域，只决定 use 或 fallback。
+func _handle_pilot_003_immediately_use(params: Dictionary) -> void:
+	if context == null or context.game_state == null or context.game_actions == null:
+		return
+	var card_id: StringName = params.get("card_instance_id", &"")
+	if card_id == &"":
+		return
+	var card = context.game_state.get_card(card_id)
+	if card == null:
+		return
+	# 使用者 = 埋牌者（metadata owner 权威，存卡片 counters）
+	var owner_pid: StringName = StringName(card.counters.get("pilot_003_leave_deck_owner_pid", &""))
+	var owner_mech_id: StringName = StringName(card.counters.get("pilot_003_leave_deck_owner_mech", &""))
+	if owner_pid == &"" or owner_mech_id == &"":
+		_pilot_003_unusable_discard(card_id, &"", &"")
+		return
+	var owner_mech = context.game_state.mechs.get(owner_mech_id)
+	if _pilot_003_can_use_card(card, owner_mech):
+		_pilot_003_force_use(card_id, owner_pid, owner_mech_id)
+	else:
+		_pilot_003_unusable_discard(card_id, owner_pid, owner_mech_id)
+
+
+## 预检：离堆正面牌是否可由 owner_mech 立即合法使用。
+## 裁定：迎击牌（含 AVAILABILITY 效果）不能凭空开无攻击来源的响应窗口 → 不可用；
+## 攻击牌 passive 仍需武器 + 合法范围；机甲 destroyed 不可用。
+func _pilot_003_can_use_card(card, owner_mech) -> bool:
+	if card == null or card.def == null or card.def.card_kind != &"action":
+		return false
+	if owner_mech == null or owner_mech.destroyed:
+		return false
+	var card_mappings: Array = _GeneratedActionEffects.get_effects_for_card(card.def.card_id)
+	var all_effects: Dictionary = _GeneratedActionEffects.build_all_effects()
+	var has_direct_or_listen := false
+	var has_availability := false
+	for mapping in card_mappings:
+		var eid: StringName = mapping.get("effect_id", &"") if mapping is Dictionary else &""
+		var eff = all_effects.get(eid)
+		if eff == null:
+			continue
+		if eff.mode == &"DIRECT" or eff.mode == &"LISTEN":
+			has_direct_or_listen = true
+		if eff.mode == &"AVAILABILITY":
+			has_availability = true
+	# 带 AVAILABILITY 的牌只能在其合法响应窗口打出（use_action_card 校验同此）
+	if has_availability:
+		return false
+	if not has_direct_or_listen:
+		return false
+	# 攻击牌：需至少一把武器能命中至少一个存活敌方（passive 攻击仍占武器/范围）
+	if String(card.def.action_type) == "攻击":
+		var weapon_ids: Array[StringName] = owner_mech.get_weapon_ids()
+		if weapon_ids.is_empty():
+			return false
+		var map_cells: Dictionary = context.game_state.map_state.cells if context.game_state.map_state else {}
+		for wid: StringName in weapon_ids:
+			var ws: Dictionary = _pilot_003_weapon_stats(owner_mech, wid)
+			var w_kind: StringName = ws.get("weapon_kind", &"")
+			var w_range: int = int(ws.get("range_value", 1)) + _GenEquipEffects.get_passive_weapon_range_bonus(owner_mech, w_kind)
+			w_range = max(1, w_range)
+			for mid: StringName in context.game_state.mechs:
+				if mid == owner_mech.mech_id:
+					continue
+				var m = context.game_state.mechs[mid]
+				if m == null or m.destroyed:
+					continue
+				if _RangeCalculator.is_in_weapon_range(owner_mech.position, m.position, w_range, map_cells):
+					return true
+		return false
+	return true
+
+
+## 武器数据（供预检范围判断）：基础武器虚拟 ID 或实体/虚拟武器卡，仅取 range_value/weapon_kind。
+func _pilot_003_weapon_stats(attacker, weapon_id: StringName) -> Dictionary:
+	var wid_str := String(weapon_id)
+	if wid_str.begins_with("frame_base_weapon"):
+		var slot_index: int = 0
+		if wid_str.begins_with("frame_base_weapon_"):
+			slot_index = wid_str.trim_prefix("frame_base_weapon_").to_int() - 1
+		var base_weapon: Dictionary = attacker.get_base_weapon(slot_index)
+		if not base_weapon.is_empty():
+			return {
+				"range_value": int(base_weapon.get("range_value", 1)),
+				"weapon_kind": base_weapon.get("weapon_kind", &""),
+			}
+	var weapon_card = context.game_state.get_card(weapon_id)
+	if weapon_card and weapon_card.def:
+		var eff_stats: Dictionary = _GenEquipEffects.get_effective_weapon_stats(weapon_card)
+		return {
+			"range_value": int(eff_stats.get("range_value", 1)),
+			"weapon_kind": eff_stats.get("weapon_kind", &""),
+		}
+	return {"range_value": 1, "weapon_kind": &""}
+
+
+## 强制使用：独立顶层 use_action_card（passive 攻击，source_action_id 非空跳过攻击数消耗/校验）。
+## 卡片已从牌堆弹出（draw_from_deck 拦截），此处清除正面/metadata 标记后直接打出。
+## 注意：不清除 pilot_003_intercepted —— 该握手标记由 draw_from_deck 读取后清除。
+func _pilot_003_force_use(card_id: StringName, owner_pid: StringName, owner_mech_id: StringName) -> void:
+	if context == null or context.action_service == null:
+		return
+	var card = context.game_state.get_card(card_id)
+	if card != null:
+		for k in [&"face_up_in_deck", &"pilot_003_face_up_leave_use", &"pilot_003_leave_deck_owner_mech", &"pilot_003_leave_deck_owner_pid", &"pilot_003_source_pilot"]:
+			card.counters.erase(k)
+		card.zone = &"temp_zone"
+	context.game_state.write_log(&"pilot_003_force_use", {
+		"card_id": String(card_id),
+		"player_id": String(owner_pid),
+	})
+	context.action_service.execute(&"use_action_card", {
+		"card_instance_id": card_id,
+		"player_id": owner_pid,
+		"mech_id": owner_mech_id,
+		"source_action_id": &"pilot_003_force_use",
+		"reason": &"pilot_003_force_use",
+		"executor": &"pilot_003_force_use",
+	})
+
+
+## 无法使用回退：公开弃置离堆正面牌 + 瑟尔基尔拥有者抽1。清除正面/metadata 标记。
+## pilot_003_intercepted 保留给 draw_from_deck 读取后清除（拦截握手）。
+func _pilot_003_unusable_discard(card_id: StringName, owner_pid: StringName, _owner_mech_id: StringName) -> void:
+	if context == null or context.game_state == null:
+		return
+	var card = context.game_state.get_card(card_id)
+	if card != null:
+		for k in [&"face_up_in_deck", &"pilot_003_face_up_leave_use", &"pilot_003_leave_deck_owner_mech", &"pilot_003_leave_deck_owner_pid", &"pilot_003_source_pilot"]:
+			card.counters.erase(k)
+	context.game_state.write_log(&"pilot_003_unusable", {
+		"card_id": String(card_id),
+		"player_id": String(owner_pid),
+	})
+	if context.deck_service != null:
+		context.deck_service.discard_card(card_id, &"pilot_003_unusable_face_up_card")
+	if owner_pid != &"":
+		context.game_actions.draw_action_cards({"player_id": owner_pid, "count": 1, "reason": &"pilot_003_unusable_compensation"})
+
+
 ## 构建来源信息（替代原 EffectBinding 的来源提取，用于日志）
 func _build_source_info_from_parent(parent_action) -> Dictionary:
 	var info := {}
@@ -779,6 +1072,10 @@ func _resolve_atomic_value(value, payload: Dictionary, parent_action):
 		var ch_key: String = s.replace("$choice.", "")
 		var ch: Dictionary = payload.get("choice", {}) if payload != null else {}
 		return ch.get(ch_key)
+	# $runtime.xxx -> 从 payload 取值（CHOOSE_MANY_CARDS store_result_key 存入 payload[key]）
+	if s.begins_with("$runtime."):
+		var rt_key: String = s.replace("$runtime.", "")
+		return payload.get(rt_key)
 	# $source.xxx → 从 parent_action.source 取值
 	var src: Dictionary = parent_action.source if (parent_action != null and parent_action.source is Dictionary) else {}
 	if s == "$source.card_instance_id":
@@ -959,7 +1256,7 @@ func _dispatch_atomic_action(act_type: StringName, params: Dictionary, payload: 
 		&"ROLL_D6":
 			ga.roll_d6(params)
 		&"TOGGLE_AURA_TARGET":
-			ga.toggle_aura_target(params)
+			ga.toggle_aura_target(params, payload)
 		&"CUSTOM_EFFECT_CHECK_TEXT":
 			ga.custom_effect_check_text(params)
 		# ── 新增动作（批次3原语扩展） ──
@@ -1030,6 +1327,11 @@ func _dispatch_atomic_action(act_type: StringName, params: Dictionary, payload: 
 		# ── 新增动作（阶段4机师效果支持） ──
 		&"SWAP_HAND_LIMIT_AND_ATTACK_COUNT":
 			ga.swap_hand_limit_and_attack_count(params)
+		&"REPLACE_USED_ACTION_EFFECT_BY_SEQUENCE":
+			# 顶部特殊处理（需 parent_action），此处不会到。保留兜底。
+			pass
+		&"CLEAR_SOURCE_STAT_MODIFIERS":
+			ga.clear_source_stat_modifiers(params)
 		_:
 			push_error("ActionService: 未知原效果动作 %s" % act_type)
 
@@ -1381,6 +1683,10 @@ func _extract_stat_mod_params(action_def: Dictionary, payload: Dictionary, paren
 	result["duration"] = params.get("duration", &"")
 	result["attack_action_id"] = params.get("attack_action_id", payload.get("action_id", &""))
 	result["player_id"] = params.get("player_id", payload.get("player_id", &""))
+	# pilot_004 玛沙 转换层：mode(cap_bonus)/runtime_tag/source_card_id 透传到 stat_modify record
+	result["mode"] = params.get("mode", &"")
+	result["runtime_tag"] = params.get("runtime_tag", &"")
+	result["source_card_id"] = params.get("source_card_id", payload.get("binding_context", {}).get("card_instance_id", &""))
 	result["source"] = _build_source_from_payload(payload, parent_action)
 	return result
 
@@ -1592,6 +1898,46 @@ func _extract_damage_change_params(action_def: Dictionary, payload: Dictionary, 
 	# exclude_slot_id：decrease 移除损伤时排除此槽（effect_079 离场移除"其他区域"损伤，排除来源槽）
 	result["exclude_slot_id"] = _resolve_atomic_value(params.get("exclude_slot_id", &""), payload, parent_action)
 	result["source"] = _build_source_from_payload(payload, parent_action)
+	return result
+
+
+## pilot_002 批次使用：丢弃整批牌（保留首张作虚拟牌）+ use_action_card virtual_transform。
+## named_type=进攻 -> as_card_def_id=action_001_进攻；防御 -> action_009_防御。
+## 裁定：整批牌作为代价进弃牌堆，生成1张虚拟"进攻/防御"使用；进攻消耗攻击数（主动），防御响应窗口。
+func _extract_pilot_002_batch_use_params(action_def: Dictionary, payload: Dictionary, parent_action) -> Dictionary:
+	var params: Dictionary = action_def.get("params", {})
+	var as_card_def_id: StringName = params.get("as_card_def_id", &"action_001_进攻")
+	var bind_ctx: Dictionary = payload.get("binding_context", {})
+	# 丢弃批次（保留首张作虚拟牌）
+	var virtual_cid: StringName = &""
+	if context != null and context.game_actions != null:
+		virtual_cid = context.game_actions.pilot_002_discard_batch(params, payload)
+	var result: Dictionary = {
+		"card_instance_id": virtual_cid,
+		"as_card_def_id": as_card_def_id,
+		"virtual_transform": true,
+		"target_count": 1,
+	}
+	# mech_id/player_id 从 binding_context（批次使用者是目标机甲）
+	var target_mech: StringName = bind_ctx.get("mech_id", &"")
+	result["mech_id"] = target_mech
+	if target_mech != &"" and context != null and context.game_state != null:
+		var p = context.game_state.get_player_for_mech(target_mech)
+		if p != null:
+			result["player_id"] = p.player_id
+	# source：进攻分支(attack_is_active=true)消耗回合攻击数（source_action_id 空）；防御分支(被动)跳过
+	var is_active: bool = bool(params.get("attack_is_active", true))
+	var src: Dictionary = {}
+	src["player_id"] = result.get("player_id", &"")
+	src["mech_id"] = target_mech
+	src["card_instance_id"] = bind_ctx.get("card_instance_id", &"")
+	if not is_active and parent_action != null:
+		src["source_action_id"] = parent_action.action_id
+	result["source"] = src
+	# 防御响应：attack_action_id 供 _step_validate_card 放行 AVAILABILITY 牌
+	var p002_atk_id: StringName = payload.get("attack_action_id", payload.get("action_id", &""))
+	if p002_atk_id != &"":
+		result["attack_action_id"] = p002_atk_id
 	return result
 
 

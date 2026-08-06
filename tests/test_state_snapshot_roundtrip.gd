@@ -276,3 +276,44 @@ func test_viewer_keeps_public_info() -> Variant:
 	if c_mech.slots[&"weapon_1"].equipped_card.def == null:
 		return "client public equipped card def null"
 	return true
+
+
+## 机师静态状态往返：悬赏/控制/批次/跳过 四字典随快照同步
+func test_roundtrip_pilot_static() -> Variant:
+	var battle: BattleState = _new_battle()
+	var gs = battle.context.game_state
+	var cdb = battle.context.card_database
+	# 用真实机师建立各静态状态（source 用 pilot 实例 id）
+	var pdef = cdb.get_card(&"pilot_006_里昂")
+	if pdef == null:
+		return "找不到 pilot_006_里昂"
+	var inst_id: StringName = gs.next_id(&"card")
+	var card = preload("res://scripts/runtime/CardInstance.gd").new(inst_id, pdef)
+	card.owner_player_id = &"player"
+	gs.cards[inst_id] = card
+	var pilot_effects = preload("res://scripts/generated_database/ActionPilotEffects.gd")
+	# 建立：pilot_006 悬赏 / pilot_009 控制 / pilot_002 批次 / pilot_003 skip
+	pilot_effects.set_pilot_006_mark(inst_id, &"enemy_mech", 1)
+	pilot_effects.grant_temp_card_control(&"enemy_mech", &"攻击", &"player", inst_id)
+	var b1: StringName = gs.next_id(&"card")
+	gs.cards[b1] = preload("res://scripts/runtime/CardInstance.gd").new(b1, cdb.get_card(&"action_001_进攻"))
+	pilot_effects.register_pilot_002_batch("test_snap_batch", &"enemy_mech", [b1], &"进攻", inst_id)
+	pilot_effects.toggle_pilot_003_skip(inst_id, &"player", true)
+
+	var snap := StateSnapshot.new().serialize(battle.context, &"")
+	var client_ctx := _new_client_context(battle.registry)
+	StateSnapshot.new().apply_snapshot(client_ctx, snap)
+	# 静态状态应随快照恢复
+	if pilot_effects.get_pilot_006_mark(inst_id) != &"enemy_mech":
+		return "pilot_006 悬赏标记未随快照同步"
+	if not pilot_effects.is_card_type_controlled_by(&"enemy_mech", &"攻击", &"player"):
+		return "pilot_009 控制未随快照同步"
+	var batch_found := false
+	for bid in pilot_effects._pilot_002_batches:
+		if String(pilot_effects._pilot_002_batches[bid].get("grant_source", &"")) == String(inst_id):
+			batch_found = true
+	if not batch_found:
+		return "pilot_002 批次未随快照同步"
+	if not pilot_effects.is_pilot_003_skip_active(&"player"):
+		return "pilot_003 skip 未随快照同步"
+	return true

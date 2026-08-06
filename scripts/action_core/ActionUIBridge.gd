@@ -161,6 +161,17 @@ func _on_action_needs_input(action_id: StringName, input_type: StringName, input
 			# AI Target 已在 TimingEngine._execute_actions 的 UNITE_ATTACK_OFFER 分支跳过。
 			# 弹窗路由到 Target 玩家（_popup_owner 按 target_mech_id 反查 owner）。
 			request_ui_popup.emit(&"unite_attack_select", input_params)
+		&"select_pilot_006_attack_card":
+			# pilot_006 e3 战后逼迫：被选机甲选1张攻击牌 use_action_card（取消=受到4伤害）。
+			# 复用 unite_attack_select 面板（同为"选1张攻击牌"单选+取消），input_params 携带
+			# card_ids/label/action_id/player_id（被选机甲玩家），_popup_owner 据此路由到对应玩家窗口。
+			request_ui_popup.emit(&"unite_attack_select", input_params)
+		&"select_pilot_003_skip_players":
+			# pilot_003 e3 复选框：瑟尔基尔玩家勾选「抽牌跳过正面牌」的玩家。
+			# AI 不支持复选框，跳过（不修改设置）。弹窗由 _popup_owner 按 player_id 路由。
+			if _is_ai_source(input_params):
+				return
+			request_ui_popup.emit(&"pilot_003_skip_players", input_params)
 		&"select_awaken_card_type":
 			# 觉醒：弃牌堆无预判/识破时，弹框让玩家选1种行动牌（列种类+数量）。
 			# AI 自动选第一项（最小可用，避免挂死）；人类弹 awaken_select 窗。

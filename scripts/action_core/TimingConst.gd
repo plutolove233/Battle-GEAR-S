@@ -67,6 +67,9 @@ const DISCARD_BEFORE        := &"DISCARD_BEFORE"          ## 弃置牌前
 const DISCARD_AFTER         := &"DISCARD_AFTER"           ## 弃置牌后
 const DISCARD_SETTLE        := &"DISCARD_SETTLE"          ## 弃置牌结算
 
+## ── 卡牌离堆（pilot_003 瑟尔基尔 effect_02）──
+const CARD_LEAVE_ACTION_DECK_BEFORE := &"CARD_LEAVE_ACTION_DECK_BEFORE"  ## 行动牌离开牌堆前
+
 ## ── 效果发动动作 ──
 const EFFECT_FIRE_BEFORE    := &"EFFECT_FIRE_BEFORE"      ## 效果发动前
 const EFFECT_FIRE_AFTER     := &"EFFECT_FIRE_AFTER"       ## 效果发动后

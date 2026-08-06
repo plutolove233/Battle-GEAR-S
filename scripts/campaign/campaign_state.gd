@@ -9,6 +9,7 @@ var selected_pilot: Dictionary = {}
 var selected_equipment: Array[String] = []
 var last_result: Dictionary = {}
 var initialized: bool = false
+var available_gold: int = 15  ## 开局金币（pilot cost 从中扣除）
 
 func initialize(data_registry: DataRegistry) -> Dictionary:
 	_clear_state()
@@ -24,6 +25,7 @@ func initialize(data_registry: DataRegistry) -> Dictionary:
 	selected_equipment = []
 	last_result = {}
 	initialized = true
+	available_gold = 15
 	return {"ok": true, "message": "campaign_initialized"}
 
 func list_available_pilots() -> Array:
@@ -117,6 +119,48 @@ func select_pilot(pilot_id: String) -> Dictionary:
 			return {"ok": true, "message": "pilot_selected"}
 	return {"ok": false, "message": "pilot is unavailable"}
 
+
+## 从全量机师牌池随机抽取 count 张（Fisher-Yates），供开局三选一。
+## 返回机师字典数组（含 id/name/faction/rarity/cost/effect_text）。
+func generate_random_pilot_selection(count: int = 3) -> Array:
+	var result: Array = []
+	if not initialized or registry == null:
+		return result
+	var all_pilots: Array = registry.list_pilot_cards()
+	if all_pilots.is_empty():
+		return result
+	all_pilots = _shuffle_and_copy(all_pilots)
+	for i in range(mini(count, all_pilots.size())):
+		result.append(all_pilots[i])
+	return result
+
+
+## 选择机师并扣除费用：校验 available_gold >= cost，扣金币，设 selected_pilot。
+## 返回 {ok, message, gold}（gold=扣除后剩余金币）。
+func select_pilot_with_cost(pilot_id: String) -> Dictionary:
+	if not initialized:
+		return _not_initialized()
+	# 从全量机师池查（非仅 tutorial pilots）
+	var pilot: Dictionary = {}
+	for p in registry.list_pilot_cards():
+		if String(p.get("id", "")) == pilot_id:
+			pilot = p.duplicate(true)
+			break
+	if pilot.is_empty():
+		# 退回 tutorial pilots
+		for p in list_available_pilots():
+			if String(p.get("id", "")) == pilot_id:
+				pilot = p.duplicate(true)
+				break
+	if pilot.is_empty():
+		return {"ok": false, "message": "pilot is unavailable"}
+	var cost: int = int(pilot.get("cost", 0))
+	if available_gold < cost:
+		return {"ok": false, "message": "not enough gold (need %d, have %d)" % [cost, available_gold]}
+	available_gold -= cost
+	selected_pilot = pilot
+	return {"ok": true, "message": "pilot_selected", "gold": available_gold}
+
 func select_equipment(equipment_ids: Array[String]) -> Dictionary:
 	if not initialized:
 		return _not_initialized()
@@ -156,6 +200,7 @@ func _clear_state() -> void:
 	selected_equipment = []
 	last_result = {}
 	initialized = false
+	available_gold = 15
 
 func _not_initialized() -> Dictionary:
 	return {"ok": false, "message": "campaign is not initialized"}

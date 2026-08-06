@@ -76,6 +76,8 @@ func _apply_one_stat(action: Action, stat_type: StringName, value: int, method: 
 				"mech_id": target_id,
 				"delta": delta,
 				"duration": action.record.get("duration", &"THIS_TURN") if action.record.get("duration", &"") != &"" else &"THIS_TURN",
+				"runtime_tag": action.record.get("runtime_tag", &""),
+				"source_card_id": action.record.get("source_card_id", &""),
 			})
 		&"power":
 			if method in [&"restore", &"heal"]:
@@ -84,6 +86,9 @@ func _apply_one_stat(action: Action, stat_type: StringName, value: int, method: 
 				context.game_actions.modify_mech_power({
 					"mech_id": target_id, "delta": delta,
 					"duration": action.record.get("duration", &"THIS_TURN") if action.record.get("duration", &"") != &"" else &"THIS_TURN",
+					"mode": action.record.get("mode", &""),
+					"runtime_tag": action.record.get("runtime_tag", &""),
+					"source_card_id": action.record.get("source_card_id", &""),
 				})
 		&"might":
 			var attack = _get_target_attack(action)

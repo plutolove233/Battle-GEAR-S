@@ -49,9 +49,25 @@ static func check_single(binding, payload: Dictionary, rule: Dictionary) -> bool
 			return payload.get("target_is_mech", false)
 
 		&"TARGET_IN_RANGE":
+			# 参数支持 params 嵌套（新机师牌 {"params": {"range": N}}）与顶层（旧牌 {"range": N}）两种格式
+			var range_params: Dictionary = rule.get("params", rule)
 			var source_pos: Dictionary = payload.get("source_pos", {})
 			var target_pos: Dictionary = payload.get("target_pos", {})
-			var range_value: int = int(rule.get("range", 1))
+			var range_value: int = int(range_params.get("range", rule.get("range", 1)))
+			# DIRECT 主动效果（effect_fire）payload 无 source_pos/target_pos/distance：从 binding.context
+			# 反查 source_mech_id/target_id 对应机甲位置（与 TARGET_IS_ADJACENT_OR_SELF 同款回退），
+			# 否则 pilot_009 等 DIRECT 效果目标选择 resume 后 target 检查永假，反复弹目标选择窗死循环。
+			if (source_pos.is_empty() or target_pos.is_empty()) and binding != null and binding.context != null:
+				var gs = binding.context.game_state
+				if gs != null:
+					var src_mid: StringName = binding.get_source_mech_id()
+					var tgt_mid: StringName = payload.get("target_id", payload.get("target_mech_id", &""))
+					var src_mech = gs.mechs.get(src_mid) if src_mid != &"" else null
+					var tgt_mech = gs.mechs.get(tgt_mid) if tgt_mid != &"" else null
+					if source_pos.is_empty() and src_mech != null:
+						source_pos = src_mech.position
+					if target_pos.is_empty() and tgt_mech != null:
+						target_pos = tgt_mech.position
 			if source_pos.is_empty() or target_pos.is_empty():
 				var precomputed_distance: int = payload.get("distance", -1)
 				if precomputed_distance >= 0:

@@ -16,6 +16,11 @@ var action_card_dropdown: OptionButton
 var equipment_card_dropdown: OptionButton
 var slot_dropdown: OptionButton
 var damage_slot_dropdown: OptionButton
+var pilot_dropdown: OptionButton
+var pilot_info_label: Label
+var attack_limit_spin: SpinBox
+var action_limit_spin: SpinBox
+var gold_spin: SpinBox
 
 var action_cards_label: Label
 var equipment_label: Label
@@ -308,6 +313,56 @@ func _setup_ui() -> void:
 	mech_info_label.custom_minimum_size.y = 50
 	modify_section.add_child(mech_info_label)
 
+	# ── 机师管理区（换机师 + 修改攻击数/行动牌上限/金币）──
+	var pilot_section := _create_section("机师管理", Color(0.6, 0.5, 1.0))
+	content.add_child(pilot_section)
+
+	# 换机师：下拉选机师 → change_pilot（走 set/unset_pilot，注销旧 listener + 建新牌）
+	var change_hbox := HBoxContainer.new()
+	pilot_section.add_child(change_hbox)
+	change_hbox.add_child(_make_label("换机师: "))
+	pilot_dropdown = OptionButton.new()
+	pilot_dropdown.custom_minimum_size = Vector2(220, 30)
+	change_hbox.add_child(pilot_dropdown)
+	var change_btn := Button.new()
+	change_btn.text = "换机师"
+	change_btn.pressed.connect(_on_change_pilot)
+	change_hbox.add_child(change_btn)
+	# 显示当前机师
+	pilot_info_label = Label.new()
+	pilot_info_label.add_theme_font_size_override("font_size", 12)
+	pilot_info_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.9))
+	pilot_section.add_child(pilot_info_label)
+
+	# 修改数值：攻击数/行动牌上限/金币（modify_player_limits，即时重算 max_attacks_per_turn）
+	var limits_hbox := HBoxContainer.new()
+	pilot_section.add_child(limits_hbox)
+	limits_hbox.add_child(_make_label("攻击数: "))
+	attack_limit_spin = SpinBox.new()
+	attack_limit_spin.min_value = 0
+	attack_limit_spin.max_value = 10
+	attack_limit_spin.value = 1
+	attack_limit_spin.custom_minimum_size = Vector2(60, 30)
+	limits_hbox.add_child(attack_limit_spin)
+	limits_hbox.add_child(_make_label("行动牌上限: "))
+	action_limit_spin = SpinBox.new()
+	action_limit_spin.min_value = 0
+	action_limit_spin.max_value = 10
+	action_limit_spin.value = 5
+	action_limit_spin.custom_minimum_size = Vector2(60, 30)
+	limits_hbox.add_child(action_limit_spin)
+	limits_hbox.add_child(_make_label("金币: "))
+	gold_spin = SpinBox.new()
+	gold_spin.min_value = 0
+	gold_spin.max_value = 999
+	gold_spin.value = 0
+	gold_spin.custom_minimum_size = Vector2(60, 30)
+	limits_hbox.add_child(gold_spin)
+	var limits_btn := Button.new()
+	limits_btn.text = "应用"
+	limits_btn.pressed.connect(_on_apply_limits)
+	limits_hbox.add_child(limits_btn)
+
 
 func _make_label(text: String) -> Label:
 	var lbl := Label.new()
@@ -373,6 +428,7 @@ func _refresh_all() -> void:
 		_refresh_equipment_card_list()
 		_card_lists_built = true
 	_refresh_slot_list()
+	_refresh_pilot_list()
 	_update_info_display()
 
 
@@ -514,6 +570,27 @@ func _refresh_slot_list() -> void:
 			damage_slot_dropdown.select(select_dmg_index)
 
 
+## 刷新机师下拉：列出 card_database 所有 pilot 卡定义（card_def_id 作 metadata）。
+func _refresh_pilot_list() -> void:
+	if pilot_dropdown == null or context == null or context.card_database == null:
+		return
+	var prev_meta: Variant = _dropdown_selected_meta(pilot_dropdown)
+	pilot_dropdown.clear()
+	var index := 0
+	var select_index := 0
+	for card_id: StringName in context.card_database.card_defs:
+		var def = context.card_database.card_defs[card_id]
+		if def == null or def.card_kind != &"pilot":
+			continue
+		pilot_dropdown.add_item("%s [%s]" % [def.display_name, String(def.rarity)], index)
+		pilot_dropdown.set_item_metadata(index, card_id)
+		if card_id == prev_meta:
+			select_index = index
+		index += 1
+	if index > 0:
+		pilot_dropdown.select(select_index)
+
+
 func _update_info_display() -> void:
 	var gs := _gs()
 	var player := _current_player()
@@ -540,9 +617,14 @@ func _update_info_display() -> void:
 		for slot_id: StringName in mech.slots:
 			var slot: MechSlotState = mech.slots[slot_id]
 			if slot.equipped_card and slot.equipped_card.def:
-				var durability: int = slot.equipped_card.def.durability
-				var sd_text := "损伤:%d/%d" % [slot.region_damage_tokens, durability]
-				equip_lines.append("  [%s] %s %s" % [String(slot_id), slot.equipped_card.def.display_name, sd_text])
+				var def = slot.equipped_card.def
+				# 按卡牌类型区分显示：装备(部件/武器)有 durability；机师/事件/行动牌无
+				if def.card_kind == &"equipment":
+					var durability: int = def.durability
+					var sd_text := "损伤:%d/%d" % [slot.region_damage_tokens, durability]
+					equip_lines.append("  [%s] %s %s" % [String(slot_id), def.display_name, sd_text])
+				else:
+					equip_lines.append("  [%s] %s (损伤:%d)" % [String(slot_id), def.display_name, slot.region_damage_tokens])
 			else:
 				equip_lines.append("  [%s] (空) 损伤:%d" % [String(slot_id), slot.region_damage_tokens])
 		var hand_count := player.equipment_hand.size() if player else 0
@@ -564,6 +646,19 @@ func _update_info_display() -> void:
 		]
 	else:
 		mech_info_label.text = ""
+
+	# ── 机师信息 ──
+	if pilot_info_label != null:
+		var pilot_text := "机师: 无"
+		if mech:
+			var pslot = mech.slots.get(&"pilot")
+			if pslot != null and pslot.equipped_card != null and pslot.equipped_card.def != null:
+				pilot_text = "机师: %s | 攻击 %d/%d | 行动牌上限 %d" % [
+					pslot.equipped_card.def.display_name,
+					mech.attack_count_this_turn, mech.max_attacks_per_turn,
+					player.action_card_limit if player else 0
+				]
+		pilot_info_label.text = pilot_text
 
 
 # ═══════════════════════════════════════════
@@ -983,6 +1078,48 @@ func _on_modify_armor(amount: int) -> void:
 	if mech:
 		for slot_id: StringName in mech.slots:
 			mech.slots[slot_id].armor_modifier += amount
+	_update_info_display()
+	edit_applied.emit()
+
+
+## 换机师：下拉选 pilot_def_id → DevModeService.change_pilot（unset 旧 + set 新，注销旧 listener）。
+func _on_change_pilot() -> void:
+	var pilot_def_id: Variant = _dropdown_selected_meta(pilot_dropdown)
+	if pilot_def_id == null or current_player_id == &"":
+		return
+	if network_mode:
+		dev_edit_requested.emit(&"change_pilot", {"target": current_player_id, "pilot_def_id": pilot_def_id})
+		return
+	var gs := _gs()
+	if gs == null:
+		return
+	var mech := _current_mech()
+	if mech == null:
+		return
+	var dev := DevModeService.new()
+	dev.context = context
+	var result: Dictionary = dev.change_pilot(current_player_id, StringName(pilot_def_id))
+	if not result.get("ok", false):
+		if gs.log is Array:
+			gs.log.append({"message": "dev 换机师失败: %s" % String(result.get("message", "")), "details": {}})
+		return
+	_update_info_display()
+	edit_applied.emit()
+
+
+## 应用攻击数/行动牌上限/金币：DevModeService.modify_player_limits（即时重算 max_attacks_per_turn）。
+func _on_apply_limits() -> void:
+	if current_player_id == &"":
+		return
+	var atk: int = int(attack_limit_spin.value)
+	var alim: int = int(action_limit_spin.value)
+	var gold: int = int(gold_spin.value)
+	if network_mode:
+		dev_edit_requested.emit(&"modify_limits", {"target": current_player_id, "attack_limit": atk, "action_card_limit": alim, "gold": gold})
+		return
+	var dev := DevModeService.new()
+	dev.context = context
+	dev.modify_player_limits(current_player_id, atk, alim, gold)
 	_update_info_display()
 	edit_applied.emit()
 

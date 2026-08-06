@@ -27,6 +27,7 @@ const _EffectBinding = preload("res://scripts/action_core/EffectBinding.gd")
 const _RangeCalculator = preload("res://scripts/battle/RangeCalculator.gd")
 const _HexGrid = preload("res://scripts/battle/hex_grid.gd")
 const _GenEquipEffects = preload("res://scripts/generated_database/GeneratedEquipmentEffects.gd")
+const _ActionPilotEffects = preload("res://scripts/generated_database/ActionPilotEffects.gd")
 
 
 ## 检查所有条件是否满足
@@ -116,6 +117,28 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 				return false
 			var card_tags: Array = payload.get("card_tags", [])
 			return tag in card_tags
+
+		&"PAYLOAD_CARD_HAS_RUNTIME_TAG":
+			# pilot_003 effect_02：检查 payload.card_instance_id 对应卡实例的运行时计数器标记
+			# （face_up_in_deck / pilot_003_face_up_leave_use 等由 pilot_003_insert_face_up_random 写入）。
+			# tag 参数置于 condition.params（回退顶层）。
+			var rt_card_id: StringName = payload.get("card_instance_id", payload.get("card_id", &""))
+			var rt_params: Dictionary = condition.get("params", condition)
+			var rt_tag: StringName = rt_params.get("tag", condition.get("tag", &""))
+			if rt_card_id == &"" or rt_tag == &"" or binding == null or binding.context == null:
+				return false
+			var rt_card = binding.context.game_state.get_card(rt_card_id)
+			if rt_card == null:
+				return false
+			return bool(rt_card.counters.get(rt_tag, false))
+
+		&"PAYLOAD_FROM_ZONE_IS":
+			# pilot_003 effect_02：检查离堆时点的来源区域（from_zone）。
+			# zone 参数置于 condition.params（回退顶层）。
+			var z_params: Dictionary = condition.get("params", condition)
+			var zone_expect: StringName = z_params.get("zone", condition.get("zone", &""))
+			var zone_actual: StringName = payload.get("from_zone", &"")
+			return zone_expect != &"" and zone_expect == zone_actual
 
 		&"SOURCE_OWNER_HAS_STATUS":
 			var owner_id: StringName = binding.get_owner_player_id()
@@ -582,6 +605,27 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 			var sma_mech_id: StringName = _equip_mech_id(binding, payload)
 			var sma_attacker: StringName = payload.get("attacker_id", &"")
 			return sma_mech_id != &"" and sma_mech_id == sma_attacker
+
+		&"SELF_MECH_NOT_ATTACK_TARGET":
+			# 本牌所属机甲 != 攻击目标（pilot_002 防御分支：被授予机师非被攻击目标）
+			var snat_mech_id: StringName = _equip_mech_id(binding, payload)
+			var snat_target: StringName = payload.get("target_id", &"")
+			return snat_mech_id != &"" and snat_mech_id != snat_target
+
+		&"ATTACK_TARGET_IN_HEX_RANGE":
+			# 攻击目标在 本牌所属机甲 hex 范围内（pilot_002 防御分支：被攻击目标5格内）
+			var atir_params: Dictionary = condition.get("params", condition)
+			var atir_range: int = int(atir_params.get("range", condition.get("range", 5)))
+			var atir_mech_id: StringName = _equip_mech_id(binding, payload)
+			var atir_target: StringName = payload.get("target_id", &"")
+			var atir_ctx = binding.context if binding != null else null
+			if atir_mech_id == &"" or atir_target == &"" or atir_ctx == null or atir_ctx.get("game_state") == null:
+				return false
+			var atir_src = atir_ctx.game_state.mechs.get(atir_mech_id)
+			var atir_tgt = atir_ctx.game_state.mechs.get(atir_target)
+			if atir_src == null or atir_tgt == null:
+				return false
+			return _hex_distance(atir_src.position, atir_tgt.position) <= atir_range
 
 		&"SELF_MECH_IS_MOVE_SUBJECT":
 			# 本牌所属机甲 = 基础移动的主体（basic_move record.mech_id）
@@ -1167,6 +1211,395 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 				return false
 			var dpas_wid: StringName = dpas_atk.record.get("weapon_id", &"")
 			return dpas_wid == dpas_self
+
+		# ════════════════════════════════════════════════════════════
+		# 机师牌效果通用条件（SSR pilot_001-010 起多张共用）
+		# ════════════════════════════════════════════════════════════
+
+		&"SELF_MECH_ALIVE":
+			# 本牌所属机甲存活（pilot_004 玛沙 / pilot_010 刻托 前置）
+			var smal_mech_id: StringName = _equip_mech_id(binding, payload)
+			var smal_ctx = binding.context if binding != null else null
+			if smal_mech_id == &"" or smal_ctx == null or smal_ctx.get("game_state") == null:
+				return false
+			var smal_mech = smal_ctx.game_state.mechs.get(smal_mech_id)
+			return smal_mech != null and not smal_mech.destroyed
+
+		&"ATTACKER_ALIVE":
+			# 攻击发起方机甲存活（pilot_006 里昂 悬赏抽牌前置）
+			var atkalive_attacker_id: StringName = payload.get("attacker_id", &"")
+			if atkalive_attacker_id == &"":
+				return false
+			var atkalive_ctx = binding.context if binding != null else null
+			if atkalive_ctx == null or atkalive_ctx.get("game_state") == null:
+				return false
+			var atkalive_mech = atkalive_ctx.game_state.mechs.get(atkalive_attacker_id)
+			return atkalive_mech != null and not atkalive_mech.destroyed
+
+		&"ATTACK_HAS_TARGET":
+			# 当前攻击已选定目标（pilot_007 珀修斯 effect_02 前置）
+			return payload.get("target_id", &"") != &""
+
+		&"HAS_OTHER_MECH_IN_HEX_RANGE":
+			# 本牌所属机甲 hex 范围内存在其他存活机甲（pilot_002/004/006/009 用）
+			# params.range 为六角距离上限；距离用 _HexGrid.distance（odd-q offset 校正）。
+			var hmr_params: Dictionary = condition.get("params", condition)
+			var hmr_range: int = int(hmr_params.get("range", condition.get("range", 1)))
+			var hmr_mech_id: StringName = _equip_mech_id(binding, payload)
+			var hmr_ctx = binding.context if binding != null else null
+			if hmr_mech_id == &"" or hmr_ctx == null or hmr_ctx.get("game_state") == null:
+				return false
+			var hmr_src = hmr_ctx.game_state.mechs.get(hmr_mech_id)
+			if hmr_src == null:
+				return false
+			for hmr_mid in hmr_ctx.game_state.mechs:
+				if hmr_mid == hmr_mech_id:
+					continue
+				var hmr_m = hmr_ctx.game_state.mechs[hmr_mid]
+				if hmr_m == null or hmr_m.destroyed:
+					continue
+				if _hex_distance(hmr_src.position, hmr_m.position) <= hmr_range:
+					return true
+			return false
+
+		&"HAS_OTHER_MECH_ON_FIELD":
+			# 场上存在其他存活机甲（pilot_006 里昂 轮次悬赏前置）
+			var hom_mech_id: StringName = _equip_mech_id(binding, payload)
+			var hom_ctx = binding.context if binding != null else null
+			if hom_ctx == null or hom_ctx.get("game_state") == null:
+				return false
+			for hom_mid in hom_ctx.game_state.mechs:
+				if hom_mid == hom_mech_id:
+					continue
+				var hom_m = hom_ctx.game_state.mechs[hom_mid]
+				if hom_m != null and not hom_m.destroyed:
+					return true
+			return false
+
+		&"HAS_ANY_MECH_ON_FIELD":
+			# 场上存在任意存活机甲（含自身；pilot_002/005 toggle 目标前置）
+			var ham_ctx = binding.context if binding != null else null
+			if ham_ctx == null or ham_ctx.get("game_state") == null:
+				return false
+			for ham_mid in ham_ctx.game_state.mechs:
+				var ham_m = ham_ctx.game_state.mechs[ham_mid]
+				if ham_m != null and not ham_m.destroyed:
+					return true
+			return false
+
+		# ════════════════════════════════════════════════════════════
+		# pilot_010 刻托 effect_02 视为序列 条件
+		# ════════════════════════════════════════════════════════════
+
+		&"USED_CARD_EXECUTOR_IS_SELF":
+			# use_action_card 的真正执行者机甲 == 本机师所属机甲（区分受控牌：physical owner 可能他人，executor 是刻托机甲）
+			var uces_bind: Dictionary = payload.get("binding_context", {})
+			var uces_mech: StringName = uces_bind.get("mech_id", &"")
+			if uces_mech == &"":
+				return false
+			var uces_executor: StringName = payload.get("mech_id", payload.get("source_mech_id", &""))
+			return uces_executor != &"" and uces_executor == uces_mech
+
+		&"PAYLOAD_IS_PHYSICAL_ACTION_CARD":
+			# use_action_card 的牌是实体行动牌（非虚拟转化/当作）。虚拟当作不计数/不视为（pilot_010 裁定歧义3）。
+			return not bool(payload.get("virtual_transform", false)) and not bool(payload.get("is_virtual", false))
+
+		&"OWNER_ATTACK_CARD_USE_INDEX_THIS_TURN_BELOW":
+			# 刻托本回合已用实体攻击牌数 < max_index（前3张：max_index=4）。读 pilot_card.counters。
+			var oau_params: Dictionary = condition.get("params", condition)
+			var oau_max: int = int(oau_params.get("max_index", condition.get("max_index", 4)))
+			var oau_bind: Dictionary = payload.get("binding_context", {})
+			var oau_card_id: StringName = oau_bind.get("card_instance_id", &"")
+			var oau_ctx = binding.context if binding != null else null
+			if oau_card_id == &"" or oau_ctx == null or oau_ctx.get("game_state") == null:
+				return false
+			var oau_pcard = oau_ctx.game_state.get_card(oau_card_id)
+			if oau_pcard == null or not "counters" in oau_pcard:
+				return false
+			var oau_turn: int = int(oau_ctx.game_state.turn_number)
+			var oau_uses: int = int(oau_pcard.counters.get("pilot_010_uses_%d" % oau_turn, 0))
+			return oau_uses < oau_max
+
+		# ════════════════════════════════════════════════════════════
+		# pilot_004 玛沙 条件
+		# ════════════════════════════════════════════════════════════
+
+		&"SELF_EFFECTIVE_ARMOR_ABOVE":
+			# 本牌所属机甲当前有效护甲 > threshold（pilot_004 护甲转动力前置：至少1护甲可转化）
+			var sea_params: Dictionary = condition.get("params", condition)
+			var sea_threshold: int = int(sea_params.get("threshold", condition.get("threshold", 0)))
+			var sea_mech_id: StringName = _equip_mech_id(binding, payload)
+			var sea_ctx = binding.context if binding != null else null
+			if sea_mech_id == &"" or sea_ctx == null or sea_ctx.get("game_state") == null:
+				return false
+			var sea_mech = sea_ctx.game_state.mechs.get(sea_mech_id)
+			if sea_mech == null:
+				return false
+			return sea_mech.get_armor() > sea_threshold
+
+		&"SOURCE_RUNTIME_MODIFIER_EXISTS":
+			# 本机师实例建立的某 runtime_tag 的临时 modifier 存在（pilot_004 effect_02 清转换层前置）
+			var srm_params: Dictionary = condition.get("params", condition)
+			var srm_tag: StringName = srm_params.get("tag", condition.get("tag", &""))
+			if srm_tag == &"":
+				return false
+			var srm_mech_id: StringName = _equip_mech_id(binding, payload)
+			var srm_ctx = binding.context if binding != null else null
+			if srm_mech_id == &"" or srm_ctx == null or srm_ctx.get("game_state") == null:
+				return false
+			var srm_mech = srm_ctx.game_state.mechs.get(srm_mech_id)
+			if srm_mech == null:
+				return false
+			for s in srm_mech.statuses:
+				if String(s.get("runtime_tag", &"")) == String(srm_tag):
+					return true
+			return false
+
+		# ════════════════════════════════════════════════════════════
+		# pilot_005 肯特 effect_01 授予能力 条件
+		# ════════════════════════════════════════════════════════════
+
+		&"SELF_MECH_IS_ATTACKER_OR_TARGET":
+			# 本牌所属机甲是当前攻击的攻击方或目标（pilot_005 帝国压制：攻击/被攻击都触发）
+			var smat_mech: StringName = _equip_mech_id(binding, payload)
+			var smat_attacker: StringName = payload.get("attacker_id", &"")
+			var smat_target: StringName = payload.get("target_id", &"")
+			return smat_mech != &"" and (smat_mech == smat_attacker or smat_mech == smat_target)
+
+		&"OPPOSING_ATTACK_PARTICIPANT_ACTION_HAND_ABOVE":
+			# 对侧参与方（攻击方->目标 / 目标->攻击方）行动手牌数 > threshold。
+			# 裁定（歧义1）：手牌不足2时可发动并弃全部剩余（触发效果非成本），故 threshold=1。
+			var opa_params: Dictionary = condition.get("params", condition)
+			var opa_threshold: int = int(opa_params.get("threshold", condition.get("threshold", 1)))
+			var opa_mech: StringName = _equip_mech_id(binding, payload)
+			var opa_attacker: StringName = payload.get("attacker_id", &"")
+			var opa_target: StringName = payload.get("target_id", &"")
+			var opa_opposing: StringName = &""
+			if opa_mech == opa_attacker:
+				opa_opposing = opa_target
+			elif opa_mech == opa_target:
+				opa_opposing = opa_attacker
+			if opa_opposing == &"":
+				return false
+			var opa_ctx = binding.context if binding != null else null
+			if opa_ctx == null or opa_ctx.get("game_state") == null:
+				return false
+			var opa_player = opa_ctx.game_state.get_player_for_mech(opa_opposing)
+			if opa_player == null:
+				return false
+			return opa_player.action_hand.size() > opa_threshold
+
+		&"PILOT_AURA_ACTIVE_FOR_MECH":
+			# 本机甲有 pilot 光环 active（pilot_005/002，未被 toggle off）。granted effect conditions 用。
+			var pam_mech: StringName = _equip_mech_id(binding, payload)
+			var pam_ctx = binding.context if binding != null else null
+			if pam_mech == &"" or pam_ctx == null or pam_ctx.get("game_state") == null:
+				return false
+			return _ActionPilotEffects.is_aura_active_for_mech(pam_ctx.game_state, pam_mech)
+
+		# ════════════════════════════════════════════════════════════
+		# pilot_008 安德洛美达 条件
+		# ════════════════════════════════════════════════════════════
+
+		&"PAYLOAD_PHYSICAL_CARD_DEF_ID_IS":
+			# use_action_card 打出的实体牌 def_id == 指定（pilot_008 回收维修：action_012_维修）
+			var pcd_params: Dictionary = condition.get("params", condition)
+			var pcd_def_id: StringName = pcd_params.get("card_def_id", condition.get("card_def_id", &""))
+			var pcd_card_id: StringName = payload.get("card_instance_id", payload.get("card_id", &""))
+			var pcd_ctx = binding.context if binding != null else null
+			if pcd_card_id == &"" or pcd_ctx == null or pcd_ctx.get("game_state") == null:
+				return false
+			var pcd_card = pcd_ctx.game_state.get_card(pcd_card_id)
+			if pcd_card == null or pcd_card.def == null:
+				return false
+			return String(pcd_card.def.card_id) == String(pcd_def_id)
+
+		&"DISCARD_CONTAINS_CARD_DEF_ID":
+			# 弃牌堆含指定 def_id 的牌（pilot_008 回收弃置的维修）
+			var dcd_params: Dictionary = condition.get("params", condition)
+			var dcd_def_id: StringName = dcd_params.get("card_def_id", condition.get("card_def_id", &""))
+			var dcd_ctx = binding.context if binding != null else null
+			if dcd_ctx == null or dcd_ctx.get("game_state") == null:
+				return false
+			for cid in dcd_ctx.game_state.deck_state.action_discard_pile:
+				var c = dcd_ctx.game_state.get_card(cid)
+				if c != null and c.def != null and String(c.def.card_id) == String(dcd_def_id):
+					return true
+			return false
+
+		&"SOURCE_CARD_INSTANCE_CAN_BE_GAINED":
+			# 源牌可获得（简化：true，GAIN_SPECIFIC_CARD 内部验证）
+			return true
+
+		&"HP_CHANGE_METHOD_IS":
+			var hcm_params: Dictionary = condition.get("params", condition)
+			var hcm_method: StringName = hcm_params.get("method", condition.get("method", &""))
+			return String(payload.get("method", &"")) == String(hcm_method)
+
+		&"DAMAGE_CHANGE_METHOD_IS":
+			var dcm_params: Dictionary = condition.get("params", condition)
+			var dcm_method: StringName = dcm_params.get("method", condition.get("method", &""))
+			return String(payload.get("method", &"")) == String(dcm_method)
+
+		&"HP_CHANGE_AMOUNT_ABOVE":
+			var ha_params: Dictionary = condition.get("params", condition)
+			var ha_threshold: int = int(ha_params.get("threshold", condition.get("threshold", 0)))
+			return int(payload.get("amount", payload.get("value", 0))) > ha_threshold
+
+		&"DAMAGE_CHANGE_AMOUNT_ABOVE":
+			var da_params: Dictionary = condition.get("params", condition)
+			var da_threshold: int = int(da_params.get("threshold", condition.get("threshold", 0)))
+			return int(payload.get("amount", payload.get("value", payload.get("total_points", 0)))) > da_threshold
+
+		&"PAYLOAD_TARGET_IN_VARIABLE_HEX_RANGE":
+			# 目标在 base_range + X 格内（X = pilot_008 card.counters var_X）
+			var ptv_params: Dictionary = condition.get("params", condition)
+			var ptv_base: int = int(ptv_params.get("base_range", condition.get("base_range", 5)))
+			var ptv_bind: Dictionary = payload.get("binding_context", {})
+			var ptv_card_id: StringName = ptv_bind.get("card_instance_id", &"")
+			var ptv_ctx = binding.context if binding != null else null
+			var ptv_x: int = 0
+			if ptv_card_id != &"" and ptv_ctx != null and ptv_ctx.get("game_state") != null:
+				var ptv_card = ptv_ctx.game_state.get_card(ptv_card_id)
+				ptv_x = _ActionPilotEffects.get_pilot_008_x(ptv_card)
+			var ptv_range: int = ptv_base + ptv_x
+			var ptv_source: StringName = ptv_bind.get("mech_id", &"")
+			var ptv_target: StringName = payload.get("target_id", payload.get("target_mech_id", &""))
+			if ptv_source == &"" or ptv_target == &"" or ptv_ctx == null or ptv_ctx.get("game_state") == null:
+				return false
+			var ptv_src = ptv_ctx.game_state.mechs.get(ptv_source)
+			var ptv_tgt = ptv_ctx.game_state.mechs.get(ptv_target)
+			if ptv_src == null or ptv_tgt == null:
+				return false
+			return _hex_distance(ptv_src.position, ptv_tgt.position) <= ptv_range
+
+		# ════════════════════════════════════════════════════════════
+		# pilot_006 里昂 条件
+		# ════════════════════════════════════════════════════════════
+
+		&"ATTACK_TARGET_HAS_SOURCE_MARK":
+			# 当前攻击目标 == 本里昂实例的本轮悬赏标记目标
+			var atsm_bind: Dictionary = payload.get("binding_context", {})
+			var atsm_source: StringName = atsm_bind.get("card_instance_id", &"")
+			var atsm_target: StringName = payload.get("target_id", &"")
+			if atsm_source == &"" or atsm_target == &"":
+				return false
+			return _ActionPilotEffects.get_pilot_006_mark(atsm_source) == atsm_target
+
+		# ════════════════════════════════════════════════════════════
+		# pilot_007 珀修斯 条件
+		# ════════════════════════════════════════════════════════════
+
+		&"ATTACK_SOURCE_IS_PHYSICAL_ACTION_CARD":
+			# 攻击来源是实体攻击行动牌（非虚拟当作/飞弹）。裁定：当作转化/飞弹不触发 effect_01。
+			var asp_card_id: StringName = payload.get("attack_card_id", payload.get("card_instance_id", &""))
+			if asp_card_id == &"":
+				return false
+			var asp_ctx = binding.context if binding != null else null
+			if asp_ctx == null or asp_ctx.get("game_state") == null:
+				return false
+			var asp_card = asp_ctx.game_state.get_card(asp_card_id)
+			if asp_card == null or asp_card.def == null:
+				return false
+			return asp_card.def.card_kind == &"action"
+
+		&"ATTACK_SOURCE_ACTION_CARD_TYPE_IS":
+			var ast_params: Dictionary = condition.get("params", condition)
+			var ast_type: StringName = ast_params.get("card_type", condition.get("card_type", &""))
+			var ast_card_id: StringName = payload.get("attack_card_id", payload.get("card_instance_id", &""))
+			var ast_ctx = binding.context if binding != null else null
+			if ast_card_id == &"" or ast_ctx == null or ast_ctx.get("game_state") == null:
+				return false
+			var ast_card = ast_ctx.game_state.get_card(ast_card_id)
+			if ast_card == null or ast_card.def == null:
+				return false
+			return String(ast_card.def.action_type) == String(ast_type)
+
+		&"ATTACK_SOURCE_CARD_CAN_BE_CLAIMED":
+			# 攻击来源牌可获得（简化：true，CLAIM 内部验证）
+			return true
+
+		# ════════════════════════════════════════════════════════════
+		# pilot_009 美杜莎 条件
+		# ════════════════════════════════════════════════════════════
+
+		&"HAS_ACTION_CARD_TYPE_IN_HAND":
+			# 持有者手牌有指定类型的行动牌（pilot_009 类型支付前置）
+			var hath_params: Dictionary = condition.get("params", condition)
+			var hath_type: StringName = hath_params.get("card_type", condition.get("card_type", &""))
+			var hath_ctx = binding.context if binding != null else null
+			var hath_pid: StringName = _equip_player_id(binding, payload)
+			if hath_type == &"" or hath_ctx == null or hath_ctx.get("game_state") == null:
+				return false
+			var hath_player = hath_ctx.game_state.players.get(hath_pid)
+			if hath_player == null:
+				return false
+			for cid in hath_player.action_hand:
+				var c = hath_ctx.game_state.get_card(cid)
+				if c != null and c.def != null and String(c.def.action_type) == String(hath_type):
+					return true
+			return false
+
+		&"MECH_HAS_USABLE_ATTACK_CARD":
+			# 被选机甲(payload.target_id)手牌有攻击牌（pilot_006 e3 战后逼迫二选一条件）
+			var muac_ctx = binding.context if binding != null else null
+			if muac_ctx == null or muac_ctx.get("game_state") == null:
+				return false
+			var muac_target: StringName = payload.get("target_id", payload.get("target_mech_id", &""))
+			if muac_target == &"":
+				return false
+			var muac_player = muac_ctx.game_state.get_player_for_mech(muac_target)
+			if muac_player == null:
+				return false
+			for cid in muac_player.action_hand:
+				var muac_c = muac_ctx.game_state.get_card(cid)
+				if muac_c != null and muac_c.def != null and String(muac_c.def.action_type) == "攻击":
+					return true
+			return false
+
+		&"PILOT_002_HAS_USABLE_BATCH":
+			# binding_context.batch_id 对应批次未使用未破裂且 named_type 匹配（pilot_002 批次使用按钮条件）
+			# 破裂检测：批次牌任一离开目标手牌则批次破裂（条件 false）
+			var phub_params: Dictionary = condition.get("params", condition)
+			var phub_named: StringName = phub_params.get("named_type", &"")
+			var phub_bind: Dictionary = payload.get("binding_context", {}) if payload != null else {}
+			var phub_batch_id: String = String(phub_bind.get("batch_id", ""))
+			if phub_batch_id == "":
+				# 也检查 payload 运行时（防御链内 GRANT_BATCH 后立即 USE_BATCH）
+				phub_batch_id = String(payload.get("pilot_002_current_batch_id", "")) if payload != null else ""
+			if phub_batch_id == "":
+				return false
+			var phub_batch: Dictionary = ActionPilotEffects.get_pilot_002_batch(phub_batch_id)
+			if phub_batch.is_empty():
+				return false
+			if bool(phub_batch.get("used", false)) or bool(phub_batch.get("broken", false)):
+				return false
+			if phub_named != &"" and String(phub_batch.get("named_type", &"")) != String(phub_named):
+				return false
+			# 破裂检测：批次牌仍在目标手牌
+			var phub_ctx = binding.context if binding != null else null
+			if phub_ctx != null and phub_ctx.get("game_state") != null:
+				var phub_tm: StringName = phub_batch.get("target_mech", &"")
+				var phub_tp = phub_ctx.game_state.get_player_for_mech(phub_tm)
+				if phub_tp != null:
+					for phub_cid in phub_batch.get("card_ids", []):
+						if not phub_tp.action_hand.has(phub_cid):
+							return false
+			return true
+
+		# ════════════════════════════════════════════════════════════
+		# pilot_001 阿克罗姆 条件
+		# ════════════════════════════════════════════════════════════
+
+		&"PAYLOAD_EFFECT_CHAIN_COMPLETED":
+			# 第1次效果链已完成（取消/中断未生效则 false）
+			return payload.get("effect_chain_completed", false) == true
+
+		&"PAYLOAD_REPEAT_DEPTH_BELOW":
+			# 防止复制链递归（repeat_depth < max_depth）
+			var prd_params: Dictionary = condition.get("params", condition)
+			var prd_max: int = int(prd_params.get("max_depth", condition.get("max_depth", 1)))
+			return int(payload.get("repeat_depth", 0)) < prd_max
 
 		_:
 			push_warning("ConditionChecker: 未知条件操作符 %s，默认返回 true" % op)

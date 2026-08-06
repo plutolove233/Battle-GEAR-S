@@ -22,6 +22,7 @@ const _GameState = preload("res://scripts/runtime/GameState.gd")
 const _RangeCalculator = preload("res://scripts/battle/RangeCalculator.gd")
 const _TimingConst = preload("res://scripts/action_core/TimingConst.gd")
 const _GenEquipEffects = preload("res://scripts/generated_database/GeneratedEquipmentEffects.gd")
+const _ActionPilotEffects = preload("res://scripts/generated_database/ActionPilotEffects.gd")
 
 ## GameContext：依赖注入容器
 var context = null
@@ -72,6 +73,7 @@ func start_tutorial(data_registry) -> Dictionary:
 		return setup_result
 	# 注入 game_state 供全场光环 helper（effect_080/086）查询所有机甲
 	_GenEquipEffects.set_aura_game_state(context.game_state)
+	_ActionPilotEffects.set_aura_game_state(context.game_state)
 
 	# 同步兼容字段
 	_sync_compat_fields()

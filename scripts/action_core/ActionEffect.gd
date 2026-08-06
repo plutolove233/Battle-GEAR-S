@@ -15,7 +15,8 @@ class_name ActionEffect
 ## 效果显示名称
 @export var display_name: String = ""
 
-## 优先级：数值越小越先执行
+## 优先级：数值越大越先执行（TimingEngine 排序 `pa > pb`，高优先级先 fire）。
+## 约定范围 -1~30：常规 10，顺序保证用 20/30，上限 30。
 @export var priority: int = 100
 
 ## ── 效果模式 ──
@@ -68,6 +69,13 @@ class_name ActionEffect
 ## ── 每回合一次控制 ──
 @export var once_per_turn_key: StringName = &""
 @export var once_per_turn_max: int = 1
+
+## ── 每局一次控制 ──
+## 非空时，ActionEngine/TimingEngine 触发前校验本局已用次数（GameState.once_per_game_used，
+## key 格式 "<key>@<card_instance_id>"），达到 once_per_game_max 则不触发。
+## 机师牌本批 SSR 未用此字段，但建系统时一并加上，供后续批次（如 pilot_033 弃2装抽高级 本局1次）使用。
+@export var once_per_game_key: StringName = &""
+@export var once_per_game_max: int = 1
 
 ## ── 手牌期间永久监听（LISTEN 模式使用）──
 ## true=牌在手牌期间作为永久监听器监听他人动作（如推进 effect2 监听他人使用迎击牌），
