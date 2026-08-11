@@ -239,10 +239,18 @@ static func check_single(binding, payload: Dictionary, rule: Dictionary) -> bool
 			return true
 
 		&"ALL_HIT_TARGETS_FROM_ACTION_RECORD_FLAG":
-			# pilot_012/013 effect_02：从命中目标中筛出受 effect_01 影响的机甲目标。
-			# 最小闭环：affected == 全部机甲目标（effect_01 对全部机甲目标结算），故筛"命中的机甲目标"。
+			# pilot_012/013 effect_02：effect_01 已发动(flag) 的命中机甲目标。
+			# flag 由 e01 SET_ACTION_RECORD_FLAG 写入 attack.record["_effect_flags"]，fork 深拷贝继承。
+			# 无 flag = e01 未发动 -> 无命中奖励目标（e02 跳过）。
+			# e01 影响全部机甲目标，故 affected == 全部机甲目标，筛"命中的机甲目标"。
 			# 单目标读 payload.hit；双连读 payload.hit_by_target 字典。
 			var aht_params: Dictionary = rule.get("params", rule)
+			var aht_flag: StringName = aht_params.get("flag", &"")
+			if aht_flag != &"":
+				var aht_flags: Dictionary = payload.get("_effect_flags", {})
+				var aht_entry: Dictionary = aht_flags.get(aht_flag, {})
+				if not bool(aht_entry.get("value", false)):
+					return false  # effect_01 未发动
 			var aht_exclude_attacker: bool = bool(aht_params.get("exclude_attacker", true))
 			var aht_all: Array = _collect_attack_mech_targets_tc(binding, payload, aht_exclude_attacker)
 			var aht_hit_by: Dictionary = payload.get("hit_by_target", {})

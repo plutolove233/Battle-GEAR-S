@@ -1813,16 +1813,17 @@ static func build_pilot_effects() -> Dictionary:
 	# ═══════════════════════════════════════════
 
 	# ── pilot_012_effect_01 夺牌压制 ──
-	# LISTEN ATTACK_PRE，每回合1次。玛丽尔攻击时可选：对每个机甲攻击目标，
+	# LISTEN ATTACK_PRE priority 30（每玩家回合1次，seat 制 turn_number）。玛丽尔攻击时可选：对每个机甲攻击目标，
 	# 若其持有行动牌则偷1张（玛丽尔玩家选暗牌），并使其当前动力-3（clamp[0,max]，保留 temp_power，不降上限）。
-	# 多目标只消耗1次回合额度（limit_counted_per_attack）。
-	# SET_ACTION_RECORD_FLAG 标记受影响目标，供 effect_02 命中奖励判定。
+	# 多目标只消耗1次回合额度（e01 在主攻击 PRE 只发1次，FOR_EACH_TARGET 遍历全部目标）。
+	# SET_ACTION_RECORD_FLAG 写 flag（pilot_012_effect_01_fired）到 attack.record["_effect_flags"]，
+	# fork 深拷贝继承，供 effect_02 在各 fork AFTER 判定 e01 是否发动 + 命中奖励触发。
 	var p012e1 := _ActionEffect.new()
 	p012e1.effect_id = &"pilot_012_effect_01"
 	p012e1.display_name = "玛丽尔·夺牌压制"
 	p012e1.description = "每回合1次，攻击时对每个机甲目标偷1张行动牌并使其当前动力-3。"
 	p012e1.mode = _TC.MODE_LISTEN
-	p012e1.priority = 10
+	p012e1.priority = 30
 	p012e1.listen_timing = _TC.ATTACK_PRE
 	p012e1.listen_action_type = &"attack"
 	p012e1.once_per_turn_key = &"pilot_012_effect_01"
@@ -1877,7 +1878,7 @@ static func build_pilot_effects() -> Dictionary:
 						"action_id": "$payload.action_id",
 						"flag": &"pilot_012_effect_01_fired",
 						"value": true,
-						"data": {"affected_target_ids": "$selected_targets.mech_ids", "limit_counted_per_attack": true},
+						"data": {"limit_counted_per_attack": true},
 					}},
 				],
 			}],
@@ -1886,10 +1887,10 @@ static func build_pilot_effects() -> Dictionary:
 	effects[p012e1.effect_id] = p012e1
 
 	# ── pilot_012_effect_02 命中奖励 ──
-	# LISTEN ATTACK_AFTER，requires_effect=pilot_012_effect_01。夺牌压制影响的目标命中时，
-	# 玛丽尔可选：对该命中目标抽1张行动牌并回复3动力（玛丽尔自身）。
-	# 最小闭环：requires_effect 标记 effect_01 已执行；RECORDED_AFFECTED_ATTACK_TARGET_HAS_HIT 重算命中目标
-	# （effect_01 影响全部机甲目标，故命中目标即受影响目标）；ALL_HIT_TARGETS_FROM_ACTION_RECORD_FLAG 收集命中目标。
+	# LISTEN ATTACK_AFTER。夺牌压制(e01)影响的目标命中时，玛丽尔可选：对该命中目标抽1张行动牌并回复3动力。
+	# e01 是否发动由 flag（pilot_012_effect_01_fired，e01 SET_ACTION_RECORD_FLAG 写入 attack.record["_effect_flags"]）
+	# 判定；fork 深拷贝 record 故双连每个复制攻击的 AFTER 都能读 flag 触发（每个命中目标各抽1+回3，逐个可选弹窗）。
+	# RECORDED_AFFECTED_ATTACK_TARGET_HAS_HIT：flag 已设 + 命中；ALL_HIT_TARGETS_FROM_ACTION_RECORD_FLAG 收集命中目标。
 	# FOR_EACH_TARGET inner CHOOSE_ONE：逐命中目标串行弹窗（per-target chosen/executed，_flat_item_choose_one）。
 	var p012e2 := _ActionEffect.new()
 	p012e2.effect_id = &"pilot_012_effect_02"
@@ -1899,7 +1900,9 @@ static func build_pilot_effects() -> Dictionary:
 	p012e2.priority = 10
 	p012e2.listen_timing = _TC.ATTACK_AFTER
 	p012e2.listen_action_type = &"attack"
-	p012e2.requires_effect = &"pilot_012_effect_01"
+	# 不用 requires_effect（它查同 action_id，双连 fork 子动作 id 不同 -> e02 在 fork AFTER 永不触发）。
+	# 改靠 RECORDED_AFFECTED_ATTACK_TARGET_HAS_HIT / ALL_HIT_TARGETS_FROM_ACTION_RECORD_FLAG 读 e01 写的
+	# flag（pilot_012_effect_01_fired，fork 深拷贝继承）判断 e01 是否发动 + 命中。
 	p012e2.set_conditions([
 		{"op": &"SELF_MECH_IS_ATTACKER"},
 		{"op": &"RECORDED_AFFECTED_ATTACK_TARGET_HAS_HIT", "params": {"flag": &"pilot_012_effect_01_fired", "target_ids_path": &"data.affected_target_ids"}},

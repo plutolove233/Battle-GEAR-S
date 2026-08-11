@@ -457,12 +457,30 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 		return {"state": &"completed"}
 
 	# pilot_012/013 effect_01：SET_ACTION_RECORD_FLAG
-	# 最小闭环：effect_02 用 requires_effect + TargetChecker 重算命中目标，无需 flags 字典。
-	# 此处 no-op（仅日志），保留动作链兼容拆解文 actions 列表。
+	# 真写入 attack 动作 record["_effect_flags"][flag] = {value, data}。
+	# effect_02(AFTER) 读此 flag 判断 effect_01 是否发动；fork 深拷贝 record（attack_action.gd _create_fork_sub_action
+	# 用 record.duplicate(true)）故 flag 继承到各复制攻击，使双连多目标的每个 fork AFTER 都能触发命中奖励。
+	# （requires_effect 查同 action_id，fork 子动作 id 不同 -> 在 fork 上失效，故 e02 改靠 flag 而非 requires_effect。）
 	if act_type == &"SET_ACTION_RECORD_FLAG":
 		var sarf_params: Dictionary = _resolve_atomic_params(action_def.get("params", {}), payload, parent_action)
 		var sarf_flag: StringName = sarf_params.get("flag", &"")
-		SLog.log_raw("[ACTION] SET_ACTION_RECORD_FLAG flag=%s (no-op, effect_02 用 requires_effect 重算)" % String(sarf_flag))
+		if sarf_flag == &"":
+			return {"state": &"completed"}
+		var sarf_value = sarf_params.get("value", true)
+		var sarf_data: Dictionary = sarf_params.get("data", {})
+		# 定位 attack 动作：e01 在 ATTACK_PRE 触发，parent_action 即 attack；兜底 action_id/attack_action_id。
+		var sarf_atk = parent_action
+		if sarf_atk == null or sarf_atk.action_type != &"attack":
+			var sarf_aid: StringName = sarf_params.get("action_id", payload.get("attack_action_id", payload.get("action_id", &"")))
+			if String(sarf_aid) != "" and context.action_registry != null:
+				sarf_atk = context.action_registry.get_action(sarf_aid)
+		if sarf_atk == null:
+			push_warning("SET_ACTION_RECORD_FLAG: 无攻击动作，无法写入 flag=%s" % String(sarf_flag))
+			return {"state": &"completed"}
+		if not sarf_atk.record.has("_effect_flags"):
+			sarf_atk.record["_effect_flags"] = {}
+		sarf_atk.record["_effect_flags"][sarf_flag] = {"value": sarf_value, "data": sarf_data}
+		SLog.log_raw("[ACTION] SET_ACTION_RECORD_FLAG flag=%s value=%s on %s" % [String(sarf_flag), str(sarf_value), String(sarf_atk.action_id)])
 		return {"state": &"completed"}
 
 	# pilot_013 effect_02b：MODIFY_ATTACK_DAMAGE 改本次攻击对当前命中目标的 damage 记录 +3。

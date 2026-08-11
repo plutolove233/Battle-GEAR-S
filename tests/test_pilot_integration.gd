@@ -814,13 +814,12 @@ func test_pilot_012_effect01_steal_and_power_drain() -> Variant:
 	return true
 
 
-## ── pilot_012 e2 命中奖励：e1 触发后攻击命中 -> 逐目标 CHOOSE_ONE -> 抽1张+回3动力 ──
-## ── pilot_012 e2 命中奖励：e1 已执行 + 攻击命中 -> 逐目标 CHOOSE_ONE -> 抽1张+回3动力 ──
+## ── pilot_012 e2 命中奖励：e1 已发动 + 攻击命中 -> 逐目标 CHOOSE_ONE -> 抽1张+回3动力 ──
 ## e1 已有独立测试（effect01_power_drain_no_cards / steal_and_power_drain）。本测试聚焦 e2：
-## 用 _mark_effect_executed 模拟 e1 已在本攻击执行（requires_effect 依赖），fire ATTACK_AFTER
-## 验证 e2 命中奖励（RECORDED_AFFECTED_ATTACK_TARGET_HAS_HIT + FOR_EACH_TARGET inner CHOOSE_ONE 串行弹窗）。
-## 注：真实流程 attack 在 ATTACK_PRE/ATTACK_AFTER 步骤间不 completed，e1 标记保留；测试简化 attack
-## 无 steps，若 fire ATTACK_PRE+resume 会触发 continue_action cleanup 清标记+注销 action，故直接模拟依赖。
+## 用 attack.record._effect_flags 模拟 e1 已发动（SET_ACTION_RECORD_FLAG 写 flag，e2 据此判定），
+## fire ATTACK_AFTER 验证 e2 命中奖励（RECORDED_AFFECTED_ATTACK_TARGET_HAS_HIT + FOR_EACH_TARGET inner CHOOSE_ONE 串行弹窗）。
+## 注：真实流程 attack 在 ATTACK_PRE/ATTACK_AFTER 步骤间不 completed，flag 保留；测试简化 attack
+## 无 steps，若 fire ATTACK_PRE+resume 会触发 continue_action cleanup 清标记+注销 action，故直接模拟 flag。
 func test_pilot_012_effect02_hit_reward() -> Variant:
 	var battle := _new_battle()
 	if battle == null or battle.context == null:
@@ -839,8 +838,8 @@ func test_pilot_012_effect02_hit_reward() -> Variant:
 	var player = gs.players.get(&"player")
 	# hit=true -> ATTACK_AFTER payload.hit=true -> e2 命中条件通过
 	var attack := _make_attack(battle, player_mech.mech_id, enemy_mech.mech_id, {"distance": 2, "hit": true})
-	# 模拟 e1 已在本攻击执行（requires_effect=pilot_012_effect_01 依赖）
-	battle.context.timing_engine._mark_effect_executed(&"pilot_012_effect_01", attack.action_id)
+	# 模拟 e1 已发动（SET_ACTION_RECORD_FLAG 写 flag 到 attack.record._effect_flags，e2 据此判定）
+	attack.record["_effect_flags"] = {"pilot_012_effect_01_fired": {"value": true, "data": {}}}
 	var player_hand_before: int = player.action_hand.size()
 	player_mech.adjust_own_power(-99)  # 降到0，确保回3动力可观测
 	if player_mech.get_own_power() != 0:
@@ -877,7 +876,8 @@ func test_pilot_012_effect02_cancel_skip() -> Variant:
 	battle.context.game_setup_service.set_pilot(player_mech.mech_id, card)
 	var player = gs.players.get(&"player")
 	var attack := _make_attack(battle, player_mech.mech_id, enemy_mech.mech_id, {"distance": 2, "hit": true})
-	battle.context.timing_engine._mark_effect_executed(&"pilot_012_effect_01", attack.action_id)
+	# 模拟 e1 已发动（flag，e2 据此判定）
+	attack.record["_effect_flags"] = {"pilot_012_effect_01_fired": {"value": true, "data": {}}}
 	var player_hand_before: int = player.action_hand.size()
 	player_mech.adjust_own_power(-99)
 	battle.context.timing_engine.fire_timing(_TimingConst.ATTACK_AFTER, attack)
@@ -893,9 +893,10 @@ func test_pilot_012_effect02_cancel_skip() -> Variant:
 	return true
 
 
-## ── pilot_012 e2 requires_effect 拦截：e1 未执行时 e2 不触发 ──
-## 真实流程：effect_01 在 ATTACK_PRE 执行后才标记 executed；若玩家取消 e1（不夺牌），e2 不触发命中奖励。
-func test_pilot_012_effect02_requires_effect_gate() -> Variant:
+## ── pilot_012 e2 flag 拦截：e1 未发动（无 flag）时 e2 不触发 ──
+## 真实流程：effect_01 在 ATTACK_PRE 发动后才写 flag（SET_ACTION_RECORD_FLAG）；若玩家取消 e1（不夺牌），
+## flag 未写，e2 的 RECORDED_AFFECTED_ATTACK_TARGET_HAS_HIT 条件失败 -> 不触发命中奖励。
+func test_pilot_012_effect02_flag_gate() -> Variant:
 	var battle := _new_battle()
 	if battle == null or battle.context == null:
 		return "battle 初始化失败"
@@ -913,10 +914,10 @@ func test_pilot_012_effect02_requires_effect_gate() -> Variant:
 	var player = gs.players.get(&"player")
 	var player_hand_before: int = player.action_hand.size()
 	var attack := _make_attack(battle, player_mech.mech_id, enemy_mech.mech_id, {"distance": 2, "hit": true})
-	# 不标记 e1 executed -> e2 requires_effect 失败 -> 不触发（即使命中）
+	# 不设 _effect_flags（e1 未发动/被取消）-> e2 flag 条件失败 -> 不触发（即使命中）
 	battle.context.timing_engine.fire_timing(_TimingConst.ATTACK_AFTER, attack)
 	if attack.state == &"waiting_effect_action":
-		return "e1 未执行时 e2 不应触发（requires_effect 应拦截），state=%s" % String(attack.state)
+		return "e1 未发动（无 flag）时 e2 不应触发（RECORDED_AFFECTED_ATTACK_TARGET_HAS_HIT 应拦截），state=%s" % String(attack.state)
 	if player.action_hand.size() != player_hand_before:
 		return "e2 未触发不应抽牌"
 	_clear_all_pilot_static()

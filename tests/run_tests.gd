@@ -80,6 +80,7 @@ class TestDriver:
 			"res://tests/test_pilot_005_kent.gd",
 			"res://tests/test_pilot_008_andromeda.gd",
 		"res://tests/test_pilot_011_dean.gd",
+		"res://tests/test_pilot_012_mariel.gd",
 		"res://tests/test_weapon_effects.gd",
 		"res://tests/test_weapon_named_response.gd",
 		"res://tests/test_weapon_name_recognition.gd",

@@ -1843,9 +1843,20 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 			return thac_player.action_hand.size() >= thac_count
 
 		&"RECORDED_AFFECTED_ATTACK_TARGET_HAS_HIT":
-			# pilot_012/013 effect_02：受 effect_01 影响的目标中至少1台命中。
-			# 最小闭环：单目标读 payload.hit；双连读 hit_by_target 字典（双连闭环后写入）。
-			# flag/target_ids_path 参数保留兼容但最小闭环下按"全部机甲目标命中判断"重算（affected==全部机甲目标）。
+			# pilot_012/013 effect_02：effect_01 已发动(flag) 且本次攻击命中目标中至少1台受影响。
+			# flag 由 e01 SET_ACTION_RECORD_FLAG 写入 attack.record["_effect_flags"][flag]；
+			# fork 深拷贝 record 故 flag 继承到各复制攻击，使双连每个 fork AFTER 都能判定。
+			# 无 flag = e01 未发动（玩家选不发动 / 条件未满足）-> e02 跳过。
+			# （旧 requires_effect 查同 action_id，fork 子动作 id 不同致双连 e02 失效，改靠 flag。）
+			var rah_p: Dictionary = condition.get("params", condition)
+			var rah_flag: StringName = rah_p.get("flag", &"")
+			if rah_flag != &"":
+				var rah_flags: Dictionary = payload.get("_effect_flags", {})
+				var rah_entry: Dictionary = rah_flags.get(rah_flag, {})
+				if not bool(rah_entry.get("value", false)):
+					return false  # effect_01 未发动
+			# e01 影响全部机甲目标（FOR_EACH_TARGET over ALL_CURRENT_ATTACK_MECH_TARGETS），
+			# 故 affected == 全部机甲目标，命中目标即受影响目标。单目标读 payload.hit；双连读 hit_by_target。
 			var rah_targets: Array = _collect_attack_mech_targets(binding, payload, true)
 			if rah_targets.is_empty():
 				return false

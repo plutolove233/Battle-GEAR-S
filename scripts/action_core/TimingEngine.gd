@@ -3103,14 +3103,25 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 					_ba_idx += 1
 					continue
 				# FOR_EACH_TARGET 嵌套在 CHOOSE_ONE 分支内（pilot_012 e1 / pilot_013 e2a）：
-				# 逐目标串行执行 inner actions。挂起存 flat _seq；分支内 FOR_EACH 之后的动作（通常为
-				# SET_ACTION_RECORD_FLAG no-op）在 flat 完成后不再续跑（最小闭环可接受）。
+				# 逐目标串行执行 inner actions。挂起存 flat _seq；分支内 FOR_EACH 之后的动作
+				# （pilot_012 e1 的 SET_ACTION_RECORD_FLAG 写 flag 供 e02 判定）须在 flat 全部
+				# 完成（所有目标处理完）后续跑--追加到 flat _seq.remaining 末尾，_continue_seq
+				# 处理完 flat 项后按普通动作执行（is_flat 但 act.has("type") 走非 flat 分支）。
 				if sub_type == &"FOR_EACH_TARGET":
 					var fet_params_ba: Dictionary = sub_act_merged.get("params", {})
 					var fet_targets_ba: Array = _resolve_fet_targets(fet_params_ba.get("targets", &""), payload, action)
 					var fet_var_ba: StringName = fet_params_ba.get("current_target_variable", &"current_target")
 					var fet_flat_ba: Array = _build_for_each_flat(fet_targets_ba, fet_params_ba.get("actions", []), fet_var_ba, effect, payload, action)
 					if _run_flat_inline(fet_flat_ba, 0, effect, payload, action, fet_var_ba):
+						# FOR_EACH_TARGET 挂起：flat _seq 已设。追加分支内 FOR_EACH 之后的动作
+						# （SET_ACTION_RECORD_FLAG 等）到 _seq.remaining 末尾，flat 完成后续跑。
+						var _ba_after_fet: Array = branch_actions.slice(_ba_idx + 1)
+						if not _ba_after_fet.is_empty() and action.record.has("_seq_effect_actions"):
+							var _fet_seq: Dictionary = action.record["_seq_effect_actions"]
+							var _fet_rem: Array = _fet_seq.get("remaining", [])
+							_fet_rem.append_array(_ba_after_fet)
+							_fet_seq["remaining"] = _fet_rem
+							action.record["_seq_effect_actions"] = _fet_seq
 						return
 					_ba_idx += 1
 					continue

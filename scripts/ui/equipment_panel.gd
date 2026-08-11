@@ -293,6 +293,7 @@ func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}, g
 			var _is_p004: bool = String(pilot_def_id) == "pilot_004_玛沙"
 			var _is_p006: bool = String(pilot_def_id) == "pilot_006_里昂"
 			var _is_p008: bool = String(pilot_def_id) == "pilot_008_安德洛美达"
+			var _is_p012: bool = String(pilot_def_id) == "pilot_012_玛丽尔"
 			var _listen_eff: Variant = null
 			if _is_p003:
 				for _eid_pre in all_eids:
@@ -309,6 +310,10 @@ func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}, g
 			elif _is_p008:
 				# pilot_008：effect_01b 回收维修(弃置)隐藏被动，描述合并到按钮1(01a) hover（01a/01b 共享 once_per_turn）
 				_listen_eff = _ActionPilotEffects.build_pilot_effects().get(&"pilot_008_effect_01b")
+			elif _is_p012:
+				# pilot_012：effect_02 命中奖励隐藏被动（ATTACK_AFTER），与 effect_01(ATTACK_PRE 偷牌减动力)是顺序过程，
+				# 融合为1个按钮：effect_01 建按钮1（被动置灰，hover 看介绍+本回合可发动次数），effect_02 描述合并进 hover。
+				_listen_eff = _ActionPilotEffects.build_pilot_effects().get(&"pilot_012_effect_02")
 			for eid_raw in all_eids:
 				var eid: StringName = StringName(eid_raw)
 				# pilot_001 双重生效：01a(确认入口)+01b(自动重跑) 合并为1个按钮（01a 代表），跳过 01b。
@@ -322,6 +327,9 @@ func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}, g
 					continue
 				# pilot_008：effect_01b 回收维修(弃置)隐藏被动（描述合并到按钮1），3按钮=01a/02/03
 				if _is_p008 and String(eid) == "pilot_008_effect_01b":
+					continue
+				# pilot_012：effect_02 命中奖励隐藏被动（ATTACK_AFTER，描述合并到按钮1），1按钮=01
+				if _is_p012 and String(eid) == "pilot_012_effect_02":
 					continue
 				var eff = _ActionPilotEffects.build_pilot_effects().get(eid)
 				if eff == null:
