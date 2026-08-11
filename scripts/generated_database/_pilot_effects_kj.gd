@@ -18,7 +18,7 @@
 	]
 	pilot_011_effect_01a.actions = [
 		{"type": &"TREAT_CARD_AS_NAMED_TYPE", "params": {"named_type": &"疾行"}},
-		{"type": &"DRAW_ACTION", "params": {"count": 1}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 1}},
 	]
 	pilot_011_effect_01a.description = "每回合1次，可以将2张行动牌当作疾行使用，之后抽1张行动牌。"
 	effects[pilot_011_effect_01a.effect_id] = pilot_011_effect_01a
@@ -38,7 +38,7 @@
 	]
 	pilot_011_effect_01b.actions = [
 		{"type": &"TREAT_CARD_AS_NAMED_TYPE", "params": {"named_type": &"反击"}},
-		{"type": &"DRAW_ACTION", "params": {"count": 1}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 1}},
 	]
 	pilot_011_effect_01b.description = "每回合1次，可以将2张行动牌当作反击使用，之后抽1张行动牌。"
 	effects[pilot_011_effect_01b.effect_id] = pilot_011_effect_01b
@@ -385,7 +385,7 @@
 	pilot_018_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
 	pilot_018_effect_01.costs = []
 	pilot_018_effect_01.actions = [
-		{"type": &"DRAW_ACTION", "params": {"count": 2}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 2}},
 		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
 			"effect_id": &"pilot_018_effect_01",
 			"text": "每回合1次，被攻击时，可立即抽2张行动牌，若我方通过使用迎击牌响应了此攻击，则弃置攻击方的3张行动牌或1张设置损伤≥2的装备牌。",
@@ -530,7 +530,7 @@
 	pilot_021_effect_01.target_rules = [{"rule": &"CHOOSE_ENEMY_MECH_IN_RANGE", "range": 4}]
 	pilot_021_effect_01.costs = []
 	pilot_021_effect_01.actions = [
-		{"type": &"DRAW_ACTION", "params": {"count": 3}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 3}},
 		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
 			"effect_id": &"pilot_021_effect_01",
 			"text": "我方回合1次，可以抽3张行动牌，之后可以给予4格范围内的其他机甲其中的1张牌（每台机甲最多给1张），剩余的牌本回合无法使用。",
@@ -552,7 +552,7 @@
 	pilot_021_effect_02.target_rules = [{"rule": &"NO_TARGET"}]
 	pilot_021_effect_02.costs = []
 	pilot_021_effect_02.actions = [
-		{"type": &"DRAW_ACTION", "params": {"count": 2}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 2}},
 	]
 	pilot_021_effect_02.description = "其他机甲使用从我方处获得的行动牌后，我方抽2张行动牌。"
 	effects[pilot_021_effect_02.effect_id] = pilot_021_effect_02
@@ -686,7 +686,7 @@
 	pilot_025_effect_02.target_rules = [{"rule": &"NO_TARGET"}]
 	pilot_025_effect_02.costs = []
 	pilot_025_effect_02.actions = [
-		{"type": &"DRAW_EQUIPMENT", "params": {"count": 1, "must_set_or_discard": true}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"equipment_deck", "card_kind": &"equipment", "count": 1, "must_set_or_discard": true}},
 	]
 	pilot_025_effect_02.description = "立即抽1张装备牌设置到区域上（否则立即弃置）。"
 	effects[pilot_025_effect_02.effect_id] = pilot_025_effect_02
@@ -989,7 +989,7 @@
 		{"cost_type": &"SPEND_POWER", "amount": 6},
 	]
 	pilot_004_effect_02.actions = [
-		{"type": &"DRAW_EQUIPMENT", "params": {"count": 1}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"equipment_deck", "card_kind": &"equipment", "count": 1}},
 	]
 	pilot_004_effect_02.description = "我方回合2次，可以消耗6动力抽1张装备牌。"
 	effects[pilot_004_effect_02.effect_id] = pilot_004_effect_02

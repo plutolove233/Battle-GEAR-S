@@ -113,8 +113,8 @@ func test_event_reinforce_draw_actions_has_valid_actions():
 	if effect.actions.is_empty():
 		return "event_reinforce_draw_actions has no actions"
 	var action = effect.actions[0]
-	if action.get("type", &"") != &"DRAW_ACTION":
-		return "expected DRAW_ACTION, got %s" % action.get("type", &"")
+	if action.get("type", &"") != &"EXECUTE_GAIN_CARD":
+		return "expected EXECUTE_GAIN_CARD, got %s" % action.get("type", &"")
 	return true
 
 
@@ -124,6 +124,6 @@ func test_event_reinforce_draw_equipment_has_valid_actions():
 	if effect.actions.is_empty():
 		return "event_reinforce_draw_equipment has no actions"
 	var action = effect.actions[0]
-	if action.get("type", &"") != &"DRAW_EQUIPMENT":
-		return "expected DRAW_EQUIPMENT, got %s" % action.get("type", &"")
+	if action.get("type", &"") != &"EXECUTE_GAIN_CARD":
+		return "expected EXECUTE_GAIN_CARD, got %s" % action.get("type", &"")
 	return true

@@ -51,8 +51,8 @@ static func _ensure_card_map() -> void:
 			&"action_014_聚能": [{"effect_id": &"energy_direct", "bind_to_sub": false}],
 			# 13 推进
 			&"action_015_推进": [{"effect_id": &"thrust_effect1", "bind_to_sub": false}, {"effect_id": &"thrust_effect2", "bind_to_sub": false}],
-			# 14 掩护（LISTEN+permanent_while_in_hand，非响应牌；监听 ATTACK_AT 弹多选窗）
-			&"action_016_掩护": [{"effect_id": &"cover_effect1", "bind_to_sub": false}],
+			# 14 掩护（cover_effect1_direct 走 use_action_card DIRECT -5；cover_effect1 LISTEN ATTACK_PRE 多选窗批量 use_action_card）
+			&"action_016_掩护": [{"effect_id": &"cover_effect1_direct", "bind_to_sub": false}, {"effect_id": &"cover_effect1", "bind_to_sub": false}],
 			# 15 联合（效果2 弃牌抽牌改由 UI 点击时询问 + unite_discard_draw 网络op 实现，故仅留 effect1）
 			&"action_018_联合": [{"effect_id": &"unite_effect1", "bind_to_sub": false}],
 			# 16 回收
@@ -245,7 +245,7 @@ static func build_all_effects() -> Dictionary:
 		"type": &"EXECUTE_ATTACK",
 		"params": {"target_count": 2},
 	}])
-	dual_strike.description = "执行攻击动作，可选择的攻击目标数为2。"
+	dual_strike.description = "选择1把武器对1~2台范围内的机甲发动攻击（2台机甲独立进行响应阶段）。"
 	effects[dual_strike.effect_id] = dual_strike
 
 	# ═══════════════════════════════════════════
@@ -560,7 +560,9 @@ static func build_all_effects() -> Dictionary:
 	thrust_e2.set_conditions([{"op": &"USED_COUNTER_CARD"}])
 	thrust_e2.set_target_rules([{"rule": &"NO_TARGET"}])
 	thrust_e2.set_costs([])
-	# 多选弹窗：列出手中所有推进，玩家选任意数量，确认后逐张执行效果1(动力+4)并弃置，再继续迎击牌。
+	# 多选弹窗：列出手中所有推进，玩家选任意数量，确认后批量创建 use_action_card（as_use_action_card），
+	# 每张走完整使用流程（USE_ACTION_BEFORE 01a确认 + thrust_effect1 +4 + USE_ACTION_AFTER 01b重跑 + settle弃置），
+	# 使阿克罗姆双重生效对推进生效，再继续迎击牌。use_action_card settle 自带弃置，不需 per_card_actions。
 	thrust_e2.set_actions([{
 		"type": &"CHOOSE_MANY_CARDS",
 		"params": {
@@ -569,23 +571,42 @@ static func build_all_effects() -> Dictionary:
 			"per_card_suffix": "·动力+4",
 			"confirm_verb": "打出",
 			"cancel_label": "不打出推进",
-			"per_card_actions": [{"type": &"EXECUTE_STAT_MODIFY", "params": {"stat_type": &"power", "value": 4, "method": &"add"}}],
+			"as_use_action_card": true,
 		},
 	}])
-	thrust_e2.description = "持有者使用迎击牌时弹出多选窗，选任意数量推进各动力+4并弃置，再执行迎击牌。"
+	thrust_e2.description = "持有者使用迎击牌时弹多选窗，选任意数量推进批量use_action_card打出(各+4,阿克罗姆可双重生效)，再执行迎击牌。"
 	effects[thrust_e2.effect_id] = thrust_e2
 
 	# ═══════════════════════════════════════════
 	# 14、掩护
 	# 文档：掩护不是响应牌，是 LISTEN 效果。持有者(机甲1)手牌期间作为永久监听器
-	# 监听 ATTACK_AT：当攻击A的目标在机甲1最大武器范围内（且非机甲1自身）时触发。
+	# 监听 ATTACK_PRE：当攻击A的目标在机甲1最大武器范围内（含机甲1自身被攻击）时触发。
 	# 机甲1所有掩护共用一个效果执行（去重守卫 _choose_many_shown 保证只弹一次窗），
-	# UI 列出机甲1所有掩护供多选任意数量（含0/取消），每张执行 MODIFY_ATTACK_MIGHT -5
-	# （X张累加=5*X）并弃置。因 LISTEN 不受 _is_effect_suppressed 抑制，自动"不受锁定影响"。
+	# UI 列出机甲1所有掩护供多选任意数量（含0/取消）。重构后多选确认批量创建 use_action_card
+	# （as_use_action_card），每张走完整使用流程（含阿克罗姆 01a/01b 双重生效），不再直接
+	# per_card_actions+弃置。因 LISTEN 不受 _is_effect_suppressed 抑制，自动"不受锁定影响"。
 	# ═══════════════════════════════════════════
+	# cover_effect1_direct：掩护经 use_action_card 打出时的 DIRECT 效果（威力-5）。
+	# use_action_card record.attack_action_id 由 CHOOSE_MANY_CARDS as_use_action_card 路径注入
+	# （_extract_use_action_card_params 从 ATTACK_PRE payload.action_id 推导），MODIFY_ATTACK_MIGHT 据此定位 attack。
+	var cover_e1d := ActionEffect.new()
+	cover_e1d.effect_id = &"cover_effect1_direct"
+	cover_e1d.display_name = "掩护·威力-5"
+	cover_e1d.mode = _TC.MODE_DIRECT
+	cover_e1d.priority = 10
+	cover_e1d.set_conditions([{"op": &"ALWAYS"}])
+	cover_e1d.set_target_rules([{"rule": &"NO_TARGET"}])
+	cover_e1d.set_costs([])
+	cover_e1d.set_actions([{
+		"type": &"MODIFY_ATTACK_MIGHT",
+		"params": {"delta": -5},
+	}])
+	cover_e1d.description = "使用掩护牌时对当前攻击威力-5（经 attack_action_id 定位）。"
+	effects[cover_e1d.effect_id] = cover_e1d
+
 	var cover_e1 := ActionEffect.new()
 	cover_e1.effect_id = &"cover_effect1"
-	cover_e1.display_name = "掩护·威力-5"
+	cover_e1.display_name = "掩护·多选使用"
 	cover_e1.mode = _TC.MODE_LISTEN
 	cover_e1.priority = 10
 	cover_e1.listen_timing = _TC.ATTACK_PRE
@@ -594,6 +615,9 @@ static func build_all_effects() -> Dictionary:
 	cover_e1.set_conditions([{"op": &"TARGET_IN_COVER_RANGE"}])
 	cover_e1.set_target_rules([{"rule": &"NO_TARGET"}])
 	cover_e1.set_costs([])
+	# 多选窗选掩护后批量创建 use_action_card（as_use_action_card），每张走完整使用流程
+	# （USE_ACTION_BEFORE 01a确认 + cover_effect1_direct -5 + USE_ACTION_AFTER 01b重跑 + settle弃牌），
+	# 使阿克罗姆双重生效对掩护牌生效。use_action_card settle 自带弃置，不需 per_card_actions/EXECUTE_DISCARD。
 	cover_e1.set_actions([{
 		"type": &"CHOOSE_MANY_CARDS",
 		"params": {
@@ -602,10 +626,10 @@ static func build_all_effects() -> Dictionary:
 			"per_card_suffix": "·威力-5",
 			"confirm_verb": "使用",
 			"cancel_label": "不使用掩护",
-			"per_card_actions": [{"type": &"MODIFY_ATTACK_MIGHT", "params": {"delta": -5}}],
+			"as_use_action_card": true,
 		},
 	}])
-	cover_e1.description = "监听ATTACK_PRE(攻击时前)：holder自身或其范围内其他机甲被攻击时弹多选窗，选X张掩护各威力-5(累加5X)并弃置。非响应，不受锁定影响。"
+	cover_e1.description = "监听ATTACK_PRE：holder自身或其范围内机甲被攻击时弹多选窗，选X张掩护批量use_action_card打出(各-5,阿克罗姆可双重生效)。非响应,不受锁定影响。"
 	effects[cover_e1.effect_id] = cover_e1
 
 	# ═══════════════════════════════════════════
@@ -788,8 +812,8 @@ static func build_all_effects() -> Dictionary:
 	supply.set_target_rules([{"rule": &"NO_TARGET"}])
 	supply.set_costs([])
 	supply.set_actions([
-		{"type": &"DRAW_ACTION", "params": {"count": 2}},
-		{"type": &"DRAW_EQUIPMENT", "params": {"count": 1}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 2}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"equipment_deck", "card_kind": &"equipment", "count": 1}},
 	])
 	supply.description = "从行动牌堆获取2张行动牌，从装备牌堆获取1张装备牌。"
 	effects[supply.effect_id] = supply
@@ -809,7 +833,7 @@ static func build_all_effects() -> Dictionary:
 		"type": &"APPLY_OR_CHECK_LOCKED",
 		"params": {"mode": &"apply", "duration": 1},
 	}])
-	lock_direct.description = "选择1台其他机甲施加锁定状态（持续1回合）。本回合我方对该目标发动的攻击，目标及其相邻机甲不能响应（识破除外）；该目标被命中后解除。"
+	lock_direct.description = "指定1台其他机甲，本回合我方对其发动的攻击不能被该机甲响应，也不能被转移攻击目标(该机甲被我方攻击命中后结束以上效果)。"
 	effects[lock_direct.effect_id] = lock_direct
 
 	# 锁定状态效果2：命中后清除

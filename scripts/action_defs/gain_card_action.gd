@@ -36,6 +36,27 @@ func _step_transfer_card(action: Action) -> Dictionary:
 	var mech_ids: Array = action.record.get("mech_ids", [])
 	var from_zone: StringName = action.record.get("from_zone", &"")
 	var reason: StringName = action.record.get("reason", &"effect")
+	var count: int = action.record.get("count", 1)
+
+	# 牌堆顶顺序抽（行动/装备）：委托 GameActions，保留 pilot_003 跳过正面牌 / ON_DRAW hook / 顺序抽。
+	# 此前效果定义用自创原子动作 DRAW_ACTION/DRAW_EQUIPMENT 绕过获取牌动作与时点，
+	# 现统一走 gain_card 动作（GAIN_CARD_BEFORE/AFTER/SETTLE 时点）。
+	# 不走下方 _resolve_card_sources 的随机洗牌——"抽牌"是牌堆顶顺序抽。
+	if card_ids.is_empty() and (from_zone == &"action_deck" or from_zone == &"equipment_deck"):
+		var player_id: StringName = action.record.get("player_id", &"")
+		if player_id == &"" and not mech_ids.is_empty():
+			var _gc_player = context.game_state.get_player_for_mech(mech_ids[0])
+			if _gc_player != null:
+				player_id = _gc_player.player_id
+		if player_id != &"" and context.game_actions != null:
+			var _drawn: Array[StringName] = []
+			if from_zone == &"action_deck":
+				_drawn = context.game_actions.draw_action_cards({"player_id": player_id, "count": count, "reason": reason})
+			else:
+				_drawn = context.game_actions.draw_equipment_cards({"player_id": player_id, "count": count, "reason": reason, "deck_type": from_zone})
+			# 记录实际抽到的牌（含被 effect_02 移走的），供 TurnService/app_root 等调用方读 record 取用
+			action.record["drawn_card_ids"] = _drawn
+		return result
 
 	# 处理随机从弃牌堆/牌堆获取的情况
 	if card_ids.is_empty():

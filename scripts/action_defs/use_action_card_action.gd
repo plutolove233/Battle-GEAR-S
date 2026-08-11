@@ -118,7 +118,19 @@ func _step_validate_card(action: Action) -> Dictionary:
 				if mech.destroyed or mech.has_status(&"cannot_attack"):
 					return {"error": "机甲无法攻击"}
 			elif not mech.can_attack():
-				return {"error": "本回合无法再攻击"}
+				# pilot_006 里昂狩猎标签豁免：攻击数=0 时，若牌带有效 hunting 标签 +
+				# 标记机甲在场存活 + 标记机甲在任一武器射程内，则豁免放行（不检查/不消耗攻击数）。
+				# 约束目标=标记机甲（record.pilot_006_zero_exemption + pilot_006_forced_target），
+				# select_target 强制只能选标记机甲，settle 打标记目标不+1。
+				var _p006_card_owner: StringName = card.owner_player_id if "owner_player_id" in card else &""
+				var _p006_exemption: StringName = _ActionPilotEffects.pilot_006_check_zero_exemption(context.game_state, mech_id, card, _p006_card_owner)
+				if _p006_exemption != &"":
+					result["pilot_006_zero_exemption"] = true
+					result["pilot_006_forced_target"] = _p006_exemption
+				else:
+					if mech.destroyed or mech.has_status(&"cannot_attack"):
+						return {"error": "机甲无法攻击"}
+					return {"error": "本回合无法再攻击"}
 
 	# 带 AVAILABILITY 的牌只能从其合法响应窗口使用。掩护虽是辅助牌，
 	# 也不能因为同时拥有 LISTEN 效果而绕过此限制主动打出。
@@ -404,6 +416,37 @@ func _register_pending_listeners_on_sub(sub_action_id: StringName) -> void:
 	record.erase("_pending_listen_effects")
 
 
+## REPEAT（阿克罗姆双重生效第二次）重新收集 bind_to_sub LISTEN 效果到 _pending_listen_effects。
+## 第一次 _register_pending_listeners_on_sub 注册后已 erase，此处重填，使第二次 DIRECT 产生的
+## 新 attack 也能经 execute_sub_action 回调注册并触发 effect2（完整重跑 effect1+effect2：
+## 闪击再攻/破甲命中破甲/猛击威力+4 在第二次均生效）。仅收集 bind_to_sub=true 且非
+## permanent_while_in_hand 的 LISTEN 效果（与 _register_card_effects 收集逻辑一致）。
+func refill_bind_to_sub_pending_effects(card_id: StringName) -> void:
+	if context == null or context.game_state == null:
+		return
+	var card = context.game_state.get_card(card_id)
+	if card == null or card.def == null:
+		return
+	var card_mappings: Array = GeneratedActionEffects.get_effects_for_card(_as_card_def_id(self, card))
+	var all_effects: Dictionary = GeneratedActionEffects.build_all_effects()
+	for mapping in card_mappings:
+		var effect_id: StringName = mapping.get("effect_id", &"") if mapping is Dictionary else &""
+		if effect_id == &"":
+			continue
+		var effect: ActionEffect = all_effects.get(effect_id)
+		if effect == null:
+			continue
+		if effect.mode == _TimingConst.MODE_LISTEN and effect.listen_timing != &"" \
+				and mapping.get("bind_to_sub", false) and not effect.permanent_while_in_hand:
+			if not record.has("_pending_listen_effects"):
+				record["_pending_listen_effects"] = []
+			record["_pending_listen_effects"].append({
+				"effect_id": effect_id,
+				"timing": effect.listen_timing,
+				"card_instance_id": card_id,
+			})
+
+
 ## ④ 使用行动牌结算
 ## 非虚拟行动牌进入行动弃牌堆
 func _step_settle(action: Action) -> Dictionary:
@@ -427,20 +470,22 @@ func _step_settle(action: Action) -> Dictionary:
 		if not _vt_settle and card != null and card.def != null and card.def.action_type == "攻击":
 			var source_action_id: StringName = action.source.get("source_action_id", &"")
 			if source_action_id == &"":
-				var mech = context.game_state.mechs.get(action.record.get("mech_id", &""))
-				if mech != null:
-					mech.attack_count_this_turn += 1
+				# pilot_006 里昂狩猎标签：打狩猎标记机甲不计回合攻击数。
+				# 豁免（攻击数=0）时强制选标记机甲，不+1。
+				# 攻击数够时选标记机甲（标签有效）也不+1；选非标记目标正常 +1。
+				if not _pilot_006_attack_hits_marked_target(action, card):
+					var mech = context.game_state.mechs.get(action.record.get("mech_id", &""))
+					if mech != null:
+						mech.attack_count_this_turn += 1
 		# 绑定到原 attack 动作的效果（如反击2）在原攻击 ATTACK_SETTLE 才触发，须等其触发后再弃置，
 		# 故此处跳过，交由 attack_action._step_cleanup 弃置（规则：行动牌所有效果执行完才结算弃置）。
 		# 转化行动牌(virtual_transform)：当作虚拟牌打出，非其原类型用途，无 bind_to_attack 延迟，直接弃置。
 		if card != null and String(card.zone) != &"discard" and (_vt_settle or not _has_bind_to_attack_action_effect(card)):
-			# pilot_007 夺取的牌跳过弃置（已被夺到手牌）；清除标记避免残留
-			if card.counters.get("claimed_by_pilot_007", false):
-				card.counters.erase("claimed_by_pilot_007")
-			else:
-				context.deck_service.discard_card(card_id, &"ACTION_CARD_PLAYED")
-				# 诊断：discard_card 是异步效果动作(fire DISCARD 时点)，此处 result 不声明 effect_action_created
-				# 若双连卡在此后仍停 temp_zone，说明 discard_card 效果动作未完成/settle 未等它。
+			# pilot_007 effect_01 改为「正常弃置后从弃牌堆回收」：此处照常 discard_card 入弃牌堆，
+			# USE_ACTION_SETTLE 时点的 pilot_007 监听效果再从弃牌堆取出到手牌（同 pilot_008 回收维修）。
+			context.deck_service.discard_card(card_id, &"ACTION_CARD_PLAYED")
+			# 诊断：discard_card 是异步效果动作(fire DISCARD 时点)，此处 result 不声明 effect_action_created
+			# 若双连卡在此后仍停 temp_zone，说明 discard_card 效果动作未完成/settle 未等它。
 			if _DIAG_USE_CARD:
 				SLog.log_raw("[DIAG use_action_card] %s settle 调 discard_card, pending_sub=%s" % [String(action.action_id), str(action.pending_effect_action_ids)])
 
@@ -458,4 +503,32 @@ func _has_bind_to_attack_action_effect(card) -> bool:
 	for mapping in card_mappings:
 		if mapping is Dictionary and mapping.get("bind_to_attack_action", false):
 			return true
+	return false
+
+
+## pilot_006 里昂狩猎标签：本次攻击是否打狩猎标记机甲（标签有效）。
+## 豁免（攻击数=0）时强制选标记机甲；攻击数够时选标记目标也不计攻击数。
+## 判断：attack 子动作的最终 target_id == 标签绑定的 marked_mech_id 且标签未失效。
+func _pilot_006_attack_hits_marked_target(action, card) -> bool:
+	if card == null or context == null or context.game_state == null:
+		return false
+	var owner_pid: StringName = card.owner_player_id if "owner_player_id" in card else &""
+	# 豁免标志：攻击数=0 豁免使用，强制选标记机甲
+	var exemption: bool = bool(action.record.get("pilot_006_zero_exemption", false))
+	if not exemption and not _ActionPilotEffects.pilot_006_hunting_tag_active(card, owner_pid):
+		return false
+	if not _ActionPilotEffects.pilot_006_hunting_tag_active(card, owner_pid):
+		return false  # 标签已失效
+	var marked_mech: StringName = _ActionPilotEffects.pilot_006_hunting_tag_marked_mech(card, owner_pid)
+	if marked_mech == &"":
+		return false
+	# 找 attack 子动作的最终 target_id
+	if context.action_registry == null:
+		return false
+	for i in range(action.pending_effect_action_ids.size() - 1, -1, -1):
+		var aid: StringName = action.pending_effect_action_ids[i]
+		var sub_action = context.action_registry.get_action(aid)
+		if sub_action and sub_action.action_type == &"attack":
+			var atk_target: StringName = sub_action.record.get("target_id", &"")
+			return atk_target == marked_mech
 	return false

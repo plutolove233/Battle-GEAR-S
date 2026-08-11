@@ -23,7 +23,23 @@ var mech_id: StringName = &""
 ## &"temp_zone"（使用行动牌动作执行期间，牌离开持有者进入临时区，结算后才进 discard）
 ## &"action_deck" / &"equipment_deck" / &"advanced_equipment_deck"
 ## &"pilot_deck" / &"event_deck" / &"shop"
-var zone: StringName = &""
+##
+## setter 监控「离开 action_deck」：当带 face_up_bury 标签的牌 zone 从 action_deck 变走，
+## emit left_action_deck 信号（pilot_003 effect_02 事后处理：瑟尔基尔立即使用/弃置+抽1）。
+var _zone: StringName = &""
+var zone: StringName:
+	get:
+		return _zone
+	set(value):
+		if value == _zone:
+			return
+		var old := _zone
+		_zone = value
+		if old == &"action_deck" and value != &"action_deck" and has_tag(&"face_up_bury"):
+			left_action_deck.emit(self)
+
+## pilot_003 effect_02：带 face_up_bury 标签的牌离开 action_deck 时发射（_p003_mark_face_up 时 connect）。
+signal left_action_deck(card: CardInstance)
 
 ## 区域内具体槽位（&"头部"/&"躯干"/&"weapon_1" 等）
 var slot_id: StringName = &""
@@ -43,6 +59,12 @@ var timer: int = 0
 
 ## 通用计数器（武器蓄能、事件进度等）
 var counters: Dictionary = {}
+
+## 通用标签（机师埋牌等效果复用）
+## 键 = StringName("标签名@owner_pid")，owner_pid 去歧义：同标签名可指向不同玩家
+## （如多个瑟尔基尔各埋各的牌，各自 owner_pid 独立）
+## 值 = { "tag_name": StringName, "owner_pid": StringName, "source": StringName, ... }
+var tags: Dictionary = {}
 
 ## 对哪些玩家可见（展示牌效果持续展示时使用）
 ## 存储玩家ID列表：Array[StringName]
@@ -76,3 +98,81 @@ func get_display_name() -> String:
 	if def:
 		return def.display_name
 	return ""
+
+
+# ── 通用标签系统（机师埋牌等效果复用）──
+
+func _tag_key(tag_name: StringName, owner_pid: StringName) -> StringName:
+	return StringName(String(tag_name) + "@" + String(owner_pid))
+
+
+## 添加标签。data 为自定义元数据（face_up / source / ...）。同 owner 重复添加覆盖。
+func add_tag(tag_name: StringName, owner_pid: StringName, data: Dictionary = {}) -> void:
+	var entry: Dictionary = {
+		"tag_name": tag_name,
+		"owner_pid": owner_pid,
+	}
+	for k in data:
+		entry[k] = data[k]
+	tags[_tag_key(tag_name, owner_pid)] = entry
+
+
+## 是否有该标签。owner_pid 为空时匹配任意 owner。
+func has_tag(tag_name: StringName, owner_pid: StringName = &"") -> bool:
+	if owner_pid == &"":
+		for key in tags:
+			if tags[key].get("tag_name", &"") == tag_name:
+				return true
+		return false
+	return tags.has(_tag_key(tag_name, owner_pid))
+
+
+## 取标签元数据。owner_pid 为空时返回第一个匹配。无则返回空字典。
+func get_tag(tag_name: StringName, owner_pid: StringName = &"") -> Dictionary:
+	if owner_pid != &"":
+		return tags.get(_tag_key(tag_name, owner_pid), {})
+	for key in tags:
+		var entry: Dictionary = tags[key]
+		if entry.get("tag_name", &"") == tag_name:
+			return entry
+	return {}
+
+
+## 该标签的所有 owner。
+func get_tag_owners(tag_name: StringName) -> Array[StringName]:
+	var owners: Array[StringName] = []
+	for key in tags:
+		var entry: Dictionary = tags[key]
+		if entry.get("tag_name", &"") == tag_name:
+			owners.append(entry.get("owner_pid", &""))
+	return owners
+
+
+## 移除标签。owner_pid 为空时移除所有同名标签。
+func remove_tag(tag_name: StringName, owner_pid: StringName = &"") -> void:
+	if owner_pid != &"":
+		tags.erase(_tag_key(tag_name, owner_pid))
+		return
+	var to_erase: Array = []
+	for key in tags:
+		if tags[key].get("tag_name", &"") == tag_name:
+			to_erase.append(key)
+	for key in to_erase:
+		tags.erase(key)
+
+
+## 是否为正面朝上的埋牌（牌堆中显示牌名 / 抽牌跳过判定用）。
+func is_face_up_in_deck() -> bool:
+	for key in tags:
+		if bool(tags[key].get("face_up", false)):
+			return true
+	return false
+
+
+## 正面朝上埋牌的 owner（effect_02 路由到正确的瑟尔基尔玩家）。无则返回 &""。
+func get_face_up_tag_owner() -> StringName:
+	for key in tags:
+		var entry: Dictionary = tags[key]
+		if bool(entry.get("face_up", false)):
+			return entry.get("owner_pid", &"")
+	return &""

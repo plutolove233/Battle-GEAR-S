@@ -119,6 +119,23 @@ func _step_select_weapon(action: Action) -> Dictionary:
 ## 如果 record 中已有 target_id，验证范围后直接使用；否则需要玩家选择
 func _step_select_target(action: Action) -> Dictionary:
 	var result: Dictionary = {}
+	# 多目标已选（双连等，input resume 提交 target_ids）：逐个校验在攻击范围内后回填。
+	# 单目标走下方 target_id 路径；陷阱目标提交 target_id+target_is_trap（非 target_ids）。
+	var target_ids: Array = action.record.get("target_ids", [])
+	if not target_ids.is_empty() and not bool(action.record.get("target_is_trap", false)):
+		var attacker_id_mt: StringName = action.record.get("attacker_id", &"")
+		var attacker_mt = context.game_state.mechs.get(attacker_id_mt)
+		var range_mt: int = max(1, action.record.get("weapon_range", 1) + int(action.record.get("extra_range", 0)))
+		var cells_mt: Dictionary = context.game_state.map_state.cells if context.game_state.map_state else {}
+		for tid in target_ids:
+			var t_mt = context.game_state.mechs.get(tid)
+			if t_mt == null or attacker_mt == null or not _RangeCalculator.is_in_weapon_range(attacker_mt.position, t_mt.position, range_mt, cells_mt):
+				return {"cancelled": true, "cancel_reason": "multi_target_out_of_range"}
+		result["target_ids"] = target_ids
+		result["target_id"] = target_ids[0]
+		result["target_count"] = target_ids.size()
+		return result
+
 	var target_id: StringName = action.record.get("target_id", &"")
 
 	if target_id != &"":
@@ -183,6 +200,9 @@ func _step_select_target(action: Action) -> Dictionary:
 						break
 			if not has_any_target:
 				return {"cancelled": true, "cancel_reason": "no_target_in_range"}
+	# pilot_006 里昂狩猎标签豁免：攻击数=0 豁免使用时，选目标只能选标记机甲（约束目标选择）。
+	# 传 forced_target 到 UI，app_root 点击非标记机甲时拒绝。
+	var _p006_forced: StringName = action.record.get("pilot_006_forced_target", &"") if bool(action.record.get("pilot_006_zero_exemption", false)) else &""
 	return {
 		"need_input": true,
 		"input_type": &"select_attack_target",
@@ -192,6 +212,7 @@ func _step_select_target(action: Action) -> Dictionary:
 			# ATTACK_BEFORE 修正），与 _step_select_target 目标校验 / _step_check_hit 命中判定一致。
 			"weapon_range": max(1, action.record.get("weapon_range", 1) + int(action.record.get("extra_range", 0))),
 			"target_count": action.record.get("target_count", 1),
+			"pilot_006_forced_target": _p006_forced,
 		},
 	}
 
@@ -229,7 +250,152 @@ func _step_execute_attack(action: Action) -> Dictionary:
 		result["response_card_id"] = &""
 	if not action.record.has("counter_attacked"):
 		result["counter_attacked"] = false
+	# pilot_007 effect_01 反夺攻击牌：监听父 use_action_card 的 USE_ACTION_SETTLE，需知道本攻击
+	# 选定的目标。攻击子动作完成后会从父 pending_effect_action_ids 移除，故在此（ATTACK_AT 步、
+	# 目标已锁定）把 target_id 显式回写到父 use_action_card record，使后续 USE_ACTION_SETTLE 的
+	# payload（=use_action_card.record）仍可读到 attack_target_id。
+	_propagate_targets_to_parent_use_action(action)
+
+	# ── 多目标攻击 fork（双连等）：主攻击不发 ATTACK_AT，改为逐个派生"复制攻击"子动作。
+	# 复制攻击深拷贝主攻击 record 快照（含武器威力/聚能/射程等发动前状态），从 step 3（ATTACK_AT）
+	# 开始各自走完整 AT→AFTER→SETTLE 流程。主攻击只发 ATTACK_BEFORE/PRE，最后 1 个复制结算后整体结束。
+	# 陷阱目标不 fork（攻击即引爆，单目标），故 target_count>=2 选了陷阱时按单目标走（target_ids 为空）。
+	var mt_target_ids: Array = action.record.get("target_ids", [])
+	if mt_target_ids.size() >= 2 and not bool(action.record.get("target_is_trap", false)):
+		if not _weapon_still_held(action):
+			# 武器已不持有：跳过所有 fork，主攻击直接完成（无 ATTACK_AT/AFTER/SETTLE）
+			action.record.erase("_multi_target_fork_queue")
+			result["multi_target_complete"] = true
+			return result
+		# 复制攻击队列（含全部目标，_create_next_fork 逐个 pop）
+		action.record["_multi_target_fork_queue"] = mt_target_ids.duplicate()
+		if _create_next_fork(action):
+			# 第 1 个复制攻击已挂起（等待响应窗口/损伤放置等），主攻击等待其完成
+			result["effect_action_created"] = true
+			return result
+		# 队列内所有目标同步完成（如均无响应窗口且无损伤放置 UI）：主攻击直接完成
+		action.record.erase("_multi_target_fork_queue")
+		result["multi_target_complete"] = true
+		return result
+
 	return result
+
+
+## 把本 attack 选定的目标回传到父 use_action_card record（供 USE_ACTION_SETTLE 时点监听效果判定
+## "使用攻击牌的目标"，如 pilot_007 effect_01）。仅当父动作是 use_action_card 时回写。
+func _propagate_targets_to_parent_use_action(action: Action) -> void:
+	var target_id: StringName = action.record.get("target_id", &"")
+	if target_id == &"":
+		return
+	if context == null or context.action_registry == null:
+		return
+	var parent_id: StringName = action.parent_action_id
+	if parent_id == &"":
+		return
+	var parent_action = context.action_registry.get_action(parent_id)
+	if parent_action == null or parent_action.action_type != &"use_action_card":
+		return
+	parent_action.record["attack_target_id"] = target_id
+
+
+## 多目标攻击：检查主攻击所选武器是否仍被机甲持有。
+## 通用规则（所有攻击动作）：选定武器若已不再被机甲持有（被反击破坏/弃置等），
+## 即使保存了快照也不得继续攻击--立即结算此攻击。
+func _weapon_still_held(action: Action) -> bool:
+	var weapon_id: StringName = action.record.get("weapon_id", &"")
+	if weapon_id == &"":
+		return true  # 无武器（理论不会发生）
+	var wid_str := String(weapon_id)
+	if wid_str.begins_with("frame_base_weapon"):
+		return true  # 基础武器恒持有（框架固有）
+	var attacker_id: StringName = action.record.get("attacker_id", &"")
+	var attacker = context.game_state.mechs.get(attacker_id) if attacker_id != &"" else null
+	if attacker == null:
+		return false
+	# 实体武器（weapon 槽）或虚拟武器（part 槽提供，如神莺·躯干）：检查卡牌仍装备在任一槽位。
+	# get_weapon_ids() 仅含 weapon 槽，虚拟武器在 part 槽，故扫描所有槽位按 instance_id 匹配。
+	for slot_id in attacker.slots:
+		var slot = attacker.slots[slot_id]
+		if slot != null and slot.equipped_card != null and slot.equipped_card.instance_id == weapon_id:
+			return true
+	return false
+
+
+## 多目标攻击：派生 1 个"复制攻击"子动作（深拷贝主攻击 record 快照）。
+## fork 从 step 3（execute_attack / ATTACK_AT）开始，跳过 extract/weapon/target 选择。
+func _create_fork_sub_action(parent_action: Action, target_id: StringName) -> void:
+	# 深拷贝主攻击 record：快照含武器威力 weapon_might / 聚能 extra_might / 射程 extra_range /
+	# weapon_id / attacker / source 等发动前状态，故聚能加成与超米伽荣光炮（冷却在选武器时检查）
+	# 对所有复制攻击均生效。
+	var fork_record: Dictionary = parent_action.record.duplicate(true)
+	fork_record["target_id"] = target_id
+	fork_record["target_ids"] = [target_id]
+	fork_record["target_count"] = 1
+	# 标记为复制攻击（fork）：供 pilot_006 effect_02 去重判断--
+	# fork 被 pilot_011 挡攻转移 rewind 重发 ATTACK_PRE 时，里昂 effect_02 应跳过
+	# （主攻击 PRE 已抽1张）。闪击再攻等独立 attack 无此标记，正常抽。
+	fork_record["_is_fork"] = true
+	# fork 独立响应/命中/伤害：清除主攻击的响应与伤害记录（避免继承主攻击假数据）
+	fork_record.erase("_multi_target_fork_queue")
+	fork_record.erase("responded")
+	fork_record.erase("counter_attacked")
+	fork_record.erase("response_source")
+	fork_record.erase("response_card_id")
+	fork_record.erase("hit")
+	fork_record.erase("miss")
+	fork_record.erase("damage")
+	fork_record.erase("markers")
+	fork_record.erase("extra_markers")
+	fork_record.erase("shield_hp_reduction")
+	fork_record.erase("damage_reduction")
+	fork_record.erase("temporary_armor_bonus")
+	fork_record.erase("temp_armor_grants")
+	fork_record.erase("negated")
+	fork_record.erase("_p011_redirect_rewind")
+	fork_record.erase("_p011_redirect_from")
+	# fork 不再消耗攻击次数（双连的攻击次数由 use_action_card 已扣）
+	fork_record["cardless_weapon_attack"] = false
+	fork_record["consume_turn_attack_count"] = false
+	var fork: Action = context.action_service.create_fork_attack(parent_action, fork_record, 2)
+	if fork != null:
+		context.action_engine.execute_action(fork)
+
+
+## 多目标攻击：从队列取下一个目标派生复制攻击。
+## 返回 true=有 fork 挂起（主攻击等待）；false=队列空或武器没了（主攻击应直接完成）。
+## 同步循环：若 fork 同步完成（无响应窗口/无损伤放置），继续取下一个，直到挂起或队列空。
+func _create_next_fork(action: Action) -> bool:
+	var queue: Array = action.record.get("_multi_target_fork_queue", [])
+	while not queue.is_empty():
+		var target_id: StringName = queue[0]
+		queue.remove_at(0)
+		action.record["_multi_target_fork_queue"] = queue
+		if not _weapon_still_held(action):
+			break  # 武器已不持有：停止派生，主攻击完成
+		_create_fork_sub_action(action, target_id)
+		# 检查刚创建的 fork 是否已挂起（未完成）
+		if not action.pending_effect_action_ids.is_empty():
+			var last_id: StringName = action.pending_effect_action_ids[-1]
+			var fork = context.action_registry.get_action(last_id)
+			if fork != null and fork.state != &"completed" and fork.state != &"cancelled":
+				return true  # fork 挂起，主攻击等待其完成
+		# fork 同步完成（或已取消），继续取下一个
+	return false
+
+
+## 多目标攻击续跑钩子（由 ActionEngine._after_sub_action_finished 调用）。
+## 上一个复制攻击完成后，派生下一个或结束整个多目标攻击。
+## 返回 true=已处理（主攻击等待/完成）；返回 false=非多目标攻击，走正常 continue_action。
+func _continue_fork_attacks() -> bool:
+	if not record.has("_multi_target_fork_queue"):
+		return false  # 非多目标攻击
+	if _create_next_fork(self):
+		return true  # 下一个 fork 已挂起，主攻击继续等待
+	# 队列空（所有目标复制攻击完成）或武器没了：主攻击整体结束
+	# （不发 ATTACK_AT/AFTER/SETTLE--这些时点由各复制攻击各自发出）
+	record.erase("_multi_target_fork_queue")
+	context.action_engine._complete_action(self)
+	return true
 
 
 ## ⑤ 判断攻击是否命中
@@ -241,6 +407,11 @@ func _step_check_hit(action: Action) -> Dictionary:
 	# payload.miss=true 使重型锤矛 effect_103 等未命中监听能触发）
 	if action.negated:
 		return {"hit": false, "miss": true, "negated": true}
+
+	# 通用规则：选定武器已不再被机甲持有（被反击破坏/弃置等）-> 立即结算（未命中，不造成伤害）。
+	# 对多目标复制攻击同样适用：fork 执行中武器被破坏，该 fork 未命中。
+	if not _weapon_still_held(action):
+		return {"hit": false, "miss": true, "weapon_lost": true}
 
 	var result: Dictionary = {}
 	var attacker_id: StringName = action.record.get("attacker_id", &"")
@@ -296,8 +467,8 @@ func _step_calculate_damage(action: Action) -> Dictionary:
 	var target_armor: int = 0
 	if target != null:
 		target_armor = target.get_armor()
-		# pilot_004 玛沙 effect_03：防御值来源替换为 current_power（动力代护甲）。
-		# effect_03a(攻击方)/effect_03b(被攻击方) 经 SET_ATTACK_DEFENSE_STAT_SOURCE 写入。
+		# pilot_004 玛沙 effect_02：防御值来源替换为 current_power（动力代护甲）。
+		# 攻击/被攻击合并为单效果，经 SET_ATTACK_DEFENSE_STAT_SOURCE 写入。
 		var _defense_override: Dictionary = action.record.get("defense_stat_override", {})
 		if String(_defense_override.get(target_id, &"")) == "current_power":
 			target_armor = target.power

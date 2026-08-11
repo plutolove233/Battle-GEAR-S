@@ -1356,7 +1356,7 @@ func test_elite_suite8_structure() -> Variant:
 		return "effect_033 应监听 set_equipment"
 	if not _has_condition(e033, &"SET_EQUIP_IS_SELF"):
 		return "effect_033 应含 SET_EQUIP_IS_SELF"
-	if not _action_has_param(e033, &"DRAW_ACTION", &"count", 1):
+	if not _action_has_param(e033, &"EXECUTE_GAIN_CARD", &"count", 1):
 		return "effect_033 DRAW_ACTION count 应=1"
 	# effect_034：因损伤弃置抽2（LISTEN DISCARD_AFTER + DISCARD_IS_SELF_FROM_SLOT + DISCARD_REASON_IS + DRAW_ACTION 2）
 	var e034 = effects.get(&"equipment_effect_034")
@@ -1364,7 +1364,7 @@ func test_elite_suite8_structure() -> Variant:
 		return "effect_034 应监听 DISCARD_AFTER"
 	if not _has_condition(e034, &"DISCARD_REASON_IS"):
 		return "effect_034 应含 DISCARD_REASON_IS"
-	if not _action_has_param(e034, &"DRAW_ACTION", &"count", 2):
+	if not _action_has_param(e034, &"EXECUTE_GAIN_CARD", &"count", 2):
 		return "effect_034 DRAW_ACTION count 应=2"
 	return true
 
@@ -2554,7 +2554,7 @@ func test_holyox_suite16_structure() -> Variant:
 		return "effect_069 应 DIRECT"
 	if e069.once_per_turn_key == &"":
 		return "effect_069 应有 once_per_turn_key"
-	if not _action_has_param(e069, &"DRAW_ACTION", &"count", 1):
+	if not _action_has_param(e069, &"EXECUTE_GAIN_CARD", &"count", 1):
 		return "effect_069 DRAW_ACTION count 应=1"
 	if not _action_has_param(e069, &"RESTORE_POWER", &"amount", 2):
 		return "effect_069 RESTORE_POWER amount 应=2"
@@ -2890,7 +2890,7 @@ func test_lark_suite21_structure() -> Variant:
 	var e090 = effects.get(&"equipment_effect_090")
 	if e090 == null or e090.listen_timing != _TimingConst.ATTACK_AFTER:
 		return "effect_090 应监听 ATTACK_AFTER"
-	if not _action_has_param(e090, &"DRAW_ACTION", &"count", 3):
+	if not _action_has_param(e090, &"EXECUTE_GAIN_CARD", &"count", 3):
 		return "effect_090 DRAW_ACTION count 应=3"
 	if not _action_has_param(e090, &"RESTORE_POWER", &"amount", 3):
 		return "effect_090 RESTORE_POWER amount 应=3"
@@ -3024,7 +3024,7 @@ func test_polar_suite19_structure() -> Variant:
 	var e077 = effects.get(&"equipment_effect_077")
 	if e077 == null or e077.listen_timing != _TimingConst.ATTACK_PRE:
 		return "effect_077 应监听 ATTACK_PRE"
-	if not _action_has_param(e077, &"DRAW_ACTION", &"count", 1):
+	if not _action_has_param(e077, &"EXECUTE_GAIN_CARD", &"count", 1):
 		return "effect_077 DRAW_ACTION count 应=1"
 	if not _action_has_param(e077, &"EXECUTE_STAT_MODIFY", &"value", 3):
 		return "effect_077 EXECUTE_STAT_MODIFY value 应=3(动力)"

@@ -14,18 +14,24 @@ signal choice_cancelled()
 var _vbox: VBoxContainer
 var _scroll: ScrollContainer
 var _confirm_btn: Button
+## 底部取消按钮（allow_cancel=false 时隐藏，如里昂效果2强制二选一不可取消）
+var _cancel_btn: Button
 ## 来源标签（"牌名：效果描述"，可空）
 var _source_label: Label
 ## 当前选中的效果ID
 var _selected_effect_id: StringName = &""
 ## 当前可选选项列表
 var _current_options: Array[Dictionary] = []
+## 是否允许取消（默认true；强制弹窗如里昂效果2二选一设为false隐藏底部取消按钮）
+var _allow_cancel: bool = true
 
 
-## 配置面板：显示可选效果列表
-func configure(options: Array[Dictionary], source_label: String = "") -> void:
+## 配置面板：显示可选效果列表。
+## allow_cancel=false 隐藏底部取消按钮（强制弹窗，如里昂效果2给被选机甲的强制二选一）。
+func configure(options: Array[Dictionary], source_label: String = "", allow_cancel: bool = true) -> void:
 	_selected_effect_id = &""
 	_current_options = options
+	_allow_cancel = allow_cancel
 	_ensure_layout()
 	if _source_label:
 		_source_label.text = source_label
@@ -79,14 +85,14 @@ func _ensure_layout() -> void:
 	_confirm_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	_confirm_btn.pressed.connect(func(): _on_confirm())
 	_vbox.add_child(_confirm_btn)
-
-	# 取消按钮
-	var cancel_btn = Button.new()
-	cancel_btn.text = "取消"
-	cancel_btn.custom_minimum_size = Vector2(240, 40)
-	cancel_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	cancel_btn.pressed.connect(func(): choice_cancelled.emit())
-	_vbox.add_child(cancel_btn)
+	# 底部固定"取消"按钮：默认显示（多数效果可取消，如效果二选一/确认/设置区域等）。
+	# allow_cancel=false 时隐藏（强制弹窗，如里昂效果2给被选机甲的强制二选一，本就不允许取消）。
+	_cancel_btn = Button.new()
+	_cancel_btn.text = "取消"
+	_cancel_btn.custom_minimum_size = Vector2(240, 32)
+	_cancel_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_cancel_btn.pressed.connect(func(): choice_cancelled.emit())
+	_vbox.add_child(_cancel_btn)
 
 
 ## 刷新显示
@@ -98,6 +104,9 @@ func _refresh() -> void:
 	_confirm_btn.text = "确认选择" if _selected_effect_id != &"" else "请选择"
 	_confirm_btn.disabled = _selected_effect_id == &""
 	_confirm_btn.add_theme_color_override("font_color", Color(0.3, 0.9, 0.4) if _selected_effect_id != &"" else Color(0.5, 0.5, 0.5))
+	# 底部取消按钮可见性：强制弹窗（里昂效果2二选一）隐藏
+	if _cancel_btn:
+		_cancel_btn.visible = _allow_cancel
 
 	# 获取滚动内容容器
 	var scroll_content = _scroll.get_meta("content") if _scroll.has_meta("content") else null

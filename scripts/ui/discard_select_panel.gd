@@ -27,6 +27,8 @@ var _card_type_filter: StringName = &""
 var _action_verb: StringName = &"discard"
 ## 来源标签（"牌名：效果描述"，来自发动效果，可空）
 var _source_text: String = ""
+## 无取消按钮（pilot_007 类型破绽强制弃牌：须选够张数后确认，不可放弃）
+var _no_cancel: bool = false
 ## 已选择的牌 ID 列表
 var _selected: Array[StringName] = []
 
@@ -36,6 +38,8 @@ var _vbox: VBoxContainer
 var _scroll: ScrollContainer
 ## 确认按钮
 var _confirm_btn: Button
+## 取消按钮
+var _cancel_btn: Button
 ## 计数标签
 var _count_label: Label
 ## 来源标签
@@ -43,7 +47,7 @@ var _source_label: Label
 
 
 ## 配置面板参数
-func configure(game_context, discard_player_id: StringName, count: int, face_up: bool, card_type_filter: StringName = &"", action_verb: StringName = &"discard", source_label: String = "") -> void:
+func configure(game_context, discard_player_id: StringName, count: int, face_up: bool, card_type_filter: StringName = &"", action_verb: StringName = &"discard", source_label: String = "", no_cancel: bool = false) -> void:
 	_context = game_context
 	_discard_player_id = discard_player_id
 	_count = count
@@ -51,6 +55,7 @@ func configure(game_context, discard_player_id: StringName, count: int, face_up:
 	_card_type_filter = card_type_filter
 	_action_verb = action_verb
 	_source_text = source_label
+	_no_cancel = no_cancel
 	_selected.clear()
 
 	# 确保布局已初始化
@@ -111,12 +116,12 @@ func _ensure_layout() -> void:
 	_vbox.add_child(_confirm_btn)
 
 	# 取消按钮
-	var cancel_btn = Button.new()
-	cancel_btn.text = "取消"
-	cancel_btn.custom_minimum_size = Vector2(200, 40)
-	cancel_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	cancel_btn.pressed.connect(func(): selection_cancelled.emit())
-	_vbox.add_child(cancel_btn)
+	_cancel_btn = Button.new()
+	_cancel_btn.text = "取消"
+	_cancel_btn.custom_minimum_size = Vector2(200, 40)
+	_cancel_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_cancel_btn.pressed.connect(func(): selection_cancelled.emit())
+	_vbox.add_child(_cancel_btn)
 
 
 ## 刷新面板显示
@@ -127,19 +132,34 @@ func _refresh() -> void:
 	# 来源标签
 	if _source_label:
 		_source_label.text = _source_text if _source_text != "" else ""
-		_source_label.visible = _source_text != ""
+		# 转化模式：标题已含 label，隐藏来源标签避免重复
+		_source_label.visible = _source_text != "" and _action_verb != &"convert"
 
 	# 更新标题
 	var verb := _verb_text()
-	if _face_up:
+	if _action_verb == &"convert":
+		# 转化模式（迪恩）：标题用 cost label（"选择转化使用的N张行动牌"），优先于通用模板
+		if _source_text != "":
+			_count_label.text = "── %s ──" % _source_text
+		else:
+			_count_label.text = "── 选择转化使用的 %d 张行动牌 ──" % _count
+	elif _face_up:
 		_count_label.text = "── 选择%s %d 张行动牌 ──" % [verb, _count]
 	else:
 		_count_label.text = "── 选择%s对手 %d 张行动牌（暗牌）──" % [verb, _count]
 
 	# 更新确认按钮
-	_confirm_btn.text = "确认%s (%d/%d)" % [verb, _selected.size(), _count]
+	if _action_verb == &"convert":
+		# 转化模式：按钮"确认选择"，带已选/需选计数
+		_confirm_btn.text = "确认选择 (%d/%d)" % [_selected.size(), _count]
+	else:
+		_confirm_btn.text = "确认%s (%d/%d)" % [verb, _selected.size(), _count]
 	_confirm_btn.disabled = _selected.size() < _count
 	_confirm_btn.add_theme_color_override("font_color", Color(0.3, 0.9, 0.4) if _selected.size() >= _count else Color(0.5, 0.5, 0.5))
+
+	# 无取消按钮模式（强制弃牌：不可放弃）
+	if _cancel_btn:
+		_cancel_btn.visible = not _no_cancel
 
 	# 获取滚动内容容器
 	var scroll_content = _scroll.get_meta("content") if _scroll.has_meta("content") else null
@@ -217,9 +237,12 @@ func _on_confirm() -> void:
 		selection_completed.emit(_selected.slice(0, _count))
 
 
-## 动作语义文案（获取/弃置）
+## 动作语义文案（获取/弃置/转化）
 func _verb_text() -> String:
-	return "获取" if _action_verb == &"gain" else "弃置"
+	match _action_verb:
+		&"gain": return "获取"
+		&"convert": return "转化"
+		_: return "弃置"
 
 
 ## 获取行动类型的简写

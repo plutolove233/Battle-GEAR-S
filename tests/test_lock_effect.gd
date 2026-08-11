@@ -2,7 +2,7 @@
 ##
 ## 还原并验证场景：
 ##   玩家A使用锁定牌选目标B后，B这回合不能对A发动的攻击用迎击牌响应（识破除外）；
-##   之后B被任何攻击命中后，锁定解除（A若还有攻击则B可迎击）。
+##   之后B被我方(locker)攻击命中后，锁定解除（A若还有攻击则B可迎击）。
 ##   持续1回合（回合结束-1，到0解除）+ 命中即解，二者并存。
 ##
 ## 验证点（对应 new_logic/行动牌的效果与逻辑.txt 第20张"锁定"）：
@@ -10,7 +10,7 @@
 ##   2. 不误封：C攻B（C≠A）时，B的普通迎击牌照常进响应窗口。
 ##   3. 命中解除：A攻B命中 → B的LOCKED被移除 → A再攻B时迎击恢复。
 ##   4. 未命中不解除：A攻B未命中 → LOCKED仍在 → A再攻B仍封锁。
-##   5. 第三方命中解除：C攻B命中 → B的LOCKED也被解除。
+##   5. 第三方命中不解除：仅locker命中才解除锁定。C攻B命中 → B的LOCKED也被解除。
 ##   6. 回合到期：未命中，回合结束 → duration-1到0 → LOCKED移除。
 ##   7. 识破可响应：锁定状态下识破仍可响应A的攻击。
 extends RefCounted
@@ -336,10 +336,10 @@ func _ensure_counter_for_mech(battle, player_id: StringName, card_def_id: String
 	return cid
 
 
-## ── 测试8：多目标(双连)攻击 - 被锁目标及其相邻共目标的迎击都被封锁 ──
+## ── 测试8：多目标(双连)攻击 - 仅被锁目标自身被封锁(相邻不再封锁) ──
 ## A(player)锁B(enemy)，A发动双连攻击目标[B,C]，C与B相邻。
-## B是被锁目标、C是B的相邻机甲 -> B、C的普通迎击牌都被封锁，识破仍可响应。
-func test_lock_suppresses_adjacent_cotarget():
+## B是被锁目标 -> B的普通迎击牌被封锁；C与B相邻但不再被锁封锁 -> C的回避可用；识破仍可响应。
+func test_lock_suppresses_only_locked_target():
 	var battle := _new_battle()
 	if battle == null or battle.context == null:
 		return "battle 初始化失败"
@@ -370,8 +370,8 @@ func test_lock_suppresses_adjacent_cotarget():
 		return "锁定下，B(被锁目标)的回避应被封锁"
 	if not _is_available(battle, attack, expose_b):
 		return "识破应仍可响应"
-	if _is_available(battle, attack, evade_c):
-		return "锁定下，C(与被锁目标B相邻的共目标)的回避应被封锁"
+	if not _is_available(battle, attack, evade_c):
+		return "锁定下，C(与被锁目标B相邻)的回避应可用（相邻机甲不再被锁封锁）"
 	return true
 
 
@@ -402,5 +402,5 @@ func test_lock_not_suppress_nonadjacent_cotarget():
 	if _is_available(battle, attack, evade_b):
 		return "B(被锁目标)的回避应被封锁"
 	if not _is_available(battle, attack, evade_c):
-		return "C与被锁目标B不相邻，回避应可用（仅被锁目标及其相邻机甲被封锁）"
+		return "C(与被锁目标B不相邻)的回避应可用（仅被锁目标B自身被封锁，相邻不再封锁）"
 	return true

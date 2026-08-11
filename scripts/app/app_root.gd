@@ -21,6 +21,9 @@ const _UniteAttackSelectPanel = preload("res://scripts/ui/unite_attack_select_pa
 const _AwakenSelectPanel = preload("res://scripts/ui/awaken_select_panel.gd")
 const _Pilot003SkipPanel = preload("res://scripts/ui/pilot_003_skip_panel.gd")
 const _ImmediateSetEquipmentPanel = preload("res://scripts/ui/immediate_set_equipment_panel.gd")
+const _CardDisplayPanel = preload("res://scripts/ui/card_display_panel.gd")
+const _ActionPilotEffects = preload("res://scripts/generated_database/ActionPilotEffects.gd")
+const _GeneratedActionEffects = preload("res://scripts/action_core/GeneratedActionEffects.gd")
 const _DeckInfoPopup = preload("res://scripts/ui/deck_info_popup.gd")
 const _ShopPanel = preload("res://scripts/ui/shop_panel.gd")
 const _SellEquipmentPanel = preload("res://scripts/ui/sell_equipment_panel.gd")
@@ -73,6 +76,8 @@ var weapon_picker_panel = null  # type: WeaponPickerPanel
 var damage_placement_panel = null  # type: DamagePlacementPanel
 ## 效果选择面板（维修等二选一卡牌）
 var choice_panel = null  # type: ChoicePanel
+## 步进数值输入面板（pilot_004 装甲转能：LineEdit+±3+键盘）
+var stepper_panel = null  # type: StepperPanel
 ## 弹窗浮层：全屏居中容器，承载所有弹窗面板（choice/response/weapon_picker 等），
 ## 使其脱离 _begin_screen 的 VBox 流式布局——否则内容总高超出窗口时，
 ## 排在 child index 后段的弹窗的确认/取消按钮会被挤到窗口外裁切。
@@ -126,6 +131,8 @@ var _POPUP_ACCENT_COLORS := {
 }
 ## 弃牌选择面板
 var discard_select_panel = null  # type: DiscardSelectPanel
+## pilot_009 美杜莎非阻塞可拖拽展示浮窗（展示目标行动牌，只弹给查看者）
+var card_display_panel = null  # type: CardDisplayPanel
 ## 推进多选面板（推进 effect2：使用迎击牌时选若干推进一起打出）
 var thrust_select_panel = null  # type: ThrustSelectPanel
 var _thrust_select_action_id: StringName = &""
@@ -133,6 +140,9 @@ var _thrust_select_action_id: StringName = &""
 var unite_attack_select_panel = null  # type: UniteAttackSelectPanel
 var pilot_003_skip_panel = null  # type: Pilot003SkipPanel
 var _pilot_003_skip_action_id: StringName = &""
+## pilot_003 effect_01 选置顶牌单选面板（复用 UniteAttackSelectPanel 通用化实例）
+var pilot_003_choose_top_panel = null  # type: UniteAttackSelectPanel
+var _pilot_003_choose_top_action_id: StringName = &""
 var _unite_attack_action_id: StringName = &""
 ## 立即设置装备面板（effect_005：弃置抽1装备立即设置，不设置则弃置抽到的牌）
 var immediate_set_equipment_panel = null  # type: ImmediateSetEquipmentPanel
@@ -163,8 +173,16 @@ var _set_equipment_card_id: StringName = &""
 var _sell_mode_active: bool = false
 ## 卖出装备按钮引用（用于更新文本）
 var _sell_button: Button = null
+## 2金币抽牌按钮引用（每我方回合1次，花2金币抽1张行动牌）
+var _paid_draw_button: Button = null
 ## 设陷按钮引用（机甲拥有设陷状态时可用，点击记录当前位置）
 var _set_trap_button: Button = null
+## 美杜莎操控按钮引用（pilot_009：本回合弃行动牌记录类型后，列出受控目标的同类行动牌供使用）
+var _medusa_control_button: Button = null
+## 美杜莎操控选择中标记（复用 unite_attack_select 面板做单选，与联合攻击选择区分）
+var _medusa_control_select_active: bool = false
+## GeneratedActionEffects.build_all_effects 缓存（pilot_009 主动牌判定用，惰性构建一次）
+var _pilot_009_all_effects_cache: Dictionary = {}
 ## 维修目标选择状态：正在选择维修目标的维修牌ID
 var _repair_target_select_card_id: StringName = &""
 ## 维修已选目标机甲ID（打出时注入 payload，空表示默认以自身机甲为目标）
@@ -184,7 +202,14 @@ var _counterattack_weapon_id: StringName = &""
 ## 机雷设陷多格选格状态：剩余可放格 / 已选格 / 需选格数（双子机雷 count=2，逐格点击）
 var _map_cell_select_valid: Array = []
 var _map_cell_select_chosen: Array = []
+## pilot_006 里昂狩猎豁免：攻击数=0 豁免使用时，选目标只能选标记机甲（约束目标选择）。
+## attack_target_select popup 时存，点击非标记机甲时拒绝。
+var _pilot_006_forced_target: StringName = &""
 var _map_cell_select_count: int = 1
+## 多目标攻击选择（双连等）：_multi_attack_target_count>=2 时进入多选模式，
+## 逐个点击目标机甲收集到 _multi_attack_target_chosen，选满或点"取消"（>=1时）提交。
+var _multi_attack_target_chosen: Array = []  # [{"q","r","target_id"}]
+var _multi_attack_target_count: int = 1
 ## 当前待处理的反击 pending（attack2）
 var _counterattack_pending: Dictionary = {}
 ## 反击上下文：反击发生在哪一方的回合 ("player"/"enemy")
@@ -234,6 +259,12 @@ var _pvp_pilot_selecting: bool = false
 var _pvp_client_pid: int = -1
 ## 正在退出 PvP 会话（防 disconnect 回调与 session_end 互相重入）
 var _pvp_exiting: bool = false
+## PVP3 专用：2个 client 的机师候选 id（player_id[String] -> Array[String]）
+var _pvp3_client_pilot_ids: Dictionary = {}
+## PVP3 专用：2个 client 进程 pid（player_id[String] -> int）
+var _pvp3_client_pids: Dictionary = {}
+## PVP3 专用：已收到的对方机师选择（player_id[String] -> pilot_id[String]）
+var _pvp_remote_pilots: Dictionary = {}
 
 func _ready() -> void:
 	set_process(true)
@@ -275,9 +306,15 @@ func _load_app_state() -> void:
 	if args.has("--pvp-host"):
 		_start_pvp_host()
 		return
+	if args.has("--pvp3-host"):
+		_start_pvp3_host()
+		return
 	# PvP client 模式：跳过主菜单，直接连 host 等待快照
 	if args.has("--pvp-client"):
 		_start_pvp_client(args)
+		return
+	if args.has("--pvp3-client"):
+		_start_pvp3_client(args)
 		return
 	_show_main_menu()
 
@@ -299,15 +336,20 @@ func _on_dev_panel_close() -> void:
 
 ## 战斗界面"返回主菜单"：PvP 走会话退出（通知对方+清理 TCP/子进程），PvE 直接回主菜单。
 func _on_return_to_main_menu() -> void:
-	if game_mode == &"PVP":
+	if _is_pvp_mode():
 		_quit_pvp_session()
 	else:
 		_show_main_menu()
 
 func _show_main_menu() -> void:
+	# PvP 会话中返回主菜单：先退出 PvP（通知对方+清理网络/子进程），host 会再次进入此方法显示菜单
+	if _is_pvp_mode() and not _pvp_exiting:
+		_quit_pvp_session()
+		return
 	var layout := _begin_screen("机斗战甲")
 	_add_button(layout, "新战役", Callable(self, "_show_loadout"))
 	_add_button(layout, "PvP测试模式", Callable(self, "_start_pvp_host"))
+	_add_button(layout, "3人PvP测试", Callable(self, "_start_pvp3_host"))
 	_add_button(layout, "图鉴", Callable(self, "_show_collection"))
 	_add_button(layout, "退出", Callable(self, "_quit_app"))
 
@@ -367,10 +409,11 @@ func _start_tutorial_battle() -> void:
 	if not _status_ok(start_result):
 		_show_status("战斗启动失败: %s" % _status_message(start_result))
 		return
+	_show_battle()
 	var turn_result = battle.start_turn("player")
 	if not _status_ok(turn_result):
 		battle.log.append({"message": "玩家回合启动失败", "details": {"reason": _status_message(turn_result)}})
-	_show_battle()
+	call_deferred("_refresh_battle")  # 首回合 start_turn 后刷新抽牌/金币到 UI
 
 # ═══════════════════════════════════════════
 # 战斗界面 — 左右分区布局
@@ -379,6 +422,10 @@ func _start_tutorial_battle() -> void:
 # ═══════════════════════════════════════════
 # PvP 测试模式（双窗口人类对人类）
 # ═══════════════════════════════════════════
+
+## 是否处于 PvP 模式（2人 PVP 或 3人 PVP3，均走锁步：广播 input / 无 AI 驱动 / 切对手回合）。
+func _is_pvp_mode() -> bool:
+	return game_mode == &"PVP" or game_mode == &"PVP3"
 
 ## 对手玩家 ID（1v1：除 local_player_id 外的玩家）
 func _opponent_player_id() -> StringName:
@@ -421,18 +468,22 @@ func _start_pvp_host() -> void:
 	net_host.message_received.connect(_on_pvp_host_message)
 	# spawn client 进程（enemy 窗）
 	_spawn_pvp_client()
-	# 开局机师三选一：共享种子产出 3 候选（双端一致），host 先选。
-	# 用 campaign 的随机选择逻辑（同 _pvp_seed 经 rng 洗牌，client 端同种子再生成一次得到相同池）。
+	# 开局机师三选一：共享种子产出 3 候选（双端一致），双方同时选。
+	# host 立即弹本方选择屏；client 连上收到种子后也立即弹本方选择屏（不等 host 选完）。
+	# 双方都选完由 _check_pvp_both_selected 统一开战（PvP 锁步）。
 	_generate_pvp_pilot_pool()
 	_pvp_pilot_selecting = true
 	_show_pvp_pilot_select("host")
-	battle.log.append({"message": "[PvP] host 已启动，请选择机师（等待 client 连接后同步选择）...", "details": {}})
+	battle.log.append({"message": "[PvP] host 已启动，请选择机师（client 连上后可同时选择，双方都选完开战）...", "details": {}})
 
 
-## 已落码机师判断：只放行 pilot_001~010（SSR 已落码，其余待后续加）。
-## 以 id 前缀区分（pilot_001_~pilot_009_ 以 "pilot_00" 开头；pilot_010_ 以 "pilot_010" 开头）。
+## 已落码机师判断：放行 SSR 001-010 + SR 011-013（已落码）。其余待后续加。
+## 以 id 前缀区分。新增 SR 批次在此追加前缀。
 func _is_pilot_implemented(pilot_id: String) -> bool:
-	return pilot_id.begins_with("pilot_00") or pilot_id.begins_with("pilot_010")
+	if pilot_id.begins_with("pilot_00") or pilot_id.begins_with("pilot_010"):
+		return true
+	# SR 011-013 已落码
+	return pilot_id.begins_with("pilot_011_") or pilot_id.begins_with("pilot_012_") or pilot_id.begins_with("pilot_013_")
 
 
 ## 从已落码机师池洗牌取 n 张（经 battle.context.rng，双端同种子 → 顺序一致）。
@@ -474,6 +525,29 @@ func _generate_pvp_pilot_pool() -> void:
 	for i in range(3, 6):
 		var item: Dictionary = six[i]
 		_pvp_client_pilot_ids.append(String(item.get("id", "")))
+
+
+## 生成 PVP3 开局机师候选池：9 张分 3 组各 3（host/player + enemy + third，不重复）。
+## host 端从已落码池洗牌取 9：前 3 为本方候选 _pvp_pilot_pool，中 3 为 enemy 候选，
+## 后 3 为 third 候选（存 _pvp3_client_pilot_ids，经 seed 消息定向发给各 client）。
+func _generate_pvp3_pilot_pool() -> void:
+	_pvp_pilot_pool = []
+	_pvp3_client_pilot_ids = {}
+	var nine: Array = _shuffle_implemented_pilots(9)
+	if nine.size() < 9:
+		# 已落码不足 9（理论不会：001-013 共 13 张），退化为三方共享前 3
+		_pvp_pilot_pool = nine.duplicate()
+		return
+	for i in range(3):
+		_pvp_pilot_pool.append(nine[i])
+	var enemy_ids: Array = []
+	for i in range(3, 6):
+		enemy_ids.append(String(nine[i].get("id", "")))
+	_pvp3_client_pilot_ids["enemy"] = enemy_ids
+	var third_ids: Array = []
+	for i in range(6, 9):
+		third_ids.append(String(nine[i].get("id", "")))
+	_pvp3_client_pilot_ids["third"] = third_ids
 
 
 ## client 端收到 host 发的本方候选 id 列表后，建 _pvp_pilot_pool（按 id 从 registry 查字典）。
@@ -536,13 +610,16 @@ func _on_pvp_pilot_picked(pilot_id: String) -> void:
 	_pvp_my_pilot_id = pilot_id
 	_send_pilot_select(pilot_id)
 	_show_pvp_pilot_select("host" if not is_network_client else "client")  # 刷新屏显示"已选"
-	_check_pvp_both_selected()
+	if game_mode == &"PVP3":
+		_check_pvp3_all_selected()
+	else:
+		_check_pvp_both_selected()
 
 
 ## 发送机师选择给对方（host→client / client→host，直发不经 _dispatch_input 避免本地重复 set_pilot）。
 ## host 若在 client 连上前已选，先记下，client 连上后由 _on_pvp_client_connected 补发。
 func _send_pilot_select(pilot_id: String) -> void:
-	var msg := {"type": "input", "op": "pilot_select", "data": {"pilot_id": pilot_id, "player_id": String(local_player_id)}}
+	var msg := {"type": "input", "op": "pilot_select", "data": {"pilot_id": pilot_id, "player_id": String(local_player_id)}, "sender": String(local_player_id)}
 	if is_network_client:
 		if net_client != null and net_client.is_connected_to_host():
 			net_client.send(msg)
@@ -556,12 +633,15 @@ func _on_remote_pilot_select(data: Dictionary) -> void:
 	var remote_player: String = String(data.get("player_id", ""))
 	if remote_player == "" or remote_pid == "":
 		return
+	if game_mode == &"PVP3":
+		# PVP3：记入字典（player_id -> pilot_id），三方都选完才开战
+		_pvp_remote_pilots[remote_player] = remote_pid
+		_check_pvp3_all_selected()
+		return
 	_pvp_remote_pilot_id = remote_pid
 	_pvp_remote_player_id = StringName(remote_player)
-	if is_network_client:
-		# client 收 host（player 方）选择：已有 host 选择，弹本方选择屏
-		if not _pvp_pilot_pool.is_empty():
-			_show_pvp_pilot_select("client")
+	# 同时选择：本方选择屏已在 _apply_pvp_seed_and_build(client)/_start_pvp_host(host) 弹出，
+	# 此处仅记录对方选择；双方都选完由 _check_pvp_both_selected 统一开战。
 	_check_pvp_both_selected()
 
 
@@ -591,7 +671,47 @@ func _check_pvp_both_selected() -> void:
 	var turn_result = battle.start_turn("player")
 	if not _status_ok(turn_result):
 		battle.log.append({"message": "玩家回合启动失败", "details": {"reason": _status_message(turn_result)}})
+	call_deferred("_refresh_battle")  # 首回合 start_turn 后刷新抽牌/金币到 UI
 	battle.log.append({"message": "[PvP] 双方机师已选，战斗开始", "details": {}})
+
+
+## PVP3：三方机师都已选定（本方 + 2 对手）-> 按固定顺序 set_pilot(player->enemy->third) 再开战斗。
+## 顺序固定保证三方锁步 instance_id 一致。
+func _check_pvp3_all_selected() -> void:
+	if _pvp_my_pilot_id == "":
+		return
+	if not _pvp_pilot_selecting:
+		return
+	# 需收到除本方外两方选择（player/enemy/third 中非 local 的两个；client 视角对手含 player）
+	for check_pid: StringName in [&"player", &"enemy", &"third"]:
+		if check_pid == local_player_id:
+			continue
+		if not _pvp_remote_pilots.has(String(check_pid)):
+			return
+	_pvp_pilot_selecting = false
+	# 解析三方机师 def_id：本方选择 = _pvp_my_pilot_id，对手选择 = _pvp_remote_pilots[pid]
+	var pilots: Dictionary = {}
+	pilots[String(local_player_id)] = _pvp_my_pilot_id
+	for pid_key in _pvp_remote_pilots.keys():
+		pilots[pid_key] = _pvp_remote_pilots[pid_key]
+	if battle == null or battle.context == null or battle.context.game_state == null:
+		return
+	var gs = battle.context.game_state
+	# 按固定顺序 player->enemy->third set_pilot（锁步 instance_id 一致）
+	for pid: StringName in [&"player", &"enemy", &"third"]:
+		var pilot_def_id: String = pilots.get(String(pid), "")
+		if pilot_def_id == "":
+			continue
+		var mech = gs.get_mech_for_player(pid)
+		if mech != null:
+			_apply_pvp_pilot_to_mech(mech, pilot_def_id)
+	# 开始战斗（先刷新让 set_pilot 数值生效）
+	_show_battle()
+	var turn_result = battle.start_turn("player")
+	if not _status_ok(turn_result):
+		battle.log.append({"message": "玩家回合启动失败", "details": {"reason": _status_message(turn_result)}})
+	call_deferred("_refresh_battle")
+	battle.log.append({"message": "[PVP3] 三方机师已选，战斗开始", "details": {}})
 
 
 ## 给指定机甲 set_pilot（建机师牌实例 + 注册效果 + 数值联动）。
@@ -606,6 +726,13 @@ func _apply_pvp_pilot_to_mech(mech, pilot_def_id: String) -> void:
 	card.owner_player_id = mech.owner_player_id
 	battle.context.game_state.cards[inst_id] = card
 	battle.context.game_setup_service.set_pilot(mech.mech_id, card)
+	# 扣除机师初始花费金币（与 campaign select_pilot_with_cost 一致；开局选机师即付费）
+	# 在 start_turn(+2金币) 之前扣，双端各自按相同 pilot_def 扣除保持锁步一致
+	var cost: int = int(pid_def.cost) if pid_def.get("cost") != null else 0
+	if cost > 0:
+		var payer = battle.context.game_state.get_player_for_mech(mech.mech_id)
+		if payer != null:
+			payer.gold = maxi(0, payer.gold - cost)
 func _spawn_pvp_client() -> void:
 	var exe := OS.get_executable_path()
 	var proj := ProjectSettings.globalize_path("res://")
@@ -654,6 +781,7 @@ func _start_pvp_client(args: PackedStringArray) -> void:
 	_show_status("正在连接 host (port %d)..." % port)
 	# 连 host
 	net_client = _NetClient.new()
+	net_client.local_player_id = local_player_id
 	add_child(net_client)
 	net_client.connected_to_host.connect(_on_pvp_connected_to_host)
 	net_client.disconnected_from_host.connect(_on_pvp_disconnected)
@@ -684,10 +812,126 @@ func _apply_pvp_seed_and_build(seed: int, client_pilot_ids: Array = []) -> void:
 	# 双方各自独立选择，回合稍后由 _check_pvp_both_selected 统一 start_turn（PvP 锁步）。
 	_build_client_pilot_pool_from_ids(client_pilot_ids)
 	_pvp_pilot_selecting = true
-	var layout := _begin_screen("PvP 连接中")
-	_add_text(layout, "连接已建立，正在等待主机选择机师...")
-	_add_text(layout, "稍后请从自己的 3 名机师中选择 1 名")
-	# _begin_screen -> _clear_screen 会断开动作信号，须重连（PvP 锁步：client 端弹窗依赖）。
+	# 同时选择：client 拿到本方候选池即弹选择屏，不等 host 选完。
+	# 双方各自独立选，都选完由 _check_pvp_both_selected 统一开战（PvP 锁步）。
+	_show_pvp_pilot_select("client")
+	# _begin_screen -> _clear_screen 会断开动作信号，须重连（_show_battle 末尾也会重连，幂等）。
+	_connect_action_signals()
+
+
+## 主菜单「3人PvP测试」：host 启动 3人局，开 NetHost(max_clients=2)，spawn 2 个 client 进程。
+## host 控制 player；enemy/third 各为独立 client 窗口。星型拓扑：host 中继 client<->client input。
+func _start_pvp3_host() -> void:
+	_pvp_cleanup()
+	_reset_pvp_state()
+	_pvp_port = 45678
+	game_mode = &"PVP3"
+	local_player_id = &"player"
+	is_network_client = false
+	# 锁步：host 选取随机种子，发给 2 个 client，三方用同种子 start_pvp3 产出相同牌堆
+	_pvp_seed = randi()
+	battle = _BattleState.new()
+	battle.rng_seed = _pvp_seed
+	battle.pvp_map_features = true
+	var start_result = battle.start_pvp3(registry)
+	if not _status_ok(start_result):
+		_show_status("PVP3 战斗启动失败: %s" % _status_message(start_result))
+		return
+	# start_pvp3 已设三方 is_human=true
+	DisplayServer.window_set_title("机斗战甲 [PVP3 - 玩家/host]")
+	# 启动 NetHost（max_clients=2）
+	net_host = _NetHost.new()
+	add_child(net_host)
+	var host_err = net_host.start(_pvp_port, 2)
+	if host_err != OK:
+		_show_status("PVP3 监听端口 %d 失败: %d" % [_pvp_port, host_err])
+		return
+	net_host.client_connected.connect(_on_pvp3_client_connected)
+	net_host.client_disconnected.connect(_on_pvp_client_disconnected)
+	net_host.message_received.connect(_on_pvp_host_message)
+	# spawn 2 个 client 进程（enemy 窗 + third 窗）
+	_spawn_pvp3_client(&"enemy")
+	_spawn_pvp3_client(&"third")
+	# 开局机师九选一：共享种子产出 9 候选分 3 组（host3+enemy3+third3，不重复）
+	_generate_pvp3_pilot_pool()
+	_pvp_pilot_selecting = true
+	_show_pvp_pilot_select("host")
+	battle.log.append({"message": "[PVP3] host 已启动，请选择机师（2 个 client 连上后可同时选择，三方都选完开战）...", "details": {}})
+
+
+## spawn 1 个 PVP3 client 进程（player_id=enemy/third）。
+func _spawn_pvp3_client(player_id: StringName) -> void:
+	var exe := OS.get_executable_path()
+	var proj := ProjectSettings.globalize_path("res://")
+	var arg_list := ["--pvp3-client", "--pvp-port", str(_pvp_port), "--pvp-local-player", String(player_id)]
+	if DisplayServer.get_name() == "headless":
+		arg_list.push_front("--headless")
+	# 继承 host 的渲染驱动参数（见 _spawn_pvp_client 注释）
+	var cmdline := OS.get_cmdline_args()
+	for i in range(cmdline.size()):
+		var a := String(cmdline[i])
+		if a == "--rendering-driver" and i + 1 < cmdline.size():
+			arg_list.push_back("--rendering-driver")
+			arg_list.push_back(String(cmdline[i + 1]))
+			break
+		elif a.begins_with("--rendering-driver="):
+			arg_list.push_back(a)
+			break
+	var args := PackedStringArray(arg_list)
+	var pid = OS.create_process(exe, args, false)
+	if pid == -1:
+		battle.log.append({"message": "[PVP3] 启动 %s client 进程失败" % String(player_id), "details": {"exe": exe}})
+	else:
+		_pvp3_client_pids[String(player_id)] = pid
+		battle.log.append({"message": "[PVP3] 已 spawn %s client 进程 pid=%d" % [String(player_id), pid], "details": {}})
+
+
+## PVP3 client 进程入口：解析参数（--pvp-local-player=enemy/third），连 host，显示空界面等种子。
+func _start_pvp3_client(args: PackedStringArray) -> void:
+	is_network_client = true
+	game_mode = &"PVP3"
+	local_player_id = &"enemy"  # 默认，下方按参数覆盖
+	var port := 45678
+	for i in range(args.size()):
+		if String(args[i]) == "--pvp-port" and i + 1 < args.size():
+			port = int(args[i + 1])
+		elif String(args[i]) == "--pvp-local-player" and i + 1 < args.size():
+			local_player_id = StringName(String(args[i + 1]))
+	_pvp_port = port
+	# 窗口标题 + 位置偏移，三方窗区分
+	DisplayServer.window_set_title("机斗战甲 [PVP3 - %s/client]" % String(local_player_id))
+	var offset := Vector2i(60, 40) if local_player_id == &"enemy" else Vector2i(120, 80)
+	DisplayServer.window_set_position(DisplayServer.window_get_position() + offset)
+	_begin_screen("PVP3 连接中")
+	_show_status("正在连接 host (port %d)..." % port)
+	# 连 host
+	net_client = _NetClient.new()
+	net_client.local_player_id = local_player_id
+	add_child(net_client)
+	net_client.connected_to_host.connect(_on_pvp_connected_to_host)
+	net_client.disconnected_from_host.connect(_on_pvp_disconnected)
+	net_client.message_received.connect(_on_pvp_client_message)
+	net_client.connect_to(port)
+
+
+## PVP3 client 收到 host 种子后自建局（同种子 start_pvp3 产出与 host 相同牌堆/初始状态）。
+func _apply_pvp3_seed_and_build(seed_val: int, client_pilot_ids: Array = []) -> void:
+	if _pvp_self_built:
+		return
+	_pvp_seed = seed_val
+	if battle == null:
+		battle = _BattleState.new()
+	battle.rng_seed = seed_val
+	battle.pvp_map_features = true
+	var start_result = battle.start_pvp3(registry)
+	if not _status_ok(start_result):
+		_show_status("PVP3 自建局失败: %s" % _status_message(start_result))
+		return
+	_pvp_self_built = true
+	# client 本方候选 = host 定向发来的 3 个机师 id
+	_build_client_pilot_pool_from_ids(client_pilot_ids)
+	_pvp_pilot_selecting = true
+	_show_pvp_pilot_select("client")
 	_connect_action_signals()
 
 
@@ -699,7 +943,7 @@ func _apply_pvp_seed_and_build(seed: int, client_pilot_ids: Array = []) -> void:
 # 任一玩家"返回主菜单"或断线时调用。host 回主菜单（可开新局），client 关窗（spawn 进程）。
 # 双方都清理 TCP 与 client 子进程，确保端口/进程释放，可立即开新一轮 PvP 测试。
 func _quit_pvp_session() -> void:
-	if game_mode != &"PVP":
+	if not _is_pvp_mode():
 		return
 	if _pvp_exiting:
 		return
@@ -743,6 +987,12 @@ func _pvp_cleanup() -> void:
 	if _pvp_client_pid > 0:
 		OS.kill(_pvp_client_pid)
 		_pvp_client_pid = -1
+	# PVP3：杀掉 spawn 的 2 个 client 进程
+	for pid_key in _pvp3_client_pids.keys():
+		var cpid: int = int(_pvp3_client_pids[pid_key])
+		if cpid > 0:
+			OS.kill(cpid)
+	_pvp3_client_pids.clear()
 
 
 ## 重置所有 PvP 相关状态（清理后调用，为新局铺路）。
@@ -762,6 +1012,10 @@ func _reset_pvp_state() -> void:
 	_pvp_remote_pilot_id = ""
 	_pvp_remote_player_id = &""
 	_pvp_pilot_selecting = false
+	# PVP3 专用状态清零
+	_pvp3_client_pilot_ids.clear()
+	_pvp3_client_pids.clear()
+	_pvp_remote_pilots.clear()
 
 
 # ── host 端回调 ──
@@ -777,11 +1031,25 @@ func _on_pvp_client_connected() -> void:
 			net_host.send({"type": "input", "op": "pilot_select", "data": {"pilot_id": _pvp_my_pilot_id, "player_id": String(local_player_id)}})
 	_refresh_battle()
 
-func _on_pvp_client_disconnected() -> void:
+
+## PVP3 host：client 连上（hello 带 player_id）-> 按玩家定向发种子 + 该 client 的候选机师 id。
+func _on_pvp3_client_connected(player_id: StringName) -> void:
+	if battle != null:
+		battle.log.append({"message": "[PVP3] client %s 已连接" % String(player_id), "details": {}})
+	if net_host == null or not net_host.is_client_connected(player_id):
+		return
+	var pilot_ids: Array = _pvp3_client_pilot_ids.get(String(player_id), [])
+	net_host.send_to(player_id, {"type": "seed", "seed": _pvp_seed, "client_pilot_ids": pilot_ids})
+	# host 若已先选好机师，补发给该 client（三方都选完才开战）
+	if _pvp_my_pilot_id != "":
+		net_host.send_to(player_id, {"type": "input", "op": "pilot_select", "data": {"pilot_id": _pvp_my_pilot_id, "player_id": String(local_player_id)}, "sender": String(local_player_id)})
+
+
+func _on_pvp_client_disconnected(_player_id: StringName = &"") -> void:
 	if battle != null:
 		battle.log.append({"message": "[PvP] client 断开", "details": {}})
 	# client 断开（关窗/退出/崩溃）-> host 自动退出 PvP 回主菜单（_pvp_exiting 守卫防自身退出时重入）
-	if game_mode == &"PVP" and not _pvp_exiting:
+	if _is_pvp_mode() and not _pvp_exiting:
 		_quit_pvp_session()
 
 ## host 收到 client 的 intent：按 action 分发，以 client 的玩家身份执行
@@ -794,6 +1062,9 @@ func _on_pvp_host_message(msg: Variant) -> void:
 	# Phase 3 锁步:对等输入交换(host 收 client 的 input,本地执行)
 	if String(d.get("type", "")) == "input":
 		_apply_remote_input(String(d.get("op", "")), d.get("data", {}))
+		# PVP3 星型中继：host 收 client input 后广播给所有 client（发送方按 sender 跳过，避免重复执行）
+		if game_mode == &"PVP3" and net_host != null and net_host.is_client_connected():
+			net_host.send(d)
 	elif String(d.get("type", "")) == "session_end":
 		# client 主动退出 -> host 自动退出回主菜单
 		_quit_pvp_session()
@@ -956,7 +1227,7 @@ func _on_pvp_disconnected() -> void:
 	if battle != null:
 		battle.log.append({"message": "[PvP] 与 host 断开", "details": {}})
 	# host 断开（回主菜单/退出）-> client 自动退出关窗（_pvp_exiting 守卫防自身退出时重入）
-	if game_mode == &"PVP" and not _pvp_exiting:
+	if _is_pvp_mode() and not _pvp_exiting:
 		_quit_pvp_session()
 
 ## client 收到 host 下发的消息：input -> 本地执行(对等)；seed/battle_over
@@ -967,9 +1238,15 @@ func _on_pvp_client_message(msg: Variant) -> void:
 	match String(d.get("type", "")):
 		"seed":
 			# host 发来的锁步随机种子 + client 本方候选机师 id，client 据此自建局（与 host 相同牌堆/初始状态）
-			_apply_pvp_seed_and_build(int(d.get("seed", 0)), d.get("client_pilot_ids", []))
+			if game_mode == &"PVP3":
+				_apply_pvp3_seed_and_build(int(d.get("seed", 0)), d.get("client_pilot_ids", []))
+			else:
+				_apply_pvp_seed_and_build(int(d.get("seed", 0)), d.get("client_pilot_ids", []))
 		"input":
-			# Phase 3 锁步:client 收 host 的 input,本地执行(对等)
+			# PVP3 星型中继：host 广播回的自己的 input 跳过（已本地执行）；其余执行
+			var sender: String = String(d.get("sender", ""))
+			if sender != "" and sender == String(local_player_id):
+				return
 			_apply_remote_input(String(d.get("op", "")), d.get("data", {}))
 		"battle_over":
 			if battle != null:
@@ -988,7 +1265,7 @@ func _on_pvp_client_message(msg: Variant) -> void:
 
 ## 广播输入给对方（host->client 或 client->host）。op 用 String,data 用 String key + 保留 StringName 值。
 func _broadcast_input(op: String, data: Dictionary) -> void:
-	var msg := {"type": "input", "op": op, "data": data}
+	var msg := {"type": "input", "op": op, "data": data, "sender": String(local_player_id)}
 	if is_network_client:
 		if net_client != null and net_client.is_connected_to_host():
 			net_client.send(msg)
@@ -999,7 +1276,7 @@ func _broadcast_input(op: String, data: Dictionary) -> void:
 ## 本方操作入口:本地执行 + 广播。PvE 退化为只本地执行（不广播）。
 func _net_exec(op: String, data: Dictionary) -> Variant:
 	var r: Variant = _dispatch_input(op, data)
-	if game_mode == &"PVP":
+	if _is_pvp_mode():
 		_broadcast_input(op, data)
 	return r
 
@@ -1122,6 +1399,16 @@ func _dispatch_input(op: String, data: Dictionary) -> Variant:
 				battle.log.append({"message": "卖出失败: %s" % String(se_result.get("message", "")), "details": {}})
 			_refresh_battle()
 			return se_result
+		"paid_draw_action":
+			var pd_pid: StringName = data.get("player_id", &"")
+			var pd_result: Dictionary = ctx.game_actions.paid_draw_action_card({"player_id": pd_pid})
+			SLog.log_call("app_root", "net_paid_draw_action", {"actor": String(pd_pid)}, pd_result)
+			if pd_result.get("ok", false):
+				battle.log.append({"message": "2金币抽牌成功", "details": {}})
+			else:
+				battle.log.append({"message": "2金币抽牌失败：%s" % String(pd_result.get("message", "")), "details": {}})
+			_refresh_battle()
+			return pd_result
 		"set_trap_arm":
 			# 设陷按钮：记录本方机甲当前位置（arm），机甲离开后由 MapService 离场放置陷阱+消耗1层
 			var sta_pid: StringName = data.get("player_id", &"")
@@ -1178,6 +1465,12 @@ func _dispatch_input(op: String, data: Dictionary) -> Variant:
 			return bh_result
 		"equipment_active":
 			_net_equipment_active(data.get("card_instance_id", &""), data.get("effect_id", &""))
+			_refresh_battle()
+			return {}
+		"granted_effect":
+			# granted 授予效果（pilot_002 莱比尔协同·进攻 EX 按钮）：来源牌=pilot_002(莱比尔机甲)，
+			# 执行机甲=被授予联邦机甲 A（acting_mech_id），须显式传 A 构造 source.mech_id=A 的 effect_fire。
+			_net_granted_effect(data.get("card_instance_id", &""), data.get("effect_id", &""), data.get("acting_mech_id", &""))
 			_refresh_battle()
 			return {}
 		"end_turn":
@@ -1247,8 +1540,17 @@ func _dispatch_input(op: String, data: Dictionary) -> Variant:
 			var ra_selected: Array[Dictionary] = []
 			if not ra_pass:
 				ra_selected = _build_selected_cards_from_card(data.get("card_instance_id", &""), data.get("effect_id", &""))
+			# 问题4：pass 时传 player_id 做多玩家 pass 追踪；handle_response_selection 返回
+			# true=窗口应关闭（确认响应/全 pass/旧行为），false=保持（部分 pass，其他玩家仍可响应）。
+			var ra_pass_pid: StringName = StringName(data.get("player_id", &"")) if ra_pass else &""
+			var ra_should_close: bool = true
 			if ctx.timing_engine:
-				ctx.timing_engine.handle_response_selection(ra_action_id, ra_selected)
+				ra_should_close = ctx.timing_engine.handle_response_selection(ra_action_id, ra_selected, ra_pass_pid)
+			# 竞争关闭：确认响应/全 pass/旧行为 -> 关窗；
+			# 部分 pass（其他玩家未响应）-> 保持本端窗口（若本端是未 pass 的响应方）。
+			# （响应发起端自己已在 _on_response_passed/_on_response_selected 关窗。）
+			if ra_should_close and response_panel:
+				response_panel.visible = false
 			_refresh_battle()
 			return {}
 		"resume_effect":
@@ -1276,11 +1578,12 @@ func _dispatch_input(op: String, data: Dictionary) -> Variant:
 			return {}
 		"discard_cards":
 			# 攻击结算后触发的弃牌（非 action 引擎 need_input 路径）：双端直接弃牌
+			# 走 discard_card 动作发时点，使监听 DISCARD_SETTLE 的效果（如安德洛美达回收维修）触发
 			var dc_pid: StringName = data.get("player_id", &"")
 			var dc_cards: Array = data.get("card_ids", [])
 			var dc_reason: StringName = data.get("reason", &"EFFECT_DISCARD")
-			for dc_cid in dc_cards:
-				ctx.game_actions.discard_action_card({"player_id": dc_pid, "card_id": dc_cid, "reason": dc_reason})
+			if not dc_cards.is_empty():
+				ctx.deck_service.discard_cards(dc_cards, dc_reason)
 			battle.log.append({"message": "弃置了 %d 张行动牌" % dc_cards.size(), "details": {}})
 			_refresh_battle()
 			return {}
@@ -1312,6 +1615,10 @@ func _build_selected_cards_from_card(card_id: StringName, effect_id: StringName 
 		var eff: ActionEffect = GeneratedActionEffects.build_all_effects().get(effect_id)
 		if eff == null:
 			eff = GeneratedEquipmentEffects.build_equipment_effects().get(effect_id)
+		if eff == null:
+			# granted 机师 AVAILABILITY 效果（pilot_002 莱比尔协同·防御）在 ActionPilotEffects，
+			# 须另查，否则 selected_cards 为空 -> handle_response_selection 误判为取消（攻击不被响应）。
+			eff = ActionPilotEffects.build_pilot_effects().get(effect_id)
 		if eff != null and eff.mode == "AVAILABILITY":
 			selected_cards.append({
 				"effect_id": effect_id,
@@ -1405,6 +1712,45 @@ func _net_equipment_active(card_id: StringName, effect_id: StringName) -> void:
 		battle.log.append({"message": "发动装备效果: %s" % String(effect_id), "details": {}})
 
 
+## granted 授予效果（锁步版）：走 effect_fire 动作。与 _net_equipment_active 的区别--
+## 来源牌 card_instance_id=pilot_002(在莱比尔机甲上)，但执行机甲=被授予的联邦机甲 A(acting_mech_id)。
+## 故 source.mech_id/source_mech_id/player_id 取 A 而非 card.mech_id(莱比尔)，
+## 使 _execute_effect_by_id 按 mech_id=A 命中 A 的 granted listener，效果以 A 身份执行（消耗 A 攻击数等）。
+func _net_granted_effect(card_id: StringName, effect_id: StringName, acting_mech_id: StringName) -> void:
+	if battle == null or battle.context == null:
+		return
+	var context = battle.context
+	if acting_mech_id == &"" or context.game_state == null:
+		return
+	var card = context.game_state.get_card(card_id) if context.game_state != null else null
+	if card == null:
+		battle.log.append({"message": "授予效果发动失败:找不到来源牌实例", "details": {}})
+		return
+	var acting_mech = context.game_state.mechs.get(acting_mech_id)
+	if acting_mech == null:
+		battle.log.append({"message": "授予效果发动失败:找不到执行机甲", "details": {}})
+		return
+	var acting_player_id: StringName = acting_mech.owner_player_id
+	var src: Dictionary = {
+		"card_instance_id": card_id,
+		"mech_id": acting_mech_id,
+		"player_id": acting_player_id,
+		"effect_id": effect_id,
+	}
+	var payload: Dictionary = {
+		"effect_id": effect_id,
+		"player_id": acting_player_id,
+		"source_mech_id": acting_mech_id,
+		"mech_id": acting_mech_id,
+		"card_instance_id": card_id,
+		"phase": context.game_state.phase,
+		"source": src,
+	}
+	if context.action_service != null:
+		context.action_service.execute(&"effect_fire", payload)
+		battle.log.append({"message": "发动授予效果: %s（执行机甲 %s）" % [String(effect_id), String(acting_mech_id)], "details": {}})
+
+
 ## 结束回合（锁步版）：弃牌 + end_turn + 胜负检查 + 切对手回合（无 AI）。
 ## 弃牌的 card_ids 由本方本地选好后带入（END_TURN_HAND_LIMIT）。
 func _net_end_turn(pid: StringName, discarded_card_ids: Array) -> void:
@@ -1415,14 +1761,11 @@ func _net_end_turn(pid: StringName, discarded_card_ids: Array) -> void:
 	if gs.active_player_id != &"" and gs.active_player_id != pid:
 		battle.log.append({"message": "[PvP] 非己方回合,结束回合被拒", "details": {}})
 		return
-	# 弃置本方已选好的超限行动牌
-	for cid in discarded_card_ids:
-		ctx.game_actions.discard_action_card({
-			"player_id": pid,
-			"card_id": cid,
-			"reason": &"END_TURN_HAND_LIMIT",
-		})
+	# 弃置本方已选好的超限行动牌（走 discard_card 动作发 DISCARD_BEFORE/AFTER/SETTLE 时点，
+	# 使监听弃置时点的效果如安德洛美达 effect_01b 回收维修能正常触发。原走 legacy
+	# game_actions.discard_action_card 只 fire ON_CARD_DISCARDED hook 不发时点 -> 监听器失效）
 	if not discarded_card_ids.is_empty():
+		ctx.deck_service.discard_cards(discarded_card_ids, &"END_TURN_HAND_LIMIT")
 		battle.log.append({"message": "弃置了 %d 张行动牌" % discarded_card_ids.size(), "details": {}})
 	# 清理残留动作
 	if ctx.action_engine:
@@ -1433,14 +1776,22 @@ func _net_end_turn(pid: StringName, discarded_card_ids: Array) -> void:
 	if get_result_state() != "active":
 		return
 	# PvP 切对手回合（无 AI 驱动）
-	var other: StringName = gs.get_opponent_player_id(pid)
+	var other: StringName
+	if game_mode == &"PVP3":
+		other = gs.get_next_player_id(pid)
+	else:
+		other = gs.get_opponent_player_id(pid)
 	battle.start_turn(String(other))
 	_refresh_battle()
 
 
 ## PvP 回合切换：当前 active 方结束回合 -> 开对手回合（无 AI 驱动）
 func _pvp_start_other_turn() -> void:
-	var other := _opponent_player_id()
+	var other: StringName
+	if game_mode == &"PVP3":
+		other = battle.context.game_state.get_next_player_id(local_player_id)
+	else:
+		other = _opponent_player_id()
 	battle.start_turn(String(other))
 	_refresh_battle()
 	_finish_battle_if_needed()
@@ -1482,7 +1833,7 @@ func _popup_owner(popup_type: StringName, params: Dictionary) -> StringName:
 			return _owner_of_mech_id(params.get("target_mech_id", &""))
 		&"use_card_confirm", &"choice_select", &"effect_choice", &"mech_target_select", \
 		&"weapon_charge_select", &"repair_target_select", &"redirect_select", &"thrust_select", \
-		&"awaken_select", &"immediate_set_equipment", &"integer_select", &"map_cell_select", &"pilot_003_skip_players":
+		&"awaken_select", &"immediate_set_equipment", &"integer_select", &"map_cell_select", &"pilot_003_skip_players", &"pilot_003_choose_top", &"pilot_009_card_display":
 			var pid: StringName = params.get("player_id", &"")
 			if pid != &"" and gs.players.has(pid):
 				return pid
@@ -1602,6 +1953,7 @@ func _show_battle() -> void:
 	equipment_panel.custom_minimum_size = Vector2(0, 200)
 	equipment_panel.reserve_set_clicked.connect(Callable(self, "_on_reserve_set_clicked"))
 	equipment_panel.equipment_active_clicked.connect(Callable(self, "_on_equipment_active_clicked"))
+	equipment_panel.granted_effect_clicked.connect(Callable(self, "_on_granted_effect_clicked"))
 	equipment_panel.mech_detail_requested.connect(Callable(self, "_on_mech_detail_requested"))
 	right_panel.add_child(equipment_panel)
 
@@ -1629,7 +1981,9 @@ func _show_battle() -> void:
 	layout.add_child(action_bar)
 	_add_button(action_bar, "结束回合", Callable(self, "_end_player_turn"))
 	_sell_button = _add_button(action_bar, "卖出(*)", Callable(self, "_on_sell_equipment_clicked"), "sell")
+	_paid_draw_button = _add_button(action_bar, "2金币抽牌", Callable(self, "_on_paid_draw_clicked"), "paid_draw")
 	_set_trap_button = _add_button(action_bar, "设陷", Callable(self, "_on_set_trap_clicked"), "set_trap")
+	_medusa_control_button = _add_button(action_bar, "美杜莎操控", Callable(self, "_on_medusa_control_clicked"), "medusa_control")
 	_add_button(action_bar, "商店", Callable(self, "_on_shop_clicked"))
 	_add_button(action_bar, "牌堆信息", Callable(self, "_on_deck_info_clicked"))
 	_add_button(action_bar, "返回主菜单", Callable(self, "_on_return_to_main_menu"))
@@ -1728,7 +2082,7 @@ func _show_battle() -> void:
 	# ── 损伤放置面板（初始隐藏）──
 	damage_placement_panel = _DamagePlacementPanel.new()
 	damage_placement_panel.placement_completed.connect(Callable(self, "_on_damage_placement_completed"))
-	if game_mode == &"PVP":
+	if _is_pvp_mode():
 		damage_placement_panel.network_mode = true
 		damage_placement_panel.token_placed.connect(_on_damage_token_placed)
 	damage_placement_panel.token_removed.connect(_on_damage_token_removed)
@@ -1743,12 +2097,28 @@ func _show_battle() -> void:
 	choice_panel.visible = false
 	popup_overlay.add_child(choice_panel)
 
+	# ── 步进数值输入面板（pilot_004 装甲转能：LineEdit+±3+键盘）──
+	var _StepperPanel = preload("res://scripts/ui/stepper_panel.gd")
+	stepper_panel = _StepperPanel.new()
+	stepper_panel.choice_made.connect(Callable(self, "_on_choice_made"))
+	stepper_panel.choice_cancelled.connect(Callable(self, "_on_choice_cancelled"))
+	stepper_panel.visible = false
+	popup_overlay.add_child(stepper_panel)
+
 	# ── 弃牌选择面板（初始隐藏）──
 	discard_select_panel = _DiscardSelectPanel.new()
 	discard_select_panel.selection_completed.connect(Callable(self, "_on_discard_selection_completed"))
 	discard_select_panel.selection_cancelled.connect(Callable(self, "_on_discard_selection_cancelled"))
 	discard_select_panel.visible = false
 	popup_overlay.add_child(discard_select_panel)
+
+	# ── pilot_009 美杜莎非阻塞可拖拽展示浮窗（初始隐藏，非模态不入堆栈）──
+	# 挂根节点 self（非 popup_overlay 的 CenterContainer）：CenterContainer 会强制居中覆盖
+	# position；挂根且 add_child 顺序在 popup_overlay/scrim 之后，自然浮在模态弹窗之上、
+	# position（左上）生效、拖拽不偏移。
+	card_display_panel = _CardDisplayPanel.new()
+	card_display_panel.visible = false
+	add_child(card_display_panel)
 
 	# ── 推进多选面板（初始隐藏）──
 	thrust_select_panel = _ThrustSelectPanel.new()
@@ -1778,6 +2148,13 @@ func _show_battle() -> void:
 	pilot_003_skip_panel.visible = false
 	popup_overlay.add_child(pilot_003_skip_panel)
 
+	# ── pilot_003 effect_01 选置顶牌单选面板（复用 UniteAttackSelectPanel，通用化后定制文案）──
+	pilot_003_choose_top_panel = _UniteAttackSelectPanel.new()
+	pilot_003_choose_top_panel.selection_completed.connect(Callable(self, "_on_pilot_003_choose_top_completed"))
+	pilot_003_choose_top_panel.selection_cancelled.connect(Callable(self, "_on_pilot_003_choose_top_cancelled"))
+	pilot_003_choose_top_panel.visible = false
+	popup_overlay.add_child(pilot_003_choose_top_panel)
+
 	# ── 觉醒种类单选面板（初始隐藏）──
 	awaken_select_panel = _AwakenSelectPanel.new()
 	awaken_select_panel.selection_completed.connect(Callable(self, "_on_awaken_selection_completed"))
@@ -1785,7 +2162,7 @@ func _show_battle() -> void:
 	awaken_select_panel.visible = false
 	popup_overlay.add_child(awaken_select_panel)
 	# 模态弹窗堆栈：监听各弹窗面板可见性，面板被处理器隐藏(visible=false)时自动出栈
-	for _pp in [response_panel, weapon_picker_panel, damage_placement_panel, choice_panel, discard_select_panel, thrust_select_panel, immediate_set_equipment_panel, unite_attack_select_panel, awaken_select_panel, pilot_003_skip_panel]:
+	for _pp in [response_panel, weapon_picker_panel, damage_placement_panel, choice_panel, discard_select_panel, thrust_select_panel, immediate_set_equipment_panel, unite_attack_select_panel, awaken_select_panel, pilot_003_skip_panel, pilot_003_choose_top_panel]:
 		if _pp != null:
 			_pp.visibility_changed.connect(Callable(self, "_on_popup_visibility_changed").bind(_pp))
 
@@ -1794,7 +2171,7 @@ func _show_battle() -> void:
 	dev_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
 	dev_panel.close_requested.connect(Callable(self, "_on_dev_panel_close"))
 	# PvP 锁步：dev 编辑走 _net_exec(dev_edit) 双端应用（不本地直改）
-	if game_mode == &"PVP":
+	if _is_pvp_mode():
 		dev_panel.network_mode = true
 		dev_panel.dev_edit_requested.connect(_on_dev_edit_requested)
 	else:
@@ -1836,6 +2213,15 @@ func _on_battle_hex_clicked(hex: Dictionary) -> void:
 			match input_type:
 				&"select_attack_target":
 					var target_id: StringName = _find_mech_at_hex(hex)
+					# pilot_006 里昂狩猎豁免：只能选标记机甲（约束目标选择）
+					if _pilot_006_forced_target != &"" and target_id != &"" and target_id != _pilot_006_forced_target:
+						battle.log.append({"message": "里昂狩猎豁免：本次攻击只能以狩猎标记机甲为目标", "details": {}})
+						_refresh_battle()
+						return
+					# 多目标攻击选择模式（双连等）：逐个点击机甲收集，可点已选机甲取消，选满自动提交
+					if _multi_attack_target_count >= 2:
+						_multi_attack_target_handle_click(hex, target_id, wait_info)
+						return
 					if target_id != &"":
 						_clear_attack_highlights()
 						_net_exec("ui_confirmed", {"data": {"target_id": target_id}})
@@ -1919,6 +2305,12 @@ func _on_battle_hex_clicked(hex: Dictionary) -> void:
 				&"select_mech_target":
 					var mech_id: StringName = _find_mech_at_hex(hex)
 					if mech_id != &"":
+						# 排除自身（CHOOSE_OTHER_MECH 不能选自己；pilot_002 转化选 B）
+						var smt_src_mid: StringName = StringName(wait_info.get("input_params", {}).get("mech_id", &""))
+						if smt_src_mid != &"" and mech_id == smt_src_mid:
+							battle.log.append({"message": "不能选择自己", "details": {}})
+							_refresh_battle()
+							return
 						_net_exec("ui_confirmed", {"data": {"target_id": mech_id}})
 					return
 				&"select_repair_target":
@@ -2047,11 +2439,10 @@ func _on_action_card_clicked(card_id: StringName) -> void:
 
 	# ── 新动作系统：通过 ActionService 执行，弹出确认对话框 ──
 	if battle.context.action_ui_bridge:
-		# 使用确认对话框（通过choice_panel）
+		# 使用确认对话框（通过choice_panel）：仅"确定使用"一项，取消走底部固定取消按钮。
 		_choice_select_card_id = card_id  # 保存当前确认的卡牌ID
 		var options: Array[Dictionary] = [
 			{"label": "确定使用", "effect_id": &"__confirm_use_action_card__"},
-			{"label": "取消", "effect_id": &"__cancel_use_action_card__"},
 		]
 		choice_panel.configure(options)
 		choice_panel.visible = true
@@ -2143,6 +2534,14 @@ func _on_equipment_active_clicked(card_instance_id: StringName, effect_id: Strin
 	_net_exec("equipment_active", {"card_instance_id": card_instance_id, "effect_id": effect_id})
 
 
+## granted 授予效果 EX 按钮被点击（pilot_002 莱比尔协同·进攻）。
+## 走 granted_effect op 锁步（携带 acting_mech_id=执行机甲 A），双端各 _net_granted_effect 构造 effect_fire。
+func _on_granted_effect_clicked(card_instance_id: StringName, effect_id: StringName, mech_id: StringName) -> void:
+	if battle == null or battle.context == null:
+		return
+	_net_exec("granted_effect", {"card_instance_id": card_instance_id, "effect_id": effect_id, "acting_mech_id": mech_id})
+
+
 ## 结束玩家回合
 func _end_player_turn() -> void:
 	if battle == null:
@@ -2172,7 +2571,7 @@ func _end_player_turn() -> void:
 			return
 
 	# 无需弃牌：PvP 走锁步 end_turn op（双端执行 end+切对手），PvE 走原 _finish_player_turn（含 AI 敌方回合）
-	if game_mode == &"PVP":
+	if _is_pvp_mode():
 		_net_exec("end_turn", {"player_id": local_player_id, "discarded_card_ids": []})
 	else:
 		_finish_player_turn()
@@ -2194,7 +2593,7 @@ func _finish_player_turn() -> void:
 		return
 
 	# PvP：直接切对手回合（无 AI 驱动）；PvE：开始敌方回合（多步式 AI）
-	if game_mode == &"PVP":
+	if _is_pvp_mode():
 		_pvp_start_other_turn()
 	else:
 		_start_enemy_turn_flow()
@@ -2261,13 +2660,14 @@ func _on_response_selected(card_id: StringName, effect_id: StringName = &"") -> 
 
 
 ## Response passed (new system: call TimingEngine.handle_response_selection with empty array)
+## 问题4：传 local_player_id 做多玩家 pass 追踪（一个玩家 pass 不影响其他人响应权）
 func _on_response_passed() -> void:
 	if battle == null or battle.context == null:
 		return
 	response_panel.visible = false
 	var rp_wait: Dictionary = battle.context.action_ui_bridge.get_waiting_action_info() if battle.context.action_ui_bridge else {}
 	var rp_action_id: StringName = rp_wait.get("action_id", &"")
-	_net_exec("respond_attack", {"action_id": rp_action_id, "pass": true})
+	_net_exec("respond_attack", {"action_id": rp_action_id, "pass": true, "player_id": String(local_player_id)})
 
 
 ## New action system: availability effect selected from response panel
@@ -2673,11 +3073,11 @@ func _on_action_completed(_action_id: StringName, _action_type: StringName, _rec
 	# 仅人类方移动（PvP 任意方 / PvE 玩家方）走轻量刷新；PvE 敌方(AI)移动需走下方
 	# _check_enemy_turn_complete 接续 AI 回合，不能提前 return。
 	if _action_type == &"single_move" and String(_record.get("parent_action_id", &"")) == &"" \
-		and (game_mode == &"PVP" or battle.context.game_state.active_player_id != &"enemy"):
+		and (_is_pvp_mode() or battle.context.game_state.active_player_id != &"enemy"):
 		_refresh_after_move_end()
 		return
 	# PvP 锁步：无 AI 驱动,双端动作完成后刷新画面。
-	if game_mode == &"PVP":
+	if _is_pvp_mode():
 		_request_refresh()
 		return
 	# 仅敌方回合需要兜底接续（玩家回合由“结束回合”按钮驱动）
@@ -2695,6 +3095,10 @@ func _on_action_completed(_action_id: StringName, _action_type: StringName, _rec
 		SLog.log_raw("[DIAG _on_action_completed] will check: action=" + String(_action_id) + " type=" + String(_action_type))
 	# call_deferred：等本帧 cleanup_action 跑完、active_actions 状态稳定后再检查
 	call_deferred("_check_enemy_turn_complete")
+
+
+## 检查敌方回合是否所有动作都已结算，是则结束敌方回合开启玩家回合
+
 
 ## 检查敌方回合是否所有动作都已结算，是则结束敌方回合开启玩家回合
 func _check_enemy_turn_complete() -> void:
@@ -2751,7 +3155,7 @@ var _pending_target_action_id: StringName = &""
 var _pending_target_effect_id: StringName = &""
 func _on_target_selection_requested(action_id: StringName, effect, input_type: StringName, payload: Dictionary) -> void:
 	# 锁步:双端都触发,只本方(owner==local)显示高亮等输入,对方忽略(等对方 input)
-	if game_mode == &"PVP":
+	if _is_pvp_mode():
 		var ts_mid: StringName = payload.get("mech_id", payload.get("source_mech_id", &""))
 		if ts_mid == &"" and effect != null and effect.source is Dictionary:
 			ts_mid = effect.source.get("mech_id", effect.source.get("source_mech_id", &""))
@@ -2869,7 +3273,40 @@ func _clear_evade_range_cache() -> void:
 
 ## ActionUIBridge 请求 UI 弹窗：锁步下双端都触发,只本方(owner==local)显示,对方忽略(等对方 input)
 func _on_action_ui_popup_requested(popup_type: StringName, params: Dictionary) -> void:
-	if game_mode == &"PVP":
+	# pilot_009 非阻塞展示浮窗：给除目标持有者外的所有客户端（美杜莎+第三方观察者），目标自己不看自己的牌。
+	# 不走通用 _popup_owner 门控（那个按 player_id=美杜莎 路由，会漏掉 PvP3 第三方观察者）。
+	# 直接配置 + 显示后返回，跳过 _show_popup/_present_popup 模态逻辑；浮窗挂根节点故浮在模态弹窗之上。
+	if popup_type == &"pilot_009_card_display":
+		var p9d_tgt_owner := _owner_of_mech_id(params.get("target_id", &""))
+		if p9d_tgt_owner != &"" and p9d_tgt_owner == local_player_id:
+			return  # 目标自己不看（PvE/PvP/PvP3 通用）
+		_update_move_overlay()
+		if card_display_panel and battle and battle.context:
+			var gs = battle.context.game_state
+			var p9d_target_id: StringName = params.get("target_id", &"")
+			var p9d_holder_name: String = String(p9d_target_id)
+			if p9d_target_id != &"" and gs != null:
+				var p9d_mech = gs.mechs.get(p9d_target_id)
+				if p9d_mech != null and p9d_mech.frame_def != null and String(p9d_mech.frame_def.display_name) != "":
+					p9d_holder_name = String(p9d_mech.frame_def.display_name)
+			card_display_panel.configure(String(params.get("source_label", "目标行动牌")), p9d_holder_name, params.get("display_cards", []))
+		return
+	if _is_pvp_mode() and popup_type == &"response_window":
+		# 多响应方响应窗口（问题3）：响应窗口不再按 target owner 单 owner 门控。
+		# 每条可用牌带 owner_player_id（get_available_cards 填充），按本地玩家过滤：
+		#   被攻击目标玩家 -> 看自己的迎击牌/响应效果；
+		#   相邻且在攻击范围内持反击/疾行的迪恩玩家 -> 单独弹自己的窗口（反击/疾行+挡攻转化）。
+		# 无本地条目不弹（迪恩不符条件时本地窗口为空跳过；第三方观察者窗口为空跳过）。
+		var rw_cards: Array = params.get("available_cards", [])
+		var rw_local: Array = []
+		for rw_e in rw_cards:
+			if rw_e is Dictionary and StringName(rw_e.get("owner_player_id", &"")) == local_player_id:
+				rw_local.append(rw_e)
+		if rw_local.is_empty():
+			return
+		params = params.duplicate()
+		params["available_cards"] = rw_local
+	elif _is_pvp_mode():
 		var owner_pid: StringName = _popup_owner(popup_type, params)
 		if owner_pid != &"" and owner_pid != local_player_id:
 			return  # 对方弹窗,本端不显示,等对方 input
@@ -3022,7 +3459,7 @@ func _build_popup_button_theme() -> Theme:
 ## 当前可见的弹窗面板列表（板选类无面板，不在此列）
 func _visible_popup_panels() -> Array:
 	var out: Array = []
-	for p in [response_panel, weapon_picker_panel, damage_placement_panel, choice_panel, discard_select_panel, thrust_select_panel, immediate_set_equipment_panel, unite_attack_select_panel, awaken_select_panel, pilot_003_skip_panel]:
+	for p in [response_panel, weapon_picker_panel, damage_placement_panel, choice_panel, discard_select_panel, thrust_select_panel, immediate_set_equipment_panel, unite_attack_select_panel, awaken_select_panel, pilot_003_skip_panel, pilot_003_choose_top_panel]:
 		if p != null and is_instance_valid(p) and p.visible:
 			out.append(p)
 	return out
@@ -3030,7 +3467,7 @@ func _visible_popup_panels() -> Array:
 
 ## 找出展示后新可见的弹窗面板（即本次 _show_popup 弹出的）
 func _newly_visible_popup_panel(before: Array) -> Control:
-	for p in [response_panel, weapon_picker_panel, damage_placement_panel, choice_panel, discard_select_panel, thrust_select_panel, immediate_set_equipment_panel, unite_attack_select_panel, awaken_select_panel, pilot_003_skip_panel]:
+	for p in [response_panel, weapon_picker_panel, damage_placement_panel, choice_panel, discard_select_panel, thrust_select_panel, immediate_set_equipment_panel, unite_attack_select_panel, awaken_select_panel, pilot_003_skip_panel, pilot_003_choose_top_panel]:
 		if p != null and is_instance_valid(p) and p.visible and not (p in before):
 			return p
 	return null
@@ -3075,6 +3512,8 @@ func _show_popup(popup_type: StringName, params: Dictionary) -> void:
 				var from_pos: Dictionary = params.get("from_position", {})
 				if from_pos.is_empty() and attacker_mech != null:
 					from_pos = attacker_mech.position
+				# pilot_006 里昂狩猎豁免：只能选标记机甲（约束目标选择）
+				_pilot_006_forced_target = params.get("pilot_006_forced_target", &"")
 				var highlights: Array[Dictionary] = _RangeCalculator.get_weapon_reachable_hexes(
 					from_pos, params.get("weapon_range", 1), gs.map_state.cells if gs else {}
 				)
@@ -3092,7 +3531,14 @@ func _show_popup(popup_type: StringName, params: Dictionary) -> void:
 								break
 				battle_board.highlight_attack_targets(target_hexes)
 				_show_cancel_button(true)
-				battle.log.append({"message": "选择攻击目标：点击红色闪烁格内的机甲或陷阱（绿色为武器范围）", "details": {}})
+				# 多目标攻击（双连等）：target_count>=2 进入多选模式
+				_multi_attack_target_count = int(params.get("target_count", 1))
+				_multi_attack_target_chosen = []
+				battle_board.clear_multi_target_marks()
+				if _multi_attack_target_count >= 2:
+					battle.log.append({"message": "多目标攻击：点击红色闪烁格内的机甲选择目标（最多%d台，可点已选机甲取消选择）；选陷阱=单目标；点「取消」=用已选目标继续" % _multi_attack_target_count, "details": {}})
+				else:
+					battle.log.append({"message": "选择攻击目标：点击红色闪烁格内的机甲或陷阱（绿色为武器范围）", "details": {}})
 		&"map_cell_select":
 			# 机雷设陷选格：标绿可放陷阱格（无机甲、无既有陷阱、在武器范围内），点击放置
 			# count>1（双子机雷）：逐格点击，已选格从高亮移除（不可再选），选满 count 格后提交
@@ -3156,6 +3602,7 @@ func _show_popup(popup_type: StringName, params: Dictionary) -> void:
 				var ds_count: int = int(params.get("count", 1))
 				var ds_face_up: bool = bool(params.get("face_up", true))
 				var ds_verb: StringName = params.get("action_verb", &"discard")
+				var ds_no_cancel: bool = bool(params.get("no_cancel", false))
 				_discard_select_card_id = &""  # 不走辅助牌同步路径
 				if String(params.get("mode", &"")) == &"need_input":
 					# STEAL/discard_card 动作 need_input 路径
@@ -3166,7 +3613,7 @@ func _show_popup(popup_type: StringName, params: Dictionary) -> void:
 						"count": ds_count,
 						"face_up": ds_face_up,
 					}
-					discard_select_panel.configure(battle.context, ds_player_id, ds_count, ds_face_up, &"", ds_verb, String(params.get("source_label", "")))
+					discard_select_panel.configure(battle.context, ds_player_id, ds_count, ds_face_up, &"", ds_verb, String(params.get("source_label", "")), ds_no_cancel)
 					discard_select_panel.visible = true
 					battle.log.append({"message": "选择1张行动牌%s" % ("获取" if ds_verb == &"gain" else "弃置"), "details": {}})
 				else:
@@ -3178,7 +3625,7 @@ func _show_popup(popup_type: StringName, params: Dictionary) -> void:
 						"count": ds_count,
 						"face_up": ds_face_up,
 					}
-					discard_select_panel.configure(battle.context, ds_player_id, ds_count, ds_face_up, &"", ds_verb, String(params.get("source_label", "")))
+					discard_select_panel.configure(battle.context, ds_player_id, ds_count, ds_face_up, &"", ds_verb, String(params.get("source_label", "")), ds_no_cancel)
 					discard_select_panel.visible = true
 					battle.log.append({"message": "闪击：弃1张行动牌可再攻1次，或取消", "details": {}})
 				_refresh_battle()
@@ -3260,11 +3707,22 @@ func _show_popup(popup_type: StringName, params: Dictionary) -> void:
 				for opt in options:
 					if opt is Dictionary:
 						typed_options.append(opt)
-				choice_panel.configure(typed_options, String(params.get("source_label", "")))
+				# 里昂效果2（战后逼迫 pilot_006_effect_03）为强制二选一，隐藏底部取消按钮（不可取消）。
+				# 其他 effect_choice（维修二选一/是否继续发动等）保留底部取消按钮。
+				var ec_effect_id: StringName = StringName(params.get("effect_id", &""))
+				var ec_allow_cancel: bool = (ec_effect_id != &"pilot_006_effect_03")
+				choice_panel.configure(typed_options, String(params.get("source_label", "")), ec_allow_cancel)
 				choice_panel.visible = true
 		&"integer_select":
-			# CHOOSE_INTEGER 金币换动力（effect_040/041）：用 choice_panel 列 n=min..max 选项
-			if choice_panel:
+			# CHOOSE_INTEGER：stepper=true 步进面板（pilot_004 装甲转能）/ 否则按钮列表（effect_040/041 金币换动力）
+			if bool(params.get("stepper", false)) and stepper_panel:
+				stepper_panel.configure(
+					String(params.get("label", "选择n")),
+					int(params.get("min_value", 0)),
+					int(params.get("max_value", 0)),
+					bool(params.get("optional", false)))
+				stepper_panel.visible = true
+			elif choice_panel:
 				var ii_min: int = int(params.get("min_value", 1))
 				var ii_max: int = int(params.get("max_value", ii_min))
 				var ii_label: String = String(params.get("label", "选择n"))
@@ -3279,7 +3737,11 @@ func _show_popup(popup_type: StringName, params: Dictionary) -> void:
 		&"mech_target_select":
 			if battle_board:
 				var highlights: Array[Dictionary] = []
+				# 排除来源机甲自身（CHOOSE_OTHER_MECH 不能选自己；pilot_002 转化选 B）
+				var _mt_src_mid: StringName = params.get("mech_id", &"")
 				for mid: StringName in battle.context.game_state.mechs:
+					if mid == _mt_src_mid:
+						continue
 					var m = battle.context.game_state.mechs[mid]
 					if m == null or m.destroyed:
 						continue
@@ -3366,6 +3828,15 @@ func _show_popup(popup_type: StringName, params: Dictionary) -> void:
 				pilot_003_skip_panel.configure(p003s_players, p003s_checked, String(params.get("source_label", "")))
 				pilot_003_skip_panel.visible = true
 				battle.log.append({"message": "跳过公开牌：勾选抽牌跳过正面牌的玩家并提交", "details": {}})
+		&"pilot_003_choose_top":
+			# pilot_003 e1 phase 链：选完埋牌后弹"选1张置顶(可取消)"窗。复用通用化 unite 单选面板，
+			# card_suffix=空（非攻击牌后缀）、confirm_verb=置顶、cancel_label=不置顶。
+			if pilot_003_choose_top_panel and battle and battle.context:
+				_pilot_003_choose_top_action_id = params.get("action_id", &"")
+				var p003t_card_ids: Array = params.get("card_ids", [])
+				pilot_003_choose_top_panel.configure(battle.context, p003t_card_ids, String(params.get("label", "选择1张正面牌放置到牌堆顶（可取消）")), "", "置顶", "不置顶（仅随机插入）")
+				pilot_003_choose_top_panel.visible = true
+				battle.log.append({"message": "公开埋牌：选择1张正面牌放置到牌堆顶（可取消）", "details": {}})
 		&"awaken_select":
 			# 觉醒：弃牌堆无预判/识破时，选1种行动牌（列种类+数量）。
 			# 弹窗已由 _popup_owner 路由到使用觉醒牌的玩家窗口（PvP 对方弹窗本端不显示）。
@@ -3395,7 +3866,7 @@ func _on_action_input_resolved(action_id: StringName, input_data: Dictionary) ->
 ## 敌方信息按钮点击
 func _on_enemy_info_clicked() -> void:
 	if enemy_info_popup and battle and battle.context:
-		enemy_info_popup.configure(battle.context)
+		enemy_info_popup.configure(battle.context, local_player_id)
 		enemy_info_popup.popup_centered(Vector2i(320, 520))
 
 ## 机甲详情按钮点击（来自装备面板）：打开该机甲的动力/护甲来源明细+状态弹窗
@@ -3509,6 +3980,29 @@ func _on_shop_refresh_clicked() -> void:
 # 卖出装备和设置操作
 # ═══════════════════════════════════════════
 
+## 点击2金币抽牌按钮：花2金币抽1张行动牌（每我方回合1次，所有玩家基础效果）
+func _on_paid_draw_clicked() -> void:
+	if battle == null or battle.context == null:
+		return
+	if not _is_my_turn():
+		battle.log.append({"message": "只能在己方回合使用2金币抽牌", "details": {}})
+		_refresh_battle()
+		return
+	var gs = battle.context.game_state
+	var player = gs.players.get(local_player_id)
+	if not player:
+		return
+	if player.paid_draw_count_this_turn > 0:
+		battle.log.append({"message": "本回合已用过2金币抽牌", "details": {}})
+		_refresh_battle()
+		return
+	if player.gold < _GameConfig.PAID_DRAW_ACTION_COST:
+		battle.log.append({"message": "金币不足（需%d）" % _GameConfig.PAID_DRAW_ACTION_COST, "details": {}})
+		_refresh_battle()
+		return
+	_net_exec("paid_draw_action", {"player_id": local_player_id})
+
+
 ## 点击卖出装备按钮
 func _on_sell_equipment_clicked() -> void:
 	if battle == null or battle.context == null:
@@ -3585,6 +4079,164 @@ func _update_set_trap_button() -> void:
 	else:
 		_set_trap_button.text = "设陷(%d)" % int(st.get("stacks", 0))
 		_set_trap_button.disabled = false
+
+## 更新美杜莎操控按钮可见状态：本方为 pilot_009 控制者且本回合已弃牌记录类型、
+## 存在受控目标同类行动牌时显示。仅我方回合可见。
+func _update_medusa_control_button() -> void:
+	if _medusa_control_button == null:
+		return
+	if battle == null or battle.context == null:
+		_medusa_control_button.visible = false
+		return
+	if not _is_my_turn():
+		_medusa_control_button.visible = false
+		return
+	var gs = battle.context.game_state
+	if gs == null:
+		_medusa_control_button.visible = false
+		return
+	var grants := _ActionPilotEffects.get_pilot_009_controlled_grants(local_player_id, gs)
+	# 仅当存在至少1张可主动使用的受控牌时显示（攻击/可主动辅助）
+	var has_active := false
+	for g: Dictionary in grants:
+		var card_ids: Array = g.get("card_ids", [])
+		if card_ids.is_empty():
+			continue
+		for cid: StringName in card_ids:
+			var c = gs.get_card(cid)
+			if c == null or c.def == null:
+				continue
+			if _pilot_009_card_is_usable_active(c.def):
+				has_active = true
+				break
+		if has_active:
+			break
+	_medusa_control_button.visible = has_active
+	if has_active:
+		_medusa_control_button.disabled = false
+
+## 判定受控牌是否为可主动使用类型（攻击牌 / 非被动辅助牌）。
+## 迎击牌（响应窗口）/ 掩护·推进（permanent_while_in_hand 触发窗口）为被动牌，不列主动按钮。
+func _pilot_009_card_is_usable_active(card_def) -> bool:
+	if card_def == null:
+		return false
+	var at := String(card_def.action_type)
+	if at == "攻击":
+		return true
+	if at == "迎击":
+		return false # 被动：响应窗口
+	if at == "辅助":
+		# 掩护/推进等 permanent_while_in_hand 被动牌走触发窗口，不列主动按钮；
+		# 维修/聚能等可主动辅助牌（无 permanent_while_in_hand 效果）可列。
+		var mappings: Array = _GeneratedActionEffects.get_effects_for_card(card_def.card_id)
+		var all_effects: Dictionary = _pilot_009_all_effects()
+		for mapping in mappings:
+			var eid: StringName = mapping.get("effect_id", &"") if mapping is Dictionary else &""
+			var eff = all_effects.get(eid)
+			if eff != null and eff.permanent_while_in_hand:
+				return false
+		return true
+	return false
+
+## 惰性构建并缓存 GeneratedActionEffects 全表（pilot_009 主动牌判定复用，避免每帧重建）。
+func _pilot_009_all_effects() -> Dictionary:
+	if _pilot_009_all_effects_cache.is_empty():
+		_pilot_009_all_effects_cache = _GeneratedActionEffects.build_all_effects()
+	return _pilot_009_all_effects_cache
+
+## 点击美杜莎操控按钮：列出本方 pilot_009 当前受控目标的同类行动牌（攻击/可主动辅助），
+## 单选确认后经 _play_action_card 打出（use_action_card 的受控牌校验会跨手牌擦除目标手牌）。
+## 复用 unite_attack_select_panel 做单选，以 _medusa_control_select_active 与联合攻击区分。
+func _on_medusa_control_clicked() -> void:
+	if battle == null or battle.context == null:
+		return
+	var gs = battle.context.game_state
+	if gs == null:
+		return
+	var grants := _ActionPilotEffects.get_pilot_009_controlled_grants(local_player_id, gs)
+	# 收集瑟尔基尔 effect_02 判定管线中的牌（应"出现但不可选"）。
+	var judging_entries: Array[Dictionary] = []
+	if battle.context.action_service != null and battle.context.action_service.has_method(&"get_p003_judging_card_entries"):
+		judging_entries = battle.context.action_service.get_p003_judging_card_entries()
+	# 受控范围：target_mech_id -> [受控 card_type...]，用于判定管线牌是否属本美杜莎受控。
+	var controlled_types_by_mech: Dictionary = {}
+	for g: Dictionary in grants:
+		var tm: StringName = StringName(String(g.get("target_mech_id", &"")))
+		var ct: String = String(g.get("card_type", &""))
+		if tm != &"" and ct != "":
+			if not controlled_types_by_mech.has(tm):
+				controlled_types_by_mech[tm] = []
+			controlled_types_by_mech[tm].append(ct)
+	# 手牌中所有 card_id 集合（区分"在手 vs 已离手"）+ 受控范围内 usable_active 的判定管线牌。
+	var in_hand_set: Dictionary = {}
+	for g: Dictionary in grants:
+		for cid: StringName in g.get("card_ids", []):
+			in_hand_set[cid] = true
+	var judging_card_ids: Array = [] # [StringName] 受控范围内 usable_active 的判定管线牌（含在手与已离手）
+	for je: Dictionary in judging_entries:
+		var jcid: StringName = StringName(String(je.get("card_id", &"")))
+		var jmid: StringName = StringName(String(je.get("owner_mech_id", &"")))
+		if jcid == &"" or jmid == &"":
+			continue
+		if not controlled_types_by_mech.has(jmid):
+			continue
+		var jc = gs.get_card(jcid)
+		if jc == null or jc.def == null:
+			continue
+		if not _pilot_009_card_is_usable_active(jc.def):
+			continue
+		var jtypes: Array = controlled_types_by_mech[jmid]
+		if not jtypes.has(String(jc.def.action_type)):
+			continue
+		if not judging_card_ids.has(jcid):
+			judging_card_ids.append(jcid)
+	var judging_set: Dictionary = {}
+	for jcid in judging_card_ids:
+		judging_set[jcid] = true
+	# 可选：在手·usable_active·非管线；禁选：在手·管线 + 已离手·管线
+	var selectable: Array = [] # [StringName]
+	var disabled_card_ids: Array = [] # [StringName]
+	for jcid in judging_card_ids:
+		disabled_card_ids.append(jcid)
+	for g: Dictionary in grants:
+		for cid: StringName in g.get("card_ids", []):
+			var c = gs.get_card(cid)
+			if c == null or c.def == null:
+				continue
+			if not _pilot_009_card_is_usable_active(c.def):
+				continue
+			if judging_set.has(cid):
+				if not disabled_card_ids.has(cid):
+					disabled_card_ids.append(cid)
+			else:
+				selectable.append(cid)
+	if selectable.is_empty() and disabled_card_ids.is_empty():
+		_refresh_battle()
+		return
+	# 即使仅1张可选也弹选框（裁定：和手牌一样需玩家点选+确认，不直接打出）。
+	# 复用 unite_attack_select 面板，click_to_confirm=true：点牌即 emit -> app_root 弹"确定使用?"确认框。
+	var card_ids: Array = []
+	for cid in selectable:
+		card_ids.append(cid)
+	for cid in disabled_card_ids:
+		card_ids.append(cid)
+	# 临时把 holder 标注塞进牌名后缀——unite 面板按 _card_suffix 统一后缀，无法逐张区分，
+	# 故此处退化为统一 "(来自目标)" 后缀；逐张来源已在展示浮窗中体现。
+	_medusa_control_select_active = true
+	unite_attack_select_panel.configure(battle.context, card_ids, "美杜莎操控：选择1张受控行动牌使用", "[受控]", "打出", "取消", disabled_card_ids, "[受控·处理中]", true)
+	unite_attack_select_panel.visible = true
+
+## 取目标机甲持有者显示名（用于「来自XX」标注）：优先机甲框架名，回退玩家id。
+func _pilot_009_holder_display_name(target_mech_id: StringName, gs) -> String:
+	if gs == null:
+		return String(target_mech_id)
+	var mech = gs.mechs.get(target_mech_id, null)
+	if mech != null and mech.frame_def != null and String(mech.frame_def.display_name) != "":
+		return String(mech.frame_def.display_name)
+	var player = gs.get_player_for_mech(target_mech_id) if gs.has_method(&"get_player_for_mech") else null
+	if player != null:
+		return String(player.player_id) if "player_id" in player else String(target_mech_id)
+	return String(target_mech_id)
 
 ## 显示卖出装备选择面板
 func _show_sell_equipment_panel() -> void:
@@ -3886,6 +4538,14 @@ func _on_cancel_attack() -> void:
 	if battle and battle.context and battle.context.action_ui_bridge:
 		var wait_info: Dictionary = battle.context.action_ui_bridge.get_waiting_action_info()
 		if not wait_info.is_empty():
+			# 多目标攻击选择：取消按钮=用已选目标继续（>=1 时提交，0 时中止）
+			if _multi_attack_target_count >= 2:
+				if not _multi_attack_target_chosen.is_empty():
+					_submit_multi_attack_targets()
+				else:
+					_net_exec("ui_cancelled", {})
+					_clear_attack_highlights()
+				return
 			_net_exec("ui_cancelled", {})
 			_clear_attack_highlights()
 			return
@@ -4037,6 +4697,72 @@ func _clear_attack_highlights() -> void:
 		battle_board.clear_highlight()      # 清绿色范围 + 连带清红色闪烁层
 		battle_board.clear_attack_targets()
 	_show_cancel_button(false)
+	_pilot_006_forced_target = &""  # 清里昂狩猎豁免约束
+	# 重置多目标攻击选择状态
+	_multi_attack_target_count = 1
+	_multi_attack_target_chosen = []
+
+## 多目标攻击选择：处理机甲点击（toggle 加入/移除）或陷阱点击（单目标提交）
+func _multi_attack_target_handle_click(hex: Dictionary, target_id: StringName, wait_info: Dictionary) -> void:
+	var attacker_id: StringName = StringName(wait_info.get("input_params", {}).get("attacker_id", &""))
+	# 陷阱目标（多选模式下点陷阱=单目标攻击，立即提交，不进入多目标流程）
+	if target_id == &"":
+		var sat_q := int(hex.get("q", 0))
+		var sat_r := int(hex.get("r", 0))
+		if battle.context and battle.context.game_state:
+			for m in battle.context.game_state.map_state.get_markers_at(sat_q, sat_r):
+				if m.get("type", &"") == &"TRAP":
+					_clear_attack_highlights()
+					_net_exec("ui_confirmed", {"data": {
+						"target_id": m.get("marker_id", &""),
+						"target_is_trap": true,
+						"target_trap_q": sat_q,
+						"target_trap_r": sat_r,
+					}})
+					return
+		battle.log.append({"message": "该格无可攻击机甲；点击红色闪烁格内的机甲选择目标，或点取消用已选目标继续", "details": {}})
+		_refresh_battle()
+		return
+	# 不可选攻击方自己
+	if target_id == attacker_id:
+		battle.log.append({"message": "不可选择攻击方自己作为目标", "details": {}})
+		_refresh_battle()
+		return
+	# 切换：已选则取消，未选则加入（不超过目标数上限）
+	var existing := -1
+	for i in range(_multi_attack_target_chosen.size()):
+		if StringName(_multi_attack_target_chosen[i].get("target_id", "")) == target_id:
+			existing = i
+			break
+	if existing >= 0:
+		_multi_attack_target_chosen.remove_at(existing)
+	else:
+		if _multi_attack_target_chosen.size() >= _multi_attack_target_count:
+			battle.log.append({"message": "已达最大目标数 %d，请点取消继续，或点已选机甲取消后重选" % _multi_attack_target_count, "details": {}})
+			_refresh_battle()
+			return
+		_multi_attack_target_chosen.append({"q": int(hex.get("q", 0)), "r": int(hex.get("r", 0)), "target_id": String(target_id)})
+	# 选满自动提交
+	if _multi_attack_target_chosen.size() >= _multi_attack_target_count:
+		_submit_multi_attack_targets()
+		return
+	# 未选满：刷新序号标记 + 提示
+	_refresh_multi_attack_marks()
+	battle.log.append({"message": "已选 %d/%d 台目标；继续点击机甲，或点取消开始攻击" % [_multi_attack_target_chosen.size(), _multi_attack_target_count], "details": {}})
+	_refresh_battle()
+
+## 刷新多目标序号标记（battle_board 上画 1/2/3...）
+func _refresh_multi_attack_marks() -> void:
+	if battle_board:
+		battle_board.set_multi_target_marks(_multi_attack_target_chosen)
+
+## 提交多目标攻击选择（target_ids 数组）
+func _submit_multi_attack_targets() -> void:
+	var target_ids: Array = []
+	for c in _multi_attack_target_chosen:
+		target_ids.append(StringName(c.get("target_id", "")))
+	_clear_attack_highlights()
+	_net_exec("ui_confirmed", {"data": {"target_ids": target_ids}})
 
 ## 刷新机雷设陷选格高亮：仅高亮剩余可放格（已选格已从 _map_cell_select_valid 移除->不可再选）
 func _refresh_map_cell_highlight() -> void:
@@ -4181,6 +4907,8 @@ func _on_choice_made(effect_id: StringName) -> void:
 				var es_ci := String(effect_id)
 				if choice_panel:
 					choice_panel.visible = false
+				if stepper_panel:
+					stepper_panel.visible = false
 				if es_ci.begins_with("__int_") and es_ci.ends_with("__"):
 					var n_ci: int = es_ci.substr(6, es_ci.length() - 8).to_int()
 					_net_exec("ui_confirmed", {"data": {"chosen_value": n_ci, "confirmed": true}})
@@ -4342,6 +5070,8 @@ func _on_choice_made(effect_id: StringName) -> void:
 func _on_choice_cancelled() -> void:
 	if choice_panel:
 		choice_panel.visible = false
+	if stepper_panel:
+		stepper_panel.visible = false
 
 	# 损伤转移取消（A6）：不转移，回填空 redirect_plan
 	if not _redirect_context.is_empty():
@@ -4439,7 +5169,7 @@ func _on_discard_selection_completed(selected_card_ids: Array[StringName]) -> vo
 		_discard_select_pending = {}
 		_play_action_card(card_id, payload)
 	elif pending.get("reason", &"") == &"END_TURN_HAND_LIMIT":
-		if game_mode == &"PVP":
+		if _is_pvp_mode():
 			# 锁步:不本地弃牌,把选中牌带入 end_turn op,双端在 _net_end_turn 统一弃牌
 			var et_ids: Array = []
 			for cid in selected_card_ids:
@@ -4447,13 +5177,9 @@ func _on_discard_selection_completed(selected_card_ids: Array[StringName]) -> vo
 			_discard_select_pending = {}
 			_net_exec("end_turn", {"player_id": local_player_id, "discarded_card_ids": et_ids})
 		else:
-			# PvE:本地弃牌 + _finish_player_turn
-			for card_id: StringName in selected_card_ids:
-				battle.context.game_actions.discard_action_card({
-					"player_id": &"player",
-					"card_id": card_id,
-					"reason": &"END_TURN_HAND_LIMIT",
-				})
+			# PvE:本地弃牌 + _finish_player_turn（走 discard_card 动作发时点，同 PvP 路径，
+			# 使监听 DISCARD_SETTLE 的效果如安德洛美达 effect_01b 回收维修能触发）
+			battle.context.deck_service.discard_cards(selected_card_ids, &"END_TURN_HAND_LIMIT")
 			battle.log.append({"message": "弃置了 %d 张行动牌" % selected_card_ids.size(), "details": {}})
 			_discard_select_pending = {}
 			_refresh_battle()
@@ -4547,6 +5273,21 @@ func _on_immediate_set_sell() -> void:
 ## 联合攻击单选确认回调：打出选中的攻击牌（结算后由动作系统去除此联合状态）
 func _on_unite_attack_selection_completed(selected_card_id: StringName) -> void:
 	unite_attack_select_panel.visible = false
+	if _medusa_control_select_active:
+		_medusa_control_select_active = false
+		# 和手牌点击一致：弹"确定使用?"确认框，确认后走 __confirm_use_action_card__ -> play_action_card。
+		# 取消则回填 battle（_on_choice_cancelled 兜底清场，与手牌确认弹窗取消一致）。
+		_choice_select_card_id = selected_card_id
+		var options: Array[Dictionary] = [
+			{"label": "确定使用", "effect_id": &"__confirm_use_action_card__"},
+		]
+		choice_panel.configure(options)
+		choice_panel.visible = true
+		var _card = battle.context.game_state.get_card(selected_card_id) if (battle != null and battle.context != null) else null
+		var _dn: String = _card.def.display_name if (_card != null and _card.def != null) else String(selected_card_id)
+		if battle != null:
+			battle.log.append({"message": "使用受控牌: %s - 确认使用？" % _dn, "details": {}})
+		return
 	var action_id: StringName = _unite_attack_action_id
 	_unite_attack_action_id = &""
 	_net_exec("resume_effect", {"action_id": action_id, "data": {"selected_card_id": selected_card_id}})
@@ -4555,6 +5296,9 @@ func _on_unite_attack_selection_completed(selected_card_id: StringName) -> void:
 ## 联合攻击单选取消回调：不联合攻击，联合状态保留到回合结束
 func _on_unite_attack_selection_cancelled() -> void:
 	unite_attack_select_panel.visible = false
+	if _medusa_control_select_active:
+		_medusa_control_select_active = false
+		return
 	var action_id: StringName = _unite_attack_action_id
 	_unite_attack_action_id = &""
 	_net_exec("resume_effect", {"action_id": action_id, "data": {"cancelled": true}})
@@ -4573,6 +5317,22 @@ func _on_pilot_003_skip_cancelled() -> void:
 	pilot_003_skip_panel.visible = false
 	var action_id: StringName = _pilot_003_skip_action_id
 	_pilot_003_skip_action_id = &""
+	_net_exec("resume_effect", {"action_id": action_id, "data": {"cancelled": true}})
+
+
+## pilot_003 e1 选置顶牌确认：把选中牌回填给 effect_01 phase 链（pilot_003_choose_top resume 读 selected_card_id）
+func _on_pilot_003_choose_top_completed(selected_card_id: StringName) -> void:
+	pilot_003_choose_top_panel.visible = false
+	var action_id: StringName = _pilot_003_choose_top_action_id
+	_pilot_003_choose_top_action_id = &""
+	_net_exec("resume_effect", {"action_id": action_id, "data": {"selected_card_id": selected_card_id}})
+
+
+## pilot_003 e1 选置顶牌取消：不置顶（仅随机插入），deck_top_card_id=空
+func _on_pilot_003_choose_top_cancelled() -> void:
+	pilot_003_choose_top_panel.visible = false
+	var action_id: StringName = _pilot_003_choose_top_action_id
+	_pilot_003_choose_top_action_id = &""
 	_net_exec("resume_effect", {"action_id": action_id, "data": {"cancelled": true}})
 
 
@@ -5030,23 +5790,12 @@ func _refresh_board_only() -> void:
 	if battle_summary_label:
 		var local_unit: Dictionary = battle.units.get(String(local_player_id), {})
 		var opp_unit: Dictionary = battle.units.get(String(_opponent_player_id()), {})
-		battle_summary_label.text = "回合 %d | 行动方: %s | 我方(%s) HP %d/%d 动力 %d/%d 金币 %d | 敌方(%s) HP %d/%d" % [
-			battle.turn_number,
-			battle.active_side,
-			String(local_player_id),
-			int(local_unit.get("life", 0)),
-			int(local_unit.get("max_life", 0)),
-			int(local_unit.get("power", 0)),
-			int(local_unit.get("max_power", 0)),
-			int(local_unit.get("gold", 0)),
-			String(_opponent_player_id()),
-			int(opp_unit.get("life", 0)),
-			int(opp_unit.get("max_life", 0)),
-		]
+		battle_summary_label.text = _build_status_bar_text()
 	# 棋盘（仅 units 更新，不重算缩放变换）+ 移动标志/当前位置（供"当前位置->目标"实时连线）
 	if battle_board:
 		battle_board.update_units(battle.units)
 		battle_board._context = battle.context
+		battle_board.local_player_id = local_player_id
 		battle_board._move_active = _has_active_single_move()
 		var _bb_local_mech = battle.context.game_state.get_mech_for_player(local_player_id) if battle.context.game_state else null
 		if _bb_local_mech != null:
@@ -5078,19 +5827,7 @@ func _refresh_damage_ui() -> void:
 	if battle_summary_label:
 		var local_unit: Dictionary = battle.units.get(String(local_player_id), {})
 		var opp_unit: Dictionary = battle.units.get(String(_opponent_player_id()), {})
-		battle_summary_label.text = "回合 %d | 行动方: %s | 我方(%s) HP %d/%d 动力 %d/%d 金币 %d | 敌方(%s) HP %d/%d" % [
-			battle.turn_number,
-			battle.active_side,
-			String(local_player_id),
-			int(local_unit.get("life", 0)),
-			int(local_unit.get("max_life", 0)),
-			int(local_unit.get("power", 0)),
-			int(local_unit.get("max_power", 0)),
-			int(local_unit.get("gold", 0)),
-			String(_opponent_player_id()),
-			int(opp_unit.get("life", 0)),
-			int(opp_unit.get("max_life", 0)),
-		]
+		battle_summary_label.text = _build_status_bar_text()
 	# 装备面板（损伤 token 变化）
 	if equipment_panel and battle.context:
 		var mech = battle.context.game_state.get_mech_for_player(local_player_id)
@@ -5104,6 +5841,7 @@ func _refresh_damage_ui() -> void:
 		message_log.configure(battle.context)
 	# 设陷按钮：移动离场放陷阱后层数/armed_cell 变化需及时刷新（否则按钮残留灰色）
 	_update_set_trap_button()
+	_update_medusa_control_button()
 
 ## 效果弹窗/损伤放置等选择后的轻量刷新：只更新面板（状态栏/手牌/临时区/装备/技能/消息/卖出按钮），
 ## 跳过 battle_board.configure -> queue_redraw -> _draw 192 格重绘（效果/损伤选择不改变棋盘可视状态，
@@ -5115,12 +5853,7 @@ func _refresh_panels_only() -> void:
 	var local_unit: Dictionary = battle.units.get(String(local_player_id), {})
 	var opp_unit: Dictionary = battle.units.get(String(_opponent_player_id()), {})
 	if battle_summary_label:
-		battle_summary_label.text = "回合 %d | 行动方: %s | 我方(%s) HP %d/%d 动力 %d/%d 金币 %d | 敌方(%s) HP %d/%d" % [
-			battle.turn_number, battle.active_side, String(local_player_id),
-			int(local_unit.get("life", 0)), int(local_unit.get("max_life", 0)),
-			int(local_unit.get("power", 0)), int(local_unit.get("max_power", 0)), int(local_unit.get("gold", 0)),
-			String(_opponent_player_id()), int(opp_unit.get("life", 0)), int(opp_unit.get("max_life", 0)),
-		]
+		battle_summary_label.text = _build_status_bar_text()
 	if hand_panel and battle.context:
 		hand_panel.local_player_id = local_player_id
 		hand_panel.configure(battle.context)
@@ -5141,7 +5874,32 @@ func _refresh_panels_only() -> void:
 			var remaining = _GameConfig.SELL_EQUIPMENT_LIMIT_PER_TURN - player_state.sell_equipment_count_this_turn
 			_sell_button.text = "卖出(%d/2)" % remaining
 			_sell_button.disabled = (remaining <= 0)
+	if _paid_draw_button and battle.context:
+		var gs = battle.context.game_state
+		var player_state = gs.players.get(local_player_id) if gs else null
+		if player_state:
+			_paid_draw_button.text = "抽牌(%d金)" % _GameConfig.PAID_DRAW_ACTION_COST
+			_paid_draw_button.disabled = (player_state.paid_draw_count_this_turn > 0) or (not _is_my_turn()) or (player_state.gold < _GameConfig.PAID_DRAW_ACTION_COST)
 	_update_set_trap_button()
+	_update_medusa_control_button()
+
+
+## 构建状态栏文本：己方信息 + 所有对手 HP（3人显示2对手，2人显示1对手）。
+func _build_status_bar_text() -> String:
+	var local_unit: Dictionary = battle.units.get(String(local_player_id), {})
+	var text := "回合 %d | 行动方: %s | 我方(%s) HP %d/%d 动力 %d/%d 金币 %d" % [
+		battle.turn_number, battle.active_side, String(local_player_id),
+		int(local_unit.get("life", 0)), int(local_unit.get("max_life", 0)),
+		int(local_unit.get("power", 0)), int(local_unit.get("max_power", 0)), int(local_unit.get("gold", 0)),
+	]
+	# 对手：遍历所有非 local 玩家（3人=2对手，2人=1对手）
+	if battle.context and battle.context.game_state:
+		for pid: StringName in battle.context.game_state.players:
+			if pid == local_player_id:
+				continue
+			var opp_u: Dictionary = battle.units.get(String(pid), {})
+			text += " | 敌方(%s) HP %d/%d" % [String(pid), int(opp_u.get("life", 0)), int(opp_u.get("max_life", 0))]
+	return text
 
 func _refresh_battle() -> void:
 	if battle == null:
@@ -5155,25 +5913,14 @@ func _refresh_battle() -> void:
 
 	# 更新状态栏（标出玩家ID，PvP双窗口视角一目了然）
 	if battle_summary_label:
-		battle_summary_label.text = "回合 %d | 行动方: %s | 我方(%s) HP %d/%d 动力 %d/%d 金币 %d | 敌方(%s) HP %d/%d" % [
-			battle.turn_number,
-			battle.active_side,
-			String(local_player_id),
-			int(local_unit.get("life", 0)),
-			int(local_unit.get("max_life", 0)),
-			int(local_unit.get("power", 0)),
-			int(local_unit.get("max_power", 0)),
-			int(local_unit.get("gold", 0)),
-			String(_opponent_player_id()),
-			int(opp_unit.get("life", 0)),
-			int(opp_unit.get("max_life", 0)),
-		]
+		battle_summary_label.text = _build_status_bar_text()
 
 	# 更新地图
 	if battle_board:
 		battle_board.configure(battle.map_tiles, battle.units)
 		# 悬停路径预览需要 context（find_optimal_path）与本地机甲 id（路径起点）
 		battle_board._context = battle.context
+		battle_board.local_player_id = local_player_id
 		var _bb_local_mech = battle.context.game_state.get_mech_for_player(local_player_id) if battle.context and battle.context.game_state else null
 		battle_board._local_mech_id = _bb_local_mech.mech_id if _bb_local_mech != null else &""
 		battle_board._local_mech_pos = _bb_local_mech.position.duplicate() if _bb_local_mech != null else {}
@@ -5217,7 +5964,14 @@ func _refresh_battle() -> void:
 			var remaining = _GameConfig.SELL_EQUIPMENT_LIMIT_PER_TURN - player_state.sell_equipment_count_this_turn
 			_sell_button.text = "卖出(%d/2)" % remaining
 			_sell_button.disabled = (remaining <= 0)
+	if _paid_draw_button and battle.context:
+		var gs = battle.context.game_state
+		var player_state = gs.players.get(local_player_id) if gs else null
+		if player_state:
+			_paid_draw_button.text = "抽牌(%d金)" % _GameConfig.PAID_DRAW_ACTION_COST
+			_paid_draw_button.disabled = (player_state.paid_draw_count_this_turn > 0) or (not _is_my_turn()) or (player_state.gold < _GameConfig.PAID_DRAW_ACTION_COST)
 	_update_set_trap_button()
+	_update_medusa_control_button()
 
 	# 更新开发者面板
 	if dev_panel and dev_panel.visible and battle.context:
@@ -5356,6 +6110,7 @@ func _finish_battle_if_needed() -> void:
 		"state": String(result.get("state", "inactive")),
 		"reason": String(result.get("reason", "")),
 		"turn_count": battle.turn_number,
+		"winner": String(result.get("winner", "")),
 	}
 	campaign.record_battle_result(record)
 	_show_result(record)
@@ -5373,7 +6128,11 @@ func get_result_state() -> String:
 func _show_result(result: Dictionary) -> void:
 	var layout := _begin_screen("战斗结果")
 	var state := String(result.get("state", "inactive"))
-	var state_text := "胜利" if state == "victory" else "失败"
+	var winner := String(result.get("winner", ""))
+	# 按 winner vs local_player_id 判定本方胜负（PvP/PVP3 多端各自视角）；
+	# 无 winner 字段时 fallback state（PvE 兼容）
+	var is_win: bool = (winner == String(local_player_id)) if winner != "" else (state == "victory")
+	var state_text := "胜利" if is_win else "失败"
 	_add_text(layout, state_text)
 	_add_text(layout, "原因: %s" % String(result.get("reason", "")))
 	_add_text(layout, "回合数: %d" % int(result.get("turn_count", 0)))
@@ -5498,11 +6257,16 @@ func _clear_screen() -> void:
 	thrust_select_panel = null
 	unite_attack_select_panel = null
 	pilot_003_skip_panel = null
+	pilot_003_choose_top_panel = null
 	awaken_select_panel = null
 	cancel_attack_button = null
 	if dev_panel and is_instance_valid(dev_panel):
 		dev_panel.queue_free()
 	dev_panel = null
+	# card_display_panel 挂根节点（非 popup_overlay），须显式释放，否则跨屏残留。
+	if card_display_panel and is_instance_valid(card_display_panel):
+		card_display_panel.queue_free()
+	card_display_panel = null
 
 func _add_text(parent: Node, text: String) -> Label:
 	var label := Label.new()
@@ -5544,7 +6308,7 @@ func _status_message(status: Dictionary) -> String:
 
 func _quit_app() -> void:
 	# 退出前清理 PvP（停 TCP / kill client 子进程），避免遗留窗口与端口占用
-	if game_mode == &"PVP":
+	if _is_pvp_mode():
 		_pvp_cleanup()
 		_reset_pvp_state()
 	SLog.log_raw("════════ 会话结束 ════════")

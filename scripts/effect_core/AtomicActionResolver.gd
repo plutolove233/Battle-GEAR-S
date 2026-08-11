@@ -82,13 +82,7 @@ static func resolve(binding: EffectBinding, payload: Dictionary, action: Diction
 		&"RESTORE_WEAPON_POWER":
 			context.game_actions.restore_weapon_power(params)
 
-		# ── 抽牌/获得 ──
-		&"DRAW_ACTION":
-			context.game_actions.draw_action_cards(params)
-
-		&"DRAW_EQUIPMENT":
-			context.game_actions.draw_equipment_cards(params)
-
+		# ── 抽牌/获得 ──（DRAW_ACTION/DRAW_EQUIPMENT 已统一走 gain_card 动作）
 		&"GAIN_SPECIFIC_CARD":
 			context.game_actions.gain_specific_card(params)
 

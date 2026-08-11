@@ -152,6 +152,10 @@ static func check_single(binding, payload: Dictionary, rule: Dictionary) -> bool
 			var target_id: StringName = payload.get("target_id", &"")
 			if target_id == &"":
 				return false
+			# 按机甲排除自身（pilot_002 转化选 B 不能选 A 自己；UI 亦排除，此处双保险）
+			var self_mid: StringName = binding.get_source_mech_id() if binding != null else &""
+			if self_mid != &"" and target_id == self_mid:
+				return false
 			var owner_id: StringName = binding.get_owner_player_id()
 			var target_owner: StringName = payload.get("target_owner_id", &"")
 			# 从游戏状态反查目标机甲所属玩家（resume 仅注入 target_id，未带 target_owner_id/
@@ -218,7 +222,82 @@ static func check_single(binding, payload: Dictionary, rule: Dictionary) -> bool
 				return payload.get("target_in_range", false)
 			return _HexGrid.distance(source_pos, target_pos) <= max_range
 
+		# ════════════════════════════════════════════════════════════
+		# SR 机师牌 011/012/013 自动收集目标规则
+		# 这些规则不弹选择 UI：从 attack record 自动收集目标，注入 payload["selected_targets"]
+		# （Array[{"mech_id": StringName}]）供 FOR_EACH_TARGET 迭代。空集合返回 false -> 效果跳过。
+		# ════════════════════════════════════════════════════════════
+
+		&"ALL_CURRENT_ATTACK_MECH_TARGETS":
+			# pilot_012/013：自动取当前攻击的全部机甲目标（排除攻击者自身、陷阱标记）。
+			var acamt_params: Dictionary = rule.get("params", rule)
+			var acamt_exclude_attacker: bool = bool(acamt_params.get("exclude_attacker", true))
+			var acamt_targets: Array = _collect_attack_mech_targets_tc(binding, payload, acamt_exclude_attacker)
+			if acamt_targets.is_empty():
+				return false
+			payload["selected_targets"] = _targets_to_selected(acamt_targets)
+			return true
+
+		&"ALL_HIT_TARGETS_FROM_ACTION_RECORD_FLAG":
+			# pilot_012/013 effect_02：从命中目标中筛出受 effect_01 影响的机甲目标。
+			# 最小闭环：affected == 全部机甲目标（effect_01 对全部机甲目标结算），故筛"命中的机甲目标"。
+			# 单目标读 payload.hit；双连读 payload.hit_by_target 字典。
+			var aht_params: Dictionary = rule.get("params", rule)
+			var aht_exclude_attacker: bool = bool(aht_params.get("exclude_attacker", true))
+			var aht_all: Array = _collect_attack_mech_targets_tc(binding, payload, aht_exclude_attacker)
+			var aht_hit_by: Dictionary = payload.get("hit_by_target", {})
+			var aht_hit_targets: Array = []
+			for mid in aht_all:
+				var is_hit: bool = false
+				if not aht_hit_by.is_empty():
+					is_hit = bool(aht_hit_by.get(mid, false))
+				else:
+					is_hit = payload.get("hit", false) and String(mid) == String(payload.get("target_id", &""))
+				if is_hit:
+					aht_hit_targets.append(mid)
+			if aht_hit_targets.is_empty():
+				return false
+			payload["selected_targets"] = _targets_to_selected(aht_hit_targets)
+			return true
+
 
 		_:
 			push_warning("TargetChecker: 未知目标规则 %s，默认返回 true" % rule_name)
 			return true
+
+
+# ════════════════════════════════════════════════════════════
+# SR 机师牌 011/012/013 helper
+# ════════════════════════════════════════════════════════════
+
+## 收集当前攻击的机甲目标（target_id + target_ids，过滤非机甲/已毁，可选排除攻击者）。
+static func _collect_attack_mech_targets_tc(binding, payload: Dictionary, exclude_attacker: bool) -> Array:
+	var ctx = binding.context if binding != null else null
+	var gs = ctx.game_state if (ctx != null and ctx.get("game_state") != null) else null
+	var attacker_id: StringName = payload.get("attacker_id", &"")
+	var seen: Dictionary = {}
+	var result: Array = []
+	var _add := func(mid):
+		var mid_sn: StringName = StringName(mid) if mid != null else &""
+		if mid_sn == &"" or seen.has(mid_sn):
+			return
+		seen[mid_sn] = true
+		if gs != null:
+			var m = gs.mechs.get(mid_sn)
+			if m == null or m.destroyed:
+				return
+		if exclude_attacker and mid_sn == attacker_id:
+			return
+		result.append(mid_sn)
+	_add.call(payload.get("target_id", &""))
+	for etid in payload.get("target_ids", []):
+		_add.call(etid)
+	return result
+
+
+## 机甲 id 数组 -> FOR_EACH_TARGET 的 selected_targets 格式 Array[{"mech_id": StringName}]
+static func _targets_to_selected(mech_ids: Array) -> Array:
+	var result: Array = []
+	for mid in mech_ids:
+		result.append({"mech_id": mid})
+	return result

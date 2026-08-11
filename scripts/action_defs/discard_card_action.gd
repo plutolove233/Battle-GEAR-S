@@ -85,6 +85,28 @@ func _step_determine_cards(action: Action) -> Dictionary:
 				push_warning("discard_card: from_target 反查目标玩家失败，target_id=%s" % String(from_target_id))
 		else:
 			push_warning("discard_card: from_target 缺少 target_id/attack_action_id，退回默认弃牌逻辑")
+	elif action.record.get("from_opposing", false):
+		# 肯特 granted 帝国压制：从对侧（非 source_mech 的攻击参与方）弃牌，使用方选 2 张暗牌。
+		# source_mech=binding_context.mech_id（肯特被授予机甲，攻或守）；
+		# 对侧 = source==attacker?target:source==target?attacker。
+		# player_id=对侧玩家（被弃方）；executor=使用方（source_mech 的玩家，选牌）。
+		var fo_source_mech: StringName = action.record.get("source_mech", &"")
+		var fo_attacker: StringName = action.record.get("attacker_id", &"")
+		var fo_target: StringName = action.record.get("target_id", &"")
+		var fo_opposing: StringName = &""
+		if fo_source_mech == fo_attacker and fo_target != &"":
+			fo_opposing = fo_target
+		elif fo_source_mech == fo_target and fo_attacker != &"":
+			fo_opposing = fo_attacker
+		if fo_opposing != &"" and context != null and context.game_state != null:
+			var fo_player = context.game_state.get_player_for_mech(fo_opposing)
+			if fo_player != null:
+				action.record["player_id"] = fo_player.player_id
+		# executor = 使用方（source_mech 的玩家）；choose=true 触发选牌 UI
+		if (executor == &"" or executor == &"system_random") and fo_source_mech != &"" and context != null and context.game_state != null:
+			var fo_src_player = context.game_state.get_player_for_mech(fo_source_mech)
+			if fo_src_player != null:
+				executor = fo_src_player.player_id
 
 	# need_input 恢复：玩家/AI 已选好要弃的牌（on_ui_confirmed 回填 determined_card_ids，
 	# 经 ActionEngine.continue_action merge 进 record 后重跑本步）。直接快照并返回，
@@ -136,6 +158,7 @@ func _step_determine_cards(action: Action) -> Dictionary:
 				"face_up": action.record.get("face_up", true),
 				"discard_player_id": action.record.get("player_id", &""),
 				"action_verb": &"discard",
+				"no_cancel": bool(action.record.get("no_cancel", false)),
 			},
 		}
 

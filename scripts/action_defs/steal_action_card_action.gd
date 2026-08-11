@@ -60,6 +60,14 @@ func _resolve_from_player(action: Action) -> StringName:
 	if from_player_id != &"":
 		return from_player_id
 
+	# pilot_012: from_target_id 直接指定偷牌来源机甲（机甲id，非攻击动作字段）
+	var from_target_mid: StringName = action.record.get("from_target_id", &"")
+	if from_target_mid != &"":
+		var fp = context.game_state.get_player_for_mech(from_target_mid)
+		if fp != null:
+			return fp.player_id
+		return &""
+
 	var mech_id: StringName = &""
 	if bool(action.record.get("from_attacker", false)):
 		mech_id = _resolve_attack_field(action, &"attacker_id")
@@ -79,6 +87,12 @@ func _step_determine_cards(action: Action) -> Dictionary:
 	var from_player_id: StringName = _resolve_from_player(action)
 	# 获得方 = 识破使用者（防御方），由 _extract_steal_params / source 注入
 	var to_player_id: StringName = action.record.get("to_player_id", action.record.get("player_id", &""))
+	# pilot_012: to_target_id（机甲id）解析 to_player_id
+	var to_target_mid: StringName = action.record.get("to_target_id", &"")
+	if to_target_mid != &"":
+		var tp = context.game_state.get_player_for_mech(to_target_mid)
+		if tp != null:
+			to_player_id = tp.player_id
 
 	# 写回 record 供 transfer 步骤使用
 	action.record["from_player_id"] = from_player_id
@@ -102,6 +116,11 @@ func _step_determine_cards(action: Action) -> Dictionary:
 
 	# choose=true 且获得方为玩家：弹暗牌选牌 UI（攻击者手牌对防御方未知）
 	var executor: StringName = action.record.get("executor", &"")
+	# pilot_012: chooser_id 指定选牌执行者（选牌的人）
+	var chooser: StringName = action.record.get("chooser_id", &"")
+	if chooser != &"":
+		executor = chooser
+		action.record["executor"] = executor
 	if choose and executor != &"system_random" and executor != &"system_default":
 		# executor 未指定时默认为获得方玩家
 		if executor == &"":

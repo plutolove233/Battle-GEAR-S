@@ -16,6 +16,9 @@ var _reader = null  # NetMessageReader
 var _port: int = 0
 var _was_connected: bool = false
 
+## 本 client 归属 player_id（连上发 hello 带此值，host 据此识别 enemy/third）
+var local_player_id: StringName = &""
+
 
 func connect_to(port: int) -> Error:
 	_port = port
@@ -48,6 +51,9 @@ func _process(_delta: float) -> void:
 	if status == StreamPeerTCP.STATUS_CONNECTED:
 		if not _was_connected:
 			_was_connected = true
+			# 握手：连上即发 hello 带 local_player_id，host 据此识别本 client 归属
+			if local_player_id != &"":
+				NetTransport.send(_peer, {"type": "hello", "player_id": String(local_player_id)})
 			connected_to_host.emit()
 		var avail := _peer.get_available_bytes()
 		if avail > 0:
@@ -55,6 +61,10 @@ func _process(_delta: float) -> void:
 			if got[0] == OK:
 				_reader.append(got[1])
 			while true:
+				# emit 回调(message_received)可能触发 _quit_pvp_session -> stop() 置 _reader=null；
+				# 此时退出本帧避免 null.pop() 崩溃
+				if _reader == null:
+					return
 				var msg = _reader.pop()
 				if msg == null:
 					break

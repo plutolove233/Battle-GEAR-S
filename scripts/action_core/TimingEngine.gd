@@ -206,8 +206,8 @@ func fire_timing(timing: StringName, action) -> void:
 	#   2) 装备牌之间按玩家座次（turn_order 序号）先后执行；
 	#   3) 其余按注册序号 seq 先来后到（行动牌"先使用/进入手牌的先执行"）。
 	regular_listeners.sort_custom(func(a, b) -> bool:
-		var pa: int = a["effect"].priority
-		var pb: int = b["effect"].priority
+		var pa: int = _effective_priority(a, action)
+		var pb: int = _effective_priority(b, action)
 		if pa != pb:
 			return pa > pb
 		var ta: int = a.get("tier", 0)
@@ -298,8 +298,8 @@ func _run_pending_regular_listeners(action) -> void:
 	# 误对 Object 用 2 参数 Dictionary 风格 get，Object.get 只接受 1 参数，size>1 时即报错）
 	if action._pending_regular_listeners.size() > 1 and not action._pending_sorted:
 		action._pending_regular_listeners.sort_custom(func(a, b) -> bool:
-			var pa: int = a["effect"].priority
-			var pb: int = b["effect"].priority
+			var pa: int = _effective_priority(a, action)
+			var pb: int = _effective_priority(b, action)
 			if pa != pb:
 				return pa > pb
 			var ta: int = a.get("tier", 0)
@@ -379,6 +379,9 @@ func _run_pending_regular_listeners(action) -> void:
 func _handle_response_window(_timing: StringName, action, availability_entries: Array) -> bool:
 	# 构建响应窗口的可用牌列表
 	var available_cards: Array[Dictionary] = []
+	# 收集有可用响应牌的玩家集合（eligible），用于多玩家 pass 追踪（问题4）：
+	# 任一玩家跳过只放弃自己响应权，其他人仍可响应；所有人 pass 才关闭窗口继续攻击。
+	var eligible_pids: Array[StringName] = []
 
 	for entry: Dictionary in availability_entries:
 		var effect: ActionEffect = entry["effect"]
@@ -408,6 +411,11 @@ func _handle_response_window(_timing: StringName, action, availability_entries: 
 					display_data["is_counter"] = true
 
 		available_cards.append(display_data)
+		# 收集 eligible 玩家（binding_context.player_id = 响应方拥有者）
+		var _ep_bc: Dictionary = entry.get("binding_context", {})
+		var _ep_pid: StringName = _ep_bc.get("player_id", &"")
+		if _ep_pid != &"" and not eligible_pids.has(_ep_pid):
+			eligible_pids.append(_ep_pid)
 
 	# 按可用条件优先级排序（数值越大越先执行）
 	# 设计文档（各动作的生命周期与时点.txt 第9行 + 行动牌效果文档第38行响应窗口）：从大到小，同优先级先来后到。
@@ -428,6 +436,10 @@ func _handle_response_window(_timing: StringName, action, availability_entries: 
 	# 更新动作记录中的响应信息
 	action.record["has_response_window"] = true
 	action.record["response_available_cards"] = available_cards
+	# 问题4：记录 eligible 玩家集合与已 pass 玩家，用于多玩家 pass 追踪。
+	# 任一玩家 pass 只放弃自己响应权；所有 eligible 都 pass 才 continue_action 关闭窗口。
+	action.record["_response_eligible_players"] = eligible_pids
+	action.record["_response_passed_players"] = []
 
 	# 将动作状态改为等待响应
 	action.state = &"waiting_timing"
@@ -441,13 +453,17 @@ func _handle_response_window(_timing: StringName, action, availability_entries: 
 
 
 ## 处理响应窗口的选择结果
-func handle_response_selection(action_id: StringName, selected_cards: Array[Dictionary]) -> void:
+## pass_player_id：pass（空选择）时传入放弃响应的玩家 id（PvP 人类玩家）；为空则走旧行为（AI/兼容）直接关闭。
+## 返回 true=窗口应关闭（全 pass 或确认响应）；false=窗口保持（部分玩家 pass，其他人仍可响应）。
+func handle_response_selection(action_id: StringName, selected_cards: Array[Dictionary], pass_player_id: StringName = &"") -> bool:
 	if context == null or context.action_registry == null or context.action_service == null:
-		return
+		return true
 
 	var attack_action = context.action_registry.get_action(action_id)
 	if attack_action == null:
-		return
+		return true
+
+	var is_pass: bool = selected_cards.is_empty()
 
 	# 重入保护：响应窗口的玩家选择可能被多个信号回调重复触发
 	# （response_panel._on_confirm 同时 emit availability_effect_selected 与 response_selected，
@@ -458,19 +474,51 @@ func handle_response_selection(action_id: StringName, selected_cards: Array[Dict
 	# 用按 action_id 记录"已处理"标记去重，而不依赖 attack_action.state——
 	# 单测中攻击动作可能处于 running 态（非 waiting_timing），靠状态判断会误拒合法的首次调用。
 	# 动作 cleanup 时通过 clear_handled_response_for_action 清除此标记。
-	if _handled_response_actions.has(action_id):
-		return
-	_handled_response_actions[action_id] = true
+	# 问题4：pass 路径不去重（多玩家 pass 追踪，每个玩家独立 pass；只有确认响应才标记已处理）。
+	if not is_pass:
+		if _handled_response_actions.has(action_id):
+			return true
+		_handled_response_actions[action_id] = true
 
 	# 玩家取消响应（空选择）：直接恢复 attack 继续执行（不跳过 execute_attack）
 	# 注意：不要在此处把 state 设为 running——continue_action 仅接受等待态
 	# (waiting_input/waiting_timing/waiting_sub_action)，先置 running 会被它拒绝，
 	# 导致攻击动作永远卡在 ATTACK_AT 无法继续 check_hit/apply_damage/settle。
-	if selected_cards.is_empty():
-		response_window_closed.emit(action_id, selected_cards)
-		if context.action_engine != null:
-			context.action_engine.continue_action(action_id, {})
-		return
+	if is_pass:
+		if pass_player_id == &"":
+			response_window_closed.emit(action_id, selected_cards)
+			attack_action.record.erase("_response_eligible_players")
+			attack_action.record.erase("_response_passed_players")
+			if context.action_engine != null:
+				context.action_engine.continue_action(action_id, {})
+			return true
+		# 人类玩家 pass：标记该玩家已放弃响应
+		var passed: Array = attack_action.record.get("_response_passed_players", [])
+		if not passed.has(pass_player_id):
+			passed.append(pass_player_id)
+			attack_action.record["_response_passed_players"] = passed
+		# 检查是否所有 eligible 玩家都已 pass
+		var eligible: Array = attack_action.record.get("_response_eligible_players", [])
+		var all_passed: bool = true
+		for ep in eligible:
+			if not passed.has(ep):
+				all_passed = false
+				break
+		if all_passed:
+			response_window_closed.emit(action_id, selected_cards)
+			attack_action.record.erase("_response_eligible_players")
+			attack_action.record.erase("_response_passed_players")
+			if context.action_engine != null:
+				context.action_engine.continue_action(action_id, {})
+			return true
+		# 还有其他玩家未 pass：不关闭窗口，不 continue（保持其他玩家响应权）
+		# pass 玩家端窗口已由 _on_response_passed 关闭；其他端窗口保持。
+		SLog.log_raw("[TIMING] %s 响应 pass by %s，剩余 eligible 未全 pass，保持窗口" % [String(action_id), String(pass_player_id)])
+		return false
+
+	# 确认响应（竞争响应）：清理 pass 追踪记录，执行响应牌
+	attack_action.record.erase("_response_eligible_players")
+	attack_action.record.erase("_response_passed_players")
 
 	# 按优先级排序选择的效果（数值越大越先执行；同优先级按注册序"先来后到"）
 	# 设计文档（行动牌的效果与逻辑.txt 第38行响应窗口）：按优先级顺序，优先级相等按先来后到。
@@ -491,16 +539,61 @@ func handle_response_selection(action_id: StringName, selected_cards: Array[Dict
 		response_window_closed.emit(action_id, selected_cards)
 		if context.action_engine != null:
 			context.action_engine.continue_action(action_id, {})
-		return
+		return true
 
 	var card = context.game_state.get_card(card_instance_id)
 	if card == null:
-		return
+		return true
 
 	# 响应方持有者（行动牌由 register_hand_card_availability 设置；装备牌由 set_equipment 设置）
 	var responder_player_id: StringName = card.owner_player_id
 	var responder_mech_id: StringName = card.mech_id
 	var effect_id: StringName = card_data.get("effect_id", &"")
+
+	# granted 跨机甲响应（pilot_002 莱比尔协同·防御）：效果来源牌 pilot_002 在莱比尔机甲上，
+	# 但实际响应机甲是被攻击的联邦机甲 A（card.mech_id=莱比尔≠A）。此时按攻击目标从 granted
+	# listener 的 binding_context 推导响应机甲 A 及其 player_id，否则后续 ADD_MECH_TEMP_ARMOR
+	# 等会误作用到莱比尔机甲。单目标用 target_id；多目标(双连)取首个有匹配 granted listener 的目标。
+	if card.mech_id != &"" and effect_id != &"":
+		var _atk_targets: Array = []
+		var _stid: StringName = attack_action.record.get("target_id", &"")
+		if _stid != &"":
+			_atk_targets.append(_stid)
+		for _etid in attack_action.record.get("target_ids", []):
+			var _etid_sn: StringName = StringName(_etid)
+			if _etid_sn != &"" and not _atk_targets.has(_etid_sn):
+				_atk_targets.append(_etid_sn)
+		if not _atk_targets.is_empty():
+			var _found_granted := false
+			for _atid in _atk_targets:
+				var _g_entry = _find_effect_listener(effect_id, card_instance_id, _atid)
+				if _g_entry != null:
+					var _g_bind: Dictionary = _g_entry.get("binding_context", {})
+					responder_mech_id = _g_bind.get("mech_id", _atid)
+					responder_player_id = _g_bind.get("player_id", responder_player_id)
+					_found_granted = true
+					break
+			# 未命中（非 granted 效果）保持 card.mech_id 不变
+
+	# 迪恩替别人响应（问题3）：响应方机甲(迪恩)非本次攻击目标时，其手牌"反击/疾行"迎击牌
+	# 替相邻友军响应。此时攻击目标应转变为迪恩（复用 _p011_redirect_rewind 回退 PRE 重 fire）。
+	# 在 responded 写入前判定（_is_dean_ally_respond_eligible 含 ATTACK_NOT_RESPONDED 检查）。
+	var _atk_first_target: StringName = StringName(attack_action.record.get("target_id", &""))
+	if StringName(responder_mech_id) != &"" and _atk_first_target != &"" \
+			and StringName(responder_mech_id) != _atk_first_target \
+			and _is_dean_ally_respond_eligible(responder_mech_id, card, attack_action):
+		# 单目标：替换 target_id 为迪恩；多目标 target_ids 中匹配项同步替换（被保护目标）。
+		if not attack_action.record.has("_p011_redirect_from"):
+			attack_action.record["_p011_redirect_from"] = String(_atk_first_target)
+		attack_action.record["target_id"] = responder_mech_id
+		var _rd_ids: Array = attack_action.record.get("target_ids", [])
+		for _ri in range(_rd_ids.size()):
+			if StringName(_rd_ids[_ri]) == _atk_first_target:
+				_rd_ids[_ri] = responder_mech_id
+		if not _rd_ids.is_empty():
+			attack_action.record["target_ids"] = _rd_ids
+		attack_action.record["_p011_redirect_rewind"] = true
+		SLog.log_raw("[ACTION] %s 迪恩(%s) 替 %s 响应，攻击目标转移为迪恩" % [String(action_id), String(responder_mech_id), String(_atk_first_target)])
 
 	# 选中即写 responded（规则：被任何效果响应都算--迎击牌/装备牌/机师牌响应均算被响应）。
 	# 强袭 effect2 的 ATTACK_WAS_RESPONDED 条件读此字段决定是否追击移动。
@@ -540,7 +633,10 @@ func handle_response_selection(action_id: StringName, selected_cards: Array[Dict
 			"player_id": responder_player_id,
 			"attack_action_id": action_id,
 			"binding_context": nc_bind_ctx,
-			# 攻击目标/发起方：供 effect_084 的 SELF_MECH_IS_ATTACK_TARGET 等 condition 读取
+			# 攻击目标/发起方：供 effect_084 的 SELF_MECH_IS_ATTACK_TARGET 等 condition 读取。
+			# attack_target_id 为攻击目标（独立字段，不被 resume 选牌目标 target_id 覆盖）；
+			# target_id 初始也是攻击目标，但 pilot_002 防御选 B 后被 resume 覆盖为交牌目标 B。
+			"attack_target_id": attack_action.record.get("target_id", &""),
 			"target_id": attack_action.record.get("target_id", &""),
 			"attacker_id": attack_action.record.get("attacker_id", &""),
 		}
@@ -550,9 +646,17 @@ func handle_response_selection(action_id: StringName, selected_cards: Array[Dict
 		var nc_effect: ActionEffect = card_data.get("effect")
 		if nc_effect != null and _effect_has_discard_cost(nc_effect):
 			var _rd_count := 1
+			var _rd_no_cancel := false
+			var _rd_label := ""
+			var _rd_verb: StringName = &"discard"
 			for _rd_cost in nc_effect.costs:
 				if _rd_cost is Dictionary and _rd_cost.get("cost_type", &"") == &"DISCARD_ACTION_CARD":
 					_rd_count = int(_rd_cost.get("count", 1))
+					_rd_no_cancel = bool(_rd_cost.get("params", {}).get("no_cancel", false))
+					_rd_label = String(_rd_cost.get("params", {}).get("label", ""))
+					# 转化类 cost（迪恩 to_temp_zone + reason=pilot_conversion_cost）用"转化"文案
+					if bool(_rd_cost.get("params", {}).get("to_temp_zone", false)) or String(_rd_cost.get("params", {}).get("reason", &"")) == &"pilot_conversion_cost":
+						_rd_verb = &"convert"
 					break
 			_pending_effect[action_id] = {
 				"effect": nc_effect,
@@ -568,13 +672,22 @@ func handle_response_selection(action_id: StringName, selected_cards: Array[Dict
 				"count": _rd_count,
 				"face_up": true,
 				"optional": false,
+				"no_cancel": _rd_no_cancel,
 				"effect_id": effect_id,
-				"source_label": "%s：弃置1张行动牌响应" % String(card.def.display_name),
+				"action_verb": _rd_verb,
+				# 转化类 cost（迪恩）自定义选牌框文案（"选择转化使用的2张行动牌"），非转化回退默认描述
+				"source_label": _rd_label if _rd_label != "" else "%s：弃置%d张行动牌响应" % [String(card.def.display_name), _rd_count],
 			})
 			SLog.log_raw("[ACTION] %s 装备响应效果 %s 挂起弃牌选择（持有者 %s）" % [String(action_id), String(effect_id), String(responder_player_id)])
-			return
+			return true
 		_execute_effect_by_id(effect_id, nc_payload, attack_action)
 		SLog.log_raw("[ACTION] %s 被 %s 响应(非迎击牌效果 %s)" % [String(action_id), String(card_instance_id), String(effect_id)])
+		# granted 防御效果挂起选目标/选牌（waiting_timing + _pending_effect）：attack 保持暂停等 resume，
+		# 不能 continue_action，否则攻击越过 ATTACK_AT 直接结算命中（防御流程没走）。
+		# resume 链：选B->重跑->CHOOSE_MANY_CARDS选牌->续跑 TRANSFER+护甲+损伤-1+抽2->continue_action 推进攻击。
+		if attack_action.state == &"waiting_timing" and _pending_effect.has(action_id):
+			response_window_closed.emit(action_id, selected_cards)
+			return true
 		# 若创建了子动作（如 single_move），attack 等其完成；否则同步完成恢复 attack
 		if not attack_action.pending_effect_action_ids.is_empty() and attack_action.state != &"waiting_effect_action":
 			attack_action.state = &"waiting_effect_action"
@@ -582,7 +695,7 @@ func handle_response_selection(action_id: StringName, selected_cards: Array[Dict
 		if attack_action.pending_effect_action_ids.is_empty():
 			if context.action_engine != null:
 				context.action_engine.continue_action(action_id, {})
-		return
+		return true
 
 	# 行动牌（迎击/辅助等）：发起正式 use_action_card 动作
 	var uc_result: Dictionary = context.action_service.execute(&"use_action_card", {
@@ -608,7 +721,7 @@ func handle_response_selection(action_id: StringName, selected_cards: Array[Dict
 		response_window_closed.emit(action_id, selected_cards)
 		if context.action_engine != null:
 			context.action_engine.continue_action(action_id, {})
-		return
+		return true
 
 	var uc_action = context.action_registry.get_action(uc_action_id)
 
@@ -621,7 +734,7 @@ func handle_response_selection(action_id: StringName, selected_cards: Array[Dict
 		response_window_closed.emit(action_id, selected_cards)
 		if context.action_engine != null:
 			context.action_engine.continue_action(action_id, {})
-		return
+		return true
 
 	# use_action_card 仍在执行（等待 single_move 等效果动作输入）：
 	# 建立父子关系，attack 从 waiting_timing 切到 waiting_sub_action，
@@ -633,6 +746,7 @@ func handle_response_selection(action_id: StringName, selected_cards: Array[Dict
 	attack_action.state = &"waiting_effect_action"
 
 	response_window_closed.emit(action_id, selected_cards)
+	return true
 
 
 ## 注册永久监听器（场上持续效果）
@@ -679,6 +793,48 @@ func unregister_permanent_listener(timing: StringName, effect: ActionEffect) -> 
 		permanent_listeners.erase(timing)
 	else:
 		permanent_listeners[timing] = list
+
+
+## 注销某机甲的 pilot_002 granted 监听器（换机师时清旧加成）。
+## 遍历所有时点，移除 effect_id 以 pilot_002_granted_ 开头且 binding_context.mech_id==mech_id 的条目。
+## 与 unregister_permanent_listeners_for_card 不同：granted 的 card_instance_id 是莱比尔实例（非该机甲机师牌），
+## 故按来源牌注销会漏删，须按 mech_id + effect_id 前缀精确清理。
+func ungrant_pilot_002_for_mech(mech_id: StringName) -> void:
+	if mech_id == &"":
+		return
+	for timing: StringName in permanent_listeners.keys():
+		var list: Array = permanent_listeners[timing]
+		var filtered: Array = list.filter(func(entry: Dictionary) -> bool:
+			var eff: ActionEffect = entry.get("effect")
+			if eff == null or not String(eff.effect_id).begins_with("pilot_002_granted_"):
+				return true
+			var ctx: Dictionary = entry.get("binding_context", {})
+			return ctx.get("mech_id", &"") != mech_id
+		)
+		if filtered.is_empty():
+			permanent_listeners.erase(timing)
+		else:
+			permanent_listeners[timing] = filtered
+
+
+## 注销某机甲的 pilot_005 肯特 granted listener（换机师时调用，按 effect_id 前缀 + mech_id 精确删）。
+## granted 的 card_instance_id=肯特实例≠换下的机师牌，unregister_permanent_listeners_for_card 会漏删。
+func ungrant_pilot_005_for_mech(mech_id: StringName) -> void:
+	if mech_id == &"":
+		return
+	for timing: StringName in permanent_listeners.keys():
+		var list: Array = permanent_listeners[timing]
+		var filtered: Array = list.filter(func(entry: Dictionary) -> bool:
+			var eff: ActionEffect = entry.get("effect")
+			if eff == null or not String(eff.effect_id).begins_with("pilot_005_granted_"):
+				return true
+			var ctx: Dictionary = entry.get("binding_context", {})
+			return ctx.get("mech_id", &"") != mech_id
+		)
+		if filtered.is_empty():
+			permanent_listeners.erase(timing)
+		else:
+			permanent_listeners[timing] = filtered
 
 
 ## 生成下一个监听器注册序号
@@ -879,6 +1035,7 @@ func get_available_cards(timing: StringName, action) -> Array[Dictionary]:
 				"availability_priority": effect.availability_priority,
 				"effect": effect,
 				"seq": entry.get("seq", 0),
+				"owner_player_id": _resolve_avail_owner(entry.get("card_instance_id", &""), entry.get("binding_context", {})),
 			})
 	# permanent 监听器（装备 AVAILABILITY 效果，如 effect_084 一角兽右腿响应攻击）：
 	# 装备设置时注册为 permanent_listener(listen_timing)；card_instance_id 在 binding_context 内。
@@ -900,6 +1057,7 @@ func get_available_cards(timing: StringName, action) -> Array[Dictionary]:
 				"availability_priority": peffect.availability_priority,
 				"effect": peffect,
 				"seq": pentry.get("seq", 0),
+				"owner_player_id": _resolve_avail_owner(pcid, pbind),
 			})
 	# 按可用条件优先级排序（数值越大越先执行；同优先级按注册序"先来后到"）
 	result.sort_custom(func(a, b) -> bool:
@@ -912,12 +1070,71 @@ func get_available_cards(timing: StringName, action) -> Array[Dictionary]:
 	return result
 
 
+## 解析 AVAILABILITY 条目的持有者玩家（多响应方窗口用）：
+## 优先 binding_context.player_id（装备/机师效果注册时带），否则查 card 实例的 owner_player_id，
+## 再退回通过 card.mech_id 反查持有玩家。返回空时由 UI 层兜底（无法归属的条目不入本地窗口）。
+func _resolve_avail_owner(card_instance_id: StringName, bind_ctx: Dictionary) -> StringName:
+	var pid: StringName = bind_ctx.get("player_id", &"")
+	if pid != &"":
+		return pid
+	if card_instance_id == &"" or context == null or context.game_state == null:
+		return &""
+	var card = context.game_state.get_card(card_instance_id)
+	if card == null:
+		return &""
+	if card.owner_player_id != &"":
+		return card.owner_player_id
+	if card.mech_id != &"":
+		var op = context.game_state.get_player_for_mech(card.mech_id)
+		if op != null:
+			return op.player_id
+	return &""
+
+
+## 根据 effect_id + card_instance_id + mech_id 精确查找监听器 entry。
+## granted 跨机甲场景（pilot_002 莱比尔授予）：多个 listener 共享同一来源 card_instance_id
+## （=pilot_002 实例），须按执行机甲 mech_id 去歧义——
+##   进攻：source.mech_id = 被授予联邦机甲 A（EX 按钮所在机甲）；
+##   防御：source.mech_id = A（响应窗口注入的被攻击目标）。
+## mech_id 为空或无精确命中时返回 null，交由调用方回退到原 card_id 首匹配逻辑。
+func _find_effect_listener(effect_id: StringName, card_id: StringName, mech_id: StringName):
+	if mech_id == &"":
+		return null
+	for store in [permanent_listeners, temporary_listeners]:
+		for _timing: StringName in store:
+			for entry: Dictionary in store[_timing]:
+				var eff: ActionEffect = entry.get("effect")
+				if eff == null or eff.effect_id != effect_id:
+					continue
+				var bind_ctx: Dictionary = entry.get("binding_context", {})
+				var entry_card: StringName = entry.get("card_instance_id", bind_ctx.get("card_instance_id", &""))
+				if card_id != &"" and entry_card != card_id:
+					continue
+				if bind_ctx.get("mech_id", &"") == mech_id:
+					return entry
+	return null
+
+
 ## 根据效果ID执行效果（用于EffectFireAction等场景）
 ## 若 payload.source.card_instance_id 指定，精确匹配该装备牌的 listener entry（双方同名装备区分），
 ## 并把 entry.binding_context 注入 payload，供 condition/once_per_turn 取来源。
+## granted 跨机甲场景：先按 source.mech_id 精确匹配执行机甲，避免多机甲共享来源牌时误取首条。
 func _execute_effect_by_id(effect_id: StringName, payload: Dictionary, action) -> void:
 	var src: Dictionary = payload.get("source", {}) if payload.has("source") else {}
 	var want_card_id: StringName = src.get("card_instance_id", payload.get("card_instance_id", &""))
+	var want_mech_id: StringName = src.get("mech_id", payload.get("source_mech_id", payload.get("mech_id", &"")))
+	# granted 跨机甲去歧义：source.mech_id 指定执行机甲 A 时，优先取 mech_id==A 的 listener。
+	if want_mech_id != &"":
+		var matched = _find_effect_listener(effect_id, want_card_id, want_mech_id)
+		if matched != null:
+			var m_eff: ActionEffect = matched.get("effect")
+			var m_bind: Dictionary = matched.get("binding_context", {})
+			var m_payload: Dictionary = payload
+			if not m_bind.is_empty():
+				m_payload = payload.duplicate()
+				m_payload["binding_context"] = m_bind
+			_execute_effect(m_eff, m_payload, action)
+			return
 	# 永久监听器（装备 DIRECT 主动效果注册时 timing=effect_id）
 	for timing: StringName in permanent_listeners:
 		for entry: Dictionary in permanent_listeners[timing]:
@@ -928,6 +1145,11 @@ func _execute_effect_by_id(effect_id: StringName, payload: Dictionary, action) -
 			var entry_card: StringName = entry.get("card_instance_id", bind_ctx.get("card_instance_id", &""))
 			if want_card_id != &"" and entry_card != want_card_id:
 				continue  # 精确匹配指定来源牌
+			# granted 跨机甲去歧义：want_mech_id 指定时跳过其他机甲的 listener（空 mech 透传保留旧行为）
+			if want_mech_id != &"":
+				var _em: StringName = bind_ctx.get("mech_id", &"")
+				if _em != &"" and _em != want_mech_id:
+					continue
 			var eff_payload: Dictionary = payload
 			if not bind_ctx.is_empty():
 				eff_payload = payload.duplicate()
@@ -944,6 +1166,11 @@ func _execute_effect_by_id(effect_id: StringName, payload: Dictionary, action) -
 			var entry_card2: StringName = entry.get("card_instance_id", bind_ctx.get("card_instance_id", &""))
 			if want_card_id != &"" and entry_card2 != want_card_id:
 				continue
+			# granted 跨机甲去歧义：want_mech_id 指定时跳过其他机甲的 listener（空 mech 透传保留旧行为）
+			if want_mech_id != &"":
+				var _em2: StringName = bind_ctx.get("mech_id", &"")
+				if _em2 != &"" and _em2 != want_mech_id:
+					continue
 			var eff_payload: Dictionary = payload
 			if not bind_ctx.is_empty():
 				eff_payload = payload.duplicate()
@@ -956,6 +1183,31 @@ func _execute_effect_by_id(effect_id: StringName, payload: Dictionary, action) -
 
 
 ## 执行一个效果
+## 计算监听器的有效优先级（排序用）。
+## 攻击/被攻击合并的被动效果（pilot_005_granted_suppression 帝国压制 / pilot_004_effect_02 动力穿透）
+## 不拆分 effect：按 binding_context.mech_id 是攻击方（30）还是被攻击方（10）动态调整，
+## 攻击方先于防御方结算、被攻击方晚于攻击方结算。其余 effect 用 effect.priority 原值。
+func _effective_priority(entry: Dictionary, action) -> int:
+	var eff = entry.get("effect", null)
+	if eff == null:
+		return 0
+	var base_pri: int = eff.priority
+	var eid: String = String(eff.effect_id)
+	if eid != "pilot_005_granted_suppression" and eid != "pilot_004_effect_02":
+		return base_pri
+	var bc: Dictionary = entry.get("binding_context", {})
+	var mid: StringName = bc.get("mech_id", &"")
+	if mid == &"" or action == null:
+		return base_pri
+	var rec = action.record if action.get("record") != null else {}
+	if rec is Dictionary:
+		var atk: StringName = rec.get("attacker_id", &"")
+		if atk != &"" and mid == atk:
+			return 30  # 攻击方先手
+		return 10  # 被攻击方后手
+	return base_pri
+
+
 func _execute_effect(effect: ActionEffect, payload: Dictionary, action) -> void:
 	# 记录效果开始执行
 	SLog.log_effect(effect.effect_id, action.source, action.action_id, String(action.action_type), {"status": "checking_conditions"})
@@ -982,6 +1234,14 @@ func _execute_effect(effect: ActionEffect, payload: Dictionary, action) -> void:
 		SLog.log_effect(effect.effect_id, action.source, action.action_id, String(action.action_type), {"status": "skipped", "reason": "once_per_game_used_up"})
 		return
 
+	# force_select：效果需自己选目标，独立于 attack 被攻击目标。LISTEN effect 复用 attack.record
+	# 作 payload 时 target_id 被攻击目标污染，CHOOSE_OTHER_MECH 误判“已选”跳过玩家选择。
+	# 首次触发清空 target_id 强制选；resume 注入后 _effect_target_selected 标志避免重跑再清（死循环）。
+	# （里昂战后逼迫 pilot_006_effect_03：攻击结算后选5格内其他机甲，不沿用本次攻击目标）
+	if not bool(payload.get("_effect_target_selected", false)) and _effect_has_force_select(effect):
+		payload["_attack_target_id_backup"] = payload.get("target_id", &"")
+		payload["target_id"] = &""
+
 	# 目标检查：需要玩家选择目标时，弹出UI而不是静默跳过
 	if not _check_targets(effect, payload, action):
 		var needs_target: bool = _effect_needs_player_target(effect)
@@ -993,7 +1253,10 @@ func _execute_effect(effect: ActionEffect, payload: Dictionary, action) -> void:
 		return
 
 	# 费用检查
-	if not _check_costs(effect, payload, action):
+	# _optional_discard_paid=true 时跳过：费用已在 response_discard/optional 弃牌 resume 阶段支付
+	# （迪恩转化弃2张移 temp_zone），CHOOSE_ONE 等挂起 resume 重跑本函数时若重查 can_pay，
+	# 会因弃牌后手牌不足而误判失败——迪恩必耗 cost 还会进而取消父攻击动作。
+	if not (payload.get("_optional_discard_paid", false) or _check_costs(effect, payload, action)):
 		# 必耗 cost（optional=false，如 effect_110 闪回激光剑「攻击必耗2动力」）支付失败：
 		# 不能静默跳过让父攻击继续（否则不付动力也能攻击）。取消父攻击动作（含反击/闪击复用本武器路径）。
 		if _effect_has_mandatory_cost(effect):
@@ -1046,6 +1309,10 @@ func _execute_effect(effect: ActionEffect, payload: Dictionary, action) -> void:
 
 	# CHOOSE_ONE 等挂起场景：_execute_actions 设了 waiting_timing 并存了 _pending_effect，
 	# 此时效果尚未真正执行完，不能 emit completed / mark executed（resume 后重跑 _execute_effect 会补）。
+	# FOR_EACH_TARGET 子动作挂起场景：_run_flat_inline 设了 waiting_effect_action + _seq，
+	# 等 _after_sub_action_finished -> _continue_seq_effect_actions 续跑（pilot_012 e1 偷牌后减动力）。
+	if action.state == &"waiting_effect_action":
+		return
 	if action.state == &"waiting_timing" and _pending_effect.has(action.action_id):
 		return
 
@@ -1087,6 +1354,15 @@ func _effect_needs_player_target(effect: ActionEffect) -> bool:
 	return false
 
 
+## 效果 target_rules 是否含 force_select（效果自己选目标，不复用 attack 被攻击目标）
+## 用于 LISTEN effect（如里昂战后逼迫）触发时清空 payload.target_id 强制玩家选机甲
+func _effect_has_force_select(effect: ActionEffect) -> bool:
+	for r in effect.target_rules:
+		if r is Dictionary and bool(r.get("force_select", false)):
+			return true
+	return false
+
+
 ## 请求玩家选择目标
 func _request_target_selection(effect: ActionEffect, payload: Dictionary, action) -> void:
 	var rule_name: String = ""
@@ -1114,7 +1390,7 @@ func _request_target_selection(effect: ActionEffect, payload: Dictionary, action
 
 	# 存挂起态：玩家选目标后 resume_pending_effect 注入 target_id 续跑 _execute_effect
 	# （目标检查在费用/动作之前，故需重跑整个 _execute_effect，而非像 optional 弃牌那样只跑 _pay_costs+_execute_actions）
-	_pending_effect[action.action_id] = {"effect": effect, "payload": payload, "phase": "pre_actions_target"}
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": "pre_actions_target"}
 
 	# 通知 ActionUIBridge 弹目标选择 UI，同时标记动作暂停（waiting_timing 与 ActionEngine 兼容）
 	# input_type 用 select_repair_target / select_mech_target，与 ActionUIBridge 已注册的弹窗分支对齐。
@@ -1123,7 +1399,12 @@ func _request_target_selection(effect: ActionEffect, payload: Dictionary, action
 		bridge_input_type = &"select_repair_target"
 	elif rule_name == "weapon_charge_select":
 		bridge_input_type = &"select_weapon_for_charge"
-	var src_mech_id: StringName = payload.get("source_mech_id", payload.get("mech_id", &""))
+	# 源机甲（用于 UI 排除"自己"）：机师/装备 permanent listener 的来源机甲在
+	# binding_context.mech_id（payload 顶层无 source_mech_id/mech_id），须优先取；
+	# 否则回退到 action.source.mech_id（=轮次开始玩家 turn_order[0] 的机甲），
+	# 3人PvP下里昂 ROUND_START 标记会排除错误机甲、候选列表反而能选自己。
+	var _src_bind_ctx: Dictionary = payload.get("binding_context", {}) if payload != null else {}
+	var src_mech_id: StringName = _src_bind_ctx.get("mech_id", payload.get("source_mech_id", payload.get("mech_id", &"")))
 	if src_mech_id == &"" and action.source is Dictionary:
 		src_mech_id = action.source.get("mech_id", action.source.get("source_mech_id", &""))
 	action.state = &"waiting_timing"
@@ -1233,7 +1514,7 @@ func _handle_pilot_006_force_use_attack(act: Dictionary, effect: ActionEffect, p
 	if action.record.get("_pilot_006_force_shown", false):
 		return false
 	action.record["_pilot_006_force_shown"] = true
-	_pending_effect[action.action_id] = {"effect": effect, "payload": payload, "phase": &"pilot_006_force_use_attack", "pilot_006_target_mech": p06_target_mech}
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"pilot_006_force_use_attack", "pilot_006_target_mech": p06_target_mech}
 	action.state = &"waiting_timing"
 	action_needs_input.emit(action.action_id, &"select_pilot_006_attack_card", {
 		"action_id": action.action_id,
@@ -1274,7 +1555,7 @@ func _ai_decide_optional_discard(effect: ActionEffect, payload: Dictionary, acti
 ## 请求 optional 弃牌弹窗（闪击「弃1张行动牌再攻 / 取消」）
 func _request_optional_discard(effect: ActionEffect, payload: Dictionary, action) -> void:
 	# 存挂起态，玩家选牌后 resume_pending_effect 续跑
-	_pending_effect[action.action_id] = {"effect": effect, "payload": payload}
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload}
 	# 弃牌对象 = 使用此牌的玩家（攻击者），手牌明牌
 	# player_id 来源优先级同 _owner_action_hand_count：payload → action.source
 	# 弃牌对象 = 效果弹窗归属玩家（装备效果优先 binding_context.player_id=持有者；
@@ -1312,9 +1593,14 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 	var effect: ActionEffect = pending.get("effect")
 	var payload: Dictionary = pending.get("payload", {})
 	var phase: StringName = pending.get("phase", &"pre_actions_discard")
-	if context == null or context.action_registry == null:
+	if context == null:
 		return
-	var action = context.action_registry.get_action(action_id)
+	# 优先从 pending 取 action 引用（TurnService 虚拟 turn action 不注册到 ActionRegistry，
+	# registry.get_action 返回 null 会导致 CHOOSE_ONE 确认后无法 resume 到 CHOOSE_INTEGER 等
+	# 后续挂起阶段）。回退 registry 取真实 action（ActionEngine 驱动的 use_action_card 等）。
+	var action = pending.get("action", null)
+	if action == null and context.action_registry != null:
+		action = context.action_registry.get_action(action_id)
 	if action == null or effect == null:
 		return
 
@@ -1323,6 +1609,32 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 	if phase == &"pre_actions_target":
 		# 取消：不执行效果，恢复动作继续后续步骤
 		if input_data.get("cancelled", false):
+			# pilot_012 e2 inner CHOOSE_ONE per-target 取消：跳过该 target 续跑下一个（非整个 effect 取消）
+			if action.record.has("_fet_choose_chosen") or action.record.has("_fet_choose_executed"):
+				var ct_d2: Dictionary = payload.get("current_target", {})
+				var ct_mid2: StringName = ct_d2.get("mech_id", &"") if ct_d2 is Dictionary else &""
+				if ct_mid2 != &"":
+					var cd2: Dictionary = action.record.get("_fet_choose_chosen", {})
+					cd2[ct_mid2] = -1
+					action.record["_fet_choose_chosen"] = cd2
+					var ed2: Dictionary = action.record.get("_fet_choose_executed", {})
+					ed2[ct_mid2] = true
+					action.record["_fet_choose_executed"] = ed2
+				action.record.erase("_waiting_for_choose_one")
+				action.record.erase("_choose_one_effect_id")
+				SLog.log_raw("[TIMING] %s inner CHOOSE_ONE per-target 取消 effect=%s，续跑下一个" % [String(action_id), String(effect.effect_id)])
+				_execute_effect(effect, payload, action)
+				if action.state == &"waiting_timing" and _pending_effect.has(action.action_id):
+					return
+				if action.state == &"waiting_effect_action":
+					return
+				if _last_created_sub_action_paused(action):
+					action.state = &"waiting_effect_action"
+					return
+				if context.action_engine != null:
+					action.state = &"waiting_input"
+					context.action_engine.continue_action(action_id, {})
+				return
 			SLog.log_raw("[TIMING] %s 目标选择被取消，effect=%s 不执行" % [String(action_id), String(effect.effect_id)])
 			if context.action_engine != null:
 				action.state = &"waiting_input"
@@ -1331,10 +1643,20 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 		# 注入 target_id（目标选择）或 chosen_option_index（二选一），续跑 _execute_effect
 		if input_data.has("target_id"):
 			payload["target_id"] = input_data["target_id"]
+			# force_select effect 标记已选目标，避免重跑 _execute_effect 时再次清空 target_id（死循环）
+			payload["_effect_target_selected"] = true
 		if input_data.has("target_mech_id"):
 			payload["target_id"] = input_data["target_mech_id"]
+			payload["_effect_target_selected"] = true
 		if input_data.has("chosen_option_index"):
 			payload["chosen_option_index"] = input_data["chosen_option_index"]
+			# pilot_012 e2 inner CHOOSE_ONE per-target：记录当前 target 的选择（重跑时跳过已处理）
+			var ct_d: Dictionary = payload.get("current_target", {})
+			var ct_mid: StringName = ct_d.get("mech_id", &"") if ct_d is Dictionary else &""
+			if ct_mid != &"":
+				var cd: Dictionary = action.record.get("_fet_choose_chosen", {})
+				cd[ct_mid] = int(input_data["chosen_option_index"])
+				action.record["_fet_choose_chosen"] = cd
 		# 聚能等 CHOOSE_OWN_WEAPON 目标规则读 selected_weapon_id（非 target_id），
 		# 需在此注入，否则重跑 _execute_effect 仍判定无目标->重新挂起->选武器死循环。
 		if input_data.has("selected_weapon_id"):
@@ -1392,6 +1714,42 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 		# 内嵌动作创建了挂起子动作（如 EXECUTE_DISCARD 选牌 / EXECUTE_SINGLE_MOVE 选目标）：
 		# 须切 waiting_effect_action 等其完成（剩余内嵌动作已存 _seq 由 _continue_seq 续跑），
 		# 否则父动作被推进、子动作孤立（曾致 effect_040/071 选牌子动作 UI 丢失）。
+		if _last_created_sub_action_paused(action):
+			action.state = &"waiting_effect_action"
+			return
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
+		return
+
+	# ── pilot_009 弹窗① 支付阶段：玩家选了1张自己行动牌（selected_action_card_ids）或取消 ──
+	# 选定：弃置该牌、记录其类型到 payload.pilot_009_recorded_type，重跑 _execute_effect（CHOOSE_ONE 读 $runtime）。
+	# 取消：中止整个效果（不授控制/不弃目标牌）。
+	if phase == &"pilot_009_pay":
+		if input_data.get("cancelled", false):
+			SLog.log_raw("[TIMING] %s pilot_009 支付取消，effect=%s 不执行" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		var p9_sel: Array = input_data.get("selected_action_card_ids", [])
+		if p9_sel.is_empty() and input_data.has("card_id"):
+			p9_sel = [input_data.get("card_id")]
+		if p9_sel.is_empty():
+			# 无选择（不应发生）：按取消处理
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		var p9_card_id: StringName = StringName(String(p9_sel[0]))
+		var p9_recorded_type: StringName = &""
+		if context.game_actions != null and context.game_actions.has_method(&"pilot_009_pay_and_record_type"):
+			p9_recorded_type = context.game_actions.pilot_009_pay_and_record_type({"card_id": p9_card_id})
+		payload["pilot_009_recorded_type"] = p9_recorded_type
+		SLog.log_raw("[TIMING] %s pilot_009 支付完成，记录类型=%s effect=%s" % [String(action_id), String(p9_recorded_type), String(effect.effect_id)])
+		_execute_effect(effect, payload, action)
+		if action.state == &"waiting_timing" and _pending_effect.has(action.action_id):
+			return
 		if _last_created_sub_action_paused(action):
 			action.state = &"waiting_effect_action"
 			return
@@ -1469,8 +1827,24 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 				return
 			payload[cm_store_key] = cm_selected
 			SLog.log_raw("[TIMING] %s pilot_002 批次存 %s=%d张 effect=%s" % [String(action.action_id), String(cm_store_key), cm_selected.size(), String(effect.effect_id)])
-			# 续跑 effect.actions 剩余（TRANSFER/GRANT_BATCH/DRAW）
 			var cm_act_idx: int = int(pending.get("act_idx", -1))
+			# store_next_phase：存牌后弹下一阶段弹窗再续跑剩余 actions（pilot_003 effect_01 选置顶牌）。
+			# phase 链：CHOOSE_MANY 选牌 -> 弹"选1张置顶(可取消)"窗(phase=store_next_phase) ->
+			# resume 存 pilot_003_top_card_id 后续跑剩余 actions（INSERT 用 deck_top_card_id 置顶+打标签）。
+			var cm_next_phase: StringName = cm_params.get("store_next_phase", &"")
+			if cm_next_phase != &"" and not cm_selected.is_empty():
+				_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": cm_next_phase, "act_idx": cm_act_idx}
+				action.state = &"waiting_timing"
+				action_needs_input.emit(action.action_id, &"select_pilot_003_choose_top", {
+					"action_id": action.action_id,
+					"effect_id": effect.effect_id,
+					"card_ids": cm_selected,
+					"player_id": payload.get("binding_context", {}).get("player_id", &""),
+					"label": String(cm_params.get("store_next_phase_label", "选择1张正面牌放置到牌堆顶（可取消）")),
+				})
+				SLog.log_raw("[TIMING] %s store_next_phase=%s 弹窗 候选=%d effect=%s" % [String(action.action_id), String(cm_next_phase), cm_selected.size(), String(effect.effect_id)])
+				return
+			# 续跑 effect.actions 剩余（TRANSFER/GRANT_BATCH/DRAW）
 			if cm_act_idx >= 0 and effect.actions.size() > cm_act_idx + 1:
 				action.record["_seq_effect_actions"] = {"payload": payload, "remaining": effect.actions.slice(cm_act_idx + 1)}
 				action.state = &"waiting_effect_action"
@@ -1481,14 +1855,45 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 				context.action_engine.continue_action(action_id, {})
 			return
 		if not input_data.get("cancelled", false):
-			for sel_cid in cm_selected:
-				# 注入 chosen_card 供 per_card_actions 中 $chosen_card.card_instance_id 解析
-				payload["chosen_card"] = {"card_instance_id": sel_cid}
-				for sub_act: Dictionary in per_card_actions:
+			var cm_as_use_action_card: bool = bool(cm_params.get("as_use_action_card", false))
+			if cm_as_use_action_card:
+				# 掩护/推进重构：多选窗确认后批量创建 use_action_card 子动作（串行 _seq），
+				# 每张走完整使用流程（USE_ACTION_BEFORE 01a确认 + effect1 + USE_ACTION_AFTER 01b重跑 + settle弃牌），
+				# 使阿克罗姆双重生效对辅助/掩护牌生效。use_action_card settle 自带弃置，不需 EXECUTE_DISCARD。
+				# attack_action_id 由 _extract_use_action_card_params 从 payload 自动推导（掩护 -5 定位 attack）。
+				var cm_bind: Dictionary = payload.get("binding_context", {})
+				var cm_holder_mech: StringName = cm_bind.get("mech_id", payload.get("source_mech_id", &""))
+				var cm_holder_pid: StringName = cm_bind.get("player_id", payload.get("player_id", &""))
+				var cm_use_actions: Array = []
+				for sel_cid in cm_selected:
+					cm_use_actions.append({
+						"type": &"EXECUTE_USE_ACTION_CARD",
+						"params": {
+							"card_instance_id": sel_cid,
+							"mech_id": cm_holder_mech,
+							"player_id": cm_holder_pid,
+						}
+					})
+				for cm_ui: int in range(cm_use_actions.size()):
 					if context != null and context.action_service != null:
-						context.action_service.execute_sub_action(sub_act, payload, action)
-				if cm_discard_selected and context != null and context.action_service != null:
-					context.action_service.execute_sub_action({"type": &"EXECUTE_DISCARD", "params": {"card_ids": [sel_cid], "reason": cm_discard_reason}}, payload, action)
+						context.action_service.execute_sub_action(cm_use_actions[cm_ui], payload, action)
+					if _last_created_sub_action_paused(action):
+						var cm_u_remaining: Array = cm_use_actions.slice(cm_ui + 1)
+						if not cm_u_remaining.is_empty():
+							action.record["_seq_effect_actions"] = {
+								"payload": payload,
+								"remaining": cm_u_remaining,
+							}
+						break
+			else:
+				for sel_cid in cm_selected:
+					# 注入 chosen_card 供 per_card_actions 中 $chosen_card.card_instance_id 解析
+					payload["chosen_card"] = {"card_instance_id": sel_cid}
+					for sub_act: Dictionary in per_card_actions:
+						if context != null and context.action_service != null:
+							context.action_service.execute_sub_action(sub_act, payload, action)
+					if cm_discard_selected and context != null and context.action_service != null:
+						context.action_service.execute_sub_action({"type": &"EXECUTE_DISCARD", "params": {"card_ids": [sel_cid], "reason": cm_discard_reason}}, payload, action)
 			# 标记每回合1次（赤枭躯干 effect_040/041：确认即消耗次数，含选0张=弃0+0动力；
 			# 取消路径不至此，不消耗。无 once_per_turn_key 的效果为 no-op）
 			_mark_once_per_turn_used(effect, payload)
@@ -1628,13 +2033,23 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 			context.action_engine.continue_action(action_id, {})
 		return
 
-	# ── pilot_003 置顶选择（effect_01）：选1张移到牌堆顶 / 取消不移动 ──
+	# ── pilot_003 置顶选择（effect_01 phase 链）：选1张置顶 / 取消=不置顶（仅随机插入）──
+	# 存置顶牌到 payload(pilot_003_top_card_id)，标记 once，续跑剩余 actions（INSERT 用 deck_top_card_id 置顶+打标签）。
 	if phase == &"pilot_003_choose_top":
 		var p003t_sel: StringName = input_data.get("selected_card_id", input_data.get("card_instance_id", &""))
 		var p003t_cancelled: bool = input_data.get("cancelled", false) or p003t_sel == &""
-		if not p003t_cancelled and p003t_sel != &"":
-			context.game_actions.pilot_003_move_to_deck_top(p003t_sel)
+		payload["pilot_003_top_card_id"] = p003t_sel if not p003t_cancelled else &""
 		SLog.log_raw("[TIMING] %s pilot_003 置顶 %s" % [String(action.action_id), "取消" if p003t_cancelled else String(p003t_sel)])
+		# 玩家已在 CHOOSE_MANY 确认选牌（非取消才到此），消耗本回合1次
+		_mark_once_per_turn_used(effect, payload)
+		_mark_once_per_game_used(effect, payload)
+		# 续跑剩余 actions（INSERT：deck_top_card_id=$runtime.pilot_003_top_card_id 置顶 + face_up_bury 标签）
+		var p003t_act_idx: int = int(pending.get("act_idx", -1))
+		if p003t_act_idx >= 0 and effect.actions.size() > p003t_act_idx + 1:
+			action.record["_seq_effect_actions"] = {"payload": payload, "remaining": effect.actions.slice(p003t_act_idx + 1)}
+			action.state = &"waiting_effect_action"
+			if _continue_seq_effect_actions(action):
+				return
 		if action.state == &"waiting_timing" and _pending_effect.has(action.action_id):
 			return
 		if context.action_engine != null:
@@ -1810,11 +2225,23 @@ func _once_per_turn_card_instance_id(effect: ActionEffect, payload: Dictionary) 
 		cid = effect.source.get("card_instance_id", &"")
 	return cid
 
-## 取当前回合号（scope key）。game_state 未就绪时返回 0（同一回合内多次触发仍受限）
+## 取当前回合号（once_per_turn 的 scope key）。
+## "每回合1次"= 每个玩家回合各1次（先手回合用1次，后手回合还能用1次），非"每轮1次"。
+## game_state.turn_number 只在先手回合递增（TurnService），故用 turn_number * 玩家数 + 位次
+## 区分各玩家回合。原硬编码 *2 仅适用2人，3人模式 seat=2 时 base*2+2=(base+1)*2 与下轮先手
+## 回合冲突，致 once_per_turn 误判已用（迪恩效果1 3人模式应3次实只生效更少）。
 func _current_turn_number() -> int:
 	if context == null or context.get("game_state") == null:
 		return 0
-	return int(context.game_state.turn_number)
+	var gs = context.game_state
+	var base: int = int(gs.turn_number)
+	if context.round_service != null:
+		var order_size: int = context.round_service.turn_order.size()
+		if order_size > 0:
+			var seat: int = context.round_service.turn_order.find(gs.active_player_id)
+			if seat >= 0:
+				return base * order_size + seat
+	return base
 
 ## 每回合1次是否已用满
 func _is_once_per_turn_used_up(effect: ActionEffect, payload: Dictionary) -> bool:
@@ -2107,6 +2534,51 @@ func clear_executed_effects_for_action(action_id: StringName) -> void:
 ## 检查可用条件
 ## card_instance_id 由调用方从监听器 entry 传入（注册时存入）；
 ## AVAILABILITY 效果是共享 Resource，其 source 不携带具体牌实例，故不能依赖 effect.source。
+## 迪恩替别人响应资格（问题3）：持有者(迪恩)机甲非攻击目标时，其手牌"反击/疾行"迎击牌
+## 在相邻友军被攻击+迪恩在攻击范围内+非迪恩攻击+未响应+目标未被攻击者锁定 时可替友军响应
+## （单独弹迪恩窗口）。复用 effect_02 的 set_conditions 评估，但排除 HAS_ACTION_CARD_IN_HAND：
+## 打反击/疾行牌本身不需要转化用的2张行动牌（那是 effect_02 转化 cost）。
+func _is_dean_ally_respond_eligible(card_mech_id: StringName, card, action) -> bool:
+	if action == null or action.action_type != &"attack":
+		return false
+	if card == null or card.def == null or card.def.card_kind != &"action":
+		return false
+	# 仅"反击/疾行"迎击牌可替别人响应（用户裁定：其他类型迎击牌不可替别人响应）
+	var cname: String = String(card.def.display_name)
+	if cname != "反击" and cname != "疾行":
+		return false
+	if context == null or context.game_state == null:
+		return false
+	# 持有者机甲必须是迪恩（pilot 槽 pilot_011_迪恩）
+	var mech = context.game_state.mechs.get(card_mech_id)
+	if mech == null:
+		return false
+	var ps = mech.slots.get(&"pilot")
+	var pc = ps.get("equipped_card") if ps != null else null
+	if pc == null or pc.def == null or String(pc.def.card_id) != "pilot_011_迪恩":
+		return false
+	# 复用 effect_02 条件（相邻友军被攻击/迪恩在范围/非自己攻击/未响应/目标未被锁），排除转化手牌要求
+	var e02 = _ActionPilotEffects.build_pilot_effects().get(&"pilot_011_effect_02")
+	if e02 == null:
+		return false
+	var conds: Array = []
+	for c in e02.conditions:
+		if String(c.get("op", &"")) != "HAS_ACTION_CARD_IN_HAND":
+			conds.append(c)
+	var bind_ctx: Dictionary = {
+		"card_instance_id": pc.instance_id,
+		"mech_id": card_mech_id,
+		"player_id": card.owner_player_id,
+		"card_def_id": pc.def.card_id,
+		"slot_id": &"pilot",
+	}
+	var avail_payload: Dictionary = action.record.duplicate()
+	avail_payload["action_id"] = action.action_id
+	avail_payload["action_type"] = action.action_type
+	avail_payload["binding_context"] = bind_ctx
+	return _check_conditions(e02, avail_payload, action, conds)
+
+
 func _check_availability(effect: ActionEffect, action, card_instance_id: StringName = &"", bind_ctx: Dictionary = {}) -> bool:
 	var condition: StringName = effect.availability_condition
 	# availability_condition 为空时跳过专用可用性检查，回退到通用 set_conditions 检查（见函数末尾）。
@@ -2115,6 +2587,17 @@ func _check_availability(effect: ActionEffect, action, card_instance_id: StringN
 	# 否则所有玩家的同名武器牌都会进入响应窗口（只有持有者才能用）。
 	if condition != &"" and (context == null or context.get("game_state") == null):
 		return false
+
+	# 每回合N次检查（gather 阶段过滤已用满的 AVAILABILITY 条目）。
+	# 迪恩转化等带弃牌 cost 的 AVAILABILITY 走 response_discard 路径不经 _execute_effect
+	# （_execute_effect 的 once_per_turn 检查不会触发），故在此处拦截，避免已用满仍可选中。
+	if effect.once_per_turn_key != &"" and not bind_ctx.is_empty():
+		var opt_payload: Dictionary = action.record.duplicate() if action != null and action.record != null else {}
+		opt_payload["action_id"] = action.action_id if action != null else &""
+		opt_payload["action_type"] = action.action_type if action != null else &""
+		opt_payload["binding_context"] = bind_ctx
+		if _is_once_per_turn_used_up(effect, opt_payload):
+			return false
 
 	if condition == _TimingConst.AVAIL_RESPOND_ATTACK:
 		# 响应攻击：检查此牌持有者是否是被攻击目标
@@ -2145,27 +2628,20 @@ func _check_availability(effect: ActionEffect, action, card_instance_id: StringN
 				holder_is_target = true
 				break
 		if not holder_is_target:
+			# 迪恩替别人响应（问题3）：持有者(迪恩)机甲非攻击目标时，其手牌"反击/疾行"
+			# 迎击牌在相邻友军被攻击+迪恩在攻击范围内时，可替友军响应（单独弹迪恩窗口，
+			# 不进 target 窗口）。通过后落入下方通用锁检查 + set_conditions 评估。
+			if _is_dean_ally_respond_eligible(card_mech_id, card, action):
+				holder_is_target = true
+			else:
+				return false
+		# 锁定状态封锁响应：仅被锁目标自身的响应牌不可用（priority < 20），
+		# 识破(≥20)不受影响。普通迎击牌 holder=card.mech_id（牌持有者机甲）。
+		if _is_response_locked_out(effect, action, card_mech_id):
 			return false
-		# 锁定状态封锁响应：locker(攻击者玩家)对"被锁定目标"发动的攻击，
-		# 被锁目标及其相邻机甲（六边形相邻）的迎击牌不可用（availability_priority < 20）。
-		# 识破（availability_priority=30）不受影响，仍可响应。
-		# 多目标攻击(双连)中，只要有一个目标是 locker 锁定的机甲，则该被锁目标及其相邻机甲
-		# （即使它们是 A 的其它共目标）的迎击牌都被封锁。
-		if int(effect.availability_priority) < _LOCK_SUPPRESS_PRIORITY:
-			var attacker_id_l: StringName = action.record.get("attacker_id", &"")
-			if attacker_id_l != &"":
-				var attacker_player = context.game_state.get_player_for_mech(attacker_id_l)
-				if attacker_player != null:
-					var holder_mech_l = context.game_state.mechs.get(card_mech_id)
-					for _atid2 in attack_targets:
-						var locked_mech = context.game_state.mechs.get(_atid2)
-						if locked_mech != null and locked_mech.is_locked_by(attacker_player.player_id):
-							# holder 是被锁目标本身 或 与被锁目标相邻 -> 封锁
-							if card_mech_id == _atid2:
-								return false
-							if holder_mech_l != null and _HexGrid.distance(holder_mech_l.position, locked_mech.position) == 1:
-								return false
-		return true
+		# 不直接 return true：落入下方通用锁检查 + set_conditions 评估，
+		# 使 AVAIL_RESPOND_ATTACK 效果可叠加额外 set_conditions（迪恩转化需 HAS_ACTION_CARD_IN_HAND(2)
+		# + ATTACK_NOT_RESPONDED）。现有迎击牌 set_conditions 为空，2516 行 size()>0 守卫跳过，行为不变。
 
 	if condition == _TimingConst.AVAIL_ALLY_IN_RANGE_TARGETED:
 		# 掩护：攻击目标为持有者最大攻击范围内的友方机甲（非自身被攻击）
@@ -2201,6 +2677,18 @@ func _check_availability(effect: ActionEffect, action, card_instance_id: StringN
 		var map_cells: Dictionary = context.game_state.map_state.cells if context.game_state.map_state else {}
 		return _RangeCalculator.is_in_weapon_range(holder_mech.position, attacker_mech.position, max_range, map_cells)
 
+	# 锁定状态封锁响应（通用路径：无 availability_condition 的 AVAILABILITY 响应效果，
+	# 如 granted 防御/094 光束/096 热能响应）：仅被锁目标自身的响应被封锁（priority < 20），相邻机甲不再被封锁。
+	# holder 优先 binding_context.mech_id（granted 跨机甲=A），回退 card.mech_id。
+	if effect.mode == _TimingConst.MODE_AVAILABILITY:
+		if context != null and context.get("game_state") != null:
+			var lock_holder: StringName = bind_ctx.get("mech_id", &"")
+			if lock_holder == &"" and card_instance_id != &"":
+				var lh_card = context.game_state.get_card(card_instance_id)
+				if lh_card != null:
+					lock_holder = lh_card.mech_id
+			if lock_holder != &"" and _is_response_locked_out(effect, action, lock_holder):
+				return false
 	# 通用 set_conditions 检查：availability_condition 为空（或已通过专用检查）时，
 	# 进一步用效果的 set_conditions 过滤（094/096 等）。payload 取攻击动作 record + binding_context。
 	if effect.conditions.size() > 0:
@@ -2223,6 +2711,43 @@ func _check_availability(effect: ActionEffect, action, card_instance_id: StringN
 			return false
 	return true
 
+## 锁定状态封锁响应检查（规则书 行动牌效果20·锁定效果1）：
+## locker(攻击者玩家)对攻击目标施加锁定后，仅该目标自身的"响应攻击"效果
+## 不可用——所有 availability_priority < 20 的响应效果被取消（不进响应窗口）。
+## 识破等 priority ≥ 20 的效果不受封锁。掩护不属于"响应攻击"，不走此检查。
+## holder_mech_id = 响应方机甲：granted/装备效果用 binding_context.mech_id，普通迎击牌用 card.mech_id。
+func _is_response_locked_out(effect: ActionEffect, action, holder_mech_id: StringName) -> bool:
+	if int(effect.availability_priority) >= _LOCK_SUPPRESS_PRIORITY:
+		return false
+	if context == null or context.get("game_state") == null:
+		return false
+	var attacker_id_l: StringName = action.record.get("attacker_id", &"")
+	if attacker_id_l == &"":
+		return false
+	var attacker_player = context.game_state.get_player_for_mech(attacker_id_l)
+	if attacker_player == null:
+		return false
+	# 收集本次攻击的全部目标（单目标 target_id + 双连等多目标 target_ids）
+	var attack_targets: Array = []
+	var _tid_l: StringName = action.record.get("target_id", &"")
+	if _tid_l != &"":
+		attack_targets.append(_tid_l)
+	for _etid_l in action.record.get("target_ids", []):
+		attack_targets.append(StringName(_etid_l))
+	for _atid2 in attack_targets:
+		var locked_mech = context.game_state.mechs.get(_atid2)
+		if locked_mech != null and locked_mech.is_locked_by(attacker_player.player_id):
+			# 仅 holder 是被锁目标本身时封锁其响应；相邻机甲不再被锁封锁响应能力。
+			# 相邻机甲替被锁目标挡攻的"转移攻击目标"另由挡攻条件拦截（见 pilot_011 effect_02）。
+			if holder_mech_id == _atid2:
+				return true
+	# holder 自身被攻击者锁定时也封锁其响应（pilot_011 effect_02 挡攻转移：迪恩非攻击目标，
+	# 但若迪恩被攻击者锁定，则不能响应/转移攻击目标到自身）。通用：被锁机甲不可响应。
+	var holder_mech_l = context.game_state.mechs.get(holder_mech_id)
+	if holder_mech_l != null and holder_mech_l.is_locked_by(attacker_player.player_id):
+		return true
+	return false
+
 ## 检查是否被抑制
 func _is_effect_suppressed(timing: StringName, effect: ActionEffect) -> bool:
 	# 只有 AVAILABILITY 模式（响应窗口可选牌）才受抑制；LISTEN/DIRECT 永不抑制。
@@ -2242,12 +2767,27 @@ func _is_effect_suppressed(timing: StringName, effect: ActionEffect) -> bool:
 
 
 ## 检查条件
-func _check_conditions(effect: ActionEffect, payload: Dictionary, action) -> bool:
-	if effect.conditions.is_empty():
+## custom_conds 非空时用它替代 effect.conditions（迪恩替别人响应资格检查复用 effect_02
+## 条件但排除 HAS_ACTION_CARD_IN_HAND——打反击/疾行牌不需转化用的2张行动牌）。
+func _check_conditions(effect: ActionEffect, payload: Dictionary, action, custom_conds: Array = []) -> bool:
+	if effect.conditions.is_empty() and custom_conds.is_empty():
 		return true
+	# 响应转化/弃牌已支付后（CHOOSE_ONE 等挂起 resume 重跑 _execute_effect，如迪恩转化 effect_01/02），
+	# 跳过 availability 门槛条件：HAS_ACTION_CARD_IN_HAND（弃牌后手牌减少会误判失败）与
+	# ATTACK_NOT_RESPONDED（responded 选中时已置 true）。这俩只在响应窗口 gather 阶段过滤用。
+	# 否则重跑条件检查会因弃牌后状态变质而静默跳过效果/取消父攻击。
+	var conds: Array = effect.conditions
+	if not custom_conds.is_empty():
+		conds = custom_conds
+	if bool(payload.get("_optional_discard_paid", false)):
+		conds = []
+		for c in effect.conditions:
+			var cop: String = String(c.get("op", &""))
+			if cop != "HAS_ACTION_CARD_IN_HAND" and cop != "ATTACK_NOT_RESPONDED":
+				conds.append(c)
 	# 创建临时 EffectBinding 用于 ConditionChecker
 	var binding = _make_binding_from_effect(effect, action, payload)
-	var ok: bool = _ConditionChecker.check_all(binding, payload, effect.conditions)
+	var ok: bool = _ConditionChecker.check_all(binding, payload, conds)
 	if not ok:
 		# 诊断：逐条件打印结果，定位 effect2 被跳过的根因（闪击不弹窗 bug）
 		if _DIAG_TIMING:
@@ -2353,6 +2893,39 @@ func _do_immediate_set_equipment(mech_id: StringName, player_id: StringName, car
 	})
 
 
+## REGISTER_LISTEN 内联逻辑（顶层 _execute_actions 与 CHOOSE_ONE 分支内共用）。
+## 迪恩当作反击转化（pilot_011_effect_01/02 反击分支）在 CHOOSE_ONE 分支内注册
+## pilot_011_counter_strike 监听器：execute_sub_action 无该工厂会静默失败，须内联。
+## listen_action_id 支持 $payload.xxx / $binding_context.xxx 表达式（绑原攻击用 $payload.attack_action_id，
+## 使监听器只在该攻击的指定时点触发）。
+func _register_listen_for_effect(act: Dictionary, payload: Dictionary, action) -> void:
+	var rl_params: Dictionary = act.get("params", {})
+	var listen_timing: StringName = rl_params.get("timing", act.get("timing", &""))
+	var listen_action_id: StringName = _resolve_mech_id_expr(String(rl_params.get("listen_action_id", act.get("listen_action_id", &""))), payload)
+	# listen_effect：优先用 params 直接给的 ActionEffect 对象；否则按 listen_effect_id 从机师效果表查
+	var listen_effect = rl_params.get("listen_effect", act.get("listen_effect"))
+	var listen_effect_id: StringName = rl_params.get("listen_effect_id", &"")
+	if listen_effect == null and listen_effect_id != &"":
+		listen_effect = _ActionPilotEffects.build_pilot_effects().get(listen_effect_id)
+	# binding_context：params 显式指定优先；否则从 payload.binding_context 派生
+	# （含 responder_mech_id/player_id/card_id 供 counter_strike 攻击取发动方，仿 use_action_card bind_to_attack_action）
+	var rl_bind: Dictionary = rl_params.get("binding_context", {})
+	if rl_bind.is_empty():
+		var rl_src: Dictionary = payload.get("binding_context", {})
+		if not rl_src.is_empty():
+			rl_bind = {
+				"responder_mech_id": rl_src.get("mech_id", &""),
+				"responder_player_id": rl_src.get("player_id", &""),
+				"responder_card_id": rl_src.get("card_instance_id", &""),
+				"mech_id": rl_src.get("mech_id", &""),
+				"player_id": rl_src.get("player_id", &""),
+				"card_instance_id": rl_src.get("card_instance_id", &""),
+			}
+	var rl_cid: StringName = rl_params.get("card_instance_id", payload.get("binding_context", {}).get("card_instance_id", &""))
+	if listen_timing != &"" and listen_effect != null:
+		register_temporary_listener(listen_timing, listen_action_id, &"attack", listen_effect, rl_cid, &"", rl_bind)
+
+
 func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void:
 	if effect.actions.is_empty():
 		return
@@ -2363,11 +2936,26 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 		var act_type: StringName = act.get("type", &"")
 		# 跳过注册监听器的动作
 		if act_type == &"REGISTER_LISTEN":
-			var listen_timing: StringName = act.get("timing", &"")
-			var listen_action_id: StringName = act.get("listen_action_id", &"")
-			var listen_effect: ActionEffect = act.get("listen_effect")
-			if listen_timing != &"" and listen_effect != null:
-				register_temporary_listener(listen_timing, listen_action_id, &"", listen_effect)
+			_register_listen_for_effect(act, payload, action)
+			continue
+		# FOR_EACH_TARGET（pilot_012/013）：逐目标串行执行 inner actions。
+		# targets=$selected_targets（由 ALL_CURRENT_ATTACK_MECH_TARGETS / ALL_HIT_TARGETS_* 注入 payload）。
+		# 展开为 flat 列表 [(target_id, action)]：CONDITIONAL_ACTIONS 按当前 target 评估条件取分支。
+		# 支持 inner 为 原子/EXECUTE_*（EXECUTE_STEAL 选牌暂停走 _seq 子动作机制）/CONDITIONAL_ACTIONS。
+		# 不支持 inner 为 CHOOSE_ONE（_pending_effect 重跑会破坏迭代，pilot_012 e2 奖励另走专用处理）。
+		if act_type == &"FOR_EACH_TARGET":
+			var fet_params: Dictionary = act.get("params", {})
+			var fet_targets_raw = fet_params.get("targets", &"")
+			var fet_targets: Array = _resolve_fet_targets(fet_targets_raw, payload, action)
+			if fet_targets.is_empty():
+				continue
+			var fet_inner: Array = fet_params.get("actions", [])
+			var fet_var: StringName = fet_params.get("current_target_variable", &"current_target")
+			var fet_flat: Array = _build_for_each_flat(fet_targets, fet_inner, fet_var, effect, payload, action)
+			if fet_flat.is_empty():
+				continue
+			if _run_flat_inline(fet_flat, 0, effect, payload, action, fet_var):
+				return
 			continue
 		# CHOOSE_ONE：维修等二选一。inline options[] 每项含 {label, actions[]}。
 		# 玩家未选时挂起弹窗（choose_one_effect）；选了则执行对应分支 actions[]，
@@ -2407,7 +2995,7 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 					continue
 				else:
 					# 挂起：存 effect/payload，弹二选一窗（ui_options 只列可用）
-					_pending_effect[action.action_id] = {"effect": effect, "payload": payload, "phase": "pre_actions_target"}
+					_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": "pre_actions_target"}
 					action.record["_waiting_for_choose_one"] = true
 					action.record["_choose_one_effect_id"] = effect.effect_id
 					var ui_options: Array[Dictionary] = []
@@ -2429,12 +3017,18 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 							var co_chooser_player = context.game_state.get_player_for_mech(co_chooser_mid)
 							if co_chooser_player != null:
 								co_player_id = co_chooser_player.player_id
+					# pilot_008 逆转弹窗描述（PILOT_008_BUILD_*_PROMPT 写入 payload._popup_description）
+					# 无 _popup_description 时回退 effect.description（如 pilot_006 e2 狩猎追击询问弹窗显示效果说明）
+					var _co_src: String = String(payload.get("_popup_description", ""))
+					if _co_src == "":
+						_co_src = String(effect.description)
 					action_needs_input.emit(action.action_id, &"choose_one_effect", {
 						"action_id": action.action_id,
 						"effect_id": effect.effect_id,
 						"options": ui_options,
 						"optional": co_optional,
 						"player_id": co_player_id,
+						"source_label": _co_src,
 					})
 					SLog.log_raw("[TIMING] %s 挂起二选一 effect=%s options=%d optional=%s" % [String(action.action_id), String(effect.effect_id), ui_options.size(), str(co_optional)])
 					return
@@ -2502,12 +3096,120 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 						return
 					_ba_idx += 1
 					continue
+				# REGISTER_LISTEN 嵌套在 CHOOSE_ONE 分支内（迪恩当作反击转化注册 counter_strike）：
+				# 顶层 for 循环有特判，此处同样需要——execute_sub_action 无工厂会静默失败。
+				if sub_type == &"REGISTER_LISTEN":
+					_register_listen_for_effect(sub_act_merged, payload, action)
+					_ba_idx += 1
+					continue
+				# FOR_EACH_TARGET 嵌套在 CHOOSE_ONE 分支内（pilot_012 e1 / pilot_013 e2a）：
+				# 逐目标串行执行 inner actions。挂起存 flat _seq；分支内 FOR_EACH 之后的动作（通常为
+				# SET_ACTION_RECORD_FLAG no-op）在 flat 完成后不再续跑（最小闭环可接受）。
+				if sub_type == &"FOR_EACH_TARGET":
+					var fet_params_ba: Dictionary = sub_act_merged.get("params", {})
+					var fet_targets_ba: Array = _resolve_fet_targets(fet_params_ba.get("targets", &""), payload, action)
+					var fet_var_ba: StringName = fet_params_ba.get("current_target_variable", &"current_target")
+					var fet_flat_ba: Array = _build_for_each_flat(fet_targets_ba, fet_params_ba.get("actions", []), fet_var_ba, effect, payload, action)
+					if _run_flat_inline(fet_flat_ba, 0, effect, payload, action, fet_var_ba):
+						return
+					_ba_idx += 1
+					continue
+				# CHOOSE_INTEGER 嵌套在 CHOOSE_ONE 分支内（pilot_004 装甲转能）：
+				# CHOOSE_INTEGER 不在 _is_atomic_action 里，走 execute_sub_action 会创建无工厂
+				# child Action 立即完成（不挂起弹窗）。此处特判，仿 _execute_actions 顶层 CHOOSE_INTEGER 分支：
+				# choice 未设 -> 挂起弹窗；choice 已设 -> 展开 actions 串行执行。
+				if sub_type == &"CHOOSE_INTEGER":
+					var _ci_params: Dictionary = sub_act_merged.get("params", {})
+					var _ci_bind_as: String = String(_ci_params.get("bind_as", "n"))
+					var _ci_min: int = int(_ci_params.get("min_value", 1))
+					var _ci_max_expr: String = String(_ci_params.get("max_value_expr", ""))
+					var _ci_max: int = _ci_min
+					if _ci_max_expr != "":
+						_ci_max = int(_eval_expr(_ci_max_expr, payload, {}))
+					else:
+						_ci_max = int(_ci_params.get("max_value", _ci_min))
+					var _ci_choice: Dictionary = payload.get("choice", {})
+					if not _ci_choice.has(_ci_bind_as):
+						if _ci_max < _ci_min:
+							_ba_idx += 1
+							continue
+						var _ci_bind_ctx: Dictionary = payload.get("binding_context", {})
+						var _ci_owner_pid: StringName = _ci_bind_ctx.get("player_id", &"")
+						var _ci_owner_mid: StringName = _ci_bind_ctx.get("mech_id", &"")
+						if _is_ai_owner(_ci_owner_pid, _ci_owner_mid):
+							_ci_choice[_ci_bind_as] = _ci_min
+							payload["choice"] = _ci_choice
+						else:
+							_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"choose_integer", "bind_as": _ci_bind_as}
+							action.record["_waiting_for_choose_integer"] = true
+							action.state = &"waiting_timing"
+							action_needs_input.emit(action.action_id, &"choose_integer", {
+								"action_id": action.action_id,
+								"effect_id": effect.effect_id,
+								"label": String(_ci_params.get("label", "")),
+								"min_value": _ci_min,
+								"max_value": _ci_max,
+								"bind_as": _ci_bind_as,
+								"optional": bool(_ci_params.get("optional", false)),
+								"stepper": bool(_ci_params.get("stepper", false)),
+								"player_id": _effect_popup_owner_pid(effect, payload, action),
+							})
+							var _ci_rem: Array = branch_actions.slice(_ba_idx + 1)
+							if not _ci_rem.is_empty():
+								action.record["_seq_effect_actions"] = {"payload": payload, "remaining": _ci_rem, "source_check": false}
+							return
+					# 已选：展开嵌套 actions 的 *_expr 与 $binding_context -> 串行执行（仿顶层 CHOOSE_INTEGER）
+					var _ci_actions: Array = _ci_params.get("actions", [])
+					var _ci_choice_full: Dictionary = payload.get("choice", {})
+					var _ci_resolved: Array = []
+					for _ci_sub: Dictionary in _ci_actions:
+						var _ci_merged: Dictionary = _ci_sub.duplicate(true)
+						var _ci_sp: Dictionary = _ci_merged.get("params", {})
+						var _ci_erase: Array = []
+						for _ci_k in _ci_sp:
+							if String(_ci_k).ends_with("_expr"):
+								var _ci_base: String = String(_ci_k).trim_suffix("_expr")
+								_ci_sp[_ci_base] = _eval_expr(String(_ci_sp[_ci_k]), payload, _ci_choice_full)
+								_ci_erase.append(_ci_k)
+							elif context != null and context.action_service != null:
+								_ci_sp[_ci_k] = context.action_service._resolve_atomic_value(_ci_sp[_ci_k], payload, action)
+						for _ci_k in _ci_erase:
+							_ci_sp.erase(_ci_k)
+						_ci_merged["params"] = _ci_sp
+						_ci_resolved.append(_ci_merged)
+					for _ci_i: int in range(_ci_resolved.size()):
+						var _ci_act: Dictionary = _ci_resolved[_ci_i]
+						if context != null and context.action_service != null:
+							context.action_service.execute_sub_action(_ci_act, payload, action)
+						if _last_created_sub_action_paused(action):
+							var _ci_remaining: Array = _ci_resolved.slice(_ci_i + 1)
+							if not _ci_remaining.is_empty():
+								action.record["_seq_effect_actions"] = {"payload": payload, "remaining": _ci_remaining}
+							return
+					_ba_idx += 1
+					continue
 				if sub_type in [&"EXECUTE_HP_CHANGE", &"EXECUTE_DAMAGE_CHANGE", &"HEAL_HP", &"REMOVE_DAMAGE_TOKENS", &"DEAL_DAMAGE", &"PLACE_DAMAGE_TOKENS", &"MODIFY_DAMAGE_TOKENS", &"PILOT_006_DEAL_4_DAMAGE"]:
 					if not sub_params.has("mech_ids"):
 						sub_params["mech_ids"] = [target_id_co]
 					if not sub_params.has("mech_id") and sub_type in [&"HEAL_HP", &"REMOVE_DAMAGE_TOKENS", &"DEAL_DAMAGE", &"PLACE_DAMAGE_TOKENS", &"MODIFY_DAMAGE_TOKENS", &"PILOT_006_DEAL_4_DAMAGE"]:
 						sub_params["mech_id"] = target_id_co
 					sub_act_merged["params"] = sub_params
+				# 解析 params 的 $-占位符与 *_expr（仿 CHOOSE_INTEGER 分支）：CHOOSE_ONE 分支此前
+				# 不解析嵌套动作参数，$binding_context.mech_id / $payload.target_id 等占位符会以
+				# 字面字符串传入原子动作（spend_power / set_attack_defense_stat_source 等）而失败。
+				# 放在所有特判之后、execute_sub_action 之前：特判动作（FOR_EACH_TARGET / CHOOSE_MAP_CELL
+				# 等）已 continue/return，仅叶子动作走到此处被解析。
+				var _ba_erase: Array = []
+				for _ba_k in sub_params:
+					if String(_ba_k).ends_with("_expr"):
+						var _ba_base: String = String(_ba_k).trim_suffix("_expr")
+						sub_params[_ba_base] = _eval_expr(String(sub_params[_ba_k]), payload, payload.get("choice", {}))
+						_ba_erase.append(_ba_k)
+					elif context != null and context.action_service != null:
+						sub_params[_ba_k] = context.action_service._resolve_atomic_value(sub_params[_ba_k], payload, action)
+				for _ba_k in _ba_erase:
+					sub_params.erase(_ba_k)
+				sub_act_merged["params"] = sub_params
 				if context != null and context.action_service != null:
 					context.action_service.execute_sub_action(sub_act_merged, payload, action)
 				# 子动作挂起（需输入/等更小子动作）：存剩余 branch_actions 到 _seq，待子动作完成后
@@ -2547,7 +3249,7 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 					ci_choice[ci_bind_as] = ci_min
 					payload["choice"] = ci_choice
 				else:
-					_pending_effect[action.action_id] = {"effect": effect, "payload": payload, "phase": &"choose_integer", "bind_as": ci_bind_as}
+					_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"choose_integer", "bind_as": ci_bind_as}
 					action.record["_waiting_for_choose_integer"] = true
 					action.state = &"waiting_timing"
 					action_needs_input.emit(action.action_id, &"choose_integer", {
@@ -2558,6 +3260,7 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 						"max_value": ci_max,
 						"bind_as": ci_bind_as,
 						"optional": ci_optional,
+						"stepper": bool(ci_params.get("stepper", false)),
 						"player_id": _effect_popup_owner_pid(effect, payload, action),
 					})
 					return
@@ -2641,7 +3344,7 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 				# 人类玩家：弹可选确认窗（转移全部 / 不转移）
 				action.record["_ao_absorb"] = ao_absorb
 				action.record["_ao_hp_reduction"] = odr_hp_reduction
-				_pending_effect[action.action_id] = {"effect": effect, "payload": payload, "phase": "redirect_select"}
+				_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": "redirect_select"}
 				action.record["_waiting_for_redirect"] = true
 				action.state = &"waiting_timing"
 				var ao_card_name: String = ""
@@ -2679,7 +3382,7 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 					_write_redirect_plan(action, ai_plan)
 					continue
 				# 玩家：挂起弹 redirect_select 窗
-				_pending_effect[action.action_id] = {"effect": effect, "payload": payload, "phase": "redirect_select"}
+				_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": "redirect_select"}
 				action.record["_waiting_for_redirect"] = true
 				action.state = &"waiting_timing"
 				var odr_total: int = int(payload.get("total_points", payload.get("value", 0)))
@@ -2754,7 +3457,7 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 			if action.record.get("_choose_many_shown", false):
 				continue
 			action.record["_choose_many_shown"] = true
-			_pending_effect[action.action_id] = {"effect": effect, "payload": payload, "phase": "choose_many_cards", "choose_many_action": act, "act_idx": _act_idx}
+			_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": "choose_many_cards", "choose_many_action": act, "act_idx": _act_idx}
 			action.state = &"waiting_timing"
 			action_needs_input.emit(action.action_id, &"select_thrust_cards", {
 				"action_id": action.action_id,
@@ -2768,45 +3471,6 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 				"max_count": int(cm_params.get("max_count", 0)),
 			})
 			SLog.log_raw("[TIMING] %s 挂起多选 effect=%s 候选=%d" % [String(action.action_id), String(effect.effect_id), cm_card_ids.size()])
-			return
-		# CHOOSE_ONE_INSERTED_CARD_TO_DECK_TOP：pilot_003 effect_01 可选1张置顶（复用 unite 单选面板）
-		if act_type == &"CHOOSE_ONE_INSERTED_CARD_TO_DECK_TOP":
-			var p003t_params: Dictionary = act.get("params", {})
-			var p003t_card_ids_raw = p003t_params.get("card_ids", [])
-			var p003t_card_ids: Array = []
-			if String(str(p003t_card_ids_raw)).begins_with("$runtime."):
-				p003t_card_ids = payload.get(String(str(p003t_card_ids_raw)).replace("$runtime.", ""), [])
-			elif p003t_card_ids_raw is Array:
-				p003t_card_ids = p003t_card_ids_raw
-			else:
-				p003t_card_ids = payload.get("pilot_003_face_up_cards", [])
-			# 过滤：只保留仍在牌堆的牌
-			var p003t_in_deck: Array = []
-			var p003t_deck: Array = context.game_state.deck_state.action_deck if context.game_state != null else []
-			for p003t_cid in p003t_card_ids:
-				if p003t_deck.has(p003t_cid):
-					p003t_in_deck.append(p003t_cid)
-			if p003t_in_deck.is_empty():
-				continue
-			var p003t_bind: Dictionary = payload.get("binding_context", {})
-			var p003t_pid: StringName = p003t_bind.get("player_id", &"")
-			var p003t_mid: StringName = p003t_bind.get("mech_id", &"")
-			if _is_ai_owner(p003t_pid, p003t_mid):
-				continue  # AI 不处理置顶选择
-			if action.record.get("_p003_top_shown", false):
-				continue
-			action.record["_p003_top_shown"] = true
-			_pending_effect[action.action_id] = {"effect": effect, "payload": payload, "phase": &"pilot_003_choose_top", "act_idx": _act_idx}
-			action.state = &"waiting_timing"
-			action_needs_input.emit(action.action_id, &"select_pilot_006_attack_card", {
-				"action_id": action.action_id,
-				"effect_id": effect.effect_id,
-				"card_ids": p003t_in_deck,
-				"target_mech_id": p003t_mid,
-				"player_id": p003t_pid,
-				"label": String(p003t_params.get("label", "选择1张正面牌放置到牌堆顶（可取消）")),
-			})
-			SLog.log_raw("[TIMING] %s pilot_003 置顶选择 effect=%s 候选=%d" % [String(action.action_id), String(effect.effect_id), p003t_in_deck.size()])
 			return
 		# CHOOSE_MANY_PLAYERS：pilot_003 effect_03 复选框——列出所有玩家（含自己），
 		# 勾选"抽牌跳过正面牌"的玩家，提交后生效（裁定权威"重要补充"）。resume 走
@@ -2826,7 +3490,7 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 			if action.record.get("_p003_skip_shown", false):
 				continue
 			action.record["_p003_skip_shown"] = true
-			_pending_effect[action.action_id] = {"effect": effect, "payload": payload, "phase": &"pilot_003_skip_players"}
+			_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"pilot_003_skip_players"}
 			action.state = &"waiting_timing"
 			action_needs_input.emit(action.action_id, &"select_pilot_003_skip_players", {
 				"action_id": action.action_id,
@@ -2871,7 +3535,7 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 			if action.record.get("_unite_attack_shown", false):
 				continue
 			action.record["_unite_attack_shown"] = true
-			_pending_effect[action.action_id] = {"effect": effect, "payload": payload, "phase": &"unite_attack_offer", "unite_attack_action": act}
+			_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"unite_attack_offer", "unite_attack_action": act}
 			action.state = &"waiting_timing"
 			action_needs_input.emit(action.action_id, &"select_unite_attack_card", {
 				"action_id": action.action_id,
@@ -2889,6 +3553,73 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 			if _handle_pilot_006_force_use_attack(act, effect, payload, action):
 				return
 			continue
+		# PILOT_009_PAY_AND_RECORD_TYPE：美杜莎弹窗① 支付+记录类型。
+		# 首次：弹非阻塞展示浮窗（目标行动牌，只弹给美杜莎）+ 弹弃牌选1窗（美杜莎自己行动牌，可取消=中止）。
+		#   弃牌窗走 optional 路径（mode 非 need_input）：confirm 发 selected_action_card_ids、cancel 发 cancelled，
+		#   均经 resume_pending_effect(phase=pilot_009_pay)。
+		# 选定：弃置选定牌、记录其类型到 payload.pilot_009_recorded_type，续跑（CHOOSE_ONE 读 $runtime）。
+		# 取消：中止整个效果（不授控制/不弃目标牌）。重跑幂等：已记录类型则跳过。
+		if act_type == &"PILOT_009_PAY_AND_RECORD_TYPE":
+			if payload.has("pilot_009_recorded_type"):
+				continue
+			var p9_params: Dictionary = act.get("params", {})
+			var p9_optional: bool = bool(p9_params.get("optional", true))
+			var p9_bind: Dictionary = payload.get("binding_context", {})
+			var p9_ctrl_pid: StringName = p9_bind.get("player_id", &"")
+			var p9_target_id: StringName = payload.get("target_id", payload.get("target_mech_id", &""))
+			# 收集目标行动牌（展示浮窗）+ 美杜莎可弃行动牌（兜底校验）
+			var p9_display_cards: Array = []
+			var p9_can_pay: bool = false
+			if context != null and context.game_state != null:
+				if p9_target_id != &"":
+					var p9_tgt_player = context.game_state.get_player_for_mech(p9_target_id)
+					if p9_tgt_player != null:
+						for p9_cid: StringName in p9_tgt_player.action_hand:
+							var p9_c = context.game_state.get_card(p9_cid)
+							if p9_c != null and p9_c.def != null:
+								p9_display_cards.append({"card_id": p9_cid, "name": p9_c.def.display_name, "type": String(p9_c.def.action_type)})
+				var p9_ctrl_player = context.game_state.players.get(p9_ctrl_pid) if p9_ctrl_pid != &"" else null
+				if p9_ctrl_player != null:
+					for p9_cid2: StringName in p9_ctrl_player.action_hand:
+						var p9_c2 = context.game_state.get_card(p9_cid2)
+						if p9_c2 != null and p9_c2.def != null and p9_c2.def.card_kind == &"action":
+							p9_can_pay = true
+							break
+			if not p9_can_pay:
+				# 无可弃行动牌兜底中止（不授控制）。p9_can_pay 是唯一手牌门槛：
+				# set_conditions 不含 HAS_ACTION_CARD_IN_HAND（否则支付弃牌后重跑会误判失败）。
+				SLog.log_raw("[TIMING] %s pilot_009 美杜莎无可弃行动牌，中止 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+				if context.action_engine != null:
+					action.state = &"waiting_input"
+					context.action_engine.continue_action(action.action_id, {})
+				continue
+			_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"pilot_009_pay"}
+			action.state = &"waiting_timing"
+			# 先弹非阻塞展示浮窗（目标行动牌，给除目标外所有客户端）：玩家先看到目标牌再决定弃哪张。
+			# 非模态不抢焦点、不捕获 _waiting_action_id（紧接着的 pay_select 才捕获，二者同 action_id）。
+			action_needs_input.emit(action.action_id, &"pilot_009_show_display", {
+				"action_id": action.action_id,
+				"effect_id": effect.effect_id,
+				"target_id": p9_target_id,
+				"display_cards": p9_display_cards,
+				"player_id": p9_ctrl_pid,
+				"source_label": "蛇发支配：目标行动牌（可拖拽/可关闭）",
+			})
+			# 再弹弃牌选1窗（阻塞，捕获 _waiting_action_id；optional 路径 confirm/cancel 走 resume_effect）
+			action_needs_input.emit(action.action_id, &"pilot_009_pay_select", {
+				"action_id": action.action_id,
+				"effect_id": effect.effect_id,
+				"executor": p9_ctrl_pid,
+				"discard_player_id": p9_ctrl_pid,
+				"count": 1,
+				"face_up": true,
+				"action_verb": &"discard",
+				"no_cancel": not p9_optional,
+				"player_id": p9_ctrl_pid,
+				"source_label": "蛇发支配：弃1张自己行动牌（记录其类型）",
+			})
+			SLog.log_raw("[TIMING] %s 挂起 pilot_009 支付选牌 effect=%s 展示牌=%d" % [String(action.action_id), String(effect.effect_id), p9_display_cards.size()])
+			return
 		# DRAW_EQUIPMENT_AND_IMMEDIATELY_SET / DRAW_EQUIPMENT_AND_CHOOSE_SET_OR_SELL 伪动作：
 		# 抽装备立即设置(或卖出)。可作顶层 action（effect_005 联邦左臂/近战左腿离场诱发），也可嵌套在
 		# CHOOSE_ONE 分支内（effect_065 王牌臂外层 optional CHOOSE_ONE）。嵌套时走 execute_sub_action
@@ -2941,6 +3672,16 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 			if _handle_choose_many_map_cells(act, effect, payload, action):
 				return
 			continue
+		# pilot_003 e02 串行化（问题2）：正面牌因 gain_card/discard_card 离堆时延迟到 cause 动作 SETTLE。
+		# 此动作作为 cause 动作子动作，逐张串行执行判定（可用->use_action_card / 不可用->弃置+补偿抽），
+		# 使父级动作（如攻击中抽牌）等待判定完成。_run_p003_deferred_judgment 设 _seq 并启动首个子动作。
+		if act_type == &"PILOT_003_RUN_DEFERRED_JUDGE":
+			if context != null and context.action_service != null:
+				context.action_service._run_p003_deferred_judgment(action, payload)
+			# 子动作挂起 -> cause 动作被 fire_timing 置 waiting_effect_action，_seq 已由 Service 设好，保留并返回
+			if _last_created_sub_action_paused(action):
+				return
+			continue
 		# 委托给 ActionService 执行效果动作
 		if context != null and context.action_service != null:
 			context.action_service.execute_sub_action(act, payload, action)
@@ -2971,8 +3712,12 @@ func _handle_draw_equipment_pseudo(act_type: StringName, act_params: Dictionary,
 	var deis_mech_id: StringName = deis_bind_ctx.get("mech_id", payload.get("mech_id", payload.get("source_mech_id", &"")))
 	var deis_player_id: StringName = deis_bind_ctx.get("player_id", &"")
 	var deis_drawn_id: StringName = &""
-	if deis_player_id != &"" and context != null and context.game_actions != null:
-		context.game_actions.draw_equipment_cards({"player_id": deis_player_id, "count": 1})
+	if deis_player_id != &"" and context != null and context.action_service != null:
+		# 走 gain_card 动作拿 GAIN_CARD 时点（gain_card 委托 draw_equipment_cards 自动 append+owner+hook）
+		context.action_service.execute(&"gain_card", {
+			"from_zone": &"equipment_deck", "card_kind": &"equipment", "count": 1,
+			"player_id": deis_player_id, "reason": &"effect_065_draw_and_set"
+		})
 		if context.game_state != null:
 			var deis_player = context.game_state.players.get(deis_player_id)
 			if deis_player != null and not deis_player.equipment_hand.is_empty():
@@ -3076,7 +3821,7 @@ func _handle_choose_map_cell(act: Dictionary, effect, payload: Dictionary, actio
 	if _is_ai_owner(cmc_owner_pid, cmc_mech_id):
 		payload["selected_cell_id"] = String(cmc_valid[0].get("cell_id", &""))
 		return false
-	_pending_effect[action.action_id] = {"effect": effect, "payload": payload, "phase": &"pre_actions_target"}
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"pre_actions_target"}
 	action.record["_waiting_for_map_cell"] = true
 	action.state = &"waiting_timing"
 	var cmc_cells: Array = []
@@ -3120,7 +3865,7 @@ func _handle_choose_many_map_cells(act: Dictionary, effect, payload: Dictionary,
 			ai_ids.append(String(mmc_valid[i].get("cell_id", &"")))
 		payload["selected_cell_ids"] = ai_ids
 		return false
-	_pending_effect[action.action_id] = {"effect": effect, "payload": payload, "phase": &"pre_actions_target"}
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"pre_actions_target"}
 	action.record["_waiting_for_map_cell"] = true
 	action.state = &"waiting_timing"
 	var mmc_cells: Array = []
@@ -3139,21 +3884,163 @@ func _handle_choose_many_map_cells(act: Dictionary, effect, payload: Dictionary,
 	SLog.log_raw("[TIMING] %s 挂起多格陷阱选格 effect=%s 候选=%d 需%d" % [String(action.action_id), String(effect.effect_id), mmc_valid.size(), mmc_count])
 	return true
 
+## 解析 FOR_EACH_TARGET 的 targets 参数（$selected_targets -> Array[{"mech_id":...}]）为 mech_id 数组。
+func _resolve_fet_targets(targets_raw, payload: Dictionary, action) -> Array:
+	var resolved = targets_raw
+	if typeof(targets_raw) == TYPE_STRING and String(targets_raw).begins_with("$"):
+		if context != null and context.action_service != null:
+			resolved = context.action_service._resolve_atomic_value(targets_raw, payload, action)
+	if resolved == null:
+		return []
+	var result: Array = []
+	if typeof(resolved) == TYPE_ARRAY:
+		for item in resolved:
+			if item is Dictionary:
+				result.append(item.get("mech_id", &""))
+			else:
+				result.append(item)
+	elif resolved is Dictionary:
+		for mid in resolved.get("mech_ids", []):
+			result.append(mid)
+	return result
+
+
+## 把 FOR_EACH_TARGET 的 targets × inner_actions 展开为 flat 列表 [{action, target_id, var_name}]。
+## CONDITIONAL_ACTIONS 按当前 target 评估条件取 if_true/if_false 分支（分支内动作须为 leaf）。
+func _build_for_each_flat(targets: Array, inner_actions: Array, var_name: StringName, effect, payload: Dictionary, action) -> Array:
+	var flat: Array = []
+	var bind = _make_binding_from_effect(effect, action, payload)
+	for t in targets:
+		var t_sn: StringName = StringName(t) if t != null else &""
+		if t_sn == &"":
+			continue
+		payload[String(var_name)] = {"mech_id": t_sn}
+		for act in inner_actions:
+			if act is Dictionary and act.get("type", &"") == &"CONDITIONAL_ACTIONS":
+				var ca_params: Dictionary = act.get("params", {})
+				var ca_conds: Array = ca_params.get("conditions", [])
+				var branch: Array = ca_params.get("if_false_actions", [])
+				if ca_conds.is_empty() or _ConditionChecker.check_all(bind, payload, ca_conds):
+					branch = ca_params.get("if_true_actions", [])
+				for ba in branch:
+					flat.append({"action": ba, "target_id": t_sn, "var_name": var_name})
+			else:
+				flat.append({"action": act, "target_id": t_sn, "var_name": var_name})
+	return flat
+
+
+## FOR_EACH_TARGET 内嵌 CHOOSE_ONE 逐目标串行弹窗（pilot_012 e2 命中奖励）。
+## per-target chosen/executed 标记避免 resume 重跑 _execute_effect 时重复弹窗/重复执行：
+##   - chosen_d[tgt]>=0：玩家选了该 target 的 option -> 执行 branch -> exec_d[tgt]=true
+##   - chosen_d[tgt]==-1：玩家取消该 target -> 跳过 -> exec_d[tgt]=true
+##   - chosen_d 无 tgt：未选 -> 挂起弹窗（_pending_effect + waiting_timing）
+## 返回：&"pass"（非 CHOOSE_ONE，调用方走 execute_sub_action）/ &"next"（已处理，i++）/ &"pause"（挂起，存 _seq+return）
+func _flat_item_choose_one(item: Dictionary, effect, payload: Dictionary, action) -> StringName:
+	var item_action: Dictionary = item.get("action", {})
+	if item_action.get("type", &"") != &"CHOOSE_ONE":
+		return &"pass"
+	var fet_tgt: StringName = item.get("target_id", &"")
+	var exec_d: Dictionary = action.record.get("_fet_choose_executed", {})
+	if bool(exec_d.get(fet_tgt, false)):
+		return &"next"  # 已处理（执行或取消），跳过
+	var chosen_d: Dictionary = action.record.get("_fet_choose_chosen", {})
+	if chosen_d.has(fet_tgt):
+		var cidx: int = int(chosen_d[fet_tgt])
+		if cidx >= 0:
+			# 已选：执行该 option 的 branch actions（DRAW_ACTION/RESTORE_POWER 等原子，同步完成）
+			var co_p: Dictionary = item_action.get("params", {})
+			var opts: Array = co_p.get("options", [])
+			if cidx < opts.size():
+				var branch_acts: Array = opts[cidx].get("actions", [])
+				for ba in branch_acts:
+					if context != null and context.action_service != null:
+						context.action_service.execute_sub_action(ba, payload, action)
+					if _last_created_sub_action_paused(action):
+						return &"pause"  # branch 子动作挂起（调用方存 _seq 续跑）
+		# cidx>=0 执行完 or cidx==-1 取消：标记已处理
+		exec_d[fet_tgt] = true
+		action.record["_fet_choose_executed"] = exec_d
+		return &"next"
+	# 未选：挂起弹窗
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": "pre_actions_target"}
+	action.record["_waiting_for_choose_one"] = true
+	action.record["_choose_one_effect_id"] = effect.effect_id
+	var co_params: Dictionary = item_action.get("params", {})
+	var opts2: Array = co_params.get("options", [])
+	var ui_opts: Array[Dictionary] = []
+	for oi in range(opts2.size()):
+		var opt_d: Dictionary = opts2[oi] if opts2[oi] is Dictionary else {}
+		ui_opts.append({"label": String(opt_d.get("label", "选项%d" % (oi + 1))), "effect_id": StringName("option_%d" % oi), "option_index": oi})
+	action.state = &"waiting_timing"
+	var co_pid: StringName = _effect_popup_owner_pid(effect, payload, action)
+	action_needs_input.emit(action.action_id, &"choose_one_effect", {
+		"action_id": action.action_id, "effect_id": effect.effect_id,
+		"options": ui_opts, "optional": bool(co_params.get("optional", false)), "player_id": co_pid,
+	})
+	SLog.log_raw("[TIMING] %s FOR_EACH_TARGET inner CHOOSE_ONE 挂起 effect=%s target=%s" % [String(action.action_id), String(effect.effect_id), String(fet_tgt)])
+	return &"pause"
+
+
+## 串行执行 flat 列表（FOR_EACH_TARGET 展开）。设 current_target 后 execute_sub_action；
+## 子动作挂起则存 _seq(flat) 并返回 true。返回 false=全部完成。
+func _run_flat_inline(flat: Array, start_idx: int, effect, payload: Dictionary, action, var_name: StringName) -> bool:
+	var i: int = start_idx
+	while i < flat.size():
+		var item: Dictionary = flat[i]
+		payload[String(item.get("var_name", var_name))] = {"mech_id": item.get("target_id", &"")}
+		# inner CHOOSE_ONE（pilot_012 e2）：per-target 串行弹窗，走专用 helper
+		var ci_ret: StringName = _flat_item_choose_one(item, effect, payload, action)
+		if ci_ret == &"pause":
+			var remaining_ci: Array = flat.slice(i + 1)
+			if not remaining_ci.is_empty():
+				action.record["_seq_effect_actions"] = {"payload": payload, "remaining": remaining_ci, "flat": true, "var_name": var_name}
+			action.state = &"waiting_effect_action"
+			return true
+		if ci_ret == &"next":
+			i += 1
+			continue
+		# pass：非 CHOOSE_ONE，走 execute_sub_action
+		if context != null and context.action_service != null:
+			context.action_service.execute_sub_action(item.get("action", {}), payload, action)
+		if _last_created_sub_action_paused(action):
+			var remaining: Array = flat.slice(i + 1)
+			if not remaining.is_empty():
+				action.record["_seq_effect_actions"] = {"payload": payload, "remaining": remaining, "flat": true, "var_name": var_name}
+			# 子动作挂起：父动作切 waiting_effect_action，等 ActionEngine._after_sub_action_finished
+			# 调 _continue_seq_effect_actions 续跑剩余 flat（pilot_012 e1 EXECUTE_STEAL 选牌后继续 MODIFY_MECH_POWER）
+			action.state = &"waiting_effect_action"
+			return true
+		i += 1
+	return false
+
+
 func _continue_seq_effect_actions(parent_action) -> bool:
 	if parent_action == null or not parent_action.record.has("_seq_effect_actions"):
 		return false
 	var seq: Dictionary = parent_action.record["_seq_effect_actions"]
 	var payload: Dictionary = seq.get("payload", {})
 	var remaining: Array = seq.get("remaining", [])
+	var is_flat: bool = bool(seq.get("flat", false))
+	var flat_var: StringName = seq.get("var_name", &"current_target")
 	while not remaining.is_empty():
 		# Q3 守卫：来源装备牌离场则停止剩余（effect_035/039 自损致弃置后不减威力/损伤）
 		if bool(seq.get("source_check", false)) and _source_equipment_discarded(payload):
 			parent_action.record.erase("_seq_effect_actions")
 			return false
 		var act: Dictionary = remaining.pop_front()
-		# 先回写 record（remaining 已 pop），供后续断点/取消路径读取一致状态（保留 source_check）
-		parent_action.record["_seq_effect_actions"] = {"payload": payload, "remaining": remaining, "source_check": seq.get("source_check", false)}
+		# 先回写 record（remaining 已 pop），供后续断点/取消路径读取一致状态（保留 source_check/flat 标记）
+		parent_action.record["_seq_effect_actions"] = {"payload": payload, "remaining": remaining, "source_check": seq.get("source_check", false), "flat": is_flat, "var_name": flat_var}
 		var act_type: StringName = act.get("type", &"")
+		# flat 模式（FOR_EACH_TARGET 展开）：item = {action, target_id, var_name}。
+		# 设 current_target 后执行 item.action（item 本身无 type -> 走 flat 分支）。
+		if is_flat and not act.has("type"):
+			var fet_tgt: StringName = act.get("target_id", &"")
+			payload[String(act.get("var_name", flat_var))] = {"mech_id": fet_tgt}
+			if context != null and context.action_service != null:
+				context.action_service.execute_sub_action(act.get("action", {}), payload, parent_action)
+			if _last_created_sub_action_paused(parent_action):
+				return true
+			continue
 		# REGISTER_LISTEN/CHOOSE_ONE/OFFER_DAMAGE_REDIRECT 不创建子动作或走 waiting_timing 挂起，
 		# 不应出现在 _seq remaining（_execute_actions 仅对 execute_sub_action 类动作设 _seq）。防御跳过。
 		if act_type == &"REGISTER_LISTEN" or act_type == &"CHOOSE_ONE" or act_type == &"OFFER_DAMAGE_REDIRECT":
@@ -3250,7 +4137,7 @@ func _handle_repeat_loop(action, effect, payload: Dictionary, rs_params: Diction
 	if _is_ai_owner(rl_pid, rl_mid):
 		return false
 	# 人类：弹"是否继续发动？"窗（choose_one_effect -> effect_choice 弹窗 -> on_ui_confirmed 续跑）
-	_pending_effect[action.action_id] = {"effect": effect, "payload": payload, "phase": "repeat_continue", "repeat_params": rs_params}
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": "repeat_continue", "repeat_params": rs_params}
 	action.record["_waiting_for_repeat_continue"] = true
 	action.state = &"waiting_timing"
 	action_needs_input.emit(action.action_id, &"choose_one_effect", {

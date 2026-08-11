@@ -13,6 +13,7 @@ extends Action
 class_name StatModifyAction
 
 const _TimingConst = preload("res://scripts/action_core/TimingConst.gd")
+const _SLog = preload("res://scripts/services/slog.gd")
 
 
 func _init() -> void:
@@ -41,6 +42,16 @@ func _step_extract_info(action: Action) -> Dictionary:
 ## ② 执行数值修正
 func _step_execute_mod(action: Action) -> Dictionary:
 	var result: Dictionary = {}
+	# stat_changes 数组模式（pilot_013 effect_02a）：每项 {stat_type, max_delta, current_delta}
+	# 护甲/动力上限与当前值原子修正（apply_max_and_current_atomically）。与单 stat_type+value 路径互斥。
+	var stat_changes: Array = action.record.get("stat_changes", [])
+	if not stat_changes.is_empty():
+		if context.game_actions == null:
+			return result
+		for change: Dictionary in stat_changes:
+			_apply_stat_change(action, change)
+		result["stat_changes"] = stat_changes
+		return result
 	var stat_type: StringName = action.record.get("stat_type", &"armor")
 	var stat_types: Array = action.record.get("stat_types", [])
 	if stat_types.is_empty():
@@ -103,6 +114,67 @@ func _apply_one_stat(action: Action, stat_type: StringName, value: int, method: 
 				context.game_actions.gain_gold({"player_id": action.record.get("player_id", &""), "amount": abs(value)})
 			elif method == &"decrease" or method == &"reduce":
 				context.game_actions.spend_gold({"player_id": action.record.get("player_id", &""), "amount": abs(value)})
+
+
+## stat_changes 数组单项处理（pilot_013 effect_02a 护甲/动力上限+当前值原子修正）。
+## 护甲为衍生值（get_armor=装备+派生+modifier），无 max/current/回复机制：
+##   - max_delta 忽略（护甲无上限，到期恢复无实际效果）
+##   - current_delta -> ARMOR_MODIFIER 永久 modifier（计入 get_armor，不恢复）
+## 动力有 max_power/power：
+##   - max_delta -> POWER_CAP_MODIFIER（计入 get_total_power/max_power，UNTIL_NEXT_OWNER_TURN 到期恢复）
+##   - current_delta -> current_only 直接减本身动力（clamp [0, max_power]，不恢复）
+func _apply_stat_change(action: Action, change: Dictionary) -> void:
+	var stat_type: StringName = change.get("stat_type", &"armor")
+	var max_delta: int = int(change.get("max_delta", 0))
+	var current_delta: int = int(change.get("current_delta", 0))
+	if max_delta == 0 and current_delta == 0:
+		return
+	if context == null or context.game_state == null or context.game_actions == null:
+		return
+	var target_id: StringName = action.record.get("target_id", &"")
+	var mech = context.game_state.mechs.get(target_id)
+	if mech == null:
+		push_error("stat_changes: 找不到机甲 %s" % String(target_id))
+		return
+	var duration: StringName = action.record.get("duration", &"UNTIL_NEXT_OWNER_TURN")
+	var source_card_id: StringName = action.record.get("source_card_id", action.record.get("source_card_instance_id", &""))
+	var duration_owner_id: StringName = action.record.get("duration_owner_id", &"")
+	var source_effect_id: StringName = action.record.get("source_effect_id", &"")
+	match stat_type:
+		&"armor":
+			if current_delta != 0:
+				context.game_actions.modify_armor({
+					"mech_id": target_id, "delta": current_delta,
+					"duration": &"PERMANENT",
+					"runtime_tag": source_effect_id if source_effect_id != &"" else &"pilot_013_armor_current",
+					"source_card_id": source_card_id,
+				})
+		&"power":
+			# max_delta -> POWER_CAP_MODIFIER（计入 max_power，到期恢复）
+			if max_delta != 0:
+				var cap_status := {
+					"status_id": context.game_state.next_id(&"status"),
+					"type": &"POWER_CAP_MODIFIER",
+					"delta": max_delta,
+					"duration": duration,
+					"source_card_id": source_card_id,
+					"runtime_tag": source_effect_id if source_effect_id != &"" else &"pilot_013_power_cap",
+					"duration_owner_id": duration_owner_id,
+				}
+				mech.statuses.append(cap_status)
+				mech.max_power = mech.get_total_power()
+				_SLog.log_stat_modify(
+					context.game_state.current_attack_id,
+					target_id, "mech", "动力上限", max_delta, "sub" if max_delta < 0 else "add",
+					{"effect_id": source_effect_id, "card_id": source_card_id, "mech_id": target_id}
+				)
+			# current_delta -> current_only（直接减本身动力，clamp [0, max_power]，不恢复）
+			if current_delta != 0:
+				context.game_actions.modify_mech_power({
+					"mech_id": target_id, "delta": current_delta, "method": &"add", "mode": &"current_only",
+					"min_value": 0, "duration": &"",
+					"source_card_id": source_card_id,
+				})
 
 
 func _get_target_attack(action: Action):

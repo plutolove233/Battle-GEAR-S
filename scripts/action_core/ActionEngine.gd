@@ -300,6 +300,10 @@ func _run_step_loop(action: Action, start_index: int) -> Dictionary:
 		# 从 settle 步继续（i 跟随 current_step_index+1）
 		if sig == &"skip":
 			i = action.current_step_index + 1
+		elif sig == &"rewind":
+			# pilot_011 挡攻转移：回退到 ATTACK_PRE 步重 fire（phase=timing_firing 已设，跳过 handler）
+			i = action.current_step_index
+			continue
 		else:
 			i += 1
 	# 所有步骤执行完毕
@@ -350,6 +354,12 @@ func _execute_step(action: Action, i: int) -> StringName:
 			cancel_action(action.action_id)
 			return &"ok"
 
+		# multi_target_complete：多目标攻击（双连等）所有复制攻击已同步完成 / 武器已不持有，
+		# 主攻击直接完成（不发 ATTACK_AT/AFTER/SETTLE--这些时点由各复制攻击各自发出）。
+		if not result.is_empty() and result.get("multi_target_complete", false):
+			_complete_action(action)
+			return &"ok"
+
 		# yield_frame：handler 请求本步完成后让出一帧（逐格移动动画用，仅 UI 模式）。
 		# 标记本步已完成（phase=timing_done，恢复时 continue_action 进下一步而非重跑 handler），
 		# 置 waiting_timing 暂停，由 _schedule_move_frame_resume 的 50ms 定时器恢复。
@@ -367,6 +377,14 @@ func _execute_step(action: Action, i: int) -> StringName:
 		if not result.is_empty():
 			action.record.merge(result, true)
 		action.current_step_phase = &"handler_done"
+
+		# handler 内 effect 选目标/选武器挂起（_request_target_selection 设 waiting_timing，
+		# 如聚能 CHOOSE_OWN_WEAPON / 维修 CHOOSE_ENEMY_MECH）：不可立即进阶段3 fire timing--
+		# 否则 USE_ACTION_AFTER 触发 pilot_001 01b REPEAT 重跑 effect 又挂起，覆盖第一次的
+		# _pending_effect，第一次 effect 永不执行（聚能双重生效只生效1次根因）。
+		# 暂停等 resume effect 完成后，continue_action 续跑阶段2/3（phase=handler_done 跳过 handler 不重跑）。
+		if action.state == &"waiting_timing":
+			return &"ok"
 
 	# ── 阶段2：检查效果动作（phase==handler_done，fire timing 之前） ──
 	# sub_action 在 fire 前暂停，恢复后进阶段3 fire（保证监听器读到效果动作完成后的完整 record）
@@ -386,23 +404,30 @@ func _execute_step(action: Action, i: int) -> StringName:
 	if action.current_step_phase == &"timing_firing":
 		var timing_point: StringName = step.get("timing_point", &"")
 		if timing_point != &"" and context != null and context.timing_engine != null:
-			if not action._step_timing_fired:
-				action._step_timing_fired = true
-				context.timing_engine.fire_timing(timing_point, action)
-			# 补跑待执行的 regular listeners（响应窗口关闭后补跑，含强袭 effect2）
-			# _run_pending_regular_listeners 开头守卫 state==waiting_timing 时 no-op：
-			# 首次 fire ATTACK_AT 开响应窗口置 waiting_timing 时跳过补跑（避免提前消费
-			# 强袭 effect2 读到 responded=false）；响应窗口关闭恢复后 state=running 才补跑。
-			if context.timing_engine.has_method("_run_pending_regular_listeners"):
-				context.timing_engine._run_pending_regular_listeners(action)
-			# 时点/补跑导致暂停：
-			# - waiting_timing：响应窗口 / 监听器目标选择 / resume_pending_effect 挂起
-			# - waiting_effect_action：补跑的 listener 创建了子动作（如强袭 effect2 的
-			#   EXECUTE_SINGLE_MOVE 创建 single_move），需等子动作完成后恢复继续补跑/推进。
-			#   若不在此 return，会清 _step_timing_fired 并推进到下一步（check_hit）用旧位置，
-			#   导致强袭2追击移动来不及在命中判定前生效。
-			if action.state == &"waiting_timing" or action.state == &"waiting_effect_action":
-				return &"ok"
+			# pilot_011 挡攻转移回退后：跳过 ATTACK_AT 重 fire。迪恩已用转化效果响应过此攻击，
+			# 重 fire 会弹第2次响应窗口并卡死；首次 ATTACK_AT 的 fire + regular listeners 已跑过，
+			# 重跑会导致强袭 effect2 等 LISTEN 效果双重结算。直接跳到 timing_done 推进 check_hit。
+			var _p011_skip_at: bool = timing_point == _TimingConst.ATTACK_AT and bool(action.record.get("_p011_skip_at_fire", false))
+			if _p011_skip_at:
+				action.record.erase("_p011_skip_at_fire")
+			else:
+				if not action._step_timing_fired:
+					action._step_timing_fired = true
+					context.timing_engine.fire_timing(timing_point, action)
+				# 补跑待执行的 regular listeners（响应窗口关闭后补跑，含强袭 effect2）
+				# _run_pending_regular_listeners 开头守卫 state==waiting_timing 时 no-op：
+				# 首次 fire ATTACK_AT 开响应窗口置 waiting_timing 时跳过补跑（避免提前消费
+				# 强袭 effect2 读到 responded=false）；响应窗口关闭恢复后 state=running 才补跑。
+				if context.timing_engine.has_method("_run_pending_regular_listeners"):
+					context.timing_engine._run_pending_regular_listeners(action)
+				# 时点/补跑导致暂停：
+				# - waiting_timing：响应窗口 / 监听器目标选择 / resume_pending_effect 挂起
+				# - waiting_effect_action：补跑的 listener 创建了子动作（如强袭 effect2 的
+				#   EXECUTE_SINGLE_MOVE 创建 single_move），需等子动作完成后恢复继续补跑/推进。
+				#   若不在此 return，会清 _step_timing_fired 并推进到下一步（check_hit）用旧位置，
+				#   导致强袭2追击移动来不及在命中判定前生效。
+				if action.state == &"waiting_timing" or action.state == &"waiting_effect_action":
+					return &"ok"
 		action._step_timing_fired = false  # 本步 timing 处理完毕，清标志
 		action.current_step_phase = &"timing_done"
 
@@ -418,6 +443,21 @@ func _execute_step(action: Action, i: int) -> StringName:
 				action.current_step_index = settle_index - 1
 				return &"skip"
 			# 已在 settle 或之后 / 无 settle 步：正常结束
+		# pilot_011 挡攻转移后回退 ATTACK_PRE 重 fire（让新目标迪恩的 PRE 装备被动触发）。
+		# 仅在 ATTACK_AT 步（execute_attack）完成时检测；回退到 PRE 步 phase=timing_firing 跳过
+		# select_target handler（目标已由 REDIRECT 设定），重 fire PRE 后推进到 ATTACK_AT 步。
+		# 迪恩已用转化效果响应过此攻击（responded=true），重 fire ATTACK_AT 会再次收集 AVAILABILITY
+		# 监听器弹第2次响应窗口（迪恩自身成为目标后 effect_01 也可选），导致攻击流程卡死在 ATTACK_AT。
+		# 故设 _p011_skip_at_fire：重 fire PRE 后到 ATTACK_AT 步时直接跳过 fire（见阶段3）。
+		if action.action_type == &"attack" and action.record.get("_p011_redirect_rewind", false):
+			action.record.erase("_p011_redirect_rewind")
+			var _rewind_idx := _find_step_by_timing(action, _TimingConst.ATTACK_PRE)
+			if _rewind_idx >= 0 and action.current_step_index > _rewind_idx:
+				action.current_step_index = _rewind_idx
+				action.current_step_phase = &"timing_firing"  # 跳过 handler，直接重 fire PRE
+				action._step_timing_fired = false  # 让 PRE 重新 fire
+				action.record["_p011_skip_at_fire"] = true  # 重 fire PRE 后跳过 ATTACK_AT 重 fire
+				return &"rewind"
 		# 清空 phase，准备下一步
 		action.current_step_phase = &""
 
@@ -506,6 +546,11 @@ func _after_sub_action_finished(parent_action) -> void:
 	if context != null and context.timing_engine != null and context.timing_engine.has_method(&"_continue_seq_effect_actions"):
 		if context.timing_engine._continue_seq_effect_actions(parent_action):
 			return
+	# 多目标攻击 fork 续跑：上一个复制攻击完成后，派生下一个或整体结束主攻击。
+	# 主攻击不发 ATTACK_AT/AFTER/SETTLE（避免 continue_action 恢复后 fire 主攻击 ATTACK_AT）。
+	if parent_action.has_method(&"_continue_fork_attacks"):
+		if parent_action._continue_fork_attacks():
+			return
 	# 无可续跑，恢复父动作继续执行
 	continue_action(parent_action.action_id, {})
 
@@ -567,5 +612,14 @@ func _find_settle_step(action: Action) -> int:
 		var step: Dictionary = action.steps[i]
 		var step_name: StringName = step.get("step_name", &"")
 		if step_name == &"settle":
+			return i
+	return -1
+
+
+## 按时点查找步骤索引（pilot_011 挡攻转移后回退 ATTACK_PRE 用）
+func _find_step_by_timing(action: Action, timing: StringName) -> int:
+	for i in range(action.steps.size()):
+		var step: Dictionary = action.steps[i]
+		if StringName(step.get("timing_point", &"")) == timing:
 			return i
 	return -1

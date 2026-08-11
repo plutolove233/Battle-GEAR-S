@@ -17,15 +17,15 @@ const _Action = preload("res://scripts/action_core/Action.gd")
 ## 从指定牌堆抽牌
 ## 如果牌堆为空，将弃牌堆洗入后再抽
 ## 返回抽到的卡牌 instance_id 列表
-## pilot_003 effect_02：抽到瑟尔基尔埋入的正面牌时，先 fire CARD_LEAVE_ACTION_DECK_BEFORE 拦截，
-## 拦截牌不交给调用方（改由瑟尔基尔拥有者立即使用/弃置+补抽），且不计入本次已抽数量（while 循环续抽）。
+## pilot_003 effect_02：action_deck 抽出的牌不在此设 zone（由调用方 append+owner 后设 zone=action_hand，
+## 设 zone 时 zone setter 检测 face_up_bury 标签 -> emit left_action_deck -> _fire_pilot_003_card_leave_deck
+## fire CARD_LEAVE_ACTION_DECK_BEFORE 时点，effect_02 监听器事后处理（瑟尔基尔立即使用/弃置+抽1）。
 func draw_from_deck(deck_key: StringName, count: int) -> Array[StringName]:
 	var gs: GameState = context.game_state
 	var deck_state: DeckState = gs.deck_state
 	var drawn: Array[StringName] = []
 
-	# while 而非 for：被拦截的正面牌弹出后不计入 drawn，需续抽补足 count。
-	while drawn.size() < count:
+	for i in range(max(0, count)):
 		var deck: Array = _get_deck_array(deck_key)
 		if deck.is_empty():
 			# 尝试洗入弃牌堆
@@ -35,47 +35,40 @@ func draw_from_deck(deck_key: StringName, count: int) -> Array[StringName]:
 				break  # 无牌可抽
 
 		var card_id: StringName = deck.pop_front() as StringName
-		var card: CardInstance = gs.get_card(card_id)
-
-		# pilot_003 effect_02：正面牌离开行动牌堆前 fire CARD_LEAVE_ACTION_DECK_BEFORE。
-		# 监听器（CANCEL_PARENT_CARD_TRANSFER + IMMEDIATELY_USE_DECK_CARD_OR_FALLBACK）同步执行；
-		# 拦截后该牌由独立顶层 use_action_card 使用（或弃置+补抽），不交给原获取者。
-		var intercepted := false
-		if deck_key == &"action_deck" and card != null and bool(card.counters.get("pilot_003_face_up_leave_use", false)):
-			intercepted = _fire_pilot_003_card_leave_deck(card_id)
-			if intercepted:
-				card.counters.erase("pilot_003_intercepted")
-				continue
-
 		drawn.append(card_id)
-		# 更新卡牌实例的区域标记
-		if card:
-			card.zone = &"hand"
+		var card: CardInstance = gs.get_card(card_id)
+		# action_deck 的 zone 由调用方设（draw_action_cards/TurnService 在 append+owner 后设，
+		# 触发 effect_02 事后处理）；其余牌堆在此设 zone。
+		if card and deck_key != &"action_deck":
+			match deck_key:
+				&"equipment_deck", &"advanced_equipment_deck":
+					card.zone = &"equipment_hand"
+				_:
+					# pilot_deck/event_deck 等不进手牌的牌：保持牌堆过渡标记（"deck"），
+					# 由具体处理路径（GameSetupService 等）覆盖为最终区域。
+					pass
 
 	return drawn
 
 
-## pilot_003 effect_02：用轻量虚拟 Action（仿 TurnService._fire_timing）fire CARD_LEAVE_ACTION_DECK_BEFORE。
-## 返回是否被拦截（监听器 CANCEL_PARENT_CARD_TRANSFER 在卡片 counters 写 pilot_003_intercepted）。
-func _fire_pilot_003_card_leave_deck(card_id: StringName) -> bool:
-	if context == null or context.timing_engine == null or context.game_state == null:
-		return false
-	var card: CardInstance = context.game_state.get_card(card_id)
-	if card == null:
-		return false
+## pilot_003 effect_02：带 face_up_bury 标签的牌 zone 从 action_deck 变走时（CardInstance.zone setter emit
+## left_action_deck 信号）触发。fire CARD_LEAVE_ACTION_DECK_BEFORE 时点，effect_02 LISTEN 监听器事后处理：
+## 可用则瑟尔基尔立即使用，不可用则当前持有者弃置+瑟尔基尔抽1。
+func _fire_pilot_003_card_leave_deck(card: CardInstance) -> void:
+	if card == null or context == null or context.timing_engine == null or context.game_state == null:
+		return
 	var virtual_action = _Action.new()
 	virtual_action.action_type = &"card_zone_change"
+	# 当前持有者（抽牌者）作为 UI 路由归属；事后 effect_02 据此让持有者弃置/移走
 	virtual_action.record = {
-		"card_instance_id": card_id,
+		"card_instance_id": card.instance_id,
 		"from_zone": &"action_deck",
-		"to_zone": &"hand",
-		# metadata owner（埋牌者/瑟尔基尔拥有者）作为 UI 路由归属；离堆牌原 owner_player_id 即埋牌者
-		"player_id": StringName(card.counters.get("pilot_003_leave_deck_owner_pid", card.owner_player_id)),
+		"to_zone": card.zone,
+		"player_id": card.owner_player_id,
 	}
 	virtual_action.state = &"running"
 	virtual_action.context = context
 	context.timing_engine.fire_timing(_TimingConst.CARD_LEAVE_ACTION_DECK_BEFORE, virtual_action)
-	return bool(card.counters.get("pilot_003_intercepted", false))
 
 
 ## 将卡牌移到牌堆底部
@@ -123,6 +116,34 @@ func discard_card(card_id: StringName, reason: StringName) -> void:
 		return
 	# 退路：action_service 未就绪（初始化/测试），走 legacy 同步移牌
 	_discard_card_legacy(card_id, reason)
+
+
+## 批量弃置（走 discard_card 动作发 DISCARD_BEFORE/AFTER/SETTLE 时点）。
+## 供美杜莎「立即弃置目标同类牌」、肯特「帝国压制」等批量弃牌调用，使监听 DISCARD_SETTLE
+## 的效果（如安德洛美达 effect_01b 回收维修）能在批量弃置含维修时自动回收首张维修 + X+1。
+## 一次弃置含多张维修时，effect_01b 只 fire 一次（同一动作同一 SETTLE），取首张维修（裁定）。
+func discard_cards(card_ids: Array, reason: StringName) -> void:
+	if card_ids.is_empty():
+		return
+	if context == null:
+		return
+	# 过滤空串
+	var ids: Array = []
+	for cid in card_ids:
+		if cid != null and String(cid) != "":
+			ids.append(cid)
+	if ids.is_empty():
+		return
+	if context.action_service != null:
+		context.action_service.execute(&"discard_card", {
+			"card_ids": ids,
+			"reason": reason,
+			"executor": &"system_default",
+		})
+		return
+	# 退路：action_service 未就绪，逐张走 legacy 同步移牌（不发时点）
+	for cid in ids:
+		_discard_card_legacy(cid, reason)
 
 
 ## Legacy 同步弃牌（action_service 未就绪时退路，不发育动作时点）

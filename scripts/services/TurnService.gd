@@ -19,6 +19,8 @@ var context = null  # type: GameContext
 
 const _GameConfig = preload("res://scripts/config/GameConfig.gd")
 const _TimingConst = preload("res://scripts/action_core/TimingConst.gd")
+const _SLog = preload("res://scripts/services/slog.gd")
+const _ActionPilotEffects = preload("res://scripts/generated_database/ActionPilotEffects.gd")
 
 
 ## 开始回合
@@ -40,6 +42,7 @@ func start_turn(player_id: StringName) -> Dictionary:
 	player.once_per_turn_used.clear()
 	player.turn_counters.clear()
 	player.sell_equipment_count_this_turn = 0
+	player.paid_draw_count_this_turn = 0
 
 	# 重置机甲回合攻击计数
 	var mech: MechState = gs.get_mech_for_player(player_id)
@@ -73,40 +76,45 @@ func start_turn(player_id: StringName) -> Dictionary:
 			return s.get("type", &"") != &"CANNOT_RESTORE_POWER"
 		)
 
-	# ── 4. 发出 TURN_START 时点（回复动力） ──
+	# 清理 UNTIL_NEXT_OWNER_TURN 持续效果（pilot_013 effect_02a 上限 modifier 到期恢复）。
+	# 仅清 duration_owner_id == 即将开始回合玩家的 ARMOR_MODIFIER/POWER_CAP_MODIFIER；
+	# 当前值减幅不恢复（仅上限恢复）。pilot_004 的 UNTIL_NEXT_OWNER_TURN modifier 无 duration_owner_id，
+	# 由其专有监听器清理，此处不重复。
+	_clean_until_next_owner_turn(player_id)
+
+	# 恢复动力到最大值（先于 TURN_START 时点：保证监听 TURN_START 的效果如玛沙装甲转能
+	# cap_bonus 补满在动力已回复后触发；权威文档顺序为 TURN_START 时点后回复动力，但
+	# TURN_START 监听器弹窗异步挂起时 TurnService 不阻塞、restore 紧随 fire 执行，
+	# 前置到 fire 之前使"动力已回复"语义确定，不受异步时序影响。抽牌/金币仍在 fire 之后）
+	if mech and context.game_actions:
+		context.game_actions.restore_power({"mech_id": mech.mech_id, "amount": "full"})
+
+	# ── 4. 发出 TURN_START 时点 ──
 	_fire_timing(_TimingConst.TURN_START, {
 		"player_id": String(player_id),
 		"turn_number": gs.turn_number,
 	})
 
-	# 恢复动力到最大值
-	if mech and context.game_actions:
-		context.game_actions.restore_power({"mech_id": mech.mech_id, "amount": "full"})
-
-	# ── 5. 抽2张行动牌 ──
+	# ── 5. 抽2张行动牌（走 gain_card 动作拿 GAIN_CARD_BEFORE/AFTER/SETTLE 时点；
+	# gain_card 委托 draw_action_cards，保留 pilot_003 跳过正面牌 / effect_02 离堆事后处理 /
+	# AVAILABILITY 注册 / ON_CARD_DRAWN hook。PvP 锁步两端一致。返回实际抽到的牌用于日志） ──
 	var drawn_actions: Array[StringName] = []
-	if context.deck_service != null:
-		drawn_actions = context.deck_service.draw_from_deck(&"action_deck", 2)
-		for card_id: StringName in drawn_actions:
-			player.action_hand.append(card_id)
-			# 标记归属玩家（draw_from_deck 不设 owner_player_id；条件检查/离场效果依赖此字段）
-			var _ac = context.game_state.get_card(card_id)
-			if _ac:
-				_ac.owner_player_id = player_id
-			# 注册 AVAILABILITY 效果（迎击牌等的响应窗口监听器）；
-			# 否则后续被攻击时响应窗口不会弹出
-			if context.has_method("register_hand_card_availability"):
-				context.register_hand_card_availability(card_id)
+	if context.action_service != null:
+		var _gc_res: Dictionary = context.action_service.execute(&"gain_card", {
+			"from_zone": &"action_deck", "card_kind": &"action", "count": 2,
+			"player_id": player_id, "reason": &"turn_start"
+		})
+		drawn_actions = _gc_res.get("record", {}).get("drawn_card_ids", [])
 
-	# ── 6. 抽1张装备牌 ──
+	# ── 6. 抽1张装备牌（走 gain_card 动作；gain_card 委托 draw_equipment_cards 自动
+	# append equipment_hand + 设 owner + fire ON_CARD_DRAWN/ON_EQUIPMENT_CARD_DRAWN hook） ──
 	var drawn_equipment: Array[StringName] = []
-	if context.deck_service != null:
-		drawn_equipment = context.deck_service.draw_from_deck(&"equipment_deck", 1)
-		for card_id: StringName in drawn_equipment:
-			player.equipment_hand.append(card_id)
-			var _ec = context.game_state.get_card(card_id)
-			if _ec:
-				_ec.owner_player_id = player_id
+	if context.action_service != null:
+		var _ge_res: Dictionary = context.action_service.execute(&"gain_card", {
+			"from_zone": &"equipment_deck", "card_kind": &"equipment", "count": 1,
+			"player_id": player_id, "reason": &"turn_start"
+		})
+		drawn_equipment = _ge_res.get("record", {}).get("drawn_card_ids", [])
 
 	# ── 7. 获得2金币 ──
 	if context.game_actions:
@@ -167,9 +175,26 @@ func end_turn(player_id: StringName) -> Dictionary:
 		context.event_timer_service.tick_on_turn_end(mech.mech_id)
 
 	# ── 5. 弃掉超出手牌上限的行动牌 ──
-	while player.action_hand.size() > player.action_card_limit:
-		var excess_card: StringName = player.action_hand.pop_back()
-		context.deck_service.discard_card(excess_card, &"turn_cleanup")
+	# 本回合被安德洛美达 effect_01b 回收的维修（标记 pilot_008_recovered）保留在手牌且不计入超限名额
+	# （效果优先，每回合至多1张）。先收集 (size - effective_limit) 张非回收超限牌再弃，避免 while pop_back
+	# 重取 append 到末尾的回收维修（once_per_turn 已用 -> 不再回收 -> 维修进弃牌堆）。
+	var _recovered_n: int = 0
+	for _cid_r in player.action_hand:
+		if _ActionPilotEffects.is_pilot_008_recovered(_cid_r):
+			_recovered_n += 1
+	var _effective_limit: int = player.action_card_limit + _recovered_n
+	if player.action_hand.size() > _effective_limit:
+		var _excess_cards: Array[StringName] = []
+		for i in range(player.action_hand.size() - 1, -1, -1):
+			if player.action_hand.size() - _excess_cards.size() <= _effective_limit:
+				break
+			var _cid: StringName = player.action_hand[i]
+			if _ActionPilotEffects.is_pilot_008_recovered(_cid):
+				continue  # 回收牌保留，跳过
+			_excess_cards.append(_cid)
+		for _cid in _excess_cards:
+			player.action_hand.erase(_cid)
+			context.deck_service.discard_card(_cid, &"turn_cleanup")
 
 	# ── 6. 弃掉未设置的装备牌 ──
 	while player.equipment_hand.size() > 0:
@@ -178,6 +203,12 @@ func end_turn(player_id: StringName) -> Dictionary:
 
 	# ── 7. 清理 THIS_TURN 持续时间的效果 ──
 	_clean_this_turn_durations(player_id)
+
+	# ── 7.1 清理 pilot_009 美杜莎临时卡牌控制（持续光环到回合结束） ──
+	# 裁定：控制仅本回合有效，回合结束统一解除（无论哪个玩家回合结束都清，安全无害）。
+	_ActionPilotEffects.clear_all_pilot_009_control()
+	# 清理 pilot_008 安德洛美达本回合回收标记（仅 end_turn 第5步弃超限牌时用，回合结束失效）
+	_ActionPilotEffects.clear_pilot_008_recovered()
 
 	# ── 7.5 清理 temp_zone 残留牌 ──
 	# 兜底：行动牌使用中（如反击2效果2监听 ATTACK_SETTLE 未触发前留 temp_zone）若因
@@ -204,7 +235,10 @@ func end_turn(player_id: StringName) -> Dictionary:
 func _fire_timing(timing: StringName, payload: Dictionary = {}) -> void:
 	if context.timing_engine == null:
 		return
-	# 创建一个轻量级的虚拟动作对象用于传递时点
+	# 创建一个轻量级的虚拟动作对象用于传递时点。
+	# 必须注册到 ActionRegistry 以获取唯一 action_id（否则 action_id=&"" 导致多个虚拟 action
+	# 的挂起效果互相覆盖；且 resume_pending_effect / continue_action 从 registry 取不到 action
+	# 致 pilot LISTEN 效果 CHOOSE_ONE 确认后无法 resume 到 CHOOSE_INTEGER 等后续阶段）。
 	var virtual_action = Action.new()
 	virtual_action.action_type = &"turn"
 	virtual_action.record = payload.duplicate()
@@ -220,7 +254,54 @@ func _fire_timing(timing: StringName, payload: Dictionary = {}) -> void:
 		var mech = context.game_state.get_mech_for_player(player_id)
 		if mech:
 			virtual_action.source["mech_id"] = mech.mech_id
+	# 注册到 registry 获取唯一 action_id（register 内部在 action_id 为空时分配）
+	if context.action_registry != null:
+		context.action_registry.register(virtual_action)
 	context.timing_engine.fire_timing(timing, virtual_action)
+	# fire 完成后：若虚拟 action 未挂起（无监听器响应或已同步完成），立即清理避免泄漏。
+	# 挂起的（waiting_timing 等玩家弹窗确认）保留在 registry，待 resume 后 continue_action
+	# 跑空 step 自动 completed -> cleanup。
+	if context.action_registry != null and virtual_action.state != &"waiting_timing" and virtual_action.state != &"waiting_input" and virtual_action.state != &"waiting_effect_action":
+		context.action_registry.cleanup_action(virtual_action.action_id)
+
+
+## 清理 duration=UNTIL_NEXT_OWNER_TURN 且归属即将开始回合玩家的上限 modifier。
+## pilot_013 effect_02a：护甲/动力上限-4 到期恢复（当前值-4 不恢复，仅上限恢复）。
+## 仅清 ARMOR_MODIFIER/POWER_CAP_MODIFIER 中 duration_owner_id 匹配的项；移除后重算 max_power
+## 并钳制 current power（cap 移除后上限恢复，当前动力不自动+4，但允许后续 restore_power 正常回满）。
+func _clean_until_next_owner_turn(player_id: StringName) -> void:
+	var gs: GameState = context.game_state
+	if gs == null:
+		return
+	for mech_id: StringName in gs.mechs:
+		var mech: MechState = gs.mechs[mech_id]
+		var remove_ids: Array[StringName] = []
+		for status: Dictionary in mech.statuses:
+			var stype: StringName = status.get("type", &"")
+			if stype != &"ARMOR_MODIFIER" and stype != &"POWER_CAP_MODIFIER":
+				continue
+			if String(status.get("duration", &"")) != "UNTIL_NEXT_OWNER_TURN":
+				continue
+			var owner_id = status.get("duration_owner_id", &"")
+			if owner_id == &"" or String(owner_id) != String(player_id):
+				continue
+			var sid: StringName = status.get("status_id", &"")
+			if sid != &"":
+				remove_ids.append(sid)
+		if remove_ids.is_empty():
+			continue
+		if context.timing_engine != null:
+			for sid in remove_ids:
+				context.timing_engine.unregister_listeners_for_status(sid)
+		mech.statuses = mech.statuses.filter(func(s: Dictionary) -> bool:
+			return not remove_ids.has(s.get("status_id", &""))
+		)
+		# 重算 max_power + 钳制 current power（cap modifier 移除后上限恢复，当前动力保留）
+		mech.max_power = mech.get_total_power()
+		var own: int = mech.get_own_power()
+		var new_own: int = clampi(own, 0, mech.max_power)
+		mech.power = new_own + mech.temp_power
+		_SLog.log_raw("[pilot_013] %s 回合开始清理 UNTIL_NEXT_OWNER_TURN modifier，mech=%s max_power=%d power=%d" % [String(player_id), String(mech_id), mech.max_power, mech.power])
 
 
 ## 清理持续时间为 THIS_TURN 的效果
@@ -284,10 +365,13 @@ func _clean_this_turn_durations(turn_player_id: StringName = &"") -> void:
 ## 异常情况下可能是 null 或 Dictionary（PvP 回合结束曾因 String(null) 构造崩溃，
 ## 报 "Nonexistent 'String' constructor"）。仅 String/StringName 才可能等于 "THIS_TURN"；
 ## int 视为非 THIS_TURN；其它类型打印诊断以便定位根因。
+## UNTIL_TURN_END（联合状态用）语义同 THIS_TURN，回合结束统一清理--
+## 原仅匹配 THIS_TURN 致联合状态永续（unite_status_clear 的 REMOVE_STATUS 缺 target_id 移除失败）。
 func _is_this_turn_duration(d) -> bool:
 	var t: int = typeof(d)
 	if t == TYPE_STRING or t == TYPE_STRING_NAME:
-		return String(d) == "THIS_TURN"
+		var s := String(d)
+		return s == "THIS_TURN" or s == "UNTIL_TURN_END"
 	if t != TYPE_INT:
 		push_warning("[TurnService] status duration 非预期类型 %d: %s" % [t, str(d)])
 	return false

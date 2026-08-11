@@ -8,8 +8,8 @@ class_name EnemyInfoPopup
 const _EquipmentPanel = preload("res://scripts/ui/equipment_panel.gd")
 
 var _context = null  # type: GameContext
-var _equipment_panel: EquipmentPanel
-var _stats_container: VBoxContainer
+var _local_player_id: StringName = &"player"
+var _content_container: VBoxContainer
 
 
 func _ready() -> void:
@@ -25,18 +25,9 @@ func _ready() -> void:
 	title.add_theme_color_override("font_color", Color(0.9, 0.3, 0.3))
 	vbox.add_child(title)
 
-	# 装备面板（复用 EquipmentPanel，传入敌方机甲）
-	_equipment_panel = _EquipmentPanel.new()
-	_equipment_panel.custom_minimum_size = Vector2(240, 0)
-	vbox.add_child(_equipment_panel)
-
-	# 分隔线
-	var sep := HSeparator.new()
-	vbox.add_child(sep)
-
-	# 统计信息容器
-	_stats_container = VBoxContainer.new()
-	vbox.add_child(_stats_container)
+	# 内容容器（按对手动态填充多个块，3人PvP时含 enemy+third）
+	_content_container = VBoxContainer.new()
+	vbox.add_child(_content_container)
 
 	# 关闭按钮
 	var close_btn := Button.new()
@@ -47,63 +38,89 @@ func _ready() -> void:
 
 
 ## 配置弹窗：从 GameContext 读取敌方数据
-func configure(game_context) -> void:
+## local_player_id 用于排除己方（3人PvP时显示其余2个对手）
+func configure(game_context, local_player_id: StringName = &"player") -> void:
 	_context = game_context
+	_local_player_id = local_player_id
 	_refresh()
 
 
-## 刷新显示内容
+## 刷新显示内容（遍历所有非本地玩家，每个生成一个对手块）
 func _refresh() -> void:
 	if _context == null:
 		return
 
-	var gs = _context.game_state
-	var enemy_player = gs.players.get(&"enemy")
-	var enemy_mech = gs.get_mech_for_player(&"enemy")
-
-	# 更新装备面板（敌方机甲，需要隐藏正面信息）
-	if enemy_mech:
-		_equipment_panel.configure(enemy_mech, true)
-
-	# 清除并重建统计信息
-	for child in _stats_container.get_children():
+	# 清除旧内容
+	for child in _content_container.get_children():
 		child.queue_free()
 
-	if enemy_player and enemy_mech:
-		_add_stat("金币: %d" % enemy_player.gold)
-		_add_stat("行动牌: %d 张" % enemy_player.action_hand.size())
-		_add_stat("装备牌: %d 张" % enemy_player.equipment_hand.size())
-		_add_stat("动力: %d / %d" % [enemy_mech.power, enemy_mech.max_power])
-		_add_stat("生命: %d / %d" % [enemy_mech.current_hp, enemy_mech.max_hp])
-		_add_stat("护甲: %d" % enemy_mech.get_armor())
-
-		# 显示损伤标记
-		var damaged_slots: Array[String] = []
-		for slot_id: StringName in enemy_mech.slots:
-			var slot = enemy_mech.slots[slot_id]
-			if slot.region_damage_tokens > 0:
-				var slot_name := _slot_display_name(String(slot_id))
-				damaged_slots.append("%s:%d" % [slot_name, slot.region_damage_tokens])
-		if not damaged_slots.is_empty():
-			_add_stat("损伤部位: %s" % " ".join(damaged_slots))
-
-		# 显示联合状态（Target UI 信息：被哪些 unite 机甲联合）
-		var unite_names: Array[String] = []
-		for s: Dictionary in enemy_mech.statuses:
-			if s.get("type", &"") == &"UNITE":
-				var u_mid: StringName = s.get("unite", &"")
-				var u_mech = gs.mechs.get(u_mid) if u_mid != &"" else null
-				var u_name: String = u_mech.frame_def.display_name if (u_mech != null and u_mech.frame_def != null) else String(u_mid)
-				unite_names.append(u_name)
-		if not unite_names.is_empty():
-			_add_stat("联合状态: 被 %s 联合" % " ".join(unite_names))
+	var gs = _context.game_state
+	for pid: StringName in gs.players:
+		if pid == _local_player_id:
+			continue
+		var enemy_player = gs.players[pid]
+		var enemy_mech = gs.get_mech_for_player(pid)
+		if enemy_mech == null:
+			continue
+		_add_opponent_block(gs, pid, enemy_player, enemy_mech)
 
 
-## 添加一行统计文本
-func _add_stat(text: String) -> void:
+## 添加单个对手的信息块
+func _add_opponent_block(gs, pid: StringName, enemy_player, enemy_mech) -> void:
+	# 对手小标题
+	var sub_title := Label.new()
+	sub_title.text = "【%s】" % String(pid)
+	sub_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	sub_title.add_theme_color_override("font_color", Color(0.85, 0.55, 0.2))
+	_content_container.add_child(sub_title)
+
+	# 装备面板（敌方机甲，隐藏正面信息）
+	var eq_panel := _EquipmentPanel.new()
+	eq_panel.custom_minimum_size = Vector2(240, 0)
+	_content_container.add_child(eq_panel)
+	eq_panel.configure(enemy_mech, true)
+
+	# 统计信息
+	var stats := VBoxContainer.new()
+	_content_container.add_child(stats)
+
+	_add_stat_to(stats, "金币: %d" % enemy_player.gold)
+	_add_stat_to(stats, "行动牌: %d 张" % enemy_player.action_hand.size())
+	_add_stat_to(stats, "装备牌: %d 张" % enemy_player.equipment_hand.size())
+	_add_stat_to(stats, "动力: %d / %d" % [enemy_mech.power, enemy_mech.max_power])
+	_add_stat_to(stats, "生命: %d / %d" % [enemy_mech.current_hp, enemy_mech.max_hp])
+	_add_stat_to(stats, "护甲: %d" % enemy_mech.get_armor())
+
+	# 显示损伤标记
+	var damaged_slots: Array[String] = []
+	for slot_id: StringName in enemy_mech.slots:
+		var slot = enemy_mech.slots[slot_id]
+		if slot.region_damage_tokens > 0:
+			var slot_name := _slot_display_name(String(slot_id))
+			damaged_slots.append("%s:%d" % [slot_name, slot.region_damage_tokens])
+	if not damaged_slots.is_empty():
+		_add_stat_to(stats, "损伤部位: %s" % " ".join(damaged_slots))
+
+	# 显示联合状态（Target UI 信息：被哪些 unite 机甲联合）
+	var unite_names: Array[String] = []
+	for s: Dictionary in enemy_mech.statuses:
+		if s.get("type", &"") == &"UNITE":
+			var u_mid: StringName = s.get("unite", &"")
+			var u_mech = gs.mechs.get(u_mid) if u_mid != &"" else null
+			var u_name: String = u_mech.frame_def.display_name if (u_mech != null and u_mech.frame_def != null) else String(u_mid)
+			unite_names.append(u_name)
+	if not unite_names.is_empty():
+		_add_stat_to(stats, "联合状态: 被 %s 联合" % " ".join(unite_names))
+
+	# 块间分隔
+	_content_container.add_child(HSeparator.new())
+
+
+## 添加一行统计文本到指定容器
+func _add_stat_to(container: VBoxContainer, text: String) -> void:
 	var label := Label.new()
 	label.text = text
-	_stats_container.add_child(label)
+	container.add_child(label)
 
 
 ## 槽位ID → 中文名

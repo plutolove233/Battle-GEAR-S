@@ -8,11 +8,14 @@
 extends PopupPanel
 class_name MechDetailPanel
 
+const _ActionPilotEffects = preload("res://scripts/generated_database/ActionPilotEffects.gd")
+
 var _context = null  # type: GameContext
 var _mech = null     # type: MechState
 var _armor_container: VBoxContainer = null
 var _power_container: VBoxContainer = null
 var _status_container: VBoxContainer = null
+var _hunting_container: VBoxContainer = null
 var _summary_label: Label = null
 
 
@@ -50,6 +53,12 @@ func _ready() -> void:
 	_status_container = VBoxContainer.new()
 	vbox.add_child(_status_container)
 
+	vbox.add_child(HSeparator.new())
+
+	vbox.add_child(_make_header("狩猎标记"))
+	_hunting_container = VBoxContainer.new()
+	vbox.add_child(_hunting_container)
+
 	var close_btn := Button.new()
 	close_btn.text = "关闭"
 	close_btn.custom_minimum_size = Vector2(140, 32)
@@ -78,6 +87,7 @@ func _refresh() -> void:
 	_refresh_armor()
 	_refresh_power()
 	_refresh_status()
+	_refresh_hunting_mark()
 
 
 func _refresh_armor() -> void:
@@ -144,6 +154,38 @@ func _refresh_status() -> void:
 		lbl.text = "• " + text
 		lbl.add_theme_color_override("font_color", Color(0.85, 0.8, 0.6))
 		_status_container.add_child(lbl)
+
+
+## 狩猎标记（pilot_006 里昂）：遍历全部机甲找持有里昂机师牌的机甲，
+## 若该里昂的本轮狩猎目标存在，则：
+##   - 当前详情机甲 == 里昂机甲：显示"本轮狩猎目标：X"
+##   - 当前详情机甲 == 被标记机甲：显示"被里昂(X)标记为狩猎目标"
+func _refresh_hunting_mark() -> void:
+	for c in _hunting_container.get_children():
+		c.queue_free()
+	if _context == null or _context.get("game_state") == null or _mech == null:
+		return
+	var gs = _context.game_state
+	for mid in gs.mechs:
+		var m = gs.mechs[mid]
+		if m == null or m.slots == null:
+			continue
+		var pilot_slot = m.slots.get(&"pilot")
+		if pilot_slot == null or pilot_slot.equipped_card == null:
+			continue
+		var pilot_card = pilot_slot.equipped_card
+		if pilot_card.def == null or String(pilot_card.def.card_id) != "pilot_006_里昂":
+			continue
+		var marked: StringName = _ActionPilotEffects.get_pilot_006_mark(pilot_card.instance_id)
+		if marked == &"":
+			continue
+		var marked_mech = gs.mechs.get(marked)
+		var marked_name: String = marked_mech.frame_def.display_name if (marked_mech != null and marked_mech.frame_def != null) else String(marked)
+		var leon_name: String = m.frame_def.display_name if (m.frame_def != null) else String(mid)
+		if mid == _mech.mech_id:
+			_add_info_line(_hunting_container, "本轮狩猎目标：%s" % marked_name, Color(0.95, 0.8, 0.5))
+		if marked == _mech.mech_id:
+			_add_info_line(_hunting_container, "被里昂(%s)标记为狩猎目标" % leon_name, Color(0.95, 0.6, 0.6))
 
 
 # ── 内部辅助 ──

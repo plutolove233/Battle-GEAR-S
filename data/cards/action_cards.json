@@ -52,7 +52,7 @@
     "type": "攻击",
     "rarity": "R",
     "count": 6,
-    "effect_text": "选择1把武器对1~2台范围内的机甲发动攻击。",
+    "effect_text": "选择1把武器对1~2台范围内的机甲发动攻击（2台机甲独立进行响应阶段）。",
     "effect_ids": [
       "attack_one_weapon_one_or_two_targets"
     ]
@@ -262,7 +262,7 @@
     "type": "辅助",
     "rarity": "SR",
     "count": 4,
-    "effect_text": "指定1台其他机甲为目标，本回合我方对该目标发动的攻击不能被目标及其相邻机甲响应（识破除外），该目标机甲被攻击命中后结束以上效果。",
+    "effect_text": "指定1台其他机甲，本回合我方对其发动的攻击不能被该机甲响应，也不能被转移攻击目标(该机甲被我方攻击命中后结束以上效果)。",
     "effect_ids": [
       "target_cannot_react_to_your_attacks"
     ]

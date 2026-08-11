@@ -245,6 +245,7 @@
     "cost": 10,
     "effect_ids": [
       "equipment_effect_112",
+      "equipment_effect_112b",
       "equipment_effect_113",
       "equipment_effect_114"
     ]
@@ -264,6 +265,7 @@
     "cost": 10,
     "effect_ids": [
       "equipment_effect_112",
+      "equipment_effect_112b",
       "equipment_effect_113",
       "equipment_effect_114"
     ]

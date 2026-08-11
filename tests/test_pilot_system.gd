@@ -292,6 +292,103 @@ func test_pilot_010_effect_02_sequence() -> Variant:
 	return true
 
 
+## 把指定 card_def_id 的牌塞入玩家手牌，返回 card_instance_id（仿 test_smash_armor_break_real_flow）
+func _ensure_action_card_in_hand(battle: BattleState, card_def_id: String) -> StringName:
+	var gs = battle.context.game_state
+	var player = gs.players.get(&"player")
+	for cid: StringName in player.action_hand:
+		var c = gs.get_card(cid)
+		if c and c.def and c.def.card_id == card_def_id:
+			return cid
+	for i in range(gs.deck_state.action_deck.size()):
+		var cid: StringName = gs.deck_state.action_deck[i]
+		var c = gs.get_card(cid)
+		if c and c.def and c.def.card_id == card_def_id:
+			gs.deck_state.action_deck.remove_at(i)
+			player.action_hand.append(cid)
+			c.zone = &"action_hand"
+			return cid
+	for i in range(gs.deck_state.action_discard_pile.size()):
+		var cid: StringName = gs.deck_state.action_discard_pile[i]
+		var c = gs.get_card(cid)
+		if c and c.def and c.def.card_id == card_def_id:
+			gs.deck_state.action_discard_pile.remove_at(i)
+			player.action_hand.append(cid)
+			c.zone = &"action_hand"
+			return cid
+	return &""
+
+
+## 测试9：pilot_010 effect_02 真实流程--第1张攻击牌视为强袭（REPLACE 在 USE_ACTION_BEFORE 早于注册）
+## 仿 test_smash_armor_break_real_flow 真实打出流程。打猛击（action_003，smash_effect2 在
+## ATTACK_BEFORE +4 威力）作为刻托第1张攻击牌 -> 视为强袭 -> 猛击 effect2 不应注册到 attack A
+## （REPLACE 在 USE_ACTION_BEFORE 设 as_card_def_id 早于 step② _register_card_effects 读 _as_card_def_id），
+## 故 extra_might=0（无泄漏）。旧实现 REPLACE 在 USE_ACTION_AT（注册之后 fire）会泄漏猛击 effect2 -> extra_might=4。
+## atomic REPLACE 经 execute_sub_action->_execute_atomic_action 同步执行不暂停，use_action 续跑 step②③。
+func test_pilot_010_effect_02_real_flow_treats_as_assault() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	var gs = battle.context.game_state
+	var cdb = battle.context.card_database
+	var player_mech = gs.get_mech_for_player(&"player")
+	var enemy_mech = gs.get_mech_for_player(&"enemy")
+	if player_mech == null or enemy_mech == null:
+		return "找不到玩家/敌方机甲"
+	# 设刻托为机师（attack_limit=3 / action_card_limit=1）
+	var pcard = _make_pilot_instance(gs, cdb, "pilot_010_刻托", &"player")
+	if pcard == null:
+		return "找不到 pilot_010_刻托"
+	battle.context.game_setup_service.set_pilot(player_mech.mech_id, pcard)
+	# 敌方放入射程内 + 清空迎击牌（避免 ATTACK_AT 响应窗口拦截）
+	enemy_mech.position = {"q": 3, "r": 2}
+	for cid: StringName in gs.players.get(&"enemy").action_hand.duplicate():
+		battle.context.timing_engine.unregister_listeners_for_card(cid)
+	gs.players.get(&"enemy").action_hand.clear()
+	# 塞入猛击（攻击牌，effect2 在 ATTACK_BEFORE +4 威力）
+	var card_id = _ensure_action_card_in_hand(battle, "action_003_猛击")
+	if card_id == &"":
+		return "找不到猛击牌"
+	var weapon_ids = player_mech.get_weapon_ids()
+	if weapon_ids.is_empty():
+		return "玩家机甲无武器"
+	# 真实打出猛击（刻托第1张攻击牌 -> REPLACE 在 USE_ACTION_BEFORE 视为强袭）
+	battle.execute_use_action_card(&"player", card_id)
+	# 找到 use_action_card 动作（应暂停在 step③ 等 attack A 完成，仍在 active_ids）
+	var use_action = null
+	for aid in battle.context.action_registry.get_active_ids():
+		var a = battle.context.action_registry.get_action(aid)
+		if a and a.action_type == &"use_action_card":
+			use_action = a
+			break
+	if use_action == null:
+		return "未找到 use_action_card 动作（REPLACE 应同步执行不暂停 use_action）"
+	# ① as_card_def_id 应为强袭（REPLACE 在 USE_ACTION_BEFORE 已同步设置）
+	if String(use_action.record.get("as_card_def_id", &"")) != "action_002_强袭":
+		return "第1张应视为强袭，as_card_def_id 实=%s" % String(use_action.record.get("as_card_def_id", &""))
+	# ② 计数器应=1（REPLACE 已 +1）
+	if _ActionPilotEffects.get_pilot_010_attack_card_uses(pcard, int(gs.turn_number)) != 1:
+		return "第1张后计数应=1，实=%d" % _ActionPilotEffects.get_pilot_010_attack_card_uses(pcard, int(gs.turn_number))
+	# 找到 attack A（强袭 effect1 EXECUTE_ATTACK 创建的攻击子动作）
+	var attack_a = null
+	for aid in battle.context.action_registry.get_active_ids():
+		var a = battle.context.action_registry.get_action(aid)
+		if a and a.action_type == &"attack":
+			attack_a = a
+			break
+	if attack_a == null:
+		return "未找到 attack A（强袭 effect1 EXECUTE_ATTACK 应创建攻击子动作）"
+	# 选武器 -> fire ATTACK_BEFORE（若猛击 effect2 泄漏则在此写 extra_might=4）
+	battle.context.action_engine.continue_action(attack_a.action_id, {"weapon_id": weapon_ids[0]})
+	# 选目标 -> 跑到 calculate_damage（ATTACK_BEFORE 已 fire，extra_might 已定）
+	battle.context.action_engine.continue_action(attack_a.action_id, {"target_id": enemy_mech.mech_id})
+	# ③ extra_might 必须为 0（猛击 effect2 未泄漏 -- 证明 REPLACE 早于 _register_card_effects）
+	var extra_might: int = int(attack_a.record.get("extra_might", 0))
+	if extra_might != 0:
+		return "视为强袭后猛击 effect2 不应泄漏，extra_might 应=0 实=%d（REPLACE 在注册之后才 fire，猛击 LISTEN 效果泄漏到 attack A）" % extra_might
+	return true
+
+
 ## 测试9：pilot_004 装甲转能机制--POWER_CAP_MODIFIER(动力上限+补满) + ARMOR_MODIFIER + clear
 func test_pilot_004_armor_to_power_mechanism() -> Variant:
 	var battle := _new_battle()
@@ -331,8 +428,8 @@ func test_pilot_004_armor_to_power_mechanism() -> Variant:
 	return true
 
 
-## 测试10：pilot_004 effect_03--SET_ATTACK_DEFENSE_STAT_SOURCE 写 attack record override
-func test_pilot_004_effect_03_defense_override() -> Variant:
+## 测试10：pilot_004 effect_02--动力穿透注册到 ATTACK_PRE + SET_ATTACK_DEFENSE_STAT_SOURCE 写 record
+func test_pilot_004_effect_02_defense_override() -> Variant:
 	var battle := _new_battle()
 	if battle == null or battle.context == null:
 		return "battle 初始化失败"
@@ -352,23 +449,46 @@ func test_pilot_004_effect_03_defense_override() -> Variant:
 	var override: Dictionary = mock_attack.record.get("defense_stat_override", {})
 	if String(override.get(enemy_mech.mech_id, &"")) != "current_power":
 		return "defense_stat_override[target] 应=current_power 实=%s" % String(override.get(enemy_mech.mech_id, &""))
-	# 验证 pilot_004 effect_03a/03b 注册到 ATTACK_PRE
+	# 验证 pilot_004 effect_02 注册到 ATTACK_PRE（快过响应窗口，与 predict_e3 同理）
 	var te = battle.context.timing_engine
-	var listeners: Array = te.permanent_listeners.get(_TimingConst.ATTACK_PRE, [])
-	var found_03a := false
-	var found_03b := false
-	for entry in listeners:
+	var pre_listeners_02: Array = te.permanent_listeners.get(_TimingConst.ATTACK_PRE, [])
+	var found_02 := false
+	for entry in pre_listeners_02:
 		var eff = entry.get("effect")
-		if eff != null and String(eff.effect_id) == "pilot_004_effect_03a":
-			found_03a = true
-		if eff != null and String(eff.effect_id) == "pilot_004_effect_03b":
-			found_03b = true
-	if not found_03a or not found_03b:
-		return "pilot_004 effect_03a/03b 应注册到 ATTACK_PRE（a=%s b=%s）" % [str(found_03a), str(found_03b)]
+		if eff != null and String(eff.effect_id) == "pilot_004_effect_02":
+			found_02 = true
+	if not found_02:
+		return "pilot_004 effect_02 应注册到 ATTACK_PRE"
+	# 旧 03a/03b 不应再注册到 ATTACK_PRE
+	var pre_listeners: Array = te.permanent_listeners.get(_TimingConst.ATTACK_PRE, [])
+	for entry in pre_listeners:
+		var eff = entry.get("effect")
+		if eff != null and (String(eff.effect_id) == "pilot_004_effect_03a" or String(eff.effect_id) == "pilot_004_effect_03b"):
+			return "旧 effect_03a/03b 不应再注册到 ATTACK_PRE"
+	# effect_01a 注册到 TURN_START，effect_01b 注册到 TURN_BEFORE_START（隐藏恢复）
+	var ts_listeners: Array = te.permanent_listeners.get(_TimingConst.TURN_START, [])
+	var found_01a := false
+	for entry in ts_listeners:
+		var eff = entry.get("effect")
+		if eff != null and String(eff.effect_id) == "pilot_004_effect_01a":
+			found_01a = true
+	if not found_01a:
+		return "pilot_004 effect_01a 应注册到 TURN_START"
+	var tbs_listeners: Array = te.permanent_listeners.get(_TimingConst.TURN_BEFORE_START, [])
+	var found_01b := false
+	for entry in tbs_listeners:
+		var eff = entry.get("effect")
+		if eff != null and String(eff.effect_id) == "pilot_004_effect_01b":
+			found_01b = true
+	if not found_01b:
+		return "pilot_004 effect_01b 应注册到 TURN_BEFORE_START"
 	return true
 
 
-## 测试11：pilot_005 effect_02 派生值--帝国机甲动力+4（阵营光环，实时重算）
+## 测试11：pilot_005 effect_02 派生值--帝国框架机甲动力+4（阵营光环，实时重算）
+## effect_02 原文"场上所有帝国阵营的机甲框架获得动力+4"：按机甲框架阵营判定（非机师牌阵营）。
+## 教程 player_mech=frame_001_基础框架(联邦)、enemy_mech=frame_002_原始框架(帝国)。
+## 肯特设到 player_mech -> 帝国框架机甲(enemy_mech)动力+4，联邦框架(player_mech)不获得。
 func test_pilot_005_empire_aura_power() -> Variant:
 	var battle := _new_battle()
 	if battle == null or battle.context == null:
@@ -376,30 +496,36 @@ func test_pilot_005_empire_aura_power() -> Variant:
 	var gs = battle.context.game_state
 	var cdb = battle.context.card_database
 	var player_mech = gs.get_mech_for_player(&"player")
-	var max_before: int = player_mech.max_power
+	var enemy_mech = gs.get_mech_for_player(&"enemy")
+	if enemy_mech == null:
+		return "enemy_mech 不存在"
 	var card = _make_pilot_instance(gs, cdb, "pilot_005_肯特", &"player")
 	if card == null:
 		return "找不到 pilot_005_肯特"
 	battle.context.game_setup_service.set_pilot(player_mech.mech_id, card)
-	# pilot_005 帝国光环：player_mech pilot 是帝国（肯特），动力+4
-	if _ActionPilotEffects.get_pilot_005_empire_power_bonus(player_mech) != 4:
-		return "帝国光环动力应+4 实=%d" % _ActionPilotEffects.get_pilot_005_empire_power_bonus(player_mech)
-	if player_mech.max_power != max_before + 4:
-		return "max_power 应+4（recalc）实=%d（before=%d）" % [player_mech.max_power, max_before]
-	# 非帝国机甲（enemy 无机师或非帝国）不应获得
-	var enemy_mech = gs.get_mech_for_player(&"enemy")
-	if enemy_mech != null:
-		# enemy 没 set_pilot，pilot 槽空，faction 空，bonus=0
-		if _ActionPilotEffects.get_pilot_005_empire_power_bonus(enemy_mech) != 0:
-			return "非帝国机甲不应获得光环"
+	# 帝国光环：给帝国框架机甲(enemy_mech=frame_002_原始框架=帝国)动力+4
+	if _ActionPilotEffects.get_pilot_005_empire_power_bonus(enemy_mech) != 4:
+		return "帝国光环动力应给帝国框架机甲+4 实=%d" % _ActionPilotEffects.get_pilot_005_empire_power_bonus(enemy_mech)
+	# 联邦框架机甲(player_mech)不获得帝国光环
+	if _ActionPilotEffects.get_pilot_005_empire_power_bonus(player_mech) != 0:
+		return "联邦框架机甲不应获得帝国光环 实=%d" % _ActionPilotEffects.get_pilot_005_empire_power_bonus(player_mech)
+	# toggle off（关闭肯特光环对 enemy_mech 的效果）
+	_ActionPilotEffects.toggle_aura_target(card.instance_id, enemy_mech.mech_id)
+	if _ActionPilotEffects.get_pilot_005_empire_power_bonus(enemy_mech) != 0:
+		return "toggle off 后光环应消失 实=%d" % _ActionPilotEffects.get_pilot_005_empire_power_bonus(enemy_mech)
+	# toggle on（恢复）
+	_ActionPilotEffects.toggle_aura_target(card.instance_id, enemy_mech.mech_id)
+	if _ActionPilotEffects.get_pilot_005_empire_power_bonus(enemy_mech) != 4:
+		return "toggle on 后光环应恢复 实=%d" % _ActionPilotEffects.get_pilot_005_empire_power_bonus(enemy_mech)
 	# unset 后光环消失
 	battle.context.game_setup_service.unset_pilot(player_mech.mech_id)
-	if _ActionPilotEffects.get_pilot_005_empire_power_bonus(player_mech) != 0:
+	if _ActionPilotEffects.get_pilot_005_empire_power_bonus(enemy_mech) != 0:
 		return "unset 后光环应消失"
 	return true
 
 
-## 测试12：pilot_005 effect_03--toggle 切换光环（取消/恢复）
+## 测试12：pilot_005 effect_03 注册（DIRECT 虚拟时点 pilot_005_effect_03，出"取消/恢复"按钮）
+## effect_03 原文"我方回合1次，取消或恢复1台机甲获得上述效果"：CHOOSE_OTHER_MECH + CHOOSE_ONE(off/on)。
 func test_pilot_005_effect_03_toggle() -> Variant:
 	var battle := _new_battle()
 	if battle == null or battle.context == null:
@@ -411,21 +537,27 @@ func test_pilot_005_effect_03_toggle() -> Variant:
 	if card == null:
 		return "找不到 pilot_005_肯特"
 	battle.context.game_setup_service.set_pilot(player_mech.mech_id, card)
-	# 初始光环 +4
-	if _ActionPilotEffects.get_pilot_005_empire_power_bonus(player_mech) != 4:
-		return "初始光环应+4 实=%d" % _ActionPilotEffects.get_pilot_005_empire_power_bonus(player_mech)
-	# toggle off
-	_ActionPilotEffects.toggle_aura_target(card.instance_id, player_mech.mech_id)
-	if _ActionPilotEffects.get_pilot_005_empire_power_bonus(player_mech) != 0:
-		return "toggle off 后光环应消失 实=%d" % _ActionPilotEffects.get_pilot_005_empire_power_bonus(player_mech)
-	# toggle on（恢复）
-	_ActionPilotEffects.toggle_aura_target(card.instance_id, player_mech.mech_id)
-	if _ActionPilotEffects.get_pilot_005_empire_power_bonus(player_mech) != 4:
-		return "toggle on 后光环应恢复 实=%d" % _ActionPilotEffects.get_pilot_005_empire_power_bonus(player_mech)
+	# effect_03 注册（DIRECT 虚拟时点 pilot_005_effect_03）
+	var te = battle.context.timing_engine
+	var found_e3 := false
+	for timing: StringName in te.permanent_listeners:
+		for entry in te.permanent_listeners[timing]:
+			var eff = entry.get("effect")
+			if eff != null and String(eff.effect_id) == "pilot_005_effect_03":
+				found_e3 = true
+				break
+		if found_e3:
+			break
+	if not found_e3:
+		return "pilot_005 effect_03 应注册（DIRECT 虚拟时点）"
 	return true
 
 
-## 测试13：pilot_005 effect_01 授予--帝国机甲注册 granted ATTACK_PRE + 弃对侧2牌
+## 测试13：pilot_005 effect_01 授予--装帝国机师牌的机甲注册 granted ATTACK_PRE 弃对侧2牌
+## effect_01 原文"场上所有帝国阵营的机师牌获得：攻击或被攻击时消耗4动力弃对侧2张行动牌"：
+## granted 按"机师牌阵营"判定（slot.equipped_card.def.faction==帝国），非框架阵营。
+## 肯特设到 player_mech -> player_mech(装帝国机师牌肯特)获 granted EX（priority 30 LISTEN ATTACK_PRE）。
+## 弃牌走 EXECUTE_DISCARD from_opposing（选对侧2张暗牌），完整选牌流程见专项测试 test_pilot_005_kent。
 func test_pilot_005_effect_01_grant_and_discard() -> Variant:
 	var battle := _new_battle()
 	if battle == null or battle.context == null:
@@ -437,7 +569,7 @@ func test_pilot_005_effect_01_grant_and_discard() -> Variant:
 	if card == null:
 		return "找不到 pilot_005_肯特"
 	battle.context.game_setup_service.set_pilot(player_mech.mech_id, card)
-	# 1. granted listener 注册到 ATTACK_PRE（mech_id=player_mech，帝国）
+	# 1. granted listener 注册到 ATTACK_PRE（mech_id=player_mech，装帝国机师牌肯特）
 	var te = battle.context.timing_engine
 	var listeners: Array = te.permanent_listeners.get(_TimingConst.ATTACK_PRE, [])
 	var found_granted := false
@@ -450,24 +582,7 @@ func test_pilot_005_effect_01_grant_and_discard() -> Variant:
 				break
 	if not found_granted:
 		return "pilot_005_granted_suppression 应注册到 ATTACK_PRE（mech_id=player_mech）"
-	# 2. 弃对侧2牌（player 攻击 enemy -> 弃 enemy 2张）
-	var enemy_mech = gs.get_mech_for_player(&"enemy")
-	var enemy_player = gs.players.get(&"enemy")
-	# 给 enemy 补行动牌确保有2张可弃
-	while enemy_player.action_hand.size() < 2 and gs.deck_state.action_deck.size() > 0:
-		var cid: StringName = gs.deck_state.action_deck[0]
-		gs.deck_state.action_deck.remove_at(0)
-		enemy_player.action_hand.append(cid)
-	var hand_before: int = enemy_player.action_hand.size()
-	if hand_before < 2:
-		return "enemy 行动手牌不足2张，无法测弃牌"
-	var mock_attack = _Action.new()
-	mock_attack.record = {}
-	var payload: Dictionary = {"binding_context": {"mech_id": player_mech.mech_id}, "attacker_id": player_mech.mech_id, "target_id": enemy_mech.mech_id}
-	battle.context.game_actions.pilot_005_discard_opposing({}, payload, mock_attack)
-	if enemy_player.action_hand.size() != hand_before - 2:
-		return "应弃 enemy 2张 实减=%d" % (hand_before - enemy_player.action_hand.size())
-	# 3. unset_pilot 后 granted listener 注销
+	# 2. unset_pilot 后 granted listener 注销
 	battle.context.game_setup_service.unset_pilot(player_mech.mech_id)
 	listeners = te.permanent_listeners.get(_TimingConst.ATTACK_PRE, [])
 	for entry in listeners:
@@ -565,7 +680,7 @@ func test_pilot_008_recover_repair_and_x() -> Variant:
 	return true
 
 
-## 测试16：pilot_006 悬赏标记 + 抽牌挂 passive_attack_bonus 标记
+## 测试16：pilot_006 狩猎标记 + 抽牌打 hunting 标签
 func test_pilot_006_bounty_and_tag() -> Variant:
 	var battle := _new_battle()
 	if battle == null or battle.context == null:
@@ -578,27 +693,29 @@ func test_pilot_006_bounty_and_tag() -> Variant:
 	if card == null:
 		return "找不到 pilot_006_里昂"
 	battle.context.game_setup_service.set_pilot(player_mech.mech_id, card)
-	# 标记悬赏目标
-	_ActionPilotEffects.set_pilot_006_mark(card.instance_id, enemy_mech.mech_id, 0)
+	# 标记狩猎目标
+	_ActionPilotEffects.set_pilot_006_mark(card.instance_id, enemy_mech.mech_id, gs)
 	if _ActionPilotEffects.get_pilot_006_mark(card.instance_id) != enemy_mech.mech_id:
-		return "悬赏标记应=enemy_mech"
+		return "狩猎标记应=enemy_mech"
 	# DRAW_ACTION_AND_TAG_IF_ATTACK：攻击方抽1
 	var player = gs.players.get(&"player")
 	var hand_before: int = player.action_hand.size()
 	var ga = battle.context.game_actions
-	ga.draw_action_and_tag_if_attack({}, {"attacker_id": player_mech.mech_id, "binding_context": {"card_instance_id": card.instance_id}})
+	ga.draw_action_and_tag_if_attack({}, {"attacker_id": player_mech.mech_id, "binding_context": {"card_instance_id": card.instance_id, "player_id": &"player", "mech_id": player_mech.mech_id}})
 	if player.action_hand.size() != hand_before + 1:
 		return "应抽1张 实增=%d" % (player.action_hand.size() - hand_before)
-	# 抽到的牌若攻击牌应挂 passive_attack_bonus
+	# 抽到的牌若攻击牌应打 hunting 标签（tag 系统，非 counter）
 	var drawn_cid: StringName = player.action_hand[-1]
 	var drawn_card = gs.get_card(drawn_cid)
 	if drawn_card != null and drawn_card.def != null and String(drawn_card.def.action_type) == "攻击":
-		if not bool(drawn_card.counters.get("passive_attack_bonus", false)):
-			return "抽到攻击牌应挂 passive_attack_bonus 标记"
+		if not _ActionPilotEffects.pilot_006_hunting_tag_active(drawn_card, &"player"):
+			return "抽到攻击牌应打 hunting 标签"
+		if _ActionPilotEffects.pilot_006_hunting_tag_marked_mech(drawn_card, &"player") != enemy_mech.mech_id:
+			return "hunting 标签应绑定 enemy_mech"
 	# clear mark
 	_ActionPilotEffects.clear_pilot_006_mark(card.instance_id)
 	if _ActionPilotEffects.get_pilot_006_mark(card.instance_id) != &"":
-		return "clear 后悬赏标记应空"
+		return "clear 后狩猎标记应空"
 	return true
 
 
@@ -615,22 +732,29 @@ func test_pilot_007_claim_attack_card() -> Variant:
 		return "找不到 pilot_007_珀修斯"
 	battle.context.game_setup_service.set_pilot(player_mech.mech_id, card)
 	var player = gs.players.get(&"player")
-	# 建一张攻击牌作为 attack_card_id（模拟攻击来源牌，在 temp_zone）
+	# 一张攻击牌进弃牌堆（模拟 use_action_card settle 已 discard_card 入弃牌堆）。
+	# claim 从弃牌堆回收（同 pilot_008 维修回收），不读 temp_zone 也不设 claimed_by_pilot_007 计数器。
 	var attack_card = _make_pilot_instance(gs, cdb, "action_001_进攻", &"enemy")
 	if attack_card == null:
 		return "找不到 action_001_进攻"
-	attack_card.zone = &"temp_zone"
+	attack_card.zone = &"discard"
+	gs.deck_state.action_discard_pile.append(attack_card.instance_id)
 	var hand_before: int = player.action_hand.size()
 	var ga = battle.context.game_actions
-	ga.claim_resolved_attack_source_card({}, {"binding_context": {"player_id": &"player"}, "attack_card_id": attack_card.instance_id})
+	ga.claim_resolved_attack_source_card({}, {
+		"binding_context": {"player_id": &"player", "card_instance_id": card.instance_id, "mech_id": player_mech.mech_id},
+		"card_instance_id": attack_card.instance_id,
+	})
 	if player.action_hand.size() != hand_before + 1:
-		return "应夺1张到手牌 实增=%d" % (player.action_hand.size() - hand_before)
+		return "应回收1张到手牌 实增=%d" % (player.action_hand.size() - hand_before)
 	if not player.action_hand.has(attack_card.instance_id):
 		return "攻击牌应在 player 手牌"
+	if gs.deck_state.action_discard_pile.has(attack_card.instance_id):
+		return "攻击牌应已从弃牌堆移除"
 	if String(attack_card.owner_player_id) != "player":
 		return "攻击牌归属应=player"
-	if not bool(attack_card.counters.get("claimed_by_pilot_007", false)):
-		return "应有 claimed_by_pilot_007 标记"
+	if String(attack_card.zone) != "action_hand":
+		return "攻击牌 zone 应=action_hand 实=%s" % String(attack_card.zone)
 	return true
 
 
@@ -755,9 +879,9 @@ func test_pilot_009_immediate_discard() -> Variant:
 	return true
 
 
-## 测试21：pilot_007 类型破绽--PILOT_007_TYPE_FLAW 算X弃抽
-## 场景A：enemy 3张攻击牌（present={攻击}，X=2，弃3抽3）
-## 场景B：enemy 2攻击+1迎击（present={攻击,迎击}，X=1，弃2抽2）
+## 测试21：pilot_007 类型破绽--PILOT_007_COMPUTE_X 算 X+1 写入 payload.pilot_007_flaw_count
+## 场景A：enemy 3张攻击牌（present={攻击}，X=2，flaw_count=3）
+## 场景B：enemy 2攻击+1迎击（present={攻击,迎击}，X=1，flaw_count=2）
 func test_pilot_007_type_flaw() -> Variant:
 	var battle := _new_battle()
 	if battle == null or battle.context == null:
@@ -767,40 +891,35 @@ func test_pilot_007_type_flaw() -> Variant:
 	var player_mech = gs.get_mech_for_player(&"player")
 	var enemy_mech = gs.get_mech_for_player(&"enemy")
 	var enemy_player = gs.players.get(&"enemy")
-	var player = gs.players.get(&"player")
 	var card = _make_pilot_instance(gs, cdb, "pilot_007_珀修斯", &"player")
 	if card == null:
 		return "找不到 pilot_007_珀修斯"
 	battle.context.game_setup_service.set_pilot(player_mech.mech_id, card)
 	var ga = battle.context.game_actions
-	# 场景A：enemy 3张攻击 -> X=2 弃3抽3
+	# 场景A：enemy 3张攻击 -> present={攻击} -> X=2 -> flaw_count=3
 	enemy_player.action_hand.clear()
 	for i in 3:
 		var a = _make_pilot_instance(gs, cdb, "action_001_进攻", &"enemy")
 		if a == null:
 			return "找不到 action_001_进攻"
 		enemy_player.action_hand.append(a.instance_id)
-	var p_hand_a: int = player.action_hand.size()
-	ga.pilot_007_type_flaw({}, {"attacker_id": player_mech.mech_id, "target_id": enemy_mech.mech_id})
-	if enemy_player.action_hand.size() != 0:
-		return "场景A enemy 应全弃3张 实剩=%d" % enemy_player.action_hand.size()
-	if player.action_hand.size() != p_hand_a + 3:
-		return "场景A player 应抽3 实增=%d" % (player.action_hand.size() - p_hand_a)
-	# 场景B：enemy 2攻击+1迎击 -> X=1 弃2抽2（剩1张）
+	var payload_a: Dictionary = {"target_id": enemy_mech.mech_id}
+	ga.pilot_007_compute_x({}, payload_a)
+	if int(payload_a.get("pilot_007_flaw_count", -1)) != 3:
+		return "场景A(3攻击) flaw_count 应=3 实=%d" % int(payload_a.get("pilot_007_flaw_count", -1))
+	# 场景B：enemy 2攻击+1迎击 -> present={攻击,迎击} -> X=1 -> flaw_count=2
 	enemy_player.action_hand.clear()
 	for i in 2:
 		var a = _make_pilot_instance(gs, cdb, "action_001_进攻", &"enemy")
 		enemy_player.action_hand.append(a.instance_id)
-	var evade = _make_pilot_instance(gs, cdb, "action_008_回避", &"enemy")
+	var evade = _make_pilot_instance(gs, cdb, "action_010_反击", &"enemy")
 	if evade == null:
-		return "找不到 action_008_回避"
+		return "找不到 action_010_反击"
 	enemy_player.action_hand.append(evade.instance_id)
-	var p_hand_b: int = player.action_hand.size()
-	ga.pilot_007_type_flaw({}, {"attacker_id": player_mech.mech_id, "target_id": enemy_mech.mech_id})
-	if enemy_player.action_hand.size() != 1:
-		return "场景B enemy 应剩1张(弃2) 实剩=%d" % enemy_player.action_hand.size()
-	if player.action_hand.size() != p_hand_b + 2:
-		return "场景B player 应抽2 实增=%d" % (player.action_hand.size() - p_hand_b)
+	var payload_b: Dictionary = {"target_id": enemy_mech.mech_id}
+	ga.pilot_007_compute_x({}, payload_b)
+	if int(payload_b.get("pilot_007_flaw_count", -1)) != 2:
+		return "场景B(2攻击+1迎击) flaw_count 应=2 实=%d" % int(payload_b.get("pilot_007_flaw_count", -1))
 	return true
 
 
@@ -907,22 +1026,40 @@ func test_pilot_002_grant_and_batch_register() -> Variant:
 	var card = _make_pilot_instance(gs, cdb, "pilot_002_莱比尔", &"player")
 	if card == null:
 		return "找不到 pilot_002_莱比尔"
+	# 裁定：莱比尔自身也获 EX（effect_01 授予所有联邦阵营机师含自身）。
+	# 另给 enemy_mech 装一张联邦机师牌（仅设槽，不走 set_pilot 以免注册其效果），作为被授予方。
+	var fed_pilot = _make_pilot_instance(gs, cdb, "pilot_001_阿克罗姆", &"enemy")
+	if fed_pilot == null:
+		return "找不到 pilot_001_阿克罗姆"
+	var enemy_pilot_slot = enemy_mech.slots.get(&"pilot")
+	if enemy_pilot_slot == null:
+		return "enemy_mech 缺 pilot 槽"
+	enemy_pilot_slot.equipped_card = fed_pilot
+	fed_pilot.zone = &"pilot_slot"
+	fed_pilot.slot_id = &"pilot"
+	fed_pilot.mech_id = enemy_mech.mech_id
 	battle.context.game_setup_service.set_pilot(player_mech.mech_id, card)
 	# 1. granted DIRECT 进攻 listener 注册到虚拟时点 pilot_002_granted_transfer_attack
+	#    落点含 enemy_mech（联邦机师）与 player_mech（莱比尔自身，去自身排除）
 	var te = battle.context.timing_engine
 	var found_attack := false
+	var found_on_self := false
 	for timing: StringName in te.permanent_listeners:
 		for entry in te.permanent_listeners[timing]:
 			var eff = entry.get("effect")
 			if eff != null and String(eff.effect_id) == "pilot_002_granted_transfer_attack":
 				var bc: Dictionary = entry.get("binding_context", {})
-				if String(bc.get("mech_id", &"")) == String(player_mech.mech_id) and String(bc.get("card_instance_id", &"")) == String(card.instance_id):
-					found_attack = true
-					break
+				if String(bc.get("card_instance_id", &"")) == String(card.instance_id):
+					if String(bc.get("mech_id", &"")) == String(enemy_mech.mech_id):
+						found_attack = true
+					if String(bc.get("mech_id", &"")) == String(player_mech.mech_id):
+						found_on_self = true
 		if found_attack:
 			break
 	if not found_attack:
-		return "pilot_002_granted_transfer_attack 应注册到联邦机甲 player_mech"
+		return "pilot_002_granted_transfer_attack 应注册到联邦机甲 enemy_mech"
+	if not found_on_self:
+		return "莱比尔自身机甲 player_mech 也应被授予 EX（去自身排除）"
 	# 2. unset_pilot 后 granted listener 注销 + 批次权限清除
 	battle.context.game_setup_service.unset_pilot(player_mech.mech_id)
 	for timing2: StringName in te.permanent_listeners:
@@ -1048,11 +1185,13 @@ func test_pilot_003_insert_and_skip() -> Variant:
 	player.action_hand.append(insert_card.instance_id)
 	var payload: Dictionary = {"binding_context": {"card_instance_id": card.instance_id, "mech_id": player_mech.mech_id, "player_id": &"player"}, "pilot_003_face_up_cards": [insert_card.instance_id]}
 	ga.pilot_003_insert_face_up_random({"card_ids": [insert_card.instance_id]}, payload)
+	# 把正面牌移到牌堆顶，确保抽1时必跳过它（真正跳过 -> +1 生效）
+	ga.pilot_003_move_to_deck_top(insert_card.instance_id)
 	if not gs.deck_state.action_deck.has(insert_card.instance_id):
 		return "正面牌应在行动牌堆"
 	var c = gs.get_card(insert_card.instance_id)
-	if c == null or not bool(c.counters.get("face_up_in_deck", false)):
-		return "牌应标记 face_up_in_deck"
+	if c == null or not c.is_face_up_in_deck():
+		return "牌应打 face_up_bury 标签"
 	# 2. effect_03 skip 开启
 	ga.toggle_pilot_003_skip({"enable": true}, {"binding_context": {"card_instance_id": card.instance_id, "player_id": &"player"}})
 	if not _ActionPilotEffects.is_pilot_003_skip_active(&"player"):
@@ -1066,7 +1205,7 @@ func test_pilot_003_insert_and_skip() -> Variant:
 	# 正面牌应仍在牌堆（被跳过）
 	if not gs.deck_state.action_deck.has(insert_card.instance_id):
 		return "正面牌应仍在牌堆（被跳过）"
-	# 应抽2张（1+1）
+	# 应抽2张（1+1：正面牌在顶被真正跳过 -> +1 生效）
 	if player.action_hand.size() != hand_before + 2:
 		return "应抽2张(1+1skip) 实增=%d" % (player.action_hand.size() - hand_before)
 	# 4. unset 后 skip 清除
@@ -1181,18 +1320,18 @@ func test_pilot_003_effect02_unusable_fallback() -> Variant:
 	# 正面牌已离开行动牌堆
 	if gs.deck_state.action_deck.has(face_card.instance_id):
 		return "正面牌应已离开行动牌堆"
-	# 正面/metadata 清除
-	if face_c != null and (bool(face_c.counters.get("face_up_in_deck", false)) or bool(face_c.counters.get("pilot_003_face_up_leave_use", false))):
-		return "正面/metadata 标记应清除"
+	# 正面/metadata 清除（face_up_bury 标签应已移除）
+	if face_c != null and face_c.is_face_up_in_deck():
+		return "正面 face_up_bury 标签应清除"
 	# 牌应进入行动弃牌堆（弃置动作同步完成；若在临时区说明弃置链挂起）
 	if not gs.deck_state.action_discard_pile.has(face_card.instance_id) and (face_c == null or face_c.zone != &"discard"):
 		return "正面牌应公开进入弃牌堆（zone=%s）" % (String(face_c.zone) if face_c else "null")
 	# P1 应抽1补偿（不可用回退）
 	if player.action_hand.size() != p1_hand_before + 1:
 		return "P1 应抽1补偿 实增=%d" % (player.action_hand.size() - p1_hand_before)
-	# enemy 应仍补足抽数（拦截牌不计入已抽数量）
-	if enemy.action_hand.size() != enemy_hand_before + 1:
-		return "enemy 应仍抽到1张背面牌 实增=%d" % (enemy.action_hand.size() - enemy_hand_before)
+	# enemy 不补抽（瑟尔基尔核心玩法：抽到的正面牌被拿走弃置，抽牌者不补抽）
+	if enemy.action_hand.size() != enemy_hand_before:
+		return "enemy 不应补抽（抽牌者不补抽）实增=%d" % (enemy.action_hand.size() - enemy_hand_before)
 	return true
 
 
@@ -1244,11 +1383,206 @@ func test_pilot_003_effect02_usable_attack() -> Variant:
 	# passive 攻击不消耗攻击数
 	if player_mech.attack_count_this_turn != attack_count_before:
 		return "强制使用攻击牌不应消耗攻击数 实=%d" % player_mech.attack_count_this_turn
-	# 正面/metadata 清除（立即使用路径）
+	# face_up_bury 标签清除（立即使用路径：_handle_pilot_003_immediately_use 移除）
 	var face_c = gs.get_card(face_card.instance_id)
-	if face_c == null or bool(face_c.counters.get("face_up_in_deck", false)):
-		return "正面标记应清除（强制使用路径）"
-	# enemy 应仍补足抽数
-	if enemy.action_hand.size() != enemy_hand_before + 1:
-		return "enemy 应仍抽到1张背面牌 实增=%d" % (enemy.action_hand.size() - enemy_hand_before)
+	if face_c == null or face_c.is_face_up_in_deck():
+		return "正面 face_up_bury 标签应清除（强制使用路径）"
+	# enemy 不补抽（瑟尔基尔核心玩法：抽到的正面牌被瑟尔基尔拿走使用，抽牌者不补抽）
+	if enemy.action_hand.size() != enemy_hand_before:
+		return "enemy 不应补抽（抽牌者不补抽）实增=%d" % (enemy.action_hand.size() - enemy_hand_before)
+	return true
+
+
+## ════════════════════════════════════════════════════════════
+## SR 机师牌 011/012/013 测试
+## ════════════════════════════════════════════════════════════
+
+## 测试：pilot_013 巴托洛夫 effect_01 非攻击伤害免疫
+## HP_CHANGE_BEFORE 取消非攻击来源的生命减少；攻击伤害（reason=attack_damage 或
+## created_by_attack_damage_step=true）正常生效；生命增加不被免疫。
+func test_pilot_013_effect_01_non_attack_immunity() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	var gs = battle.context.game_state
+	var cdb = battle.context.card_database
+	var player_mech = gs.get_mech_for_player(&"player")
+	if player_mech == null:
+		return "player_mech 不存在"
+	var card = _make_pilot_instance(gs, cdb, "pilot_013_巴托洛夫", &"player")
+	if card == null:
+		return "找不到 pilot_013_巴托洛夫"
+	battle.context.game_setup_service.set_pilot(player_mech.mech_id, card)
+	var hp0: int = player_mech.current_hp
+	# 1. 非攻击伤害（reason=effect_damage）-> 免疫，HP 不变
+	battle.context.action_service.execute(&"hp_change", {
+		"mech_ids": [player_mech.mech_id],
+		"value": 5,
+		"method": &"decrease",
+		"reason": &"effect_damage",
+		"source": {"player_id": &"enemy"},
+	})
+	if player_mech.current_hp != hp0:
+		return "effect_01 应免疫非攻击伤害(effect_damage)，HP 应不变 实=%d->%d" % [hp0, player_mech.current_hp]
+	# 2. 攻击伤害（reason=attack_damage）-> 不免疫，HP -5
+	battle.context.action_service.execute(&"hp_change", {
+		"mech_ids": [player_mech.mech_id],
+		"value": 5,
+		"method": &"decrease",
+		"reason": &"attack_damage",
+		"source": {"player_id": &"enemy"},
+	})
+	if player_mech.current_hp != hp0 - 5:
+		return "effect_01 不应免疫攻击伤害(attack_damage)，HP 应-5 实=%d->%d" % [hp0, player_mech.current_hp]
+	# 3. created_by_attack_damage_step=true 权威判定为攻击伤害 -> 不免疫（即便 reason 文本伪造）
+	player_mech.current_hp = hp0
+	battle.context.action_service.execute(&"hp_change", {
+		"record": {
+			"mech_ids": [player_mech.mech_id],
+			"value": 3,
+			"method": &"decrease",
+			"reason": &"effect_damage",
+			"created_by_attack_damage_step": true,
+		},
+		"source": {"player_id": &"enemy"},
+	})
+	if player_mech.current_hp != hp0 - 3:
+		return "created_by_attack_damage_step=true 应判定攻击伤害不免疫，HP 应-3 实=%d->%d" % [hp0, player_mech.current_hp]
+	# 4. 生命增加（method=increase）不被免疫（effect_01 仅免疫 decrease 非攻击伤害）
+	battle.context.action_service.execute(&"hp_change", {
+		"mech_ids": [player_mech.mech_id],
+		"value": 2,
+		"method": &"increase",
+		"reason": &"effect_heal",
+		"source": {"player_id": &"player"},
+	})
+	if player_mech.current_hp != hp0 - 3 + 2:
+		return "生命增加不应被免疫，HP 应+2 实=%d" % player_mech.current_hp
+	return true
+
+
+## 测试：pilot_013 effect_02a stat_changes 数组机制 + UNTIL_NEXT_OWNER_TURN 到期清理
+## 直接 execute stat_modify with stat_changes，验证护甲/动力上限+当前值-4；源拥有者下回合开始时
+## 上限恢复（POWER_CAP_MODIFIER 移除）+ restore_power 回满当前动力；护甲 PERMANENT 不恢复。
+func test_pilot_013_effect_02a_stat_changes_and_expire() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	var gs = battle.context.game_state
+	var player_mech = gs.get_mech_for_player(&"player")
+	if player_mech == null:
+		return "player_mech 不存在"
+	var armor0: int = player_mech.get_armor()
+	var maxp0: int = player_mech.max_power
+	var power0: int = player_mech.get_own_power()
+	# 执行 stat_changes 数组修正（模拟 effect_02a 对自身的降属性）
+	battle.context.action_service.execute(&"stat_modify", {
+		"target_id": player_mech.mech_id,
+		"stat_changes": [
+			{"stat_type": &"armor", "max_delta": -4, "current_delta": -4},
+			{"stat_type": &"power", "max_delta": -4, "current_delta": -4},
+		],
+		"duration": &"UNTIL_NEXT_OWNER_TURN",
+		"duration_owner_id": &"player",
+		"source_effect_id": &"pilot_013_effect_02a",
+		"source_card_id": &"test_p013_card",
+		"source": {"player_id": &"player"},
+	})
+	# 护甲 -4（ARMOR_MODIFIER PERMANENT，护甲是衍生值无上限故 max_delta 忽略）
+	if player_mech.get_armor() != armor0 - 4:
+		return "护甲应-4 实=%d->%d" % [armor0, player_mech.get_armor()]
+	# 动力上限 -4（POWER_CAP_MODIFIER UNTIL_NEXT_OWNER_TURN）
+	if player_mech.max_power != maxp0 - 4:
+		return "max_power 应-4 实=%d->%d" % [maxp0, player_mech.max_power]
+	# 当前动力 -4（current_only，钳制到0）
+	if player_mech.get_own_power() != maxi(0, power0 - 4):
+		return "当前动力应-4 实=%d->%d" % [power0, player_mech.get_own_power()]
+	# 模拟 player 下回合开始：_clean_until_next_owner_turn 移除上限modifier + restore_power 回满
+	battle.context.turn_service.start_turn(&"player")
+	# 上限恢复
+	if player_mech.max_power != maxp0:
+		return "到期后 max_power 应恢复原值 实=%d（原%d）" % [player_mech.max_power, maxp0]
+	# 当前动力被 restore_power 回满到上限（权威场景m：随后正常回合开始回复动力按恢复后上限执行）
+	if player_mech.get_own_power() != maxp0:
+		return "到期后 restore_power 应回满当前动力到上限 实=%d（应%d）" % [player_mech.get_own_power(), maxp0]
+	# 护甲 PERMANENT 不恢复
+	if player_mech.get_armor() != armor0 - 4:
+		return "到期后护甲不应恢复（PERMANENT）实=%d（应%d）" % [player_mech.get_armor(), armor0 - 4]
+	return true
+
+
+## 测试：pilot_007 effect_01 claim 从弃牌堆回收攻击牌到手牌（同 pilot_008 回收模式）
+func test_pilot_007_claim_recovers_from_discard() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	var gs = battle.context.game_state
+	var cdb = battle.context.card_database
+	var player_mech = gs.get_mech_for_player(&"player")
+	var pilot_card = _make_pilot_instance(gs, cdb, "pilot_007_珀修斯", &"player")
+	if pilot_card == null:
+		return "找不到 pilot_007_珀修斯"
+	battle.context.game_setup_service.set_pilot(player_mech.mech_id, pilot_card)
+	var player = gs.players.get(&"player")
+	# 一张攻击牌进弃牌堆（模拟 use_action_card settle 已 discard_card 入弃牌堆）
+	var atk = _make_pilot_instance(gs, cdb, "action_001_进攻", &"enemy")
+	if atk == null:
+		return "找不到 action_001_进攻"
+	atk.zone = &"discard"
+	gs.deck_state.action_discard_pile.append(atk.instance_id)
+	var payload: Dictionary = {
+		"binding_context": {"player_id": &"player", "card_instance_id": pilot_card.instance_id, "mech_id": player_mech.mech_id},
+		"card_instance_id": atk.instance_id,
+	}
+	var hand_before: int = player.action_hand.size()
+	battle.context.game_actions.claim_resolved_attack_source_card({}, payload)
+	# 攻击牌应从弃牌堆移除、进 player 手牌
+	if player.action_hand.size() != hand_before + 1:
+		return "应回收1张攻击牌到手牌 实增=%d" % (player.action_hand.size() - hand_before)
+	if not player.action_hand.has(atk.instance_id):
+		return "回收的攻击牌应在 player 手牌"
+	if gs.deck_state.action_discard_pile.has(atk.instance_id):
+		return "攻击牌应已从弃牌堆移除"
+	var rc = gs.get_card(atk.instance_id)
+	if rc == null or rc.zone != &"action_hand" or rc.owner_player_id != &"player":
+		return "回收牌 zone/owner 应为 action_hand/player 实=%s/%s" % [String(rc.zone if rc else &""), String(rc.owner_player_id if rc else &"")]
+	return true
+
+
+## 测试：pilot_007 effect_02 compute_x 按目标手牌缺失类型数算 X+1
+func test_pilot_007_compute_x_values() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	var gs = battle.context.game_state
+	var cdb = battle.context.card_database
+	var enemy_mech = gs.get_mech_for_player(&"enemy")
+	var enemy = gs.players.get(&"enemy")
+	if enemy_mech == null or enemy == null:
+		return "enemy 缺失"
+	enemy.action_hand.clear()
+	# 场景1：3张全是攻击 -> 只有{攻击}1类 -> X=2 -> flaw_count=3
+	for i in 3:
+		var a = _make_pilot_instance(gs, cdb, "action_001_进攻", &"enemy")
+		enemy.action_hand.append(a.instance_id)
+	var payload1: Dictionary = {"target_id": enemy_mech.mech_id}
+	battle.context.game_actions.pilot_007_compute_x({}, payload1)
+	if int(payload1.get("pilot_007_flaw_count", -1)) != 3:
+		return "场景1(3攻击) flaw_count 应=3 实=%d" % int(payload1.get("pilot_007_flaw_count", -1))
+	# 场景2：攻击+迎击+辅助各1 -> 3类齐 -> X=0 -> flaw_count=1
+	enemy.action_hand.clear()
+	var atk2 = _make_pilot_instance(gs, cdb, "action_001_进攻", &"enemy")
+	enemy.action_hand.append(atk2.instance_id)
+	var counter = _make_pilot_instance(gs, cdb, "action_010_反击", &"enemy")
+	if counter == null:
+		return "找不到 action_010_反击"
+	enemy.action_hand.append(counter.instance_id)
+	var support = _make_pilot_instance(gs, cdb, "action_022_补给", &"enemy")
+	if support == null:
+		return "找不到 action_022_补给"
+	enemy.action_hand.append(support.instance_id)
+	var payload2: Dictionary = {"target_id": enemy_mech.mech_id}
+	battle.context.game_actions.pilot_007_compute_x({}, payload2)
+	if int(payload2.get("pilot_007_flaw_count", -1)) != 1:
+		return "场景2(3类齐) flaw_count 应=1 实=%d" % int(payload2.get("pilot_007_flaw_count", -1))
 	return true

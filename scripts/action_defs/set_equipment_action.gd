@@ -90,10 +90,28 @@ func _step_remove_damage(action: Action) -> Dictionary:
 			if mech != null:
 				var slot = mech.slots.get(slot_id)
 				if slot != null:
-					# 弃置「新牌耐久数」的区域损伤（最多弃现有数）。
-					# 新牌的损伤在 _step_place_equip 继承区域剩余损伤（损伤在区域上=在牌上）。
+					# 弃置「新牌耐久数」的区域损伤（最多弃现有数）。新牌的损伤在 _step_place_equip
+					# 继承区域剩余损伤（损伤在区域上=在牌上）。
+					# 走 damage_change(decrease, direct_remove) 子动作：①正常路径直接从该区域移除
+					# min(耐久, 现有区域损伤) 不弹面板；②pilot_008 安德洛美达 effect_03 可在
+					# DAMAGE_CHANGE_BEFORE 逆转为「设置等量损伤」（移除取消，安德洛美达选位放置）。
 					var tokens_to_remove: int = mini(durability, slot.region_damage_tokens)
-					slot.region_damage_tokens -= tokens_to_remove
+					if tokens_to_remove > 0:
+						context.action_service.execute_sub_action({
+							"type": &"EXECUTE_DAMAGE_CHANGE",
+							"params": {
+								"mech_ids": [mech_id],
+								"value": tokens_to_remove,
+								"method": &"decrease",
+								"target_mech_id": mech_id,
+								"target_slot_id": slot_id,
+								"direct_remove": true,
+								"executor": &"system_default",
+								"reason": &"set_equipment_replace",
+							}
+						}, action.record.duplicate(), action)
+						if not action.pending_effect_action_ids.is_empty():
+							result["effect_action_created"] = true
 	return result
 
 

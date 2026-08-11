@@ -86,6 +86,85 @@ func setup_tutorial_battle(data_registry: DataRegistry, pvp_map_features: bool =
 	return {"ok": true, "message": "initialized"}
 
 
+## 初始化 3人 PvP 战斗（PVP3 模式）
+## 仿 setup_tutorial_battle，创建 3 玩家（player/enemy/third 全 is_human=true）+ 3 机甲。
+## 第3玩家 third 复用 player 的 frame_001_基础框架（仅 2 个框架定义）。
+## 建机甲顺序固定 player_mech->enemy_mech->third_mech，保证双端 instance_id 同步（next_id 纯计数）。
+## 起始位置：player(2,2) / enemy(20,-6) / third(2,-6)。
+## 地图/牌堆/装备效果注册复用现有；configure_map_features 遍历 gs.players 自动含3方起始格禁区。
+func setup_pvp3_battle(data_registry: DataRegistry, pvp_map_features: bool = true) -> Dictionary:
+	var gs: GameState = context.game_state
+	gs.reset_all()
+
+	# 清空 TimingEngine 监听器：开新局时确保无上一局残留
+	if context.timing_engine != null:
+		context.timing_engine.temporary_listeners.clear()
+		context.timing_engine.suppressed_effects.clear()
+		context.timing_engine.permanent_listeners.clear()
+
+	# ── 1. 读取教学战役配置（复用 frame 定义 + 地图尺寸 + 回合上限）──
+	var battle_config: Dictionary = data_registry.get_tutorial_battle()
+	if battle_config.is_empty():
+		return {"ok": false, "message": "未找到教学战役配置"}
+
+	# ── 2. 创建 3 玩家（全人类，PvP 各窗口独立控制）──
+	var player: PlayerState = _create_player(&"player", 15, true)
+	var enemy: PlayerState = _create_player(&"enemy", 15, true)
+	var third: PlayerState = _create_player(&"third", 15, true)
+	gs.players[player.player_id] = player
+	gs.players[enemy.player_id] = enemy
+	gs.players[third.player_id] = third
+
+	# ── 3. 创建 3 机甲（固定顺序保证 instance_id 同步）──
+	var player_frame_id: String = battle_config.get("player_frame_id", "frame_001_基础框架")
+	var enemy_frame_id: String = battle_config.get("enemy_frame_id", "frame_002_原始框架")
+	var player_mech: MechState = _create_mech_from_frame(&"player_mech", &"player", player_frame_id, data_registry)
+	var enemy_mech: MechState = _create_mech_from_frame(&"enemy_mech", &"enemy", enemy_frame_id, data_registry)
+	var third_mech: MechState = _create_mech_from_frame(&"third_mech", &"third", player_frame_id, data_registry)
+	gs.mechs[player_mech.mech_id] = player_mech
+	gs.mechs[enemy_mech.mech_id] = enemy_mech
+	gs.mechs[third_mech.mech_id] = third_mech
+
+	# ── 4. 设置初始位置（player/enemy 复用教学配置，third 固定 (11,-3)）──
+	# third 不能用 (2,-6)：odd-q 地图 q=2 的 r 范围仅 -1..6，r=-6 超出该列范围不在地图格内。
+	# (11,-3) 在 q=11 的 r 范围(-6..1)内，3方分散(player左上/enemy右下/third中部)。
+	player_mech.position = {
+		"q": int(battle_config.get("player_start", {}).get("q", 2)),
+		"r": int(battle_config.get("player_start", {}).get("r", 2)),
+	}
+	enemy_mech.position = {
+		"q": int(battle_config.get("enemy_start", {}).get("q", 20)),
+		"r": int(battle_config.get("enemy_start", {}).get("r", -6)),
+	}
+	third_mech.position = {"q": 11, "r": -3}
+
+	# ── 5. 生成地图 ──
+	var map_cols: int = int(battle_config.get("map", {}).get("cols", 24))
+	var map_rows: int = int(battle_config.get("map", {}).get("rows", 8))
+	var map_blocked: Array = battle_config.get("map", {}).get("blocked", [])
+	var cells: Array[Dictionary] = _HexGrid.generate_rectangle(map_cols, map_rows, map_blocked)
+	for cell: Dictionary in cells:
+		gs.map_state.add_cell(int(cell.q), int(cell.r), &"NORMAL")
+
+	# ── 5b. PvP 地图特征（绿/红格 + 标记点，遍历 gs.players 含3方起始格禁区）──
+	if pvp_map_features:
+		configure_map_features(gs)
+
+	# ── 6. 构建牌堆 ──
+	context.deck_build_service.build_all_decks_from_card_database()
+
+	# ── 7. 注册所有已装备卡牌效果（开局无装备，遍历无害）──
+	_register_equipped_effects(player_mech)
+	_register_equipped_effects(enemy_mech)
+	_register_equipped_effects(third_mech)
+
+	# ── 8. 记录回合上限 ──
+	gs.temp_values["turn_limit"] = int(battle_config.get("turn_limit", 12))
+
+	gs.write_log(&"game_setup", {"battle_id": "pvp3"})
+	return {"ok": true, "message": "pvp3_initialized"}
+
+
 ## ── 内部方法 ──
 
 
@@ -243,6 +322,13 @@ func set_pilot(mech_id: StringName, pilot_card_instance) -> void:
 		_ActionPilotEffects.register_faction_aura(pilot_card_instance.instance_id, pdef.card_id, String(pdef.faction))
 	# 派生光环（pilot_002 护甲 / pilot_005 动力）注册后重算动力上限，使 max_power 算入
 	mech.recalc_power_limits()
+	# pilot_005 肯特动力+4 给的是「帝国框架机甲」（按框架阵营，非被设机甲），须遍历全场重算
+	_recalc_power_for_faction_frames(&"帝国")
+	# 刷新该机甲的 pilot_002 granted 加成（换人/新机甲框架：清旧+若联邦且场上有莱比尔则授予 EX）
+	# 莱比尔自身 set_pilot 时 _grant 全量已注册，此处 ungrant+授予幂等；其他联邦机师换人由此获 EX。
+	_refresh_pilot_002_grant_for_mech(mech_id)
+	# 刷新该机甲的 pilot_005 肯特 granted 加成（换人/新机甲：清旧+若帝国且场上有肯特则授予 EX）
+	_refresh_pilot_005_grant_for_mech(mech_id)
 	var _log_card_id: String = String(pdef.card_id) if pdef != null else ""
 	gs.write_log(&"pilot_set", {"mech_id": String(mech_id), "card_id": _log_card_id})
 
@@ -279,6 +365,14 @@ func unset_pilot(mech_id: StringName) -> void:
 	slot.equipped_card = null
 	old_card.zone = &""
 	old_card.slot_id = &""
+	# pilot_005 肯特离场：帝国框架动力+4 失效；pilot_002 莱比尔离场：联邦框架护甲+4 失效。
+	# 派生光环 unregister 后须遍历全场对应阵营框架机甲重算上限（max_power 是存储字段）。
+	if old_card.def != null:
+		if String(old_card.def.card_id) == "pilot_005_肯特":
+			_recalc_power_for_faction_frames(&"帝国")
+		elif String(old_card.def.card_id) == "pilot_002_莱比尔":
+			# 莱比尔离场仅联邦护甲派生失效（护甲非动力上限，recalc 仍幂等无害）
+			_recalc_power_for_faction_frames(&"联邦")
 	gs.write_log(&"pilot_unset", {"mech_id": String(mech_id), "card_id": String(old_card.def.card_id) if old_card.def != null else ""})
 
 
@@ -350,21 +444,75 @@ func _grant_pilot_005_to_empire_mechs(card, _source_mech_id: StringName) -> void
 		var faction: String = String(slot.equipped_card.def.faction) if "faction" in slot.equipped_card.def else ""
 		if faction != "帝国":
 			continue
-		var granted_ctx: Dictionary = {
-			"card_instance_id": card.instance_id,
-			"mech_id": mid,
-			"player_id": m.owner_player_id,
-			"slot_id": &"pilot",
-			"card_def_id": &"pilot_005_肯特",
-		}
-		context.timing_engine.register_permanent_listener(_TimingConst.ATTACK_PRE, granted_effect, granted_ctx)
+		_grant_pilot_005_to_one_mech(card, mid, m, granted_effect)
+
+
+## 向单个机甲注册 pilot_005 granted 帝国压制 listener（_grant 全量与 _refresh 换人共用）。
+## binding_context.card_instance_id=pilot_005 实例（注销用），mech_id=被授予帝国机甲。
+func _grant_pilot_005_to_one_mech(card, mid: StringName, m, granted_effect) -> void:
+	if context == null or context.timing_engine == null:
+		return
+	var granted_ctx: Dictionary = {
+		"card_instance_id": card.instance_id,
+		"mech_id": mid,
+		"player_id": m.owner_player_id,
+		"slot_id": &"pilot",
+		"card_def_id": &"pilot_005_肯特",
+	}
+	context.timing_engine.register_permanent_listener(_TimingConst.ATTACK_PRE, granted_effect, granted_ctx)
+
+
+## 刷新某机甲的 pilot_005 肯特 granted 加成（换机师/新机甲框架时调用）：
+## 先注销该机甲旧 granted listener（清非帝国残留），再若新机师帝国阵营且场上有肯特 aura 则授予。
+## 解决"后续换帝国机师/新机甲无法享受肯特加成"（set_pilot 时调用，镜像 pilot_002 莱比尔）。
+func _refresh_pilot_005_grant_for_mech(target_mid: StringName) -> void:
+	if context == null or context.timing_engine == null or context.game_state == null:
+		return
+	# 1. 清旧 granted（换非帝国机师时移除残留 EX）
+	context.timing_engine.ungrant_pilot_005_for_mech(target_mid)
+	# 2. 查目标机甲机师阵营，非帝国不授予
+	var target_mech = context.game_state.mechs.get(target_mid)
+	if target_mech == null:
+		return
+	var t_slot = target_mech.slots.get(&"pilot") if "slots" in target_mech else null
+	if t_slot == null or t_slot.equipped_card == null or t_slot.equipped_card.def == null:
+		return
+	var t_faction: String = String(t_slot.equipped_card.def.faction) if "faction" in t_slot.equipped_card.def else ""
+	if t_faction != "帝国":
+		return
+	# 3. 查场上是否已有肯特 aura（pilot_005 帝国来源）
+	var all_effects: Dictionary = _ActionPilotEffects.build_pilot_effects()
+	var granted_effect = all_effects.get(&"pilot_005_granted_suppression")
+	for src_instance: StringName in _ActionPilotEffects._pilot_aura:
+		var aura: Dictionary = _ActionPilotEffects._pilot_aura[src_instance]
+		if String(aura.get("pilot_def_id", "")) == "pilot_005_肯特" and String(aura.get("faction", "")) == "帝国":
+			var card = context.game_state.get_card(src_instance)
+			if card != null:
+				_grant_pilot_005_to_one_mech(card, target_mid, target_mech, granted_effect)
+			return
+
+
+## 遍历全场所有指定阵营框架机甲，重算动力上限。
+## pilot_005 肯特动力+4 按「机甲框架阵营」判定（frame_def.faction），非被设机甲。
+## set_pilot/unset_pilot/toggle 后派生光环变化，max_power 是存储字段须 recalc 才同步。
+func _recalc_power_for_faction_frames(faction: StringName) -> void:
+	if context == null or context.game_state == null:
+		return
+	for mid: StringName in context.game_state.mechs:
+		var m = context.game_state.mechs[mid]
+		if m == null or m.get("frame_def") == null:
+			continue
+		var ff: String = String(m.frame_def.faction) if "faction" in m.frame_def else ""
+		if ff != String(faction):
+			continue
+		m.recalc_power_limits()
 
 
 ## pilot_002 effect_01 授予机制：向所有联邦阵营机甲注册 granted DIRECT 进攻 + AVAILABILITY 防御 listener。
 ## granted listener 的 binding_context.card_instance_id=pilot_002 实例（注销用），
 ## mech_id=被授予联邦机甲。unset_pilot 时 unregister_permanent_listeners_for_card(pilot_002_instance) 注销所有 granted。
 ## 裁定：阵营含敌方同阵营；toggle 只关闭对应莱比尔来源（由 is_aura_active_for_mech 判定）。
-func _grant_pilot_002_to_federation_mechs(card, _source_mech_id: StringName) -> void:
+func _grant_pilot_002_to_federation_mechs(card, source_mech_id: StringName) -> void:
 	if context == null or context.timing_engine == null or context.game_state == null:
 		return
 	var all_effects: Dictionary = _ActionPilotEffects.build_pilot_effects()
@@ -373,6 +521,7 @@ func _grant_pilot_002_to_federation_mechs(card, _source_mech_id: StringName) -> 
 	if granted_attack == null and granted_defense == null:
 		return
 	for mid: StringName in context.game_state.mechs:
+		# 莱比尔自身也获 EX（裁定修订：莱比尔自己也能发动交牌转化）
 		var m = context.game_state.mechs[mid]
 		if m == null:
 			continue
@@ -382,19 +531,57 @@ func _grant_pilot_002_to_federation_mechs(card, _source_mech_id: StringName) -> 
 		var faction: String = String(slot.equipped_card.def.faction) if "faction" in slot.equipped_card.def else ""
 		if faction != "联邦":
 			continue
-		var granted_ctx: Dictionary = {
-			"card_instance_id": card.instance_id,
-			"mech_id": mid,
-			"player_id": m.owner_player_id,
-			"slot_id": &"pilot",
-			"card_def_id": &"pilot_002_莱比尔",
-		}
-		# DIRECT 进攻分支：注册到虚拟时点（skill_bar 按钮扫描）
-		if granted_attack != null:
-			context.timing_engine.register_permanent_listener(&"pilot_002_granted_transfer_attack", granted_attack, granted_ctx)
-		# AVAILABILITY 防御分支：注册到 ATTACK_AT（response_window 扫描）
-		if granted_defense != null:
-			context.timing_engine.register_permanent_listener(_TimingConst.ATTACK_AT, granted_defense, granted_ctx)
+		_grant_pilot_002_to_one_mech(card, mid, m, granted_attack, granted_defense)
+
+
+## 向单个机甲注册 pilot_002 granted 进攻+防御 listener（_grant 全量与 _refresh 换人共用）。
+func _grant_pilot_002_to_one_mech(card, mid: StringName, m, granted_attack, granted_defense) -> void:
+	if context == null or context.timing_engine == null:
+		return
+	var granted_ctx: Dictionary = {
+		"card_instance_id": card.instance_id,
+		"mech_id": mid,
+		"player_id": m.owner_player_id,
+		"slot_id": &"pilot",
+		"card_def_id": &"pilot_002_莱比尔",
+	}
+	# DIRECT 进攻分支：注册到虚拟时点（EX 按钮扫描）
+	if granted_attack != null:
+		context.timing_engine.register_permanent_listener(&"pilot_002_granted_transfer_attack", granted_attack, granted_ctx)
+	# AVAILABILITY 防御分支：注册到 ATTACK_AT（response_window 扫描）
+	if granted_defense != null:
+		context.timing_engine.register_permanent_listener(_TimingConst.ATTACK_AT, granted_defense, granted_ctx)
+
+
+## 刷新某机甲的 pilot_002 granted 加成（换机师/新机甲框架时调用）：
+## 先注销该机甲旧 granted listener（清非联邦残留），再若新机师联邦阵营且场上有莱比尔 aura 则授予。
+## 解决"后续换联邦机师/新机甲无法享受莱比尔加成"（set_pilot 时调用）。
+func _refresh_pilot_002_grant_for_mech(target_mid: StringName) -> void:
+	if context == null or context.timing_engine == null or context.game_state == null:
+		return
+	# 1. 清旧 granted（换非联邦机师时移除残留 EX）
+	context.timing_engine.ungrant_pilot_002_for_mech(target_mid)
+	# 2. 查目标机甲机师阵营，非联邦不授予
+	var target_mech = context.game_state.mechs.get(target_mid)
+	if target_mech == null:
+		return
+	var t_slot = target_mech.slots.get(&"pilot") if "slots" in target_mech else null
+	if t_slot == null or t_slot.equipped_card == null or t_slot.equipped_card.def == null:
+		return
+	var t_faction: String = String(t_slot.equipped_card.def.faction) if "faction" in t_slot.equipped_card.def else ""
+	if t_faction != "联邦":
+		return
+	# 3. 查场上是否已有莱比尔 aura（pilot_002 联邦来源）
+	var all_effects: Dictionary = _ActionPilotEffects.build_pilot_effects()
+	var granted_attack = all_effects.get(&"pilot_002_granted_transfer_attack")
+	var granted_defense = all_effects.get(&"pilot_002_granted_transfer_defense")
+	for src_instance: StringName in _ActionPilotEffects._pilot_aura:
+		var aura: Dictionary = _ActionPilotEffects._pilot_aura[src_instance]
+		if String(aura.get("pilot_def_id", "")) == "pilot_002_莱比尔" and String(aura.get("faction", "")) == "联邦":
+			var card = context.game_state.get_card(src_instance)
+			if card != null:
+				_grant_pilot_002_to_one_mech(card, target_mid, target_mech, granted_attack, granted_defense)
+			return
 
 
 # ═══════════════════════════════════════════

@@ -67,6 +67,7 @@ func _serialize_players(gs, viewer_pid: StringName) -> Dictionary:
 			"statuses": p.statuses.duplicate(true),
 			"hand_revealed": p.hand_revealed,
 			"sell_equipment_count_this_turn": p.sell_equipment_count_this_turn,
+			"paid_draw_count_this_turn": p.paid_draw_count_this_turn,
 			"hand_hidden": hidden,
 		}
 		if hidden:
@@ -156,6 +157,7 @@ func _serialize_cards(gs, viewer_pid: StringName) -> Dictionary:
 			"disabled": card.disabled,
 			"timer": card.timer,
 			"counters": card.counters.duplicate(true),
+			"tags": card.tags.duplicate(true),
 			"known_to": card.known_to.duplicate(),
 			"energy_charge_stacks": card.energy_charge_stacks,
 		}
@@ -252,6 +254,7 @@ func apply_snapshot(context, snap: Dictionary) -> void:
 		card.disabled = bool(c_snap.get("disabled", false))
 		card.timer = int(c_snap.get("timer", 0))
 		card.counters = c_snap.get("counters", {}).duplicate(true)
+		card.tags = c_snap.get("tags", {}).duplicate(true)
 		card.known_to = c_snap.get("known_to", []).duplicate()
 		card.energy_charge_stacks = int(c_snap.get("energy_charge_stacks", 0))
 		gs.cards[instance_id] = card
@@ -275,6 +278,7 @@ func apply_snapshot(context, snap: Dictionary) -> void:
 		p.statuses = p_snap.get("statuses", []).duplicate(true)
 		p.hand_revealed = bool(p_snap.get("hand_revealed", false))
 		p.sell_equipment_count_this_turn = int(p_snap.get("sell_equipment_count_this_turn", 0))
+		p.paid_draw_count_this_turn = int(p_snap.get("paid_draw_count_this_turn", 0))
 		# 手牌：hidden 时为空数组（client 用 action_hand_count 渲染牌背）；否则真实 instance_id
 		var ah: Array = p_snap.get("action_hand", [])
 		var eh: Array = p_snap.get("equipment_hand", [])

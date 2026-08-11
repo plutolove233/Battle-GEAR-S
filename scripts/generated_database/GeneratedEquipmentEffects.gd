@@ -847,7 +847,7 @@ static func build_equipment_effects() -> Dictionary:
 		"params": {
 			"optional": true,
 			"options": [{"label": "抽1张行动牌", "actions": [
-				{"type": &"DRAW_ACTION", "params": {"count": 1, "player_id": "$binding_context.player_id"}},
+				{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 1, "player_id": "$binding_context.player_id"}},
 			]}],
 		},
 	}])
@@ -875,7 +875,7 @@ static func build_equipment_effects() -> Dictionary:
 		"params": {
 			"optional": true,
 			"options": [{"label": "抽2张行动牌", "actions": [
-				{"type": &"DRAW_ACTION", "params": {"count": 2, "player_id": "$binding_context.player_id"}},
+				{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 2, "player_id": "$binding_context.player_id"}},
 			]}],
 		},
 	}])
@@ -1837,7 +1837,7 @@ static func build_equipment_effects() -> Dictionary:
 			"optional": false,
 			"options": [
 				{"label": "抽1张行动牌", "actions": [
-					{"type": &"DRAW_ACTION", "params": {"count": 1, "player_id": "$binding_context.player_id"}},
+					{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 1, "player_id": "$binding_context.player_id"}},
 				]},
 				{"label": "回复2动力", "actions": [
 					{"type": &"RESTORE_POWER", "params": {"amount": 2}},
@@ -2075,7 +2075,7 @@ static func build_equipment_effects() -> Dictionary:
 		{"cost_type": &"DISCARD_ACTION_CARD", "count": 2, "optional": true},
 	])
 	polar_torso.set_actions([
-		{"type": &"DRAW_ACTION", "params": {"count": 1, "player_id": "$binding_context.player_id"}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 1, "player_id": "$binding_context.player_id"}},
 		{"type": &"EXECUTE_STAT_MODIFY", "params": {"target_id": "$binding_context.mech_id", "stat_type": &"power", "value": 3, "method": &"add", "duration": &"THIS_TURN"}},
 	])
 	polar_torso.description = "机甲被指定为攻击目标时，可弃置2张行动牌，立即抽1张行动牌(若是迎击牌可以立即响应该攻击)，并使当前回合动力+3。"
@@ -2366,7 +2366,7 @@ static func build_equipment_effects() -> Dictionary:
 			"optional": true,
 			"options": [{"label": "在此牌上设置2损伤，抽3行动牌并回复3动力", "actions": [
 				{"type": &"EXECUTE_DAMAGE_CHANGE", "params": {"target_mech_id": "$binding_context.mech_id", "target_slot_id": "$binding_context.slot_id", "value": 2, "method": &"increase", "executor": &"SYSTEM_DEFAULT", "reason": &"equipment_effect_cost", "fixed_slot": true}},
-				{"type": &"DRAW_ACTION", "params": {"count": 3, "player_id": "$binding_context.player_id"}},
+				{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 3, "player_id": "$binding_context.player_id"}},
 				{"type": &"RESTORE_POWER", "params": {"amount": 3}},
 			]}],
 		},
@@ -2805,7 +2805,7 @@ static func build_equipment_effects() -> Dictionary:
 	# 112 每次攻击结算后武器威力永久-4并标记本回合已用（14/15）
 	var w112 := _ActionEffect.new()
 	w112.effect_id = &"equipment_effect_112"
-	w112.display_name = "每次攻击结算后武器威力永久-4并标记本回合已用"
+	w112.display_name = "每次攻击结算后按PRE记录次数衰减威力并标记本回合已用"
 	w112.mode = _TC.MODE_LISTEN
 	w112.priority = 10
 	w112.listen_timing = _TC.ATTACK_SETTLE
@@ -2814,11 +2814,31 @@ static func build_equipment_effects() -> Dictionary:
 	w112.set_target_rules([{"rule": &"NO_TARGET"}])
 	w112.set_costs([])
 	w112.set_actions([
-		{"type": &"MODIFY_WEAPON_POWER", "params": {"target_card_instance_id": "$binding_context.card_instance_id", "delta": -4, "mode": &"increase", "duration": &"PERMANENT", "bucket": "weapon_decay"}},
+		# 按 ATTACK_PRE 记录的攻击次数衰减（双连等多次攻击只衰减1次），衰减后清除记录。
+		{"type": &"DECAY_WEAPON_BY_RECORDED_COUNT", "params": {"target_card_instance_id": "$binding_context.card_instance_id", "delta": -4}},
 		{"type": &"ADD_STATUS", "params": {"status_type": &"weapon_used_this_turn", "target_card_instance_id": "$binding_context.card_instance_id", "duration": &"UNTIL_OWNER_TURN_AFTER_END", "refresh": true}},
 	])
 	w112.description = "此牌每发动过1次攻击，威力-4。"
 	effects[w112.effect_id] = w112
+
+	# 112b 衰减前置：在 ATTACK_PRE 记录1次攻击次数（写武器 counters.pending_attack_decay）。
+	# 多目标攻击（双连）主攻击只发1次 ATTACK_PRE（复制攻击从 ATTACK_AT 开始不发 PRE），
+	# 故记录1次；复制攻击各自结算时 effect_112 按记录次数衰减1次，避免重复衰减。
+	var w112b := _ActionEffect.new()
+	w112b.effect_id = &"equipment_effect_112b"
+	w112b.display_name = "攻击前记录1次攻击次数（衰减武器前置）"
+	w112b.mode = _TC.MODE_LISTEN
+	w112b.priority = 10
+	w112b.listen_timing = _TC.ATTACK_PRE
+	w112b.listen_action_type = &"attack"
+	w112b.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}])
+	w112b.set_target_rules([{"rule": &"NO_TARGET"}])
+	w112b.set_costs([])
+	w112b.set_actions([
+		{"type": &"RECORD_WEAPON_ATTACK_COUNT", "params": {"target_card_instance_id": "$binding_context.card_instance_id"}},
+	])
+	w112b.description = "发动攻击前记录1次攻击次数，供结算时按次数衰减。"
+	effects[w112b.effect_id] = w112b
 
 	# 113 我方回合未用本牌攻击则回合结束回复4威力（14/15）
 	var w113 := _ActionEffect.new()
@@ -3292,7 +3312,7 @@ static func build_equipment_effects() -> Dictionary:
 			]}}]},
 			{"label": "弃置2张行动牌，再抽2张", "condition": {"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"count": 2}}, "actions": [
 				{"type": &"EXECUTE_DISCARD", "params": {"from_target": false, "count": 2, "choose": true, "face_up": true, "reason": &"weapon_cycle"}},
-				{"type": &"DRAW_ACTION", "params": {"target_id": "$binding_context.mech_id", "count": 2, "reason": &"weapon_cycle"}},
+				{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 2, "reason": &"weapon_cycle"}},
 				{"type": &"INCREMENT_VARIABLE", "params": {"scope": &"attack", "variable_name": &"weapon_037_used", "delta": 1}},
 			]},
 		]}},

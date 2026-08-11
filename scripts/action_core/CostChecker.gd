@@ -141,13 +141,23 @@ static func pay_single(binding, payload: Dictionary, cost: Dictionary, ctx) -> b
 
 			# 优先使用玩家选择的牌ID列表
 			var selected_ids: Array = payload.get("selected_action_card_ids", [])
+			var to_temp_zone: bool = bool(cost.get("params", {}).get("to_temp_zone", false))
 			if selected_ids.size() >= count:
+				var moved_ids: Array = []
 				for i in range(count):
-					ctx.game_actions.discard_action_card({
-						"player_id": player_id,
-						"card_id": selected_ids[i],
-						"reason": discard_reason
-					})
+					if to_temp_zone:
+						# pilot_011 迪恩转化：2张行动牌作为燃料移入临时区（不立即弃置），
+						# 效果链末尾由 DISCARD_TEMP_ZONE_CARDS 原子动作入弃牌堆（复用维修臂 zone 生命周期）。
+						_move_action_card_to_temp_zone(ctx, selected_ids[i], player_id)
+						moved_ids.append(selected_ids[i])
+					else:
+						ctx.game_actions.discard_action_card({
+							"player_id": player_id,
+							"card_id": selected_ids[i],
+							"reason": discard_reason
+						})
+				if to_temp_zone:
+					payload["temp_zone_card_ids"] = moved_ids
 				return true
 
 			# 回退：自动选择前 N 张匹配的牌
@@ -302,6 +312,22 @@ static func pay_single(binding, payload: Dictionary, cost: Dictionary, ctx) -> b
 		_:
 			push_warning("CostChecker: 未知费用类型 %s，跳过支付" % cost_type)
 			return true
+
+
+## pilot_011 迪恩转化：把1张行动牌从手牌移入临时区（不弃置、不触发弃牌时点）。
+## 复用 use_action_card._step_card_to_temp_zone 的 zone 生命周期：手牌 erase + 注销监听器 + zone=temp_zone。
+## 效果链末尾由 DISCARD_TEMP_ZONE_CARDS 原子动作统一入弃牌堆。
+static func _move_action_card_to_temp_zone(ctx, card_id: StringName, player_id: StringName) -> void:
+	if ctx == null or ctx.game_state == null:
+		return
+	var player = ctx.game_state.players.get(player_id)
+	if player != null:
+		player.action_hand.erase(card_id)
+	if ctx.timing_engine != null:
+		ctx.timing_engine.unregister_listeners_for_card(card_id)
+	var card = ctx.game_state.get_card(card_id)
+	if card != null:
+		card.zone = &"temp_zone"
 
 
 ## 检查弃牌费用是否需要玩家选择弃置目标

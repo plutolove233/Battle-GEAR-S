@@ -116,6 +116,15 @@ func _step_set_damage(action: Action) -> Dictionary:
 		# 损伤已放置完毕，进入结算
 		return result
 	elif method == &"decrease":
+		# direct_remove：设装备移除旧区域损伤走 damage_change(decrease) 时用。
+		# 直接从指定 slot 区域移除 value 个损伤（不弹面板），pilot_008 effect_03 逆转时
+		# 会清除 direct_remove 改 method=increase 走下方放置面板。
+		if bool(action.record.get("direct_remove", false)):
+			var dr_mech: StringName = StringName(action.record.get("target_mech_id", &""))
+			var dr_slot: StringName = StringName(action.record.get("target_slot_id", &""))
+			if dr_mech != &"" and dr_slot != &"" and context.game_actions != null:
+				context.game_actions.remove_damage_tokens_from_slot_region(dr_mech, dr_slot, value)
+			return result
 		# 减少损伤：弹损伤框让玩家逐一选择从哪些槽位移除（与 increase 的放置框对称，
 		# 复用 damage_placement_panel 的 removal 模式）。AI 路径由 ActionUIBridge 自动移除。
 		# 已回填 placed（玩家手动完成）/auto_placed（AI）则跳过，进入结算。

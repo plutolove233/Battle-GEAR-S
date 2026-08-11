@@ -282,6 +282,11 @@ func register_hand_card_availability(card_instance_id: StringName) -> void:
 				"player_id": player_id,
 				"mech_id": holder_mech.mech_id,
 			})
+		# pilot_009 美杜莎控制牌接入触发窗口（被动牌迎击/掩护/推进）的设计：
+		# 被动牌触发窗口（ATTACK_AT 等）按 card.mech_id（=目标持有者）路由到目标玩家，
+		# granted listener 无法把窗口路由给美杜莎，且会在目标窗口重复列出同一张牌。
+		# 故被动牌触发窗口集成延后（需 PvP 多玩家窗口设计，待实机验证）；
+		# 主动牌（攻击/可主动辅助）由「美杜莎操控」按钮直接使用（use_action_card + is_card_type_controlled_by 校验）。
 
 
 ## 当行动牌离开手牌时，注销其 AVAILABILITY 效果

@@ -26,6 +26,9 @@ var action_cards_label: Label
 var equipment_label: Label
 var mech_info_label: Label
 
+## 滚动容器引用（刷新内容后强制重算滚动范围用）
+var _scroll: ScrollContainer = null
+
 ## 当前选中的玩家
 var current_player_id: StringName = &""
 ## 防止刷新玩家下拉时 select() → item_selected → _refresh_all 递归
@@ -71,9 +74,9 @@ func _setup_ui() -> void:
 	main_vbox.anchor_right = 1.0
 	main_vbox.anchor_bottom = 1.0
 	main_vbox.offset_top = 8
-	main_vbox.offset_bottom = 8
+	main_vbox.offset_bottom = -8
 	main_vbox.offset_left = 8
-	main_vbox.offset_right = 8
+	main_vbox.offset_right = -8
 	main_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	main_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	main_vbox.add_theme_constant_override("separation", 6)
@@ -85,6 +88,7 @@ func _setup_ui() -> void:
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	main_vbox.add_child(scroll)
+	_scroll = scroll  # 存引用，供刷新内容后强制重算滚动范围
 
 	# 外部 MarginContainer 限制宽度
 	var margin := MarginContainer.new()
@@ -659,6 +663,11 @@ func _update_info_display() -> void:
 					player.action_card_limit if player else 0
 				]
 		pilot_info_label.text = pilot_text
+
+	# autowrap 长文本 label（装备/行动牌/机甲信息）内容变化后实际高度可能变，
+	# ScrollContainer 的滚动范围未必同步刷新 -> 滚不到底。deferred 强制重算。
+	if _scroll != null and is_instance_valid(_scroll):
+		_scroll.update_minimum_size()
 
 
 # ═══════════════════════════════════════════

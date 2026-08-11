@@ -134,6 +134,48 @@ func get_opponent_mech(player_id: StringName):
 	return null
 
 
+## 3人 PvP 固定回合顺序（player->enemy->third 循环）。
+## 2人时 third 不在 players 中会被跳过，故 get_next_player_id 对 2人同样兼容。
+const PVP3_TURN_ORDER: Array[StringName] = [&"player", &"enemy", &"third"]
+
+
+## 判断玩家是否仍存活（机甲未摧毁且 HP>0）。3人淘汰制用。
+func is_player_alive(player_id: StringName) -> bool:
+	var mech = get_mech_for_player(player_id)
+	if mech == null:
+		return false
+	return (not mech.destroyed) and mech.current_hp > 0
+
+
+## 3人轮转：按 PVP3_TURN_ORDER 取 player_id 之后的下一个存活玩家。
+## 跳过已淘汰（机甲 destroyed/HP<=0）的玩家；全淘汰返回 &""。
+## 兼容 2人：顺序中的 third 若不在 players 自动跳过，2人 enemy<->player 仍正确。
+func get_next_player_id(player_id: StringName) -> StringName:
+	var order: Array[StringName] = PVP3_TURN_ORDER
+	var idx: int = order.find(player_id)
+	if idx < 0:
+		# 不在固定顺序中：回退到第一个非己存活玩家（2人兼容路径）
+		for pid: StringName in players:
+			if pid != player_id and is_player_alive(pid):
+				return pid
+		return &""
+	var n: int = order.size()
+	for i in range(1, n + 1):
+		var cand: StringName = order[(idx + i) % n]
+		if players.has(cand) and is_player_alive(cand):
+			return cand
+	return &""  # 全员淘汰
+
+
+## 存活玩家数（3人胜利判定：<=1 即结束）。通用，2人时返回 0/1/2。
+func alive_player_count() -> int:
+	var count: int = 0
+	for pid: StringName in players:
+		if is_player_alive(pid):
+			count += 1
+	return count
+
+
 ## 获取机甲最大动力
 func get_max_power(mech_id: StringName) -> int:
 	var mech = mechs.get(mech_id)

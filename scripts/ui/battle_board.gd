@@ -59,6 +59,7 @@ var hovered_hex: Dictionary = {}
 # 悬停移动路径预览（鼠标悬停可达格时画最短路线连线）
 var _context = null  # GameContext（find_optimal_path 用）
 var _local_mech_id: StringName = &""  # 本地玩家机甲 id（路径起点）
+var local_player_id: StringName = &"player"  # 本地玩家 id（_draw_unit 区分"我/敌"，PvP客户端=enemy/third）
 var _local_mech_pos: Dictionary = {}  # 本地机甲当前位置（axial q/r），移动中画"当前位置->目标"线用
 var _hover_move_path: Array = []  # 悬停预览路径 center 列表，空=不画
 # 逐格移动进行中标志 + 目标格。移动中不画悬停路径（避免误导），改画"当前位置->目标"实时连线。
@@ -73,6 +74,8 @@ var base_background_texture: Texture2D  # 底层地图背景
 var highlighted_hexes: Dictionary = {}  # key: "q,r" → true
 # 可攻击格高亮层（红色闪烁）：key "q,r" → true
 var attack_target_hexes: Dictionary = {}
+# 多目标攻击已选标记（双连等）：key "q,r" -> int 序号（1,2,3...），在格子上画序号圆标
+var multi_target_marks: Dictionary = {}
 # 闪烁动画累计时间与开关
 var _blink_accum: float = 0.0
 var _blink_enabled: bool = false
@@ -263,6 +266,9 @@ func _draw() -> void:
 			var red_border := Color(ATTACK_TARGET_BORDER.r, ATTACK_TARGET_BORDER.g, ATTACK_TARGET_BORDER.b, ATTACK_TARGET_BORDER.a * blink_t)
 			draw_colored_polygon(points, red_fill)
 			draw_polyline(points + PackedVector2Array([points[0]]), red_border, (BORDER_WIDTH * 1.6) / _grid_scale)
+		# 多目标攻击已选序号标记（双连：选了第1/第2台机甲后在格上画序号圆+数字）
+		if multi_target_marks.has(tile_key):
+			_draw_multi_target_mark(center, int(multi_target_marks[tile_key]))
 		_draw_hex_label(tile, center)
 		_draw_special_icon(tile, center)
 		_draw_marker_overlay(tile, center, marker_lookup)
@@ -457,14 +463,14 @@ func _draw_unit(side: String, unit: Dictionary) -> void:
 	var col: int = int(unit_pos.get("col", 0))
 	var row: int = int(unit_pos.get("row", 0))
 	var center := _grid_to_world(col, row)
-	var color := PLAYER_START_FILL if side == "player" else ENEMY_START_FILL
+	var color := PLAYER_START_FILL if side == String(local_player_id) else ENEMY_START_FILL
 	var unit_r := 18.0 / _grid_scale
 	draw_circle(center, unit_r, color)
 	draw_arc(center, unit_r, 0.0, TAU, 48, Color.BLACK, 2.0 / _grid_scale)
 	var font := _draw_font()
 	if font == null:
 		return
-	var label := "我" if side == "player" else "敌"
+	var label := "我" if side == String(local_player_id) else "敌"
 	var font_size := int(18.0 / _grid_scale)
 	if font_size <= 0:
 		return
@@ -618,8 +624,40 @@ func highlight_attack_targets(hexes: Array[Dictionary]) -> void:
 ## 清除可攻击格红色高亮层（停止闪烁）
 func clear_attack_targets() -> void:
 	attack_target_hexes.clear()
+	multi_target_marks.clear()  # 多目标序号标记随攻击高亮一同清除
 	_blink_enabled = false
 	_blink_accum = 0.0
 	_blink_redraw_accum = 0.0
 	set_process(false)
 	queue_redraw()
+
+## 设置多目标攻击已选标记（双连等）：marks = [{"q","r"}] 顺序数组，序号=1,2,3...
+## 在已选目标格上画带序号的圆标，让玩家区分"第1台/第2台"机甲。
+func set_multi_target_marks(marks: Array) -> void:
+	multi_target_marks.clear()
+	for i in range(marks.size()):
+		var hx: Dictionary = marks[i]
+		var key: String = "%s,%s" % [int(hx.get("q", 0)), int(hx.get("r", 0))]
+		multi_target_marks[key] = i + 1
+	queue_redraw()
+
+func clear_multi_target_marks() -> void:
+	if not multi_target_marks.is_empty():
+		multi_target_marks.clear()
+		queue_redraw()
+
+## 画多目标序号圆标：金黄色实心圆 + 白色序号数字
+func _draw_multi_target_mark(center: Vector2, index: int) -> void:
+	var r := (HEX_RADIUS * 0.42) / _grid_scale
+	var bg := Color(1.0, 0.78, 0.12, 0.92)
+	var edge := Color(0.35, 0.22, 0.0, 0.95)
+	# 标记偏向格子右上角，避开格子中央的机甲贴图
+	var mark_center := center + Vector2(HEX_RADIUS * 0.34, -HEX_HEIGHT * 0.28) / _grid_scale
+	draw_circle(mark_center, r, bg)
+	draw_arc(mark_center, r, 0.0, TAU, 24, edge, 2.0 / _grid_scale)
+	var font := _draw_font()
+	if font != null:
+		var font_size := int(r * 1.5)
+		var text := str(index)
+		var ts := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
+		draw_string(font, mark_center - ts * 0.5 + Vector2(0, r * 0.55), text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(0.1, 0.07, 0.0, 1.0))

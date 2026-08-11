@@ -12,6 +12,7 @@ const BattleState = preload("res://scripts/battle/battle_state.gd")
 const _TimingConst = preload("res://scripts/action_core/TimingConst.gd")
 const _MechState = preload("res://scripts/runtime/MechState.gd")
 const _MechSlotState = preload("res://scripts/runtime/MechSlotState.gd")
+const _CardInstance = preload("res://scripts/runtime/CardInstance.gd")
 
 
 func _new_battle() -> BattleState:
@@ -206,6 +207,122 @@ func test_flash_real_play_registers_and_fires_effect2():
 	var saw_select_discard: bool = seen_inputs.has("select_discard_cards")
 	if not saw_select_discard:
 		return "未发出 select_discard_cards 弹窗信号（收到的 inputs: %s）" % str(seen_inputs)
+	return true
+
+
+## 里昂(标记)用闪击额外攻击打标记目标：attack A 与 attack B 的 ATTACK_PRE 都应抽牌。
+## 复现问题4A：闪击额外攻击(attack B)打标记目标不抽牌。
+func test_pilot006_flash_extra_attack_draws() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	var gs = battle.context.game_state
+	var cdb = battle.context.card_database
+	var player_mech = gs.get_mech_for_player(&"player")
+	var enemy_mech = gs.get_mech_for_player(&"enemy")
+	if player_mech == null or enemy_mech == null:
+		return "找不到玩家/敌方机甲"
+	# 装里昂 + 标记 enemy_mech
+	var _APE = preload("res://scripts/generated_database/ActionPilotEffects.gd")
+	var leon = null
+	for src in gs.cards.values():
+		if src != null and src.def != null and String(src.def.card_id) == "pilot_006_里昂":
+			leon = src
+			break
+	if leon == null:
+		leon = _CardInstance.new(gs.next_id(&"card"), cdb.get_card(StringName("pilot_006_里昂")))
+		leon.owner_player_id = &"player"
+		gs.cards[leon.instance_id] = leon
+	if leon == null:
+		return "找不到 pilot_006_里昂"
+	battle.context.game_setup_service.set_pilot(player_mech.mech_id, leon)
+	_APE.set_pilot_006_mark(leon.instance_id, enemy_mech.mech_id, gs)
+	# 准备闪击牌 + 弃牌用饲料牌
+	var flash_id = _ensure_card_in_hand(battle, "action_006_闪击")
+	var fodder1 = _ensure_card_in_hand(battle, "action_001_进攻")
+	if flash_id == &"" or fodder1 == &"":
+		return "无法塞入闪击/弃牌"
+	var weapon_ids = player_mech.get_weapon_ids()
+	if weapon_ids.is_empty():
+		return "玩家机甲无武器"
+	var weapon_id = weapon_ids[0]
+	enemy_mech.position = {"q": 3, "r": 2}
+	# 清空地图地形（避免绿/红格干扰射程）+ 敌方迎击牌
+	for key in gs.map_state.cells:
+		gs.map_state.cells[key].terrain = &"NORMAL"
+	for cid: StringName in gs.players.get(&"enemy").action_hand.duplicate():
+		battle.context.timing_engine.unregister_listeners_for_card(cid)
+	gs.players.get(&"enemy").action_hand.clear()
+
+	var player = gs.players.get(&"player")
+	# 用牌堆大小作为抽牌指标（打出闪击牌会离开手牌，手牌净变化=0易误判）。
+	# effect_02 从 action_deck 抽顶牌；闪击流程中仅 effect_02 抽牌，故牌堆减少数=effect_02 触发数。
+	var deck_before: int = gs.deck_state.action_deck.size()
+
+	# 真实打出闪击 -> attack A
+	battle.execute_use_action_card(&"player", flash_id)
+	var ae = battle.context.action_engine
+	var ar = battle.context.action_registry
+	var attack_a_id: StringName = &""
+	for aid in ar.get_active_ids():
+		var a = ar.get_action(aid)
+		if a and a.action_type == &"attack":
+			attack_a_id = aid
+			break
+	if attack_a_id == &"":
+		return "找不到 attack A"
+	# 记录 attack A 抽牌前的牌堆顶（effect_02 将抽这张）
+	var deck_top_a: StringName = gs.deck_state.action_deck[0] if not gs.deck_state.action_deck.is_empty() else &""
+	# 选武器 + 选目标=enemy_mech(标记)
+	ae.continue_action(attack_a_id, {"weapon_id": weapon_id})
+	ae.continue_action(attack_a_id, {"target_id": enemy_mech.mech_id})
+	# effect_02 改 CHOOSE_ONE optional（问题3）：ATTACK_PRE 触发时弹窗询问里昂是否发动狩猎追击。
+	# 测试同步确认发动（option 0）-> effect_02 抽1张行动牌。
+	battle.context.timing_engine.resume_pending_effect(attack_a_id, {"chosen_option_index": 0})
+	# attack A 的 ATTACK_PRE 应已触发 effect_02 抽1张（牌堆-1）
+	var deck_after_a: int = gs.deck_state.action_deck.size()
+	if deck_after_a != deck_before - 1:
+		return "attack A 的 ATTACK_PRE 应抽1张（牌堆-1）实=%d（before=%d）" % [deck_after_a, deck_before]
+	# 验证 attack A 抽到的攻击牌已打狩猎标签（非攻击牌不打标签，跳过）
+	var drawn_a = gs.get_card(deck_top_a) if deck_top_a != &"" else null
+	if drawn_a != null and drawn_a.def != null and String(drawn_a.def.action_type) == "攻击":
+		if not _APE.pilot_006_hunting_tag_active(drawn_a, &"player"):
+			return "attack A 抽到的攻击牌应打狩猎标签"
+		if _APE.pilot_006_hunting_tag_marked_mech(drawn_a, &"player") != enemy_mech.mech_id:
+			return "attack A 抽到的攻击牌狩猎标签应绑定 enemy_mech"
+	# 驱动 attack A 损伤设置 -> ATTACK_SETTLE。effect_03(priority30)先于 flash_e2(priority10)触发并阻塞选机甲。
+	var drive_ret_a: Dictionary = _drive_damage_placement(battle, attack_a_id)
+	if not drive_ret_a.get("ok", false):
+		return drive_ret_a.get("msg", "attack A 损伤设置驱动失败")
+	# effect_03 选机甲=enemy_mech（无攻击牌自动回落4伤害，同步完成）-> 续跑进 flash_effect2 弃牌弹窗
+	battle.context.timing_engine.resume_pending_effect(attack_a_id, {"target_id": enemy_mech.mech_id})
+	# 弃 fodder1 续跑 -> 创建 attack B
+	battle.context.timing_engine.resume_pending_effect(attack_a_id, {"selected_action_card_ids": [fodder1]})
+	var attack_a = ar.get_action(attack_a_id)
+	var attack_b_id: StringName = &""
+	for aid: StringName in attack_a.pending_effect_action_ids:
+		var sub = ar.get_action(aid)
+		if sub != null and sub.action_type == &"attack":
+			attack_b_id = aid
+			break
+	if attack_b_id == &"":
+		return "续跑后应创建 attack B（state=%s）" % String(attack_a.state)
+	# 记录 attack B 抽牌前的牌堆顶
+	var deck_top_b: StringName = gs.deck_state.action_deck[0] if not gs.deck_state.action_deck.is_empty() else &""
+	# attack B 选目标=enemy_mech(标记)
+	ae.continue_action(attack_b_id, {"target_id": enemy_mech.mech_id})
+	# effect_02 CHOOSE_ONE optional（问题3）：attack B 的 ATTACK_PRE 同样弹窗询问，确认发动
+	battle.context.timing_engine.resume_pending_effect(attack_b_id, {"chosen_option_index": 0})
+	# attack B 的 ATTACK_PRE 应再触发 effect_02 抽1张（牌堆累计-2）
+	var deck_after_b: int = gs.deck_state.action_deck.size()
+	if deck_after_b != deck_before - 2:
+		return "attack B 的 ATTACK_PRE 应再抽1张（牌堆累计-2）实=%d（before=%d）" % [deck_after_b, deck_before]
+	# 验证 attack B 抽到的攻击牌同样打狩猎标签
+	var drawn_b = gs.get_card(deck_top_b) if deck_top_b != &"" else null
+	if drawn_b != null and drawn_b.def != null and String(drawn_b.def.action_type) == "攻击":
+		if not _APE.pilot_006_hunting_tag_active(drawn_b, &"player"):
+			return "attack B 抽到的攻击牌应打狩猎标签"
+	_APE.clear_pilot_006_mark(leon.instance_id)
 	return true
 
 

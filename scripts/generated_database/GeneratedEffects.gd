@@ -273,7 +273,7 @@ static func build_all_effects() -> Dictionary:
 	passive_draw_extra_action.target_rules = [{"rule": &"NO_TARGET"}]
 	passive_draw_extra_action.costs = []
 	passive_draw_extra_action.actions = [
-		{"type": &"DRAW_ACTION", "params": {"count": 1}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 1}},
 	]
 	passive_draw_extra_action.description = "每回合开始额外抽1张行动牌。"
 	effects[passive_draw_extra_action.effect_id] = passive_draw_extra_action
@@ -326,7 +326,7 @@ static func build_all_effects() -> Dictionary:
 	event_reinforce_draw_actions.target_rules = [{"rule": &"NO_TARGET"}]
 	event_reinforce_draw_actions.costs = []
 	event_reinforce_draw_actions.actions = [
-		{"type": &"DRAW_ACTION", "params": {"count": 2}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 2}},
 	]
 	event_reinforce_draw_actions.description = "选择抽2张行动牌。"
 	effects[event_reinforce_draw_actions.effect_id] = event_reinforce_draw_actions
@@ -343,7 +343,7 @@ static func build_all_effects() -> Dictionary:
 	event_reinforce_draw_equipment.target_rules = [{"rule": &"NO_TARGET"}]
 	event_reinforce_draw_equipment.costs = []
 	event_reinforce_draw_equipment.actions = [
-		{"type": &"DRAW_EQUIPMENT", "params": {"count": 1}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"equipment_deck", "card_kind": &"equipment", "count": 1}},
 	]
 	event_reinforce_draw_equipment.description = "选择抽1张装备牌。"
 	effects[event_reinforce_draw_equipment.effect_id] = event_reinforce_draw_equipment
@@ -789,7 +789,7 @@ static func build_all_effects() -> Dictionary:
 	discard_self_draw_action_1.target_rules = [{"rule": &"NO_TARGET"}]
 	discard_self_draw_action_1.costs = [{"cost_type": &"DISCARD_ACTION_CARD", "count": 1}]
 	discard_self_draw_action_1.actions = [
-		{"type": &"DRAW_ACTION", "params": {"count": 1}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 1}},
 	]
 	discard_self_draw_action_1.description = "也可以弃置此牌，然后抽1张行动牌。"
 	effects[discard_self_draw_action_1.effect_id] = discard_self_draw_action_1
@@ -853,8 +853,8 @@ static func build_all_effects() -> Dictionary:
 	draw_action_2_equipment_1.target_rules = [{"rule": &"NO_TARGET"}]
 	draw_action_2_equipment_1.costs = []
 	draw_action_2_equipment_1.actions = [
-		{"type": &"DRAW_ACTION", "params": {"count": 2}},
-		{"type": &"DRAW_EQUIPMENT", "params": {"count": 1}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 2}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"equipment_deck", "card_kind": &"equipment", "count": 1}},
 	]
 	draw_action_2_equipment_1.description = "抽2张行动牌与1张装备牌。"
 	effects[draw_action_2_equipment_1.effect_id] = draw_action_2_equipment_1
@@ -993,7 +993,7 @@ static func build_all_effects() -> Dictionary:
 	equipment_effect_005.target_rules = [{"rule": &"NO_TARGET"}]
 	equipment_effect_005.costs = []
 	equipment_effect_005.actions = [
-		{"type": &"DRAW_EQUIPMENT", "params": {"count": 1, "must_set_or_discard": true}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"equipment_deck", "card_kind": &"equipment", "count": 1, "must_set_or_discard": true}},
 	]
 	equipment_effect_005.description = "此牌从区域中弃置时可立即抽1张装备牌并设置到区域上。"
 	effects[equipment_effect_005.effect_id] = equipment_effect_005
@@ -1188,7 +1188,7 @@ static func build_all_effects() -> Dictionary:
 	equipment_effect_017.target_rules = [{"rule": &"NO_TARGET"}]
 	equipment_effect_017.costs = [{"cost_type": &"SPEND_POWER", "amount": 4}]
 	equipment_effect_017.actions = [
-		{"type": &"DRAW_ACTION", "params": {"count": 1}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 1}},
 	]
 	equipment_effect_017.once_per_turn_key = &"equipment_effect_017"
 	equipment_effect_017.description = "每我方回合1次，可以消耗4动力抽1张行动牌。"
@@ -1336,7 +1336,7 @@ static func build_all_effects() -> Dictionary:
 	equipment_effect_087.costs = []
 	equipment_effect_087.actions = [
 		{"type": &"PLACE_DAMAGE_TOKENS_ON_SLOT", "params": {"amount": 2}},
-		{"type": &"DRAW_ACTION", "params": {"count": 3}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 3}},
 		{"type": &"RESTORE_POWER", "params": {"amount": 3}},
 	]
 	equipment_effect_087.description = "发动攻击命中时，可以设置2损伤到此牌上，之后抽3张行动牌，回复3动力。"
@@ -2199,7 +2199,7 @@ static func build_all_effects() -> Dictionary:
 	equipment_effect_032.target_rules = [{"rule": &"NO_TARGET"}]
 	equipment_effect_032.costs = []
 	equipment_effect_032.actions = [
-		{"type": &"DRAW_ACTION", "params": {"count": 1}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 1}},
 	]
 	equipment_effect_032.description = "此牌设置到区域中时可以抽1张行动牌。"
 	effects[equipment_effect_032.effect_id] = equipment_effect_032
@@ -2215,7 +2215,7 @@ static func build_all_effects() -> Dictionary:
 	equipment_effect_033.target_rules = [{"rule": &"NO_TARGET"}]
 	equipment_effect_033.costs = []
 	equipment_effect_033.actions = [
-		{"type": &"DRAW_ACTION", "params": {"count": 2}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 2}},
 	]
 	equipment_effect_033.description = "此牌因损伤而从区域中弃置时可以抽2张行动牌。"
 	effects[equipment_effect_033.effect_id] = equipment_effect_033
@@ -2479,7 +2479,7 @@ static func build_all_effects() -> Dictionary:
 	equipment_effect_047.target_rules = [{"rule": &"NO_TARGET"}]
 	equipment_effect_047.costs = [{"cost_type": &"SPEND_POWER", "amount": 4}]
 	equipment_effect_047.actions = [
-		{"type": &"DRAW_ACTION", "params": {"count": 1}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 1}},
 	]
 	equipment_effect_047.description = "每我方回合2次，可以消耗4动力抽1张行动牌。"
 	effects[equipment_effect_047.effect_id] = equipment_effect_047
@@ -2755,7 +2755,7 @@ static func build_all_effects() -> Dictionary:
 	equipment_effect_063.target_rules = [{"rule": &"NO_TARGET"}]
 	equipment_effect_063.costs = []
 	equipment_effect_063.actions = [
-		{"type": &"DRAW_EQUIPMENT", "params": {"count": 1, "must_set_or_sell": true}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"equipment_deck", "card_kind": &"equipment", "count": 1, "must_set_or_sell": true}},
 	]
 	equipment_effect_063.description = "此牌因损伤而从区域中弃置时可以抽1张装备牌，立即设置或者卖出。"
 	effects[equipment_effect_063.effect_id] = equipment_effect_063
@@ -2825,7 +2825,7 @@ static func build_all_effects() -> Dictionary:
 	equipment_effect_067.costs = [{"cost_type": &"DISCARD_ACTION_CARD", "count": 1}]
 	equipment_effect_067.actions = [
 		{"type": &"CHOICE", "params": {"options": [
-			{"type": &"DRAW_ACTION", "params": {"count": 1}},
+			{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 1}},
 			{"type": &"RESTORE_POWER", "params": {"amount": 2}},
 		]}},
 	]
@@ -2966,7 +2966,7 @@ static func build_all_effects() -> Dictionary:
 	equipment_effect_074.target_rules = [{"rule": &"NO_TARGET"}]
 	equipment_effect_074.costs = [{"cost_type": &"DISCARD_ACTION_CARD", "count": 2}]
 	equipment_effect_074.actions = [
-		{"type": &"DRAW_ACTION", "params": {"count": 1, "can_play_as_reaction": true}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 1, "can_play_as_reaction": true}},
 		{"type": &"MODIFY_MECH_POWER", "params": {"delta": 3, "duration": &"THIS_TURN"}},
 	]
 	equipment_effect_074.description = "机甲被指定为攻击目标时，可弃置2张行动牌，立即抽1张行动牌(若是迎击牌可以立即响应该攻击)，并使当前回合动力+3。"

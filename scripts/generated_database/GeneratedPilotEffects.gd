@@ -99,7 +99,7 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_060_effect_01a.target_rules = [{"rule": &"NO_TARGET"}]
 	pilot_060_effect_01a.costs = []
 	pilot_060_effect_01a.actions = [
-		{"type": &"DRAW_ACTION", "params": {"count": 2}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 2}},
 	]
 	pilot_060_effect_01a.description = "若发动的攻击没有命中，则可以选择抽2张行动牌。"
 	effects[pilot_060_effect_01a.effect_id] = pilot_060_effect_01a
@@ -156,7 +156,7 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_061_effect_01.target_rules = [{"rule": &"CHOOSE_ENEMY_MECH_IN_RANGE", "range": 3}]
 	pilot_061_effect_01.costs = []
 	pilot_061_effect_01.actions = [
-		{"type": &"DRAW_ACTION", "params": {"count": 2}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 2}},
 		{"type": &"TRANSFER_ACTION_CARDS", "params": {"count": 2, "range": 3}},
 	]
 	pilot_061_effect_01.description = "我方回合开始时，额外抽2张行动牌，之后可以将我方最多2张行动牌交给3格范围内的其他机甲。"
@@ -260,7 +260,7 @@ static func build_pilot_effects() -> Dictionary:
 	]
 	pilot_064_effect_01.actions = [
 		{"type": &"GAIN_GOLD", "params": {"amount": 2}},
-		{"type": &"DRAW_EQUIPMENT", "params": {"count": 1}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"equipment_deck", "card_kind": &"equipment", "count": 1}},
 		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
 			"effect_id": &"pilot_064_weapon_bonus",
 			"text": "若弃置的是武器牌则再抽1张行动牌。",
@@ -413,7 +413,7 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_070_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
 	pilot_070_effect_01.costs = []
 	pilot_070_effect_01.actions = [
-		{"type": &"DRAW_ACTION", "params": {"count": 3}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 3}},
 	]
 	pilot_070_effect_01.description = "若发动的攻击命中，则可以抽3张行动牌。"
 	effects[pilot_070_effect_01.effect_id] = pilot_070_effect_01
@@ -430,7 +430,7 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_071_effect_01.target_rules = [{"rule": &"CHOOSE_ENEMY_MECH_IN_RANGE", "range": 3}]
 	pilot_071_effect_01.costs = []
 	pilot_071_effect_01.actions = [
-		{"type": &"DRAW_ACTION", "params": {"count": 3}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 3}},
 		{"type": &"DISCARD_ACTION_CARD", "params": {"count": 1}},
 	]
 	pilot_071_effect_01.description = "每个我方回合结束后，可以选择1台3格范围内的机甲使其抽3张行动牌，之后其再弃置1张牌。"
@@ -668,7 +668,7 @@ static func build_pilot_effects() -> Dictionary:
 	]
 	pilot_078_effect_01.actions = [
 		{"type": &"HEAL_HP", "params": {"amount": 2}},
-		{"type": &"DRAW_ACTION", "params": {"count": 1}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 1}},
 	]
 	pilot_078_effect_01.description = "每回合2次，3格范围内的机甲受到伤害后，可以弃置1张行动牌，使其回复2生命并抽1张行动牌。"
 	effects[pilot_078_effect_01.effect_id] = pilot_078_effect_01
@@ -879,7 +879,7 @@ static func build_pilot_effects() -> Dictionary:
 	]
 	pilot_084_effect_01.actions = [
 		{"type": &"TREAT_CARD_AS_NAMED_TYPE", "params": {"named_type": &"联合"}},
-		{"type": &"DRAW_ACTION", "params": {"count": 2}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 2}},
 	]
 	pilot_084_effect_01.description = "我方回合2次，可以将2张行动牌当作联合使用，之后抽2张行动牌。"
 	effects[pilot_084_effect_01.effect_id] = pilot_084_effect_01
@@ -996,7 +996,7 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_087_effect_02.target_rules = [{"rule": &"NO_TARGET"}]
 	pilot_087_effect_02.costs = []
 	pilot_087_effect_02.actions = [
-		{"type": &"DRAW_ACTION", "params": {"count": 1}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 1}},
 	]
 	pilot_087_effect_02.description = "其他机甲使用从我方处获得的行动牌后，该机甲和我方各抽1张行动牌。"
 	effects[pilot_087_effect_02.effect_id] = pilot_087_effect_02
@@ -1098,7 +1098,7 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_030_effect_02.target_rules = [{"rule": &"NO_TARGET"}]
 	pilot_030_effect_02.costs = []
 	pilot_030_effect_02.actions = [
-		{"type": &"DRAW_ACTION", "params": {"count": 1}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 1}},
 		{"type": &"MODIFY_ATTACK_COUNT", "params": {"delta": 1, "duration": &"NEXT_OWNER_TURN"}},
 	]
 	pilot_030_effect_02.description = "我方使用防御后，可以抽1张行动牌，并且下一个我方回合的攻击数+1。"
@@ -1157,7 +1157,7 @@ static func build_pilot_effects() -> Dictionary:
 		{"cost_type": &"DISCARD_EQUIPMENT_CARD", "count": 1},
 	]
 	pilot_033_effect_01.actions = [
-		{"type": &"DRAW_EQUIPMENT", "params": {"count": 1}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"equipment_deck", "card_kind": &"equipment", "count": 1}},
 	]
 	pilot_033_effect_01.description = "我方回合1次，可以弃置1张装备牌，之后抽1张装备牌。"
 	effects[pilot_033_effect_01.effect_id] = pilot_033_effect_01
@@ -1254,7 +1254,7 @@ static func build_pilot_effects() -> Dictionary:
 		{"cost_type": &"SPEND_GOLD", "amount": 2},
 	]
 	pilot_036_effect_01.actions = [
-		{"type": &"DRAW_ACTION", "params": {"count": 1}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 1}},
 	]
 	pilot_036_effect_01.description = "我方回合2次，可以消耗2金币抽1张行动牌。"
 	effects[pilot_036_effect_01.effect_id] = pilot_036_effect_01
@@ -1313,7 +1313,7 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_038_effect_01.target_rules = [{"rule": &"CHOOSE_ENEMY_MECH_IN_RANGE", "range": 4}]
 	pilot_038_effect_01.costs = []
 	pilot_038_effect_01.actions = [
-		{"type": &"DRAW_ACTION", "params": {"count": 1}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 1}},
 		{"type": &"RESTORE_POWER", "params": {"amount": 3}},
 	]
 	pilot_038_effect_01.description = "我方回合1次，可以选择最多2台4格范围内的机甲，使其抽1张行动牌，回复3动力。"
@@ -1334,7 +1334,7 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_039_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
 	pilot_039_effect_01.costs = []
 	pilot_039_effect_01.actions = [
-		{"type": &"DRAW_ACTION", "params": {"count": 1}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 1}},
 		{"type": &"MODIFY_ATTACK_COUNT", "params": {"delta": 1}},
 	]
 	pilot_039_effect_01.description = "若发动的攻击没有命中，则可以抽1张行动牌，之后再发动1次攻击。"
@@ -1376,7 +1376,7 @@ static func build_pilot_effects() -> Dictionary:
 		{"cost_type": &"SPEND_GOLD", "amount": 3},
 	]
 	pilot_041_effect_01.actions = [
-		{"type": &"DRAW_ACTION", "params": {"count": 2}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 2}},
 	]
 	pilot_041_effect_01.description = "我方回合1次，可以花费3金币抽2张行动牌。"
 	effects[pilot_041_effect_01.effect_id] = pilot_041_effect_01
@@ -1395,7 +1395,7 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_042_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
 	pilot_042_effect_01.costs = []
 	pilot_042_effect_01.actions = [
-		{"type": &"DRAW_ACTION", "params": {"count": 1}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 1}},
 		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
 			"effect_id": &"pilot_042_discard_all",
 			"text": "我方回合2次，可以弃置所有行动牌，之后再抽1张行动牌。",
@@ -1638,7 +1638,7 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_051_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
 	pilot_051_effect_01.costs = []
 	pilot_051_effect_01.actions = [
-		{"type": &"DRAW_ACTION", "params": {"count": 1}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 1}},
 	]
 	pilot_051_effect_01.description = "每回合1次，失去事件牌后可以立即抽1张事件牌设置到区域上。"
 	effects[pilot_051_effect_01.effect_id] = pilot_051_effect_01
@@ -1676,7 +1676,7 @@ static func build_pilot_effects() -> Dictionary:
 		{"cost_type": &"DISCARD_ACTION_CARD", "count": 1},
 	]
 	pilot_052_effect_01.actions = [
-		{"type": &"DRAW_EQUIPMENT", "params": {"count": 1}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"equipment_deck", "card_kind": &"equipment", "count": 1}},
 	]
 	pilot_052_effect_01.description = "我方回合2次，可以弃置1张行动牌，之后抽1张装备牌。"
 	effects[pilot_052_effect_01.effect_id] = pilot_052_effect_01
@@ -1693,7 +1693,7 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_053_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
 	pilot_053_effect_01.costs = []
 	pilot_053_effect_01.actions = [
-		{"type": &"DRAW_ACTION", "params": {"count": 2}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 2}},
 		{"type": &"MODIFY_ACTION_HAND_LIMIT", "params": {"delta": 1, "duration": &"NEXT_OWNER_TURN"}},
 	]
 	pilot_053_effect_01.description = "每回合1次，我方区域每次有正面朝上的装备牌被设置/弃置，立即抽2张行动牌，直到下个我方回合开始行动牌上限+1。"
@@ -1994,7 +1994,7 @@ static func build_pilot_effects() -> Dictionary:
 	]
 	pilot_011_effect_01a.actions = [
 		{"type": &"TREAT_CARD_AS_NAMED_TYPE", "params": {"named_type": &"疾行"}},
-		{"type": &"DRAW_ACTION", "params": {"count": 1}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 1}},
 	]
 	pilot_011_effect_01a.description = "每回合1次，可以将2张行动牌当作疾行使用，之后抽1张行动牌。"
 	effects[pilot_011_effect_01a.effect_id] = pilot_011_effect_01a
@@ -2013,7 +2013,7 @@ static func build_pilot_effects() -> Dictionary:
 	]
 	pilot_011_effect_01b.actions = [
 		{"type": &"TREAT_CARD_AS_NAMED_TYPE", "params": {"named_type": &"反击"}},
-		{"type": &"DRAW_ACTION", "params": {"count": 1}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 1}},
 	]
 	pilot_011_effect_01b.description = "每回合1次，可以将2张行动牌当作反击使用，之后抽1张行动牌。"
 	effects[pilot_011_effect_01b.effect_id] = pilot_011_effect_01b
@@ -2092,7 +2092,7 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_012_effect_01b.target_rules = [{"rule": &"NO_TARGET"}]
 	pilot_012_effect_01b.costs = []
 	pilot_012_effect_01b.actions = [
-		{"type": &"DRAW_ACTION", "params": {"count": 1}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 1}},
 		{"type": &"RESTORE_POWER", "params": {"amount": 3}},
 	]
 	pilot_012_effect_01b.description = "若攻击命中则我方可抽1张行动牌并回复3动力。"
@@ -2372,7 +2372,7 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_018_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
 	pilot_018_effect_01.costs = []
 	pilot_018_effect_01.actions = [
-		{"type": &"DRAW_ACTION", "params": {"count": 2}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 2}},
 		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
 			"effect_id": &"pilot_018_effect_01_counter",
 			"text": "若我方通过使用迎击牌响应了此攻击，则弃置攻击方的3张行动牌或1张设置损伤≥2的装备牌。",
@@ -2661,7 +2661,7 @@ static func build_pilot_effects() -> Dictionary:
 				{
 					"label": &"抽1装备设置",
 					"actions": [
-						{"type": &"DRAW_EQUIPMENT", "params": {"count": 1}},
+						{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"equipment_deck", "card_kind": &"equipment", "count": 1}},
 						{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
 							"effect_id": &"pilot_025_set_or_discard",
 							"text": "立即抽1张装备牌设置到区域上（否则立即弃置）。",
@@ -2702,7 +2702,7 @@ static func build_pilot_effects() -> Dictionary:
 				{
 					"label": &"抽1装备设置",
 					"actions": [
-						{"type": &"DRAW_EQUIPMENT", "params": {"count": 1}},
+						{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"equipment_deck", "card_kind": &"equipment", "count": 1}},
 						{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
 							"effect_id": &"pilot_025_set_or_discard",
 							"text": "立即抽1张装备牌设置到区域上（否则立即弃置）。",
@@ -3153,7 +3153,7 @@ static func build_pilot_effects() -> Dictionary:
 		{"cost_type": &"SPEND_POWER", "amount": 6},
 	]
 	pilot_004_effect_02.actions = [
-		{"type": &"DRAW_EQUIPMENT", "params": {"count": 1}},
+		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"equipment_deck", "card_kind": &"equipment", "count": 1}},
 	]
 	pilot_004_effect_02.description = "我方回合2次，可以消耗6动力抽1张装备牌。"
 	effects[pilot_004_effect_02.effect_id] = pilot_004_effect_02

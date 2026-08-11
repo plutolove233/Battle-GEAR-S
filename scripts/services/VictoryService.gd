@@ -24,34 +24,38 @@ func check_victory() -> Dictionary:
 		var cached: Dictionary = gs.temp_values.get("victory_result", {})
 		if not cached.is_empty():
 			return cached
-		return {"state": "defeat", "reason": "battle_over"}
+		return {"state": "defeat", "reason": "battle_over", "winner": ""}
+
+	# PVP3 三人对战：淘汰制（存活数<=1 终局）+ 回合上限比全员 HP
+	if gs.temp_values.get("game_mode", &"") == &"PVP3":
+		return _check_pvp3_victory(gs)
 
 	var player_mech: MechState = gs.get_mech_for_player(&"player")
 	var enemy_mech: MechState = gs.get_mech_for_player(&"enemy")
 
 	# ── 检查玩家机甲被摧毁 → 失败 ──
 	if player_mech != null and player_mech.destroyed:
-		var result := {"state": "defeat", "reason": "玩家机甲被摧毁"}
+		var result := {"state": "defeat", "reason": "玩家机甲被摧毁", "winner": "enemy"}
 		_fire_victory_reached(result, &"enemy")
 		gs.write_log(&"game_over", {"state": "defeat", "reason": "player_mech_destroyed"})
 		return result
 
 	# ── 检查敌方机甲被摧毁 → 胜利 ──
 	if enemy_mech != null and enemy_mech.destroyed:
-		var result := {"state": "victory", "reason": "敌方机甲被摧毁"}
+		var result := {"state": "victory", "reason": "敌方机甲被摧毁", "winner": "player"}
 		_fire_victory_reached(result, &"player")
 		gs.write_log(&"game_over", {"state": "victory", "reason": "enemy_mech_destroyed"})
 		return result
 
 	# ── 检查HP归零（双重保险） ──
 	if player_mech != null and player_mech.current_hp <= 0:
-		var result := {"state": "defeat", "reason": "玩家HP归零"}
+		var result := {"state": "defeat", "reason": "玩家HP归零", "winner": "enemy"}
 		_fire_victory_reached(result, &"enemy")
 		gs.write_log(&"game_over", {"state": "defeat", "reason": "player_hp_zero"})
 		return result
 
 	if enemy_mech != null and enemy_mech.current_hp <= 0:
-		var result := {"state": "victory", "reason": "敌方HP归零"}
+		var result := {"state": "victory", "reason": "敌方HP归零", "winner": "player"}
 		_fire_victory_reached(result, &"player")
 		gs.write_log(&"game_over", {"state": "victory", "reason": "enemy_hp_zero"})
 		return result
@@ -64,24 +68,63 @@ func check_victory() -> Dictionary:
 		var enemy_hp: int = enemy_mech.current_hp if enemy_mech else 0
 
 		if player_hp > enemy_hp:
-			var result := {"state": "victory", "reason": "回合上限，HP优势获胜"}
+			var result := {"state": "victory", "reason": "回合上限，HP优势获胜", "winner": "player"}
 			_fire_victory_reached(result, &"player")
 			gs.write_log(&"game_over", {"state": "victory", "reason": "turn_limit_hp_advantage"})
 			return result
 		elif player_hp < enemy_hp:
-			var result := {"state": "defeat", "reason": "回合上限，HP劣势失败"}
+			var result := {"state": "defeat", "reason": "回合上限，HP劣势失败", "winner": "enemy"}
 			_fire_victory_reached(result, &"enemy")
 			gs.write_log(&"game_over", {"state": "defeat", "reason": "turn_limit_hp_disadvantage"})
 			return result
 		else:
 			# HP相同，判定失败（进攻方不利原则）
-			var result := {"state": "defeat", "reason": "回合上限，HP平局判定失败"}
+			var result := {"state": "defeat", "reason": "回合上限，HP平局判定失败", "winner": "enemy"}
 			_fire_victory_reached(result, &"enemy")
 			gs.write_log(&"game_over", {"state": "defeat", "reason": "turn_limit_tie"})
 			return result
 
 	# ── 游戏继续 ──
-	return {"state": "active", "reason": ""}
+	return {"state": "active", "reason": "", "winner": ""}
+
+
+## PVP3 三人对战胜利判定：淘汰制（存活数<=1 终局）+ 回合上限比全员 HP。
+## result.state 相对 player（host 视角）：winner=player -> victory，否则 defeat。
+## 各 client 按 result.winner vs local_player_id 自行判定本方胜负（_show_result）。
+func _check_pvp3_victory(gs: GameState) -> Dictionary:
+	# 统计存活玩家
+	var alive: Array[StringName] = []
+	for pid: StringName in gs.players:
+		if gs.is_player_alive(pid):
+			alive.append(pid)
+	# 存活数<=1 -> 终局
+	if alive.size() <= 1:
+		var winner: StringName = alive[0] if alive.size() == 1 else &""
+		var state: String = "victory" if winner == &"player" else "defeat"
+		var reason: String = "唯一存活者获胜：%s" % String(winner) if winner != &"" else "同归于尽"
+		var result := {"state": state, "reason": reason, "winner": String(winner)}
+		_fire_victory_reached(result, winner)
+		gs.write_log(&"game_over", {"state": state, "reason": reason, "winner": String(winner)})
+		return result
+	# 回合上限：比较全员 HP，最高者胜（同 HP 取遍历先者）
+	var turn_limit: int = int(gs.temp_values.get("turn_limit", 30))
+	if gs.turn_number >= turn_limit:
+		var best_pid: StringName = &""
+		var best_hp: int = -1
+		for pid: StringName in gs.players:
+			var m = gs.get_mech_for_player(pid)
+			var hp: int = m.current_hp if m != null else 0
+			if hp > best_hp:
+				best_hp = hp
+				best_pid = pid
+		var state: String = "victory" if best_pid == &"player" else "defeat"
+		var reason: String = "回合上限，HP最高者获胜：%s" % String(best_pid)
+		var result := {"state": state, "reason": reason, "winner": String(best_pid)}
+		_fire_victory_reached(result, best_pid)
+		gs.write_log(&"game_over", {"state": state, "reason": reason, "winner": String(best_pid)})
+		return result
+	# 游戏继续
+	return {"state": "active", "reason": "", "winner": ""}
 
 
 ## 发出 VICTORY_REACHED 时点（文档第148-149行：记录胜利方式、胜利者）

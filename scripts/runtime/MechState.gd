@@ -282,6 +282,10 @@ func get_armor_breakdown(context = null) -> Array:
 			if src != "":
 				label += "（%s）" % src
 			result.append({"label": label, "amount": delta, "temporary": true})
+	# pilot_002 莱比尔 联邦光环护甲+4（实时重算，每有效来源+4）
+	var p002_aura := _ActionPilotEffects.get_pilot_002_federation_armor_bonus(self)
+	if p002_aura != 0:
+		result.append({"label": "机师·莱比尔联邦光环", "amount": p002_aura, "temporary": false})
 	return result
 
 
@@ -318,6 +322,16 @@ func get_power_breakdown(_context = null) -> Array:
 		var thr := _GenEquipEffects.slot_damage_threshold_power_bonus(self, slot_id)
 		if thr != 0:
 			result.append({"label": "派生·损伤阈值·%s" % String(slot_id), "amount": thr, "temporary": false})
+	# pilot_005 肯特 帝国光环动力+4（实时重算，每有效来源+4）
+	var p005_aura := _ActionPilotEffects.get_pilot_005_empire_power_bonus(self)
+	if p005_aura != 0:
+		result.append({"label": "机师·肯特帝国光环", "amount": p005_aura, "temporary": false})
+	# pilot_004 玛沙 转换动力层（POWER_CAP_MODIFIER）：装甲转能的 +N 上限（到下个我方回合前清）
+	for st: Dictionary in statuses:
+		if st.get("type", &"") == &"POWER_CAP_MODIFIER":
+			var conv_amt: int = int(st.get("delta", 0))
+			if conv_amt != 0:
+				result.append({"label": "机师·玛沙装甲转能", "amount": conv_amt, "temporary": true})
 	return result
 
 

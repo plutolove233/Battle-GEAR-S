@@ -16,6 +16,8 @@ const SLog = preload("res://scripts/services/slog.gd")
 const _GenEquipEffects = preload("res://scripts/generated_database/GeneratedEquipmentEffects.gd")
 const _GeneratedActionEffects = preload("res://scripts/action_core/GeneratedActionEffects.gd")
 const _RangeCalculator = preload("res://scripts/battle/RangeCalculator.gd")
+const _TC = preload("res://scripts/action_core/TimingConst.gd")
+const _ActionEffect = preload("res://scripts/action_core/ActionEffect.gd")
 # 新增动作类用 preload 引用，避免 headless -s 模式下新 class_name 尚未注册到全局缓存
 const _AwakenAction = preload("res://scripts/action_defs/awaken_action.gd")
 const _TrapExplosionAction = preload("res://scripts/action_defs/trap_explosion_action.gd")
@@ -25,6 +27,22 @@ var _action_factories: Dictionary = {}
 
 ## 依赖注入：GameContext 容器
 var context = null
+
+## pilot_003 effect_02 串行队列：多张正面牌同时离堆时按离开顺序串行处理（先来后到），
+## force_use 挂起（人类选目标）时等该 use_action_card 完成后再处理下一张。
+var _p003_e02_queue: Array[Dictionary] = []
+var _p003_e02_active: bool = false
+var _p003_e02_force_action_id: StringName = &""
+var _p003_e02_signal_connected: bool = false
+## 当前正在处理的即时队列条目（已 pop_front、force_use 可能挂起）。
+## 供 get_p003_judging_card_entries 暴露给 UI（美杜莎操控列表将其标记为不可选）。
+var _p003_e02_active_entry: Dictionary = {}
+
+## pilot_003 effect_02 串行化（问题2）：正面牌因 gain_card/discard_card 动作离堆时，
+## 判定延迟到该动作 SETTLE 时点作为其子动作串行执行，使父级动作（如攻击中抽牌）等待判定完成。
+## key = cause_action_id, value = Array[{card_id, owner_pid, owner_mech_id}]。
+var _p003_deferred_e02_map: Dictionary = {}
+var _p003_deferred_effect = null  ## 惰性构建的 pilot_003_e02_deferred ActionEffect
 
 
 ## 初始化：注册所有动作类型的工厂函数
@@ -185,7 +203,7 @@ func _is_atomic_action(act_type: StringName) -> bool:
 		&"NEGATE_ATTACK", &"APPLY_CANNOT_RESPOND", &"APPLY_OR_CHECK_LOCKED", \
 		&"MOVE_MECH", &"CONSUME_NEXT_ATTACK_POWER_BUFF", \
 		&"APPLY_ENERGY_TO_WEAPON", &"STEAL_ACTION_CARD", \
-		&"DRAW_ACTION", &"DRAW_EQUIPMENT", &"GAIN_SPECIFIC_CARD", \
+		&"GAIN_SPECIFIC_CARD", \
 		&"RANDOM_DRAW_FROM_DISCARD_OR_DECK", &"TRANSFER_ACTION_CARDS", \
 		&"PLACE_DAMAGE_TOKENS", &"MODIFY_DAMAGE_TOKENS", &"REMOVE_DAMAGE_TOKENS", \
 		&"HEAL_HP", &"DEAL_DAMAGE", &"DISCARD_CARD", &"DISCARD_ACTION_CARD", \
@@ -195,9 +213,10 @@ func _is_atomic_action(act_type: StringName) -> bool:
 		&"CUSTOM_EFFECT_CHECK_TEXT", &"CHOOSE_ONE", &"MODIFY_ATTACK_COUNT", \
 		&"MODIFY_ACTION_HAND_LIMIT", &"INCREMENT_VARIABLE", &"ADD_WEAPON_TAG", \
 		&"CONVERT_WEAPON_KIND", &"NEGATE_EQUIPMENT_EFFECT", &"MODIFY_WEAPON_POWER", \
-		&"SET_WEAPON_STATS", &"SHOP_BUY_MODIFIER", &"SWAP_HAND_LIMIT_AND_ATTACK_COUNT", &"REPLACE_USED_ACTION_EFFECT_BY_SEQUENCE", &"CLEAR_SOURCE_STAT_MODIFIERS", &"SET_ATTACK_DEFENSE_STAT_SOURCE", &"PILOT_005_DISCARD_OPPOSING", &"PILOT_008_RECOVER_REPAIR", &"SET_ROUND_MARKED_TARGET", &"DRAW_ACTION_AND_TAG_IF_ATTACK", &"CLAIM_RESOLVED_ATTACK_SOURCE_CARD", &"GRANT_TEMP_CARD_CONTROL", &"PILOT_009_DISCARD_ALL_CONTROLLED_TYPE", &"PILOT_007_TYPE_FLAW", &"PILOT_006_DEAL_4_DAMAGE", &"GRANT_TRANSFER_BATCH_AS_NAMED_TYPE", &"INSERT_ACTION_CARDS_FACE_UP_RANDOM", &"TOGGLE_PILOT_003_SKIP", &"SET_PILOT_003_SKIP_PLAYERS", &"REPEAT_USED_ACTION_EFFECT_CHAIN", \
+		&"SET_WEAPON_STATS", &"SHOP_BUY_MODIFIER", &"SWAP_HAND_LIMIT_AND_ATTACK_COUNT", &"REPLACE_USED_ACTION_EFFECT_BY_SEQUENCE", &"CLEAR_SOURCE_STAT_MODIFIERS", &"SET_ATTACK_DEFENSE_STAT_SOURCE", &"PILOT_005_DISCARD_OPPOSING", &"PILOT_008_RECOVER_REPAIR", &"PILOT_008_BUILD_HEAL_REDIRECT_PROMPT", &"PILOT_008_BUILD_REMOVE_REDIRECT_PROMPT", &"SET_ROUND_MARKED_TARGET", &"DRAW_ACTION_AND_TAG_IF_ATTACK", &"CLAIM_RESOLVED_ATTACK_SOURCE_CARD", &"GRANT_TEMP_CARD_CONTROL", &"PILOT_009_DISCARD_ALL_CONTROLLED_TYPE", &"PILOT_007_COMPUTE_X", &"PILOT_006_DEAL_4_DAMAGE", &"GRANT_TRANSFER_BATCH_AS_NAMED_TYPE", &"INSERT_ACTION_CARDS_FACE_UP_RANDOM", &"TOGGLE_PILOT_003_SKIP", &"SET_PILOT_003_SKIP_PLAYERS", &"REPEAT_USED_ACTION_EFFECT_CHAIN", \
 		&"OPEN_OR_USE_RESPONSE", &"REDIRECT_DAMAGE_TOKENS", \
 		&"REDIRECT_HEAL_TO_DAMAGE", &"REDIRECT_REMOVE_TO_PLACE_TOKENS", \
+		&"REDIRECT_ATTACK_TARGET_TO_SELF", &"RESTORE_REDIRECTED_ATTACK_TARGET", \
 		&"MODIFY_NEXT_DAMAGE_DEALT", &"DECLARE_CARD_TYPE", \
 		&"DRAW_ADVANCED_EQUIPMENT", &"PLACE_CARD_IN_DECK_FACE_UP", \
 		&"DECREMENT_STATUS_DURATION", &"CANCEL_PARENT_ACTION", \
@@ -207,7 +226,9 @@ func _is_atomic_action(act_type: StringName) -> bool:
 		&"RANDOM_DISCARD_ACTION_CARD", &"SET_WEAPON_MODE", &"SET_WEAPON_COOLDOWN", \
 		&"SET_ATTACK_MIGHT_FROM_PRINTED_WEAPON", &"DISCARD_ALL_FACE_UP_PARTS", \
 		&"SET_WEAPON_LOCK", &"SET_WEAPON_CONVERSION", \
-		&"CANCEL_PARENT_CARD_TRANSFER", &"IMMEDIATELY_USE_DECK_CARD_OR_FALLBACK":
+		&"IMMEDIATELY_USE_DECK_CARD_OR_FALLBACK", \
+		&"SET_ACTION_RECORD_FLAG", &"MODIFY_ATTACK_DAMAGE", \
+		&"DISCARD_TEMP_ZONE_CARDS", &"RECORD_WEAPON_ATTACK_COUNT", &"DECAY_WEAPON_BY_RECORDED_COUNT":
 			return true
 		_:
 			return false
@@ -280,12 +301,17 @@ func _create_action(action_type: StringName, params: Dictionary) -> Action:
 				&"power_fraction", &"loop_until_cancel", &"card_kind", &"random",
 				&"duration", &"tag", &"status_type", &"stacks", &"attack_action_id",
 				&"from_target", &"from_attacker", &"from_player_id", &"to_player_id",
-				&"choose", &"face_up", &"determined_card_ids", &"selected_action_card_ids", &"phase",
+				&"choose", &"face_up", &"no_cancel", &"determined_card_ids", &"selected_action_card_ids", &"phase",
 				&"max_cells", &"free_move", &"adjacent_only",
-				&"target_slot_id", &"target_mech_id", &"fixed_slot", &"exclude_slot_id",
+				&"target_slot_id", &"target_mech_id", &"fixed_slot", &"exclude_slot_id", &"direct_remove",
 				&"cardless_weapon_attack", &"consume_turn_attack_count", &"skip_weapon_select", &"weapon_instance_id",
 				&"as_card_def_id", &"consume_original_card", &"virtual_transform",
-				&"trigger_q", &"trigger_r", &"trigger_mech_id"]
+				&"trigger_q", &"trigger_r", &"trigger_mech_id",
+				&"stat_changes", &"duration_owner_id", &"source_effect_id",
+				&"source_key", &"source_target_id", &"source_card_id",
+				&"mode", &"runtime_tag", &"stat_types",
+				&"from_target_id", &"to_target_id", &"chooser_id", &"card_kind", &"optional",
+				&"from_opposing", &"source_mech"]
 			for key: String in params:
 				if key in record_keys:
 					action.record[key] = params[key]
@@ -313,7 +339,7 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 		context.game_actions.replace_used_action_effect_by_sequence(action_def.get("params", {}), payload, parent_action)
 		return {"state": &"completed"}
 
-	# pilot_004 effect_03：改 attack record 防御值来源（动力代护甲）。需 parent_action 设 record。
+	# pilot_004 effect_02：改 attack record 防御值来源（动力代护甲）。需 parent_action 设 record。
 	if act_type == &"SET_ATTACK_DEFENSE_STAT_SOURCE":
 		context.game_actions.set_attack_defense_stat_source(action_def.get("params", {}), payload, parent_action)
 		return {"state": &"completed"}
@@ -326,6 +352,21 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 	# pilot_008 effect_01a/01b：回收弃牌堆维修 + X+1。需 payload.binding_context。
 	if act_type == &"PILOT_008_RECOVER_REPAIR":
 		context.game_actions.pilot_008_recover_repair(action_def.get("params", {}), payload)
+		return {"state": &"completed"}
+
+	# pilot_008 effect_02/03：逆转 + 弹窗描述。需 payload + parent_action（被监听的 hp_change/damage_change）。
+	# 修改被监听动作 record，让其后续步骤按修改后信息执行（回复->伤害 / 移除->设置）。
+	if act_type == &"REDIRECT_HEAL_TO_DAMAGE":
+		context.game_actions.redirect_heal_to_damage(action_def.get("params", {}), payload, parent_action)
+		return {"state": &"completed"}
+	if act_type == &"REDIRECT_REMOVE_TO_PLACE_TOKENS":
+		context.game_actions.redirect_remove_to_place_tokens(action_def.get("params", {}), payload, parent_action)
+		return {"state": &"completed"}
+	if act_type == &"PILOT_008_BUILD_HEAL_REDIRECT_PROMPT":
+		context.game_actions.pilot_008_build_heal_redirect_prompt(action_def.get("params", {}), payload, parent_action)
+		return {"state": &"completed"}
+	if act_type == &"PILOT_008_BUILD_REMOVE_REDIRECT_PROMPT":
+		context.game_actions.pilot_008_build_remove_redirect_prompt(action_def.get("params", {}), payload, parent_action)
 		return {"state": &"completed"}
 
 	# pilot_006 effect_01：设置本轮悬赏目标。需 payload.binding_context + target_id。
@@ -353,9 +394,9 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 		context.game_actions.pilot_009_discard_all_controlled_type(action_def.get("params", {}), payload)
 		return {"state": &"completed"}
 
-	# pilot_007 effect_02 类型破绽：对每攻击目标 peek+算X+弃X+1+抽X+1（多目标全部结算）。
-	if act_type == &"PILOT_007_TYPE_FLAW":
-		context.game_actions.pilot_007_type_flaw(action_def.get("params", {}), payload)
+	# pilot_007 effect_02 类型破绽：算 X+1 写入 payload.pilot_007_flaw_count（供后续 EXECUTE_DISCARD/GAIN_CARD 取 count）。
+	if act_type == &"PILOT_007_COMPUTE_X":
+		context.game_actions.pilot_007_compute_x(action_def.get("params", {}), payload)
 		return {"state": &"completed"}
 
 	# pilot_006 e3 战后逼迫4伤害（选项2/回落，直接减 HP，不走 fire_hook）。
@@ -408,23 +449,49 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 		context.game_actions.set_pilot_003_skip_players(action_def.get("params", {}), payload)
 		return {"state": &"completed"}
 
-	# pilot_003 effect_02：CANCEL_PARENT_CARD_TRANSFER —— 标记该牌已被瑟尔基尔拦截，
-	# 原抽牌/取牌动作不得把它交给原目标（draw_from_deck 在 fire 后读此标记跳过入手的牌）。
-	if act_type == &"CANCEL_PARENT_CARD_TRANSFER":
-		var cancel_params: Dictionary = _resolve_atomic_params(action_def.get("params", {}), payload, parent_action)
-		var cancel_card_id: StringName = cancel_params.get("card_instance_id", &"")
-		var cancel_card = context.game_state.get_card(cancel_card_id) if cancel_card_id != &"" else null
-		if cancel_card != null:
-			if not "counters" in cancel_card:
-				cancel_card.counters = {}
-			cancel_card.counters["pilot_003_intercepted"] = true
-		return {"state": &"completed"}
-
 	# pilot_003 effect_02：IMMEDIATELY_USE_DECK_CARD_OR_FALLBACK —— 由瑟尔基尔拥有者立即完整使用；
 	# 无法合法使用（迎击牌/攻击牌无合法武器目标/机甲不可用）则公开弃置该牌 + 拥有者抽1。
 	if act_type == &"IMMEDIATELY_USE_DECK_CARD_OR_FALLBACK":
 		var iu_params: Dictionary = _resolve_atomic_params(action_def.get("params", {}), payload, parent_action)
 		_handle_pilot_003_immediately_use(iu_params)
+		return {"state": &"completed"}
+
+	# pilot_012/013 effect_01：SET_ACTION_RECORD_FLAG
+	# 最小闭环：effect_02 用 requires_effect + TargetChecker 重算命中目标，无需 flags 字典。
+	# 此处 no-op（仅日志），保留动作链兼容拆解文 actions 列表。
+	if act_type == &"SET_ACTION_RECORD_FLAG":
+		var sarf_params: Dictionary = _resolve_atomic_params(action_def.get("params", {}), payload, parent_action)
+		var sarf_flag: StringName = sarf_params.get("flag", &"")
+		SLog.log_raw("[ACTION] SET_ACTION_RECORD_FLAG flag=%s (no-op, effect_02 用 requires_effect 重算)" % String(sarf_flag))
+		return {"state": &"completed"}
+
+	# pilot_013 effect_02b：MODIFY_ATTACK_DAMAGE 改本次攻击对当前命中目标的 damage 记录 +3。
+	# 不另开 DEAL_DAMAGE -> 仍属攻击产生伤害（不被 effect_01 非攻击伤害免疫拦截）。
+	# 仿 MODIFY_ATTACK_MARKERS：定位 attack 动作（parent 或 payload.attack_action_id），写 record["damage"]。
+	# 单目标直接改 record["damage"]（_step_apply_damage 读此值）；双连另写 damage_by_target[target]。
+	if act_type == &"MODIFY_ATTACK_DAMAGE":
+		var mad_params: Dictionary = _resolve_atomic_params(action_def.get("params", {}), payload, parent_action)
+		var mad_target: StringName = mad_params.get("target_id", &"")
+		var mad_delta: int = int(mad_params.get("delta", 0))
+		var mad_min: int = int(mad_params.get("min_value", 0))
+		var mad_atk = parent_action
+		if mad_atk == null or mad_atk.action_type != &"attack":
+			var mad_aid: StringName = payload.get("attack_action_id", payload.get("action_id", &""))
+			if String(mad_aid) != "" and context.action_registry != null:
+				mad_atk = context.action_registry.get_action(mad_aid)
+		if mad_atk == null:
+			push_warning("MODIFY_ATTACK_DAMAGE: 无攻击动作，无法写入 damage")
+			return {"state": &"completed"}
+		# 单目标：改 record["damage"]（_step_apply_damage 读取并入 HP 变动）
+		var mad_prev: int = int(mad_atk.record.get("damage", 0))
+		mad_atk.record["damage"] = max(mad_min, mad_prev + mad_delta)
+		# 双连 per-target map（双连闭环后 _step_calculate_damage 写入 damage_by_target）
+		if not mad_atk.record.has("damage_by_target"):
+			mad_atk.record["damage_by_target"] = {}
+		if mad_target != &"":
+			var mad_pt_prev: int = int(mad_atk.record["damage_by_target"].get(mad_target, mad_prev))
+			mad_atk.record["damage_by_target"][mad_target] = max(mad_min, mad_pt_prev + mad_delta)
+		SLog.log_raw("[ACTION] %s damage %+d (累计=%d, target=%s)" % [String(mad_atk.action_id), mad_delta, int(mad_atk.record.get("damage", 0)), String(mad_target)])
 		return {"state": &"completed"}
 
 	# pilot_001 effect_01：重复执行行动牌效果链（克隆 DIRECT effect，不重发 USE_ACTION_*，attack 不计攻击数）。
@@ -438,6 +505,11 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 			var rp_source_action = context.action_registry.get_action(rp_action_id)
 			var rp_card = context.game_state.get_card(rp_card_id)
 			if rp_source_action != null and rp_card != null and rp_card.def != null:
+				# 重新收集 bind_to_sub LISTEN 效果，使第二次 DIRECT 产生的新 attack 也能注册并触发 effect2
+				# （阿克罗姆完整重跑 effect1+effect2：闪击再攻/破甲命中破甲/猛击威力+4 在第二次均生效）。
+				# 第一次 _register_pending_listeners_on_sub 注册后已 erase _pending_listen_effects，此处重填。
+				if rp_source_action.has_method(&"refill_bind_to_sub_pending_effects"):
+					rp_source_action.refill_bind_to_sub_pending_effects(rp_card_id)
 				var rp_mappings: Array = _GeneratedActionEffects.get_effects_for_card(rp_card.def.card_id)
 				var rp_all_effects: Dictionary = _GeneratedActionEffects.build_all_effects()
 				for mapping in rp_mappings:
@@ -606,6 +678,62 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 		SLog.log_raw("[ACTION] %s 被 %s 响应(迎击)" % [String(attack_id_ra), String(ra_card_id)])
 		return {"state": &"completed"}
 
+	# 特殊处理 REDIRECT_ATTACK_TARGET_TO_SELF：pilot_011 effect_02 挡攻转移。
+	# 将本次攻击的目标改为迪恩自身（保护被攻击的相邻友军）。写回原 attack 动作 record：
+	# target_id（单目标）/ target_ids（多目标中匹配项）。旧目标存入 _p011_redirect_from 供回滚。
+	# parent_action 通常是 attack（响应窗口 _execute_actions 直传）；否则用 payload.attack_action_id 定位。
+	if act_type == &"REDIRECT_ATTACK_TARGET_TO_SELF":
+		var rdt_attack = parent_action
+		if rdt_attack == null or rdt_attack.action_type != &"attack":
+			var rdt_aid: StringName = payload.get("attack_action_id", &"")
+			if rdt_aid != &"" and context.action_registry != null:
+				rdt_attack = context.action_registry.get_action(rdt_aid)
+		if rdt_attack == null:
+			push_warning("REDIRECT_ATTACK_TARGET_TO_SELF: 找不到攻击动作")
+			return {"state": &"completed"}
+		var rdt_bind: Dictionary = payload.get("binding_context", {})
+		var rdt_protector: StringName = rdt_bind.get("mech_id", payload.get("source_mech_id", payload.get("mech_id", &"")))
+		if rdt_protector == &"":
+			push_warning("REDIRECT_ATTACK_TARGET_TO_SELF: 缺少 protector mech_id")
+			return {"state": &"completed"}
+		# 被保护目标：优先 params.protect_target_id（可为 $payload.target_id 表达式，需解析），
+		# 否则 payload.target_id，否则 attack.record.target_id
+		var rdt_params_a: Dictionary = action_def.get("params", {})
+		var rdt_protected_raw = rdt_params_a.get("protect_target_id", payload.get("target_id", rdt_attack.record.get("target_id", &"")))
+		var rdt_protected: StringName = _resolve_atomic_value(rdt_protected_raw, payload, parent_action)
+		if String(rdt_protected) == "":
+			rdt_protected = rdt_protector  # 兜底：无明确被保护目标时视为自身（无操作）
+		# 记录原目标供 RESTORE 回滚（仅单目标路径）
+		if not rdt_attack.record.has("_p011_redirect_from"):
+			rdt_attack.record["_p011_redirect_from"] = String(rdt_protected)
+		# 单目标：替换 target_id
+		if StringName(rdt_attack.record.get("target_id", &"")) == StringName(rdt_protected):
+			rdt_attack.record["target_id"] = rdt_protector
+		# 多目标：替换 target_ids 中匹配项
+		if rdt_attack.record.has("target_ids"):
+			var rdt_tids: Array = rdt_attack.record["target_ids"]
+			for rdt_i in range(rdt_tids.size()):
+				if StringName(rdt_tids[rdt_i]) == StringName(rdt_protected):
+					rdt_tids[rdt_i] = rdt_protector
+			rdt_attack.record["target_ids"] = rdt_tids
+		SLog.log_raw("[ACTION] %s 目标转移: %s -> %s(迪恩)" % [String(rdt_attack.action_id), String(rdt_protected), String(rdt_protector)])
+		# 标记需要回退 ATTACK_PRE 重 fire：转移目标=迪恩后，让迪恩的 PRE 装备被动（如「被攻击时」）
+		# 重新触发（原 PRE 对友军 fire，迪恩 PRE 监听器检查 self==target 未触发）。
+		# 回退由 ActionEngine._execute_step 阶段4 检测标志执行（回退到 PRE 步，phase=timing_firing 跳过
+		# select_target handler 重 fire PRE；推进 ATTACK_AT 时 _execute_attack_ran 幂等 + responded=true 不弹窗）。
+		rdt_attack.record["_p011_redirect_rewind"] = true
+		return {"state": &"completed"}
+
+	# 特殊处理 RESTORE_REDIRECTED_ATTACK_TARGET：pilot_011 effect_02 回滚（虚拟具名链提交失败时还原目标）。
+	# 最小闭环下挡攻转移一旦提交不回滚；此动作为占位 no-op，保留 actions 链兼容拆解文档。
+	if act_type == &"RESTORE_REDIRECTED_ATTACK_TARGET":
+		if parent_action != null and parent_action.action_type == &"attack":
+			var rra_from = parent_action.record.get("_p011_redirect_from", &"")
+			if rra_from != &"":
+				parent_action.record["target_id"] = StringName(rra_from)
+				parent_action.record.erase("_p011_redirect_from")
+		return {"state": &"completed"}
+
 	# 特殊处理 MODIFY_ATTACK_TEMP_ARMOR：防御牌护甲+5，写原 attack 动作的 temporary_armor_bonus。
 	# _step_calculate_damage 读 action.record["temporary_armor_bonus"]，故必须写到 attack record（非 use_action_card）。
 	if act_type == &"MODIFY_ATTACK_TEMP_ARMOR":
@@ -629,7 +757,14 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 	# 在 ATTACK_SETTLE 后恢复（防御结算后恢复护甲数值）。替代旧 MODIFY_ATTACK_TEMP_ARMOR：
 	# 旧法把 +5 藏在 attack record.temporary_armor_bonus，面板不可见、效果不明显。
 	if act_type == &"ADD_MECH_TEMP_ARMOR":
-		var amt_mech_id: StringName = payload.get("source_mech_id", payload.get("mech_id", &""))
+		var amt_params: Dictionary = action_def.get("params", {})
+		# mech_id 优先取 params.mech_id（可为 $binding_context.mech_id 表达式，pilot_002 防御分支
+		# 经响应窗口触发时 payload.mech_id 是莱比尔自身机甲，须显式指定被授予机甲 A）。
+		var amt_mech_id: StringName = &""
+		if amt_params.has("mech_id"):
+			amt_mech_id = _resolve_atomic_value(amt_params.get("mech_id", &""), payload, parent_action)
+		if String(amt_mech_id) == "":
+			amt_mech_id = payload.get("source_mech_id", payload.get("mech_id", &""))
 		if amt_mech_id == &"" or context.game_state == null:
 			push_warning("ADD_MECH_TEMP_ARMOR: 缺少 mech_id")
 			return {"state": &"completed"}
@@ -637,7 +772,6 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 		if amt_mech == null:
 			push_warning("ADD_MECH_TEMP_ARMOR: 找不到机甲 %s" % String(amt_mech_id))
 			return {"state": &"completed"}
-		var amt_params: Dictionary = action_def.get("params", {})
 		var amt_delta: int = int(amt_params.get("delta", payload.get("delta", 0)))
 		amt_mech.temp_armor_bonus += amt_delta
 		# 登记到攻击动作，供 _step_cleanup 结算后恢复
@@ -818,8 +952,15 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 
 	# 特殊处理CANCEL_PARENT_ACTION：沿parent链向上找指定类型祖先并取消（递归清理子树）
 	# 联合effect2选"弃牌抽1张"后中断父use_action_card动作（不算真正使用）
+	# scope=CURRENT_ACTION（pilot_013 effect_01）：仅取消当前生命变动动作（hp_change）本身，
+	# 不沿链找祖先、不取消来源效果中的其他动作/损伤/后续步骤（preserve_source_parent_action）。
 	if act_type == &"CANCEL_PARENT_ACTION":
 		var cancel_params: Dictionary = action_def.get("params", {})
+		var cancel_scope: StringName = cancel_params.get("scope", &"")
+		if cancel_scope == &"CURRENT_ACTION":
+			if parent_action != null and context.action_engine != null:
+				context.action_engine.cancel_action(parent_action.action_id)
+			return {"state": &"completed"}
 		var target_type: StringName = cancel_params.get("target", &"use_action_card")
 		var ancestor = parent_action
 		while ancestor != null:
@@ -845,11 +986,15 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 	return {"state": &"completed"}
 
 
-## ── pilot_003 effect_02 离堆强制使用 helper ──
-
-## IMMEDIATELY_USE_DECK_CARD_OR_FALLBACK：由瑟尔基尔拥有者立即完整使用离堆的正面牌。
-## 无法合法使用（迎击牌无响应窗口 / 攻击牌无合法武器目标 / 机甲不可用）→ 公开弃置 + 拥有者抽1。
-## 卡片已被 draw_from_deck 弹出（不在任何区域数组），此处不重复处理区域，只决定 use 或 fallback。
+## ── pilot_003 effect_02 离堆强制使用 helper（事后语义）──
+## IMMEDIATELY_USE_DECK_CARD_OR_FALLBACK：face_up_bury 牌 zone 从 action_deck 变走时
+## （CardInstance.zone setter emit left_action_deck -> _fire_pilot_003_card_leave_deck
+##  fire CARD_LEAVE_ACTION_DECK_BEFORE -> effect_02 监听器执行本原子）事后处理。
+## 牌此时已进入抽牌者手牌（被抽走，zone=action_hand，owner=抽牌者）或弃牌堆（从牌堆弃置）。
+## 流程：移除 face_up_bury 标签 + disconnect 离堆信号 -> 判断对瑟尔基尔是否可用 ->
+##   可用：从抽牌者手牌移除 + 重指向 owner=瑟尔基尔 + 进临时区 + use_action_card；
+##   不可用：discard_card（已在弃牌堆则跳过）+ 瑟尔基尔抽1。
+## 抽牌者不补抽（瑟尔基尔核心玩法）。
 func _handle_pilot_003_immediately_use(params: Dictionary) -> void:
 	if context == null or context.game_state == null or context.game_actions == null:
 		return
@@ -859,17 +1004,263 @@ func _handle_pilot_003_immediately_use(params: Dictionary) -> void:
 	var card = context.game_state.get_card(card_id)
 	if card == null:
 		return
-	# 使用者 = 埋牌者（metadata owner 权威，存卡片 counters）
-	var owner_pid: StringName = StringName(card.counters.get("pilot_003_leave_deck_owner_pid", &""))
-	var owner_mech_id: StringName = StringName(card.counters.get("pilot_003_leave_deck_owner_mech", &""))
+	# 使用者 = 埋牌者（移标签前从 face_up_bury 标签读 owner_pid/mech_id）
+	var face_tag: Dictionary = card.get_tag(&"face_up_bury")
+	var owner_pid: StringName = StringName(face_tag.get("owner_pid", &""))
+	var owner_mech_id: StringName = StringName(face_tag.get("mech_id", &""))
+	# 移除标签（防后续 zone 变化再触发）+ disconnect 离堆信号（_p003_mark_face_up 时 connect 的）
+	card.remove_tag(&"face_up_bury")
+	if context.deck_service != null and card.left_action_deck.is_connected(Callable(context.deck_service, &"_fire_pilot_003_card_leave_deck")):
+		card.left_action_deck.disconnect(Callable(context.deck_service, &"_fire_pilot_003_card_leave_deck"))
+	# 问题2串行化：若此离堆由 gain_card/discard_card 动作引起，判定延迟到该动作 SETTLE 时点，
+	# 作为其子动作串行执行（使父级动作如攻击中抽牌等待判定完成再继续）。非 gain/discard 起因走原即时队列。
+	var _p003_cause = _p003_find_cause_action_for_card(card)
+	if _p003_cause != null:
+		var _p003_cause_id: StringName = _p003_cause.action_id
+		if not _p003_deferred_e02_map.has(_p003_cause_id):
+			_p003_deferred_e02_map[_p003_cause_id] = []
+			# 首次为该 cause 动作注册 SETTLE 临时监听器（effect=pilot_003_e02_deferred）
+			var _p003_settle_t: StringName = _p003_settle_timing_for(_p003_cause.action_type)
+			if _p003_settle_t != &"" and context.timing_engine != null:
+				context.timing_engine.register_temporary_listener(
+					_p003_settle_t, _p003_cause_id, _p003_cause.action_type,
+					_p003_get_deferred_effect(), &"", &"", {})
+		_p003_deferred_e02_map[_p003_cause_id].append({
+			"card_id": card_id, "owner_pid": owner_pid, "owner_mech_id": owner_mech_id,
+		})
+		return  # 不立即处理，等 cause 动作 SETTLE 触发 _run_p003_deferred_judgment
+	# 入队串行处理：多张正面牌同时离堆时按离开牌堆顺序先来先执行（先来后到）。
+	# force_use 的 use_action_card 若挂起（人类选目标），等其完成后再处理下一张；
+	# unusable/同步完成则立即续跑下一张。owner 信息在移标签前已读取，此处保留。
+	_p003_e02_queue.append({"card_id": card_id, "owner_pid": owner_pid, "owner_mech_id": owner_mech_id})
+	_ensure_p003_e02_signal()
+	if not _p003_e02_active:
+		_p003_process_next_e02()
+
+
+## 查找引起本牌离堆的 gain_card/discard_card 动作（当前 running 状态者）。
+## 命中 player_id 与卡牌当前持有者一致的优先；否则取首个 running 的 gain/discard 动作。
+## 未找到返回 null（非 gain/discard 起因，走原即时队列）。
+func _p003_find_cause_action_for_card(card):
+	if context == null or context.action_registry == null or card == null:
+		return null
+	var _fallback = null
+	for _fc_aid in context.action_registry.active_actions:
+		var _fc_a = context.action_registry.active_actions[_fc_aid]
+		if _fc_a == null:
+			continue
+		if _fc_a.action_type != &"gain_card" and _fc_a.action_type != &"discard_card":
+			continue
+		if _fc_a.state == &"completed" or _fc_a.state == &"cancelled":
+			continue
+		var _fc_pid: StringName = _fc_a.record.get("player_id", &"") if _fc_a.record != null else &""
+		if _fc_pid != &"" and _fc_pid == card.owner_player_id:
+			return _fc_a
+		if _fallback == null:
+			_fallback = _fc_a
+	return _fallback
+
+
+## cause 动作类型 -> 其 SETTLE 时点。gain_card/discard_card 各自的结算时点。
+func _p003_settle_timing_for(action_type: StringName) -> StringName:
+	match action_type:
+		&"gain_card":
+			return _TC.GAIN_CARD_SETTLE
+		&"discard_card":
+			return _TC.DISCARD_SETTLE
+		_:
+			return &""
+
+
+## 惰性构建 pilot_003_e02_deferred 效果（监听 cause 动作 SETTLE，动作=PILOT_003_RUN_DEFERRED_JUDGE）。
+## 空条件/目标/费用 -> _execute_effect 直通 _execute_actions -> TimingEngine 的 PILOT_003_RUN_DEFERRED_JUDGE 分支。
+func _p003_get_deferred_effect():
+	if _p003_deferred_effect != null:
+		return _p003_deferred_effect
+	var eff := _ActionEffect.new()
+	eff.effect_id = &"pilot_003_e02_deferred"
+	eff.display_name = "离堆判定串行化"
+	eff.description = "正面牌因获取/弃置动作离堆时，延迟到该动作结算时点串行判定。"
+	eff.mode = _TC.MODE_LISTEN
+	eff.priority = 0
+	eff.set_conditions([])
+	eff.set_target_rules([{"rule": &"NO_TARGET"}])
+	eff.set_costs([])
+	eff.set_actions([{"type": &"PILOT_003_RUN_DEFERRED_JUDGE", "params": {}}])
+	_p003_deferred_effect = eff
+	return eff
+
+
+## 问题2：在 cause 动作 SETTLE 触发，串行执行延迟的正面牌判定。
+## 逐张构建子动作 def（_seq 串行，挂为 cause 动作子动作使其等待）：
+##   可用 -> prep（移手牌+改 owner）+ EXECUTE_USE_ACTION_CARD（迎击牌带 attack_action_id 即时响应）；
+##   不可用 -> 同步弃置 + EXECUTE_GAIN_CARD（补偿抽，作为子动作串行；其再抽到正面牌自然递归延迟到自身 SETTLE）。
+func _run_p003_deferred_judgment(cause_action, payload: Dictionary) -> void:
+	if context == null or context.game_state == null or context.timing_engine == null:
+		return
+	if cause_action == null:
+		return
+	var cause_id: StringName = cause_action.action_id
+	if not _p003_deferred_e02_map.has(cause_id):
+		return
+	var deferred: Array = _p003_deferred_e02_map[cause_id]
+	_p003_deferred_e02_map.erase(cause_id)
+	if deferred.is_empty():
+		return
+	var seq_remaining: Array = []
+	for entry in deferred:
+		var d_card_id: StringName = entry.get("card_id", &"")
+		var d_owner_pid: StringName = entry.get("owner_pid", &"")
+		var d_owner_mech_id: StringName = entry.get("owner_mech_id", &"")
+		var d_card = context.game_state.get_card(d_card_id)
+		if d_card == null:
+			continue
+		var d_owner_mech = context.game_state.mechs.get(d_owner_mech_id)
+		# 即时生效优先：迎击/掩护牌若能响应当前进行中攻击，带 attack_action_id 强制使用。
+		var d_imm_aid: StringName = _p003_find_immediate_attack_for_card(d_card, d_owner_mech)
+		if d_imm_aid != &"" or _pilot_003_can_use_card(d_card, d_owner_mech):
+			_p003_prep_force_use(d_card_id, d_owner_pid)
+			var ua_params: Dictionary = {
+				"card_instance_id": d_card_id,
+				"player_id": d_owner_pid,
+				"mech_id": d_owner_mech_id,
+				"source_action_id": &"pilot_003_force_use",
+				"reason": &"pilot_003_force_use",
+				"executor": &"pilot_003_force_use",
+			}
+			if d_imm_aid != &"":
+				ua_params["attack_action_id"] = d_imm_aid
+			seq_remaining.append({"type": &"EXECUTE_USE_ACTION_CARD", "params": ua_params})
+		else:
+			# 不可用：公开弃置（同步）+ 补偿抽（EXECUTE_GAIN_CARD 进 _seq 串行）
+			var d_already: bool = d_card.zone == &"discard"
+			context.game_state.write_log(&"pilot_003_unusable", {"card_id": String(d_card_id), "player_id": String(d_owner_pid)})
+			if not d_already and context.deck_service != null:
+				context.deck_service.discard_card(d_card_id, &"pilot_003_unusable_face_up_card")
+			seq_remaining.append({
+				"type": &"EXECUTE_GAIN_CARD",
+				"params": {
+					"from_zone": &"action_deck", "card_kind": &"action", "count": 1,
+					"player_id": d_owner_pid, "reason": &"pilot_003_unusable_compensation",
+				},
+			})
+	if seq_remaining.is_empty():
+		return
+	# 设 _seq 并启动首个子动作；子动作挂起则 cause 动作被 fire_timing 置 waiting_effect_action。
+	cause_action.record["_seq_effect_actions"] = {"payload": payload, "remaining": seq_remaining}
+	context.timing_engine._continue_seq_effect_actions(cause_action)
+
+
+## force_use 的同步准备部分：从抽牌者手牌移除 + 改 owner=瑟尔基尔（不进手牌，由 use_action_card 移入临时区）。
+## 从 _pilot_003_force_use 拆出，供延迟判定路径在 SETTLE 时为每张可用牌预先准备。
+func _p003_prep_force_use(card_id: StringName, owner_pid: StringName) -> void:
+	if context == null or context.game_state == null:
+		return
+	var card = context.game_state.get_card(card_id)
+	if card == null:
+		return
+	var drawer_pid: StringName = card.owner_player_id
+	if drawer_pid != &"" and drawer_pid != owner_pid:
+		var drawer = context.game_state.players.get(drawer_pid)
+		if drawer != null:
+			drawer.action_hand.erase(card_id)
+	card.owner_player_id = owner_pid
+	context.game_state.write_log(&"pilot_003_force_use", {"card_id": String(card_id), "player_id": String(owner_pid)})
+
+
+## 串行处理 effect_02 队列队首：force_use / unusable_discard。
+## force_use 的 use_action_card 若挂起（人类选目标/武器），保持 active 等其 action_completed 回调；
+## 否则（同步完成 / unusable 弃置+补偿抽）立即递归处理下一张，保证先来后到、全部完成。
+## 注：unusable_discard 的补偿抽牌可能再触发本 _handle（入队），此时 active=true 故只入队不处理，
+## 待当前 unusable 返回后递归处理新入队的牌。
+func _p003_process_next_e02() -> void:
+	if _p003_e02_active:
+		return  # 上一张 force_use 仍挂起，等 action_completed 回调
+	if _p003_e02_queue.is_empty():
+		return
+	if context == null or context.game_state == null:
+		_p003_e02_queue.clear()
+		return
+	_p003_e02_active = true
+	var entry: Dictionary = _p003_e02_queue.pop_front()
+	_p003_e02_active_entry = entry
+	var card_id: StringName = entry.get("card_id", &"")
+	var owner_pid: StringName = entry.get("owner_pid", &"")
+	var owner_mech_id: StringName = entry.get("owner_mech_id", &"")
 	if owner_pid == &"" or owner_mech_id == &"":
 		_pilot_003_unusable_discard(card_id, &"", &"")
+		_p003_e02_active = false
+		_p003_e02_active_entry = {}
+		_p003_process_next_e02()
 		return
+	var card = context.game_state.get_card(card_id)
 	var owner_mech = context.game_state.mechs.get(owner_mech_id)
+	# 即时生效：若此牌监听当前进行中攻击（未到判断命中 idx<4）的时点且基本条件满足，
+	# 瑟尔基尔强制使用（不弹是否使用窗）。迎击牌带 attack_action_id 让 use_action_card 通过 validate +
+	# RESPOND_ATTACK 定位 attack 标记已响应；掩护带 attack_action_id 让 MODIFY_ATTACK_MIGHT 定位 attack -5。
+	var _p003_imm_aid: StringName = _p003_find_immediate_attack_for_card(card, owner_mech)
+	if _p003_imm_aid != &"":
+		_pilot_003_force_use(card_id, owner_pid, owner_mech_id, _p003_imm_aid)
+		if _p003_e02_force_action_id != &"" and context.action_registry != null:
+			var _p003_imm_ua = context.action_registry.get_action(_p003_e02_force_action_id)
+			if _p003_imm_ua != null and (_p003_imm_ua.state == &"waiting_input" or _p003_imm_ua.state == &"waiting_timing" or _p003_imm_ua.state == &"waiting_effect_action"):
+				return  # 挂起，等回调
+		_p003_e02_force_action_id = &""
+		_p003_e02_active = false
+		_p003_e02_active_entry = {}
+		_p003_process_next_e02()
+		return
 	if _pilot_003_can_use_card(card, owner_mech):
 		_pilot_003_force_use(card_id, owner_pid, owner_mech_id)
+		# force_use 创建的 use_action_card 若挂起 -> 等 action_completed 回调（保持 active=true）
+		if _p003_e02_force_action_id != &"" and context.action_registry != null:
+			var ua = context.action_registry.get_action(_p003_e02_force_action_id)
+			if ua != null and (ua.state == &"waiting_input" or ua.state == &"waiting_timing" or ua.state == &"waiting_effect_action"):
+				return  # 挂起，等回调
+		# 未挂起（同步完成，如无 target 的辅助牌 force_use 直接跑完）-> 续跑下一张
+		_p003_e02_force_action_id = &""
+		_p003_e02_active = false
+		_p003_e02_active_entry = {}
+		_p003_process_next_e02()
 	else:
 		_pilot_003_unusable_discard(card_id, owner_pid, owner_mech_id)
+		_p003_e02_active = false
+		_p003_e02_active_entry = {}
+		_p003_process_next_e02()
+
+
+## 惰性连接 action_engine.action_completed，监听 force_use 的 use_action_card 完成以续跑队列。
+func _ensure_p003_e02_signal() -> void:
+	if _p003_e02_signal_connected or context == null or context.action_engine == null:
+		return
+	var cb := Callable(self, "_on_p003_e02_action_completed")
+	if not context.action_engine.action_completed.is_connected(cb):
+		context.action_engine.action_completed.connect(cb)
+	_p003_e02_signal_connected = true
+
+
+## force_use 的 use_action_card 完成回调：续跑队列下一张（延迟一帧避免在完成栈中递归 execute）。
+func _on_p003_e02_action_completed(action_id: StringName, _action_type: StringName, _record: Dictionary) -> void:
+	if action_id == _p003_e02_force_action_id:
+		_p003_e02_force_action_id = &""
+		_p003_e02_active = false
+		_p003_e02_active_entry = {}
+		call_deferred("_p003_process_next_e02")
+
+
+## 返回当前处于瑟尔基尔 effect_02 判定管线中的全部卡牌条目：
+## pending 即时队列 + 当前正在处理的即时牌（已 pop、force_use 可能挂起）+ 延迟 map（待 cause 动作 SETTLE）。
+## 每条 {card_id, owner_pid, owner_mech_id}。供 UI（美杜莎操控列表）将这些牌标记为"出现但不可选"。
+func get_p003_judging_card_entries() -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for e in _p003_e02_queue:
+		out.append(e)
+	if not _p003_e02_active_entry.is_empty():
+		out.append(_p003_e02_active_entry)
+	for cause_id in _p003_deferred_e02_map:
+		for e in _p003_deferred_e02_map[cause_id]:
+			out.append(e)
+	return out
 
 
 ## 预检：离堆正面牌是否可由 owner_mech 立即合法使用。
@@ -918,6 +1309,38 @@ func _pilot_003_can_use_card(card, owner_mech) -> bool:
 				if _RangeCalculator.is_in_weapon_range(owner_mech.position, m.position, w_range, map_cells):
 					return true
 		return false
+	# 非攻击辅助牌预检：effect_02 离堆事后处理在自动抽牌中触发（无攻击上下文，但可弹窗让人类选目标）。
+	# 裁定（用户）：除以下外都 force_use 可用--锁定/联合（CHOOSE_OTHER_MECH）由人类玩家选目标后使用。
+	# 不可用：掩护（MODIFY_ATTACK 依赖攻击上下文）、维修（TARGET_IS_ADJACENT_OR_SELF 选目标+二选一）、
+	#   聚能（CHOOSE_OWN_WEAPON 选武器）、弃牌堆空时的回忆/回收（EXECUTE_GAIN_CARD from discard）、
+	#   弃牌堆空时的觉醒（AWAKEN_DRAW）。
+	for _p003_map in card_mappings:
+		var _p003_eid: StringName = _p003_map.get("effect_id", &"") if _p003_map is Dictionary else &""
+		var _p003_eff = all_effects.get(_p003_eid)
+		if _p003_eff == null or _p003_eff.mode != &"DIRECT":
+			continue
+		# 维修/聚能等需选目标+后续条件 -> 不可用（锁定/联合 CHOOSE_OTHER_MECH 可由人类选，故放行）
+		for _p003_tr in _p003_eff.target_rules:
+			var _p003_rule: StringName = _p003_tr.get("rule", &"") if _p003_tr is Dictionary else &""
+			if _p003_rule == &"TARGET_IS_ADJACENT_OR_SELF" or _p003_rule == &"CHOOSE_OWN_WEAPON":
+				return false
+		for _p003_act in _p003_eff.actions:
+			var _p003_atype: StringName = _p003_act.get("type", &"") if _p003_act is Dictionary else &""
+			# 依赖攻击上下文 -> 不可用（掩护 MODIFY_ATTACK -5）
+			if String(_p003_atype).begins_with("MODIFY_ATTACK"):
+				return false
+			# 回忆/回收：从弃牌堆获取，弃牌堆空 -> 不可用
+			if _p003_atype == &"EXECUTE_GAIN_CARD":
+				var _p003_gp: Dictionary = _p003_act.get("params", {}) if _p003_act is Dictionary else {}
+				var _p003_fz: StringName = _p003_gp.get("from_zone", &"")
+				if _p003_fz == &"action_discard" and context.game_state.deck_state.action_discard_pile.is_empty():
+					return false
+				if _p003_fz == &"equipment_discard" and context.game_state.deck_state.equipment_discard_pile.is_empty():
+					return false
+			# 觉醒：核心从行动弃牌堆获取，弃牌堆空 -> 不可用
+			if _p003_atype == &"AWAKEN_DRAW":
+				if context.game_state.deck_state.action_discard_pile.is_empty():
+					return false
 	return true
 
 
@@ -944,48 +1367,176 @@ func _pilot_003_weapon_stats(attacker, weapon_id: StringName) -> Dictionary:
 	return {"range_value": 1, "weapon_kind": &""}
 
 
-## 强制使用：独立顶层 use_action_card（passive 攻击，source_action_id 非空跳过攻击数消耗/校验）。
-## 卡片已从牌堆弹出（draw_from_deck 拦截），此处清除正面/metadata 标记后直接打出。
-## 注意：不清除 pilot_003_intercepted —— 该握手标记由 draw_from_deck 读取后清除。
-func _pilot_003_force_use(card_id: StringName, owner_pid: StringName, owner_mech_id: StringName) -> void:
+## 强制使用：牌归瑟尔基尔先用，直接走 use_action_card 动作（主动使用），由动作把牌放入瑟尔基尔临时区使用。
+## 事后语义：牌在抽牌者手牌（owner=抽牌者）。force_use 先从抽牌者手牌移除 + 改 owner=瑟尔基尔
+## （"这个牌就该他先用"；owner==执行者，根本不涉及 pilot_009 受控使用校验），然后直接调
+## use_action_card -- 不手动设 temp_zone，由 use_action_card 的 _step_card_to_temp_zone 把牌移入瑟尔基尔临时区。
+## passive 攻击，source_action_id 非空跳过攻击数消耗/校验。
+## face_up_bury 标签已由 _handle_pilot_003_immediately_use 移除。
+## "不拿走" = 不把牌加进瑟尔基尔 action_hand，而是直接进使用流程（临时区->使用->结算弃）。
+
+
+## 即时生效：为此牌查找一个可即时生效的进行中攻击动作。
+## 条件：attack 在 active_actions 且未到判断命中步(current_step_index<4) + 此牌监听该 attack 的时点 + 基本条件满足。
+## 迎击牌(AVAILABILITY+AVAIL_RESPOND_ATTACK)：瑟尔基尔自身被攻击(target_id含owner_mech) + 攻击未响应(!responded)。
+## 掩护(cover_effect1_direct DIRECT MODIFY_ATTACK_MIGHT)：瑟尔基尔范围内任意机甲被攻击(含自身) + 攻击者≠瑟尔基尔。
+## 满足返回 attack_id，否则返回空（回退普通 effect_02 逻辑）。
+func _p003_find_immediate_attack_for_card(card, owner_mech) -> StringName:
+	if card == null or card.def == null or card.def.card_kind != &"action":
+		return &""
+	if owner_mech == null or owner_mech.destroyed:
+		return &""
+	if context == null or context.game_state == null or context.action_registry == null:
+		return &""
+	var card_mappings: Array = _GeneratedActionEffects.get_effects_for_card(card.def.card_id)
+	if card_mappings.is_empty():
+		return &""
+	var all_effects: Dictionary = _GeneratedActionEffects.build_all_effects()
+	# 判定此牌类型：是否迎击牌(有 AVAILABILITY+AVAIL_RESPOND_ATTACK) / 是否掩护(DIRECT MODIFY_ATTACK_MIGHT)
+	var is_counter_card := false
+	var is_cover_card := false
+	for _imm_map in card_mappings:
+		var _imm_eid: StringName = _imm_map.get("effect_id", &"") if _imm_map is Dictionary else &""
+		var _imm_eff = all_effects.get(_imm_eid)
+		if _imm_eff == null:
+			continue
+		if _imm_eff.mode == _TC.MODE_AVAILABILITY and _imm_eff.availability_condition == _TC.AVAIL_RESPOND_ATTACK:
+			is_counter_card = true
+		if _imm_eff.mode == _TC.MODE_DIRECT:
+			for _imm_act in _imm_eff.actions:
+				var _imm_atype: StringName = _imm_act.get("type", &"") if _imm_act is Dictionary else &""
+				if _imm_atype == &"MODIFY_ATTACK_MIGHT":
+					is_cover_card = true
+	if not is_counter_card and not is_cover_card:
+		return &""  # 非即时生效牌类
+	# 遍历进行中 attack 找符合的
+	for _imm_aid in context.action_registry.active_actions:
+		var _imm_attack = context.action_registry.active_actions[_imm_aid]
+		if _imm_attack == null or _imm_attack.action_type != &"attack":
+			continue
+		# 未到判断命中步(idx<4)：extract/weapon/target/execute 四步内允许即时生效
+		if _imm_attack.current_step_index >= 4:
+			continue
+		if _imm_attack.state == &"completed" or _imm_attack.state == &"cancelled":
+			continue
+		var _imm_attacker: StringName = _imm_attack.record.get("attacker_id", &"")
+		# 排除瑟尔基尔自身发出的攻击（即时生效只针对他人发动的攻击）
+		if _imm_attacker == owner_mech.mech_id:
+			continue
+		# 收集攻击目标（单目标 target_id + 多目标 target_ids）
+		var _imm_targets: Array = []
+		var _imm_tid: StringName = _imm_attack.record.get("target_id", &"")
+		if _imm_tid != &"":
+			_imm_targets.append(_imm_tid)
+		for _imm_etid in _imm_attack.record.get("target_ids", []):
+			var _imm_etid_sn: StringName = StringName(_imm_etid)
+			if _imm_etid_sn != &"":
+				_imm_targets.append(_imm_etid_sn)
+		if is_counter_card:
+			# 迎击：瑟尔基尔自身被攻击 + 攻击未响应
+			var _imm_self_targeted := _imm_targets.has(owner_mech.mech_id)
+			if not _imm_self_targeted:
+				continue
+			if bool(_imm_attack.record.get("responded", false)) or bool(_imm_attack.record.get("counter_attacked", false)):
+				continue  # 已响应，迎击不可
+			return _imm_attack.action_id
+		if is_cover_card:
+			# 掩护：目标在瑟尔基尔掩护范围内（含自身）。复用 TARGET_IN_COVER_RANGE 逻辑。
+			for _imm_ctid in _imm_targets:
+				if _p003_target_in_cover_range(_imm_ctid, owner_mech):
+					return _imm_attack.action_id
+	return &""
+
+
+## 掩护范围判定：target 是 holder 自身 OR 在 holder 最大武器范围内。
+## 仿 ConditionChecker.TARGET_IN_COVER_RANGE，提取为可复用 helper（即时生效不建 EffectBinding）。
+func _p003_target_in_cover_range(target_mech_id: StringName, holder_mech) -> bool:
+	if holder_mech == null or target_mech_id == &"":
+		return false
+	if target_mech_id == holder_mech.mech_id:
+		return true  # 自身被攻击，掩护可保护自己
+	var _tcr_target_mech = context.game_state.mechs.get(target_mech_id)
+	if _tcr_target_mech == null:
+		return false
+	var _tcr_max_range: int = 1
+	for _tcr_wid in holder_mech.get_weapon_ids():
+		var _tcr_rv: int = 1
+		var _tcr_wid_str := String(_tcr_wid)
+		if _tcr_wid_str.begins_with("frame_base_weapon_"):
+			var _tcr_si: int = _tcr_wid_str.trim_prefix("frame_base_weapon_").to_int() - 1
+			var _tcr_bw: Dictionary = holder_mech.get_base_weapon(_tcr_si)
+			if not _tcr_bw.is_empty():
+				_tcr_rv = int(_tcr_bw.get("range_value", 1))
+		else:
+			var _tcr_wc = context.game_state.get_card(_tcr_wid)
+			if _tcr_wc != null and _tcr_wc.def != null and "range_value" in _tcr_wc.def:
+				_tcr_rv = int(_tcr_wc.def.range_value)
+		_tcr_max_range = max(_tcr_max_range, _tcr_rv)
+	var _tcr_cells: Dictionary = context.game_state.map_state.cells if context.game_state.map_state else {}
+	return _RangeCalculator.is_in_weapon_range(holder_mech.position, _tcr_target_mech.position, _tcr_max_range, _tcr_cells)
+
+func _pilot_003_force_use(card_id: StringName, owner_pid: StringName, owner_mech_id: StringName, attack_action_id: StringName = &"") -> void:
 	if context == null or context.action_service == null:
 		return
 	var card = context.game_state.get_card(card_id)
 	if card != null:
-		for k in [&"face_up_in_deck", &"pilot_003_face_up_leave_use", &"pilot_003_leave_deck_owner_mech", &"pilot_003_leave_deck_owner_pid", &"pilot_003_source_pilot"]:
-			card.counters.erase(k)
-		card.zone = &"temp_zone"
+		# 从抽牌者手牌移除（owner=抽牌者 != 瑟尔基尔 时）；瑟尔基尔自己抽到自己埋的牌则无需移
+		var drawer_pid: StringName = card.owner_player_id
+		if drawer_pid != &"" and drawer_pid != owner_pid:
+			var drawer = context.game_state.players.get(drawer_pid)
+			if drawer != null:
+				drawer.action_hand.erase(card_id)
+		# 牌归瑟尔基尔先用（owner==执行者，不进 pilot_009 受控使用校验分支，与 009 无关）
+		card.owner_player_id = owner_pid
+		# 不设 temp_zone：由 use_action_card 的 _step_card_to_temp_zone 放入瑟尔基尔临时区
 	context.game_state.write_log(&"pilot_003_force_use", {
 		"card_id": String(card_id),
 		"player_id": String(owner_pid),
 	})
-	context.action_service.execute(&"use_action_card", {
+	var _fu_params: Dictionary = {
 		"card_instance_id": card_id,
 		"player_id": owner_pid,
 		"mech_id": owner_mech_id,
 		"source_action_id": &"pilot_003_force_use",
 		"reason": &"pilot_003_force_use",
 		"executor": &"pilot_003_force_use",
-	})
+	}
+	# 即时生效：attack_action_id 作为 execute params 传入（在 record_keys 白名单内，写进 record），
+	# 使迎击牌 validate（has_availability 须 attack_action_id 非空）在第一步就通过 + counter_e1 的
+	# RESPOND_ATTACK / 掩护 MODIFY_ATTACK_MIGHT 经 payload.attack_action_id 定位 attack。
+	if attack_action_id != &"":
+		_fu_params["attack_action_id"] = attack_action_id
+	var _fu_result: Dictionary = context.action_service.execute(&"use_action_card", _fu_params)
+	if attack_action_id != &"" and _fu_result.get("action_id", &"") != &"":
+		var _fu_ua = context.action_registry.get_action(_fu_result["action_id"]) if context.action_registry != null else null
+		if _fu_ua != null:
+			_fu_ua.record["attack_action_id"] = attack_action_id
+	# 记录 force_use 创建的 use_action_card id，供 _p003_process_next_e02 判断是否挂起 + 完成回调续跑
+	_p003_e02_force_action_id = _fu_result.get("action_id", &"")
 
 
-## 无法使用回退：公开弃置离堆正面牌 + 瑟尔基尔拥有者抽1。清除正面/metadata 标记。
-## pilot_003_intercepted 保留给 draw_from_deck 读取后清除（拦截握手）。
+## 无法使用回退：公开弃置该正面牌 + 瑟尔基尔拥有者抽1。
+## 事后语义：牌在抽牌者手牌（被抽走）或弃牌堆（从牌堆弃置）。discard_card 经
+## remove_card_from_all_zones 自动从抽牌者手牌移除入弃牌堆；已在弃牌堆则跳过（不重复弃置
+## 致离场效果二次触发）。瑟尔基尔抽1（即使牌已在弃牌堆也抽）。face_up_bury 标签已由
+## _handle_pilot_003_immediately_use 移除。
 func _pilot_003_unusable_discard(card_id: StringName, owner_pid: StringName, _owner_mech_id: StringName) -> void:
 	if context == null or context.game_state == null:
 		return
 	var card = context.game_state.get_card(card_id)
-	if card != null:
-		for k in [&"face_up_in_deck", &"pilot_003_face_up_leave_use", &"pilot_003_leave_deck_owner_mech", &"pilot_003_leave_deck_owner_pid", &"pilot_003_source_pilot"]:
-			card.counters.erase(k)
+	var already_discarded: bool = card != null and card.zone == &"discard"
 	context.game_state.write_log(&"pilot_003_unusable", {
 		"card_id": String(card_id),
 		"player_id": String(owner_pid),
 	})
-	if context.deck_service != null:
+	if not already_discarded and context.deck_service != null:
 		context.deck_service.discard_card(card_id, &"pilot_003_unusable_face_up_card")
 	if owner_pid != &"":
-		context.game_actions.draw_action_cards({"player_id": owner_pid, "count": 1, "reason": &"pilot_003_unusable_compensation"})
+		# 走 gain_card 动作拿 GAIN_CARD 时点（gain_card 委托 draw_action_cards，保留 pilot_003 跳过/effect_02/hook）
+		context.action_service.execute(&"gain_card", {
+			"from_zone": &"action_deck", "card_kind": &"action", "count": 1,
+			"player_id": owner_pid, "reason": &"pilot_003_unusable_compensation"
+		})
 
 
 ## 构建来源信息（替代原 EffectBinding 的来源提取，用于日志）
@@ -1084,6 +1635,17 @@ func _resolve_atomic_value(value, payload: Dictionary, parent_action):
 		return src.get("mech_id", &"")
 	if s == "$source.owner_player_id":
 		return src.get("player_id", &"")
+	# $current_target.xxx -> 从 payload["current_target"] 取（FOR_EACH_TARGET 注入 {mech_id: ...}）
+	if s.begins_with("$current_target."):
+		var ct_key: String = s.replace("$current_target.", "")
+		var ct: Dictionary = payload.get("current_target", {}) if payload != null else {}
+		return ct.get(ct_key)
+	# 裸 $key（如 $selected_targets）-> 从 payload 取
+	# （TargetChecker.ALL_CURRENT_ATTACK_MECH_TARGETS / ALL_HIT_TARGETS_* 在 check_single 里注入 payload["selected_targets"]）
+	if s.begins_with("$"):
+		var bare_key: String = s.substr(1)
+		if payload != null and payload.has(bare_key):
+			return payload.get(bare_key)
 	# 无匹配：原样返回
 	return value
 
@@ -1141,11 +1703,7 @@ func _dispatch_atomic_action(act_type: StringName, params: Dictionary, payload: 
 			ga.restore_power(params)
 		&"RESTORE_WEAPON_POWER":
 			ga.restore_weapon_power(params)
-		# ── 抽牌/获得 ──
-		&"DRAW_ACTION":
-			ga.draw_action_cards(params)
-		&"DRAW_EQUIPMENT":
-			ga.draw_equipment_cards(params)
+		# ── 抽牌/获得 ──（DRAW_ACTION/DRAW_EQUIPMENT 已统一走 gain_card 动作拿 GAIN_CARD 时点）
 		&"GAIN_SPECIFIC_CARD":
 			ga.gain_specific_card(params)
 		&"RANDOM_DRAW_FROM_DISCARD_OR_DECK":
@@ -1187,6 +1745,15 @@ func _dispatch_atomic_action(act_type: StringName, params: Dictionary, payload: 
 			ga.discard_card(params)
 		&"DISCARD_ACTION_CARD":
 			ga.discard_action_card(params)
+		&"DISCARD_TEMP_ZONE_CARDS":
+			# pilot_011 迪恩转化：把 cost 阶段移入临时区的燃料牌入弃牌堆（不触发 Action Engine 时点，
+			# 走 legacy GameActions.discard_card 仅 fire ON_CARD_DISCARDED hook）。card_ids 已由
+			# _resolve_atomic_params 从 $payload.temp_zone_card_ids 解析为数组。
+			var dtz_ids: Array = params.get("card_ids", [])
+			var dtz_reason: StringName = params.get("reason", &"PILOT_011_FUEL")
+			for dtz_cid in dtz_ids:
+				if dtz_cid != null and String(dtz_cid) != "" and context.game_state != null and context.game_state.cards.has(dtz_cid):
+					ga.discard_card({"card_id": dtz_cid, "reason": dtz_reason})
 		&"DESTROY_CARD":
 			ga.destroy_card(params)
 		&"PLAY_AS_CARD":
@@ -1297,6 +1864,10 @@ func _dispatch_atomic_action(act_type: StringName, params: Dictionary, payload: 
 			ga.move_without_power(params)
 		&"MODIFY_WEAPON_POWER":
 			ga.modify_weapon_power(params)
+		&"RECORD_WEAPON_ATTACK_COUNT":
+			ga.record_weapon_attack_count(params)
+		&"DECAY_WEAPON_BY_RECORDED_COUNT":
+			ga.decay_weapon_by_recorded_count(params)
 		&"SET_WEAPON_STATS":
 			ga.set_weapon_stats(params)
 		&"SET_WEAPON_COOLDOWN":
@@ -1310,10 +1881,8 @@ func _dispatch_atomic_action(act_type: StringName, params: Dictionary, payload: 
 			pass
 		&"CONVERT_ARMOR_TO_POWER":
 			ga.convert_armor_to_power(params)
-		&"REDIRECT_HEAL_TO_DAMAGE":
-			ga.redirect_heal_to_damage(params)
-		&"REDIRECT_REMOVE_TO_PLACE_TOKENS":
-			ga.redirect_remove_to_place_tokens(params)
+		# REDIRECT_HEAL_TO_DAMAGE / REDIRECT_REMOVE_TO_PLACE_TOKENS 已在 _execute_atomic_action
+		# 顶部 special case 处理（需 parent_action 修改被监听动作 record），不会走到此通用分发。
 		&"MODIFY_NEXT_DAMAGE_DEALT":
 			ga.modify_next_damage_dealt(params)
 		&"ADD_WEAPON_TAG":
@@ -1496,6 +2065,24 @@ func _create_attack_action(params: Dictionary) -> Action:
 	return action
 
 
+## 多目标攻击（双连等）派生"复制攻击"子动作：深拷贝主攻击 record（快照发动前武器状态），
+## 从 step 3（execute_attack / ATTACK_AT）开始执行，跳过 extract/weapon/target 选择。
+## 主攻击只发 ATTACK_BEFORE/PRE，复制攻击各自发完整 ATTACK_AT/AFTER/SETTLE。
+## fork_record 已是主攻击 record 的深拷贝（含 weapon_might/extra_might/extra_range 等快照）。
+func create_fork_attack(parent_attack: Action, fork_record: Dictionary, start_step_index: int) -> Action:
+	var fork: Action = _create_attack_action({})
+	if fork == null:
+		return null
+	fork.context = context
+	fork.source = parent_attack.source.duplicate(true)
+	fork.record = fork_record
+	fork.current_step_index = start_step_index
+	context.action_registry.register(fork)
+	fork.parent_action_id = parent_attack.action_id
+	parent_attack.pending_effect_action_ids.append(fork.action_id)
+	return fork
+
+
 func _create_use_action_card_action(params: Dictionary) -> Action:
 	var action = UseActionCardAction.new()
 	action.setup_steps()
@@ -1590,6 +2177,11 @@ func _extract_attack_params(action_def: Dictionary, payload: Dictionary, parent_
 	result["weapon_id"] = params.get("weapon_id", payload.get("weapon_id", &""))
 	result["attack_card_id"] = params.get("attack_card_id", payload.get("attack_card_id", payload.get("card_instance_id", &"")))
 	result["target_count"] = params.get("target_count", 1)
+	# pilot_006 里昂狩猎标签豁免：从父 use_action_card record 继承到 attack record，
+	# select_target 据此约束只能选标记机甲，settle 据此对标记目标不+1攻击数。
+	if bool(payload.get("pilot_006_zero_exemption", false)):
+		result["pilot_006_zero_exemption"] = true
+		result["pilot_006_forced_target"] = payload.get("pilot_006_forced_target", &"")
 	result["source"] = _build_source_from_payload(payload, parent_action)
 	# 闪击等再攻型效果：使用上一次攻击的武器（目标可锁定或重选，见下方各 flag）
 	# attack B 的 payload 是 attack A 的 record（含 attack_source=发动方信息）。
@@ -1667,9 +2259,13 @@ func _extract_attack_params(action_def: Dictionary, payload: Dictionary, parent_
 func _extract_stat_mod_params(action_def: Dictionary, payload: Dictionary, parent_action) -> Dictionary:
 	var params: Dictionary = action_def.get("params", {})
 	var result: Dictionary = {}
-	result["target_id"] = params.get("target_id", payload.get("target_id", payload.get("mech_id", payload.get("source_mech_id", &""))))
+	# target_id: 解析 $expr（$binding_context.mech_id / $current_target.mech_id）；未指定时退回 payload
+	var sm_target_default = payload.get("target_id", payload.get("mech_id", payload.get("source_mech_id", &"")))
+	result["target_id"] = _resolve_atomic_value(params.get("target_id", sm_target_default), payload, parent_action)
 	result["stat_type"] = params.get("stat_type", &"armor")
 	result["stat_types"] = params.get("stat_types", [])
+	# stat_changes 数组（pilot_013 effect_02a）：透传（字面值，无 $expr）
+	result["stat_changes"] = params.get("stat_changes", [])
 	# 数值：显式 value 优先；否则若指定 value_multiplier_by_stacks（如聚能"威力+4*X"），
 	# 按 payload.binding_context 定位的状态层数算出 value = multiplier * stacks。
 	# 修复前此参数从未被解析 -> value 恒为 0 -> stat_modify 提前返回 -> 聚能不加威力。
@@ -1686,7 +2282,16 @@ func _extract_stat_mod_params(action_def: Dictionary, payload: Dictionary, paren
 	# pilot_004 玛沙 转换层：mode(cap_bonus)/runtime_tag/source_card_id 透传到 stat_modify record
 	result["mode"] = params.get("mode", &"")
 	result["runtime_tag"] = params.get("runtime_tag", &"")
-	result["source_card_id"] = params.get("source_card_id", payload.get("binding_context", {}).get("card_instance_id", &""))
+	# source_card_id: 解析 $expr（$binding_context.card_instance_id）；空则退回 binding_context
+	var sm_src_card = _resolve_atomic_value(params.get("source_card_id", &""), payload, parent_action)
+	if sm_src_card == &"" or sm_src_card == null:
+		sm_src_card = payload.get("binding_context", {}).get("card_instance_id", &"")
+	result["source_card_id"] = sm_src_card
+	# pilot_013 effect_02a：duration_owner_id/source_effect_id/source_key/source_target_id 透传到 record
+	result["duration_owner_id"] = _resolve_atomic_value(params.get("duration_owner_id", &""), payload, parent_action)
+	result["source_effect_id"] = params.get("source_effect_id", &"")
+	result["source_key"] = params.get("source_key", &"")
+	result["source_target_id"] = _resolve_atomic_value(params.get("source_target_id", &""), payload, parent_action)
 	result["source"] = _build_source_from_payload(payload, parent_action)
 	return result
 
@@ -1777,19 +2382,28 @@ func _extract_set_equip_params(action_def: Dictionary, payload: Dictionary, pare
 
 func _extract_gain_card_params(action_def: Dictionary, payload: Dictionary, parent_action) -> Dictionary:
 	var params: Dictionary = action_def.get("params", {})
+	# 解析 $-占位符（player_id="$binding_context.player_id" 等）并注入 player_id/source_mech_id。
+	# 仿原子动作 _execute_atomic_action 末尾的 _resolve_atomic_params；此前 EXECUTE_GAIN_CARD 不解析，
+	# $binding_context.player_id 以字面字符串传入致 draw_action_cards 拿不到玩家。
+	var resolved: Dictionary = _resolve_atomic_params(params, payload, parent_action)
 	var result: Dictionary = {}
-	result["card_ids"] = params.get("card_ids", [])
-	# mech_ids：优先从 params 指定，否则从 payload 提取 source_mech_id
-	result["mech_ids"] = params.get("mech_ids", [])
+	result["card_ids"] = resolved.get("card_ids", [])
+	# mech_ids：优先从 params 指定，否则从注入的 source_mech_id 取
+	result["mech_ids"] = resolved.get("mech_ids", [])
 	if result["mech_ids"].is_empty():
-		var source_mech: StringName = payload.get("source_mech_id", payload.get("mech_id", &""))
+		var source_mech: StringName = resolved.get("source_mech_id", payload.get("mech_id", &""))
 		if source_mech != &"":
 			result["mech_ids"] = [source_mech]
-	result["from_zone"] = params.get("from_zone", &"")
-	result["reason"] = params.get("reason", &"effect")
-	result["count"] = params.get("count", 1)
-	result["random"] = params.get("random", false)
-	result["card_kind"] = params.get("card_kind", &"")
+	result["from_zone"] = resolved.get("from_zone", &"")
+	result["reason"] = resolved.get("reason", &"effect")
+	result["count"] = resolved.get("count", 1)
+	result["random"] = resolved.get("random", false)
+	result["card_kind"] = resolved.get("card_kind", &"")
+	result["player_id"] = resolved.get("player_id", &"")
+	if result["player_id"] == &"":
+		# LISTEN 效果的 player_id 在 binding_context（非 payload 顶层），_resolve_atomic_params 注入不到时回退取
+		var _gc_bc: Dictionary = payload.get("binding_context", {}) if payload != null else {}
+		result["player_id"] = _gc_bc.get("player_id", &"")
 	result["source"] = _build_source_from_payload(payload, parent_action)
 	return result
 
@@ -1798,7 +2412,26 @@ func _extract_discard_params(action_def: Dictionary, payload: Dictionary, parent
 	var params: Dictionary = action_def.get("params", {})
 	var result: Dictionary = {}
 	result["card_ids"] = params.get("card_ids", [])
-	result["count"] = params.get("count", 1)
+	# count 支持 $runtime.xxx（pilot_007 effect_02 弃/抽 X+1 由 PILOT_007_COMPUTE_X 写入 payload.pilot_007_flaw_count）。
+	result["count"] = int(_resolve_atomic_value(params.get("count", 1), payload, parent_action))
+	# from_opposing（肯特 granted 帝国压制）：从对侧（非 source_mech 的攻击参与方）弃牌，使用方选 2 张暗牌。
+	# source_mech=binding_context.mech_id（肯特被授予机甲）；player_id/executor 由 discard_card_action 反查。
+	# 提前 return 避免与 from_target/自选弃置逻辑冲突（player_id 须=对侧而非使用方）。
+	var from_opposing: bool = bool(params.get("from_opposing", false))
+	result["from_opposing"] = from_opposing
+	if from_opposing:
+		var _fo_bind: Dictionary = payload.get("binding_context", {}) if payload != null else {}
+		result["source_mech"] = _fo_bind.get("mech_id", payload.get("source_mech_id", payload.get("mech_id", &"")))
+		result["target_id"] = payload.get("target_id", &"")
+		result["attacker_id"] = payload.get("attacker_id", &"")
+		result["attack_action_id"] = payload.get("attack_action_id", &"")
+		result["executor"] = &""  # discard_card_action._step_determine_cards 从 source_mech 反查使用方
+		result["choose"] = bool(params.get("choose", true))
+		result["face_up"] = bool(params.get("face_up", false))
+		result["no_cancel"] = bool(params.get("no_cancel", false))
+		result["reason"] = params.get("reason", &"effect")
+		result["source"] = _build_source_from_payload(payload, parent_action)
+		return result
 	# from_target=true 表示从攻击目标玩家手牌弃牌（预判 effect2）。
 	# 透传 from_target/target_id/attacker_id，由 discard_card_action._step_determine_cards
 	# 从 target_id 反查目标玩家（_extract_discard_params 无 context 访问，反查放到动作里）。
@@ -1826,6 +2459,7 @@ func _extract_discard_params(action_def: Dictionary, payload: Dictionary, parent
 			result["player_id"] = _self_choose_pid
 	result["choose"] = params.get("choose", false)
 	result["face_up"] = params.get("face_up", true)
+	result["no_cancel"] = bool(params.get("no_cancel", false))
 	result["reason"] = params.get("reason", &"effect")
 	result["source"] = _build_source_from_payload(payload, parent_action)
 	return result
@@ -1850,6 +2484,25 @@ func _extract_steal_params(action_def: Dictionary, payload: Dictionary, parent_a
 	result["to_player_id"] = payload.get("player_id", &"")
 	result["player_id"] = payload.get("player_id", &"")
 	result["executor"] = params.get("executor", &"")
+	# pilot_012：from_target_id / to_target_id（机甲id）/ chooser_id（玩家id）
+	# 这些是 $expr 变量（$current_target.mech_id / $binding_context.*），需解析
+	var ft_id = params.get("from_target_id", &"")
+	if String(ft_id) != "":
+		result["from_target_id"] = _resolve_atomic_value(ft_id, payload, parent_action)
+	else:
+		result["from_target_id"] = &""
+	var tt_id = params.get("to_target_id", &"")
+	if String(tt_id) != "":
+		result["to_target_id"] = _resolve_atomic_value(tt_id, payload, parent_action)
+	else:
+		result["to_target_id"] = &""
+	var chooser = params.get("chooser_id", &"")
+	if String(chooser) != "":
+		result["chooser_id"] = _resolve_atomic_value(chooser, payload, parent_action)
+	else:
+		result["chooser_id"] = &""
+	result["card_kind"] = params.get("card_kind", &"ACTION")
+	result["optional"] = params.get("optional", false)
 	# 已预选牌（玩家选完恢复 / 测试注入）
 	result["determined_card_ids"] = payload.get("determined_card_ids", [])
 	result["selected_action_card_ids"] = payload.get("selected_action_card_ids", [])
@@ -1893,6 +2546,9 @@ func _extract_damage_change_params(action_def: Dictionary, payload: Dictionary, 
 	# fixed_slot：直接置X点到指定 slot（规则2"设置X损伤到此牌/区域上"），跳过转移窗与逐点UI。
 	# effect_035/039 用：target_mech_id/target_slot_id 从 $binding_context 解析（来源装备牌机甲/槽）。
 	result["fixed_slot"] = bool(params.get("fixed_slot", false))
+	# direct_remove：设装备移除旧区域损伤走 damage_change(decrease) 时用，直接从指定 slot 区域
+	# 移除 value 个损伤（不弹面板）。pilot_008 effect_03 逆转时清除此标志改走 increase 放置面板。
+	result["direct_remove"] = bool(params.get("direct_remove", false))
 	result["target_mech_id"] = _resolve_atomic_value(params.get("target_mech_id", &""), payload, parent_action)
 	result["target_slot_id"] = _resolve_atomic_value(params.get("target_slot_id", &""), payload, parent_action)
 	# exclude_slot_id：decrease 移除损伤时排除此槽（effect_079 离场移除"其他区域"损伤，排除来源槽）
@@ -1993,6 +2649,10 @@ func _extract_use_action_card_params(action_def: Dictionary, payload: Dictionary
 	# 供 use_action_card _step_validate_card / _step_settle 跳过攻击次数校验/结算。
 	result["virtual_transform"] = bool(params.get("virtual_transform", false))
 	result["source"] = _build_source_from_payload(payload, parent_action)
+	# attack_action_id：掩护经 CHOOSE_MANY_CARDS as_use_action_card 批量打出时，需定位当前 attack
+	# 供 cover_effect1_direct(MODIFY_ATTACK_MIGHT -5) 改威力。优先显式 params，退回 payload（ATTACK_PRE
+	# fire 时 payload.action_id 即 attack action_id；迎击牌 USE_ACTION_AT 时 payload.attack_action_id）。
+	result["attack_action_id"] = params.get("attack_action_id", payload.get("attack_action_id", payload.get("action_id", &"")))
 	return result
 
 

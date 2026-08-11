@@ -12,6 +12,7 @@ class_name ActionUIBridge
 const _TC = preload("res://scripts/action_core/TimingConst.gd")
 const _RangeCalculator = preload("res://scripts/battle/RangeCalculator.gd")
 const _HexGrid = preload("res://scripts/battle/hex_grid.gd")
+const _ActionPilotEffects = preload("res://scripts/generated_database/ActionPilotEffects.gd")
 
 ## 依赖注入：GameContext 容器
 var context = null
@@ -172,6 +173,37 @@ func _on_action_needs_input(action_id: StringName, input_type: StringName, input
 			if _is_ai_source(input_params):
 				return
 			request_ui_popup.emit(&"pilot_003_skip_players", input_params)
+		&"select_pilot_003_choose_top":
+			# pilot_003 e1 phase 链：选完埋牌后弹"选1张置顶(可取消)"窗。AI 不会到此（CHOOSE_MANY 已跳过）。
+			# 复用 unite 单选面板（通用化后 card_suffix/confirm_verb/cancel_label 可定制），按 player_id 路由。
+			if _is_ai_source(input_params):
+				return
+			request_ui_popup.emit(&"pilot_003_choose_top", input_params)
+		&"pilot_009_pay_select":
+			# pilot_009 弹窗① 支付：美杜莎弃1张自己行动牌（记录类型，可取消=中止）。
+			# 复用 discard_card_select 面板；mode 非 need_input -> optional 路径，confirm/cancel 走 resume_effect。
+			# AI 美杜莎：自动弃首张行动牌（最小可用，避免挂死）。
+			if _is_ai_source(input_params):
+				var pay_pid: StringName = input_params.get("discard_player_id", input_params.get("player_id", &""))
+				if pay_pid != &"" and context != null and context.game_state != null:
+					var pay_player = context.game_state.players.get(pay_pid)
+					if pay_player != null and not pay_player.action_hand.is_empty():
+						var _first_action := &""
+						for _pcid: StringName in pay_player.action_hand:
+							var _pc = context.game_state.get_card(_pcid)
+							if _pc != null and _pc.def != null and _pc.def.card_kind == &"action":
+								_first_action = _pcid
+								break
+						if _first_action != &"":
+							on_ui_confirmed({"selected_action_card_ids": [_first_action]})
+							return
+				on_ui_cancelled()
+				return
+			request_ui_popup.emit(&"discard_card_select", input_params)
+		&"pilot_009_show_display":
+			# pilot_009 非阻塞展示浮窗：列出目标行动牌（只弹给美杜莎，可拖拽/可关闭）。
+			# 不捕获 _waiting_action_id（非模态），不阻塞弃牌选1窗。
+			request_ui_popup.emit(&"pilot_009_card_display", input_params)
 		&"select_awaken_card_type":
 			# 觉醒：弃牌堆无预判/识破时，弹框让玩家选1种行动牌（列种类+数量）。
 			# AI 自动选第一项（最小可用，避免挂死）；人类弹 awaken_select 窗。
@@ -610,15 +642,43 @@ func _show_response_window(action_id: StringName, params: Dictionary) -> void:
 	# 将可用效果转换为UI显示数据
 	# 注意：get_available_cards 返回的是 Dictionary 数组，每个元素含
 	# effect_id / card_instance_id / display_name 等键（无 source 字段）。
+	# pilot_009 美杜莎受控牌（若其类型被其他玩家控制）标注「(来自XX)」以区分来源；
+	# 被动牌触发窗口集成延后，此处为预留 hook（granted listener 接入后生效）。
 	var display_data: Array[Dictionary] = []
 	for entry in available_cards:
 		var card_instance_id: StringName = entry.get("card_instance_id", &"")
 		var card = context.game_state.get_card(card_instance_id) if card_instance_id != &"" and context != null and context.game_state != null else null
+		var _card_name: String = card.def.display_name if card and card.def else String(entry.get("effect_id", &""))
+		if card != null and card.def != null and card.def.card_kind == &"action" and _ActionPilotEffects != null:
+			var _ctrl_type: StringName = StringName(String(card.def.action_type))
+			var _ctrl_mech: StringName = card.mech_id
+			if _ctrl_mech != &"":
+				for _ctrl_pid: StringName in _ActionPilotEffects.get_pilot_009_controllers(_ctrl_mech, _ctrl_type):
+					if _ctrl_pid != card.owner_player_id:
+						# 标注来源：取控制者机甲名（无则用玩家 id）
+						var _src_name: String = String(_ctrl_pid)
+						if context != null and context.game_state != null:
+							var _ctrl_m = context.game_state.get_mech_for_player(_ctrl_pid)
+							if _ctrl_m != null and _ctrl_m.frame_def != null and String(_ctrl_m.frame_def.display_name) != "":
+								_src_name = String(_ctrl_m.frame_def.display_name)
+						_card_name += "(来自%s)" % _src_name
+						break
 		display_data.append({
 			"effect_id": entry.get("effect_id", &""),
 			"card_instance_id": card_instance_id,
 			"display_name": entry.get("display_name", &""),
-			"card_name": card.def.display_name if card and card.def else String(entry.get("effect_id", &"")),
+			"card_name": _card_name,
+			# 透传 PvP 路由/响应窗口选择所需字段：
+			# - owner_player_id：app_root 在 PvP 模式按 owner_player_id==local_player_id 过滤响应窗口条目，
+			#   缺此字段会导致所有条目被过滤、窗口永不弹出、攻击卡死 waiting_timing。
+			# - effect/availability_priority/seq：_build_selected_cards_from_card 重建 selected_cards、
+			#   handle_response_selection 排序用；display_data 即 client 端 configure_with_cards 收到的列表。
+			# - is_counter：迎击牌标注（行动牌响应牌弃置等流程区分用）。
+			"owner_player_id": entry.get("owner_player_id", &""),
+			"effect": entry.get("effect", null),
+			"availability_priority": entry.get("availability_priority", 0),
+			"seq": entry.get("seq", 0),
+			"is_counter": bool(entry.get("is_counter", false)),
 		})
 
 	request_ui_popup.emit(&"response_window", {

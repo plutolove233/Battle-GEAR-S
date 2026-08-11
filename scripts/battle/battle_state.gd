@@ -115,6 +115,81 @@ func start_tutorial(data_registry) -> Dictionary:
 	return {"ok": true, "message": "started"}
 
 
+## ── 3人 PvP 初始化 ──
+
+
+## 启动 3人 PvP 战斗（PVP3 模式入口）。
+## 仿 start_tutorial：init context + setup_pvp3_battle（3玩家3机甲）+ 初始装备/抽牌/商店/注册手牌。
+## 抽初始行动牌走 3人版 _draw_starting_action_cards_pvp3（固定 player->enemy->third 各抽4，锁步确定）。
+func start_pvp3(data_registry) -> Dictionary:
+	registry = data_registry
+
+	# 创建 GameContext 并初始化所有系统
+	context = _GameContext.new()
+	context.initialize(data_registry)
+	# PvP 锁步：用共享种子建局，双端牌堆顺序一致
+	if rng_seed >= 0:
+		context.set_rng_seed(rng_seed)
+
+	# 通过 GameSetupService 创建 3人游戏状态
+	var setup_result: Dictionary = context.game_setup_service.setup_pvp3_battle(data_registry, pvp_map_features)
+	if not setup_result.get("ok", false):
+		return setup_result
+	# 注入 game_state 供全场光环 helper 查询所有机甲
+	_GenEquipEffects.set_aura_game_state(context.game_state)
+	_ActionPilotEffects.set_aura_game_state(context.game_state)
+
+	_sync_compat_fields()
+
+	var battle_config: Dictionary = data_registry.get_tutorial_battle()
+
+	# 初始装备手牌（pre_selected_equipment 在 PvP 为空 -> 三方均0装备手牌，靠商店）
+	_setup_starting_equipment(battle_config)
+	# 玩家预选装备（PvP 通常空）
+	for equipment_id: String in pre_selected_equipment:
+		var equip_result: Dictionary = set_equipment("player", equipment_id)
+		if not equip_result.get("ok", false):
+			log.append(BattleMath.make_log("预选装备未设置", {"equipment": equipment_id, "reason": String(equip_result.get("message", ""))}))
+	# 自动装备（PvP 手牌空，无操作；保留以兼容 dev 设装备后开局）
+	_auto_equip_enemy()
+
+	# 3人抽初始行动牌：固定 player->enemy->third 各抽4（双端同种子+同顺序=>同 instance_id）
+	_draw_starting_action_cards_pvp3()
+
+	# 初始化商店（同 start_tutorial）
+	if context and context.shop_service:
+		context.shop_service.initialize_shop()
+
+	# 注册手牌 AVAILABILITY 效果（3方都注册）
+	if context:
+		for pid: StringName in context.game_state.players:
+			context.register_all_hand_availability(pid)
+
+	_sync_compat_fields()
+	context.game_state.temp_values["game_mode"] = &"PVP3"
+	log.append(BattleMath.make_log("3人PvP战斗开始", {}))
+	return {"ok": true, "message": "pvp3_started"}
+
+
+## 3人初始抽牌：按固定顺序 player->enemy->third 从行动牌堆各抽4张。
+## 2人版 _draw_starting_action_cards 硬编码 player/enemy，third 不会抽牌，故 3人专用。
+## 顺序固定保证双端锁步：同种子建出相同牌堆，按相同顺序 pop_front => 同 instance_id。
+func _draw_starting_action_cards_pvp3() -> void:
+	var gs = context.game_state
+	var deck_state = gs.deck_state
+	for pid: StringName in [&"player", &"enemy", &"third"]:
+		var p = gs.players.get(pid)
+		if p == null:
+			continue
+		for i in range(mini(4, deck_state.action_deck.size())):
+			var card_id: StringName = deck_state.action_deck.pop_front() as StringName
+			var card = gs.cards.get(card_id)
+			if card:
+				card.owner_player_id = pid
+				card.zone = &"action_hand"
+			p.action_hand.append(card_id)
+
+
 ## ── 回合操作 ──
 
 

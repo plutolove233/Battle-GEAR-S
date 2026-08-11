@@ -38,3 +38,5 @@ var hand_revealed: bool = false
 
 ## 本回合已卖出装备的次数
 var sell_equipment_count_this_turn: int = 0
+## 付费抽行动牌本回合次数（2金币抽牌，每我方回合1次）
+var paid_draw_count_this_turn: int = 0
