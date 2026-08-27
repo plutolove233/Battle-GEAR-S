@@ -17,8 +17,14 @@ var _context = null  # type: GameContext
 
 ## 要弃牌的玩家 ID
 var _discard_player_id: StringName = &""
-## 需要弃置的牌数
+## 需要弃置的牌数（最多可选张数）
 var _count: int = 1
+## 至少选择的张数（0=须选满 count，>0=至少选 min_count 张，可少选）
+var _min_count: int = 0
+## 自定义标题（非空则优先于通用模板）
+var _title_override: String = ""
+## 白名单：非空时只列出这些牌（塔莉娅赐予：只列刚抽的剩余禁牌）
+var _allowed_card_ids: Array = []
 ## 是否明牌
 var _face_up: bool = true
 ## 牌类型过滤（空字符串表示不过滤）
@@ -31,6 +37,8 @@ var _source_text: String = ""
 var _no_cancel: bool = false
 ## 已选择的牌 ID 列表
 var _selected: Array[StringName] = []
+## 排除的牌 ID 列表（默多克展示转化：选另外2张时排除展示的牌A，不使其被选）
+var _exclude_card_ids: Array = []
 
 ## 内部布局容器
 var _vbox: VBoxContainer
@@ -47,7 +55,7 @@ var _source_label: Label
 
 
 ## 配置面板参数
-func configure(game_context, discard_player_id: StringName, count: int, face_up: bool, card_type_filter: StringName = &"", action_verb: StringName = &"discard", source_label: String = "", no_cancel: bool = false) -> void:
+func configure(game_context, discard_player_id: StringName, count: int, face_up: bool, card_type_filter: StringName = &"", action_verb: StringName = &"discard", source_label: String = "", no_cancel: bool = false, exclude_card_ids: Array = [], min_count: int = 0, title_override: String = "", allowed_card_ids: Array = []) -> void:
 	_context = game_context
 	_discard_player_id = discard_player_id
 	_count = count
@@ -56,6 +64,10 @@ func configure(game_context, discard_player_id: StringName, count: int, face_up:
 	_action_verb = action_verb
 	_source_text = source_label
 	_no_cancel = no_cancel
+	_exclude_card_ids = exclude_card_ids
+	_min_count = min_count
+	_title_override = title_override
+	_allowed_card_ids = allowed_card_ids
 	_selected.clear()
 
 	# 确保布局已初始化
@@ -137,7 +149,10 @@ func _refresh() -> void:
 
 	# 更新标题
 	var verb := _verb_text()
-	if _action_verb == &"convert":
+	var _need: int = _min_count if _min_count > 0 else _count
+	if _title_override != "":
+		_count_label.text = "── %s ──" % _title_override
+	elif _action_verb == &"convert":
 		# 转化模式（迪恩）：标题用 cost label（"选择转化使用的N张行动牌"），优先于通用模板
 		if _source_text != "":
 			_count_label.text = "── %s ──" % _source_text
@@ -154,8 +169,8 @@ func _refresh() -> void:
 		_confirm_btn.text = "确认选择 (%d/%d)" % [_selected.size(), _count]
 	else:
 		_confirm_btn.text = "确认%s (%d/%d)" % [verb, _selected.size(), _count]
-	_confirm_btn.disabled = _selected.size() < _count
-	_confirm_btn.add_theme_color_override("font_color", Color(0.3, 0.9, 0.4) if _selected.size() >= _count else Color(0.5, 0.5, 0.5))
+	_confirm_btn.disabled = _selected.size() < _need
+	_confirm_btn.add_theme_color_override("font_color", Color(0.3, 0.9, 0.4) if _selected.size() >= _need else Color(0.5, 0.5, 0.5))
 
 	# 无取消按钮模式（强制弃牌：不可放弃）
 	if _cancel_btn:
@@ -187,8 +202,16 @@ func _refresh() -> void:
 		if not card or not card.def:
 			continue
 
+		# 白名单过滤（塔莉娅赐予：只列刚抽的剩余禁牌）
+		if not _allowed_card_ids.is_empty() and card_id not in _allowed_card_ids:
+			continue
+
 		# 应用 card_type_filter 过滤
 		if _card_type_filter != &"" and card.def.action_type != _card_type_filter:
+			continue
+
+		# 排除指定牌（默多克展示转化：选另外2张时排除展示的牌A）
+		if card_id in _exclude_card_ids:
 			continue
 
 		display_index += 1
@@ -233,7 +256,8 @@ func _on_card_toggle(card_id: StringName) -> void:
 
 ## 确认选择
 func _on_confirm() -> void:
-	if _selected.size() >= _count:
+	var _need: int = _min_count if _min_count > 0 else _count
+	if _selected.size() >= _need:
 		selection_completed.emit(_selected.slice(0, _count))
 
 

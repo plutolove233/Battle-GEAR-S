@@ -549,7 +549,7 @@ effect_ids：["equipment_effect_101"]
 ──────────── 效果拆解（equipment_effect_101）────────────
 display_name：本次攻击损伤全在同一区域后，可在该区域额外放2损伤
 机制族：C.命中后额外损伤
-优先级：10
+优先级：40（「本次攻击损伤延续」类装备效果统一40，先于攻击结算时点上「结算后再攻击」类效果：反击额外攻击=30、联合连携攻击=20、闪击再次攻击=10。本效果属本次攻击结算，须在反击/闪击发起新一轮攻击子动作之前完成）
 模式：LISTEN
 植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
 触发/查询：监听 "attack" 的 ATTACK_SETTLE。原因：权威生命周期中只有 step7 的损伤变动完成后才知道实际放置分布；attack record 必须保留本次攻击 damage_placement_log。满足全部攻击损伤落在同一 slot 后，攻击方可在该 slot 追加2枚。
@@ -668,7 +668,7 @@ effect_ids：["equipment_effect_102"]
 ──────────── 效果拆解（equipment_effect_102）────────────
 display_name：命中后可额外2损伤，之后本牌自损1
 机制族：C+D.额外损伤/自损伤后果
-优先级：10
+优先级：40（「本次攻击损伤延续」类装备效果统一40，先于攻击结算时点上「结算后再攻击」类效果：反击额外攻击=30、联合连携攻击=20、闪击再次攻击=10。本效果属本次攻击结算，须在反击/闪击发起新一轮攻击子动作之前完成）
 模式：LISTEN
 植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
 触发/查询：监听 "attack" 的 ATTACK_AFTER。命中后弹可选项；只有玩家确认额外2损伤时，才按文本“之后”继续在本牌所在武器槽设置1损伤。
@@ -1910,7 +1910,7 @@ effect_ids：["equipment_effect_117", "equipment_effect_118"]
 ──────────── 效果拆解（equipment_effect_117）────────────
 display_name：指定目标时可使目标当前动力-2并记录已发动
 机制族：H.动力操纵
-优先级：20
+优先级：40（「本次攻击损伤延续」类装备效果统一40，先于攻击结算时点上「结算后再攻击」类效果：反击额外攻击=30、联合连携攻击=20、闪击再次攻击=10。本效果属本次攻击结算，须在反击/闪击发起新一轮攻击子动作之前完成）
 模式：LISTEN
 植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
 触发/查询：监听 "attack" 的 ATTACK_PRE。目标已选、响应窗口尚未打开；攻击方可选择使目标 current_power-2。确认后写 attack scoped variable weapon_024_power_drain_used=1，供 effect_118 判断。
@@ -2036,7 +2036,7 @@ effect_ids：["equipment_effect_119"]
 ──────────── 效果拆解（equipment_effect_119）────────────
 display_name：本次攻击损伤未全在同一区域后，可额外2损伤
 机制族：C.命中后额外损伤
-优先级：10
+优先级：40（「本次攻击损伤延续」类装备效果统一40，先于攻击结算时点上「结算后再攻击」类效果：反击额外攻击=30、联合连携攻击=20、闪击再次攻击=10。本效果属本次攻击结算，须在反击/闪击发起新一轮攻击子动作之前完成）
 模式：LISTEN
 植入：set_equipment 设置到武器槽后由 set_equipment_action._register_equipment_effects 注册 permanent listener；binding_context={card_instance_id, mech_id, player_id, slot_id="武器", card_def_id, weapon_kind}。进入备用区时不注册；弃置、替换、卖出或翻至备用区时注销。
 触发/查询：监听 "attack" 的 ATTACK_SETTLE；主损伤放置完成后读取 damage_placement_log。若至少2枚攻击损伤分布在2个或以上区域，攻击方可再设置2损伤。

@@ -51,6 +51,10 @@ var _removal_mode: bool = false
 var _exclude_slot_id: StringName = &""
 ## 来源标签（"牌名：效果描述"，可空）
 var _source_text: String = ""
+## allow_cancel：removal 面板显示「取消」按钮（点=不移除直接结算，不走 cancel_action）
+var _allow_cancel: bool = false
+## max_mode：removal 面板显示「完成」按钮（剩余不强制移除，可提前结束）
+var _max_mode: bool = false
 
 
 ## 配置面板
@@ -62,11 +66,13 @@ func configure(game_context, target_mech_id: StringName, token_count: int, sourc
 	_removal_mode = false
 	_exclude_slot_id = &""
 	_source_text = ""
+	_allow_cancel = false
+	_max_mode = false
 	_ensure_styled()
 	_refresh()
 
 
-func configure_removal(game_context, target_mech_id: StringName, token_count: int, exclude_slot_id: StringName = &"", source_label: String = "") -> void:
+func configure_removal(game_context, target_mech_id: StringName, token_count: int, exclude_slot_id: StringName = &"", source_label: String = "", allow_cancel: bool = false, max_mode: bool = false) -> void:
 	_context = game_context
 	_target_mech_id = target_mech_id
 	_remaining_tokens = token_count
@@ -74,6 +80,8 @@ func configure_removal(game_context, target_mech_id: StringName, token_count: in
 	_removal_mode = true
 	_exclude_slot_id = exclude_slot_id
 	_source_text = source_label
+	_allow_cancel = allow_cancel
+	_max_mode = max_mode
 	_ensure_styled()
 	_refresh()
 
@@ -87,6 +95,8 @@ func suspend_state() -> Dictionary:
 		"exclude_slot_id": _exclude_slot_id,
 		"source_attack_id": _source_attack_id,
 		"source_text": _source_text,
+		"allow_cancel": _allow_cancel,
+		"max_mode": _max_mode,
 	}
 
 ## 恢复挂起的面板状态并刷新显示
@@ -97,6 +107,8 @@ func resume_state(state: Dictionary) -> void:
 	_exclude_slot_id = state.get("exclude_slot_id", &"")
 	_source_attack_id = state.get("source_attack_id", &"")
 	_source_text = String(state.get("source_text", ""))
+	_allow_cancel = bool(state.get("allow_cancel", false))
+	_max_mode = bool(state.get("max_mode", false))
 	_ensure_styled()
 	_refresh()
 
@@ -178,6 +190,26 @@ func _refresh() -> void:
 		var slot: MechSlotState = mech.slots[slot_id]
 		var is_valid: bool = slot_id in valid_slots
 		_add_slot_button(vbox, slot_id, slot, is_valid)
+
+	# max_mode/allow_cancel：最多移除场景显示「完成」/「取消」按钮（可提前结束或取消）。
+	# 两者都 emit placement_completed —— damage_change decrease 收到 {placed:true} 即跳过剩余
+	# 移除进入结算，取消=不移除任何损伤直接结算（不走 cancel_action，避免整棵父动作链被取消）。
+	if _removal_mode and (_max_mode or _allow_cancel):
+		var action_row = HBoxContainer.new()
+		action_row.add_theme_constant_override("separation", 8)
+		if _max_mode:
+			var done_btn = Button.new()
+			done_btn.text = "完成（保留已移除）"
+			done_btn.custom_minimum_size = Vector2(120, 28)
+			done_btn.pressed.connect(func(): placement_completed.emit())
+			action_row.add_child(done_btn)
+		if _allow_cancel:
+			var cancel_btn = Button.new()
+			cancel_btn.text = "取消"
+			cancel_btn.custom_minimum_size = Vector2(120, 28)
+			cancel_btn.pressed.connect(func(): placement_completed.emit())
+			action_row.add_child(cancel_btn)
+		vbox.add_child(action_row)
 
 
 ## 添加一个槽位按钮

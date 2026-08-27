@@ -276,10 +276,7 @@ func test_pilot006_flash_extra_attack_draws() -> Variant:
 	# 选武器 + 选目标=enemy_mech(标记)
 	ae.continue_action(attack_a_id, {"weapon_id": weapon_id})
 	ae.continue_action(attack_a_id, {"target_id": enemy_mech.mech_id})
-	# effect_02 改 CHOOSE_ONE optional（问题3）：ATTACK_PRE 触发时弹窗询问里昂是否发动狩猎追击。
-	# 测试同步确认发动（option 0）-> effect_02 抽1张行动牌。
-	battle.context.timing_engine.resume_pending_effect(attack_a_id, {"chosen_option_index": 0})
-	# attack A 的 ATTACK_PRE 应已触发 effect_02 抽1张（牌堆-1）
+	# effect_02 直接自动抽牌（无确认弹窗）：attack A 的 ATTACK_PRE 应已触发抽1张（牌堆-1）
 	var deck_after_a: int = gs.deck_state.action_deck.size()
 	if deck_after_a != deck_before - 1:
 		return "attack A 的 ATTACK_PRE 应抽1张（牌堆-1）实=%d（before=%d）" % [deck_after_a, deck_before]
@@ -294,7 +291,8 @@ func test_pilot006_flash_extra_attack_draws() -> Variant:
 	var drive_ret_a: Dictionary = _drive_damage_placement(battle, attack_a_id)
 	if not drive_ret_a.get("ok", false):
 		return drive_ret_a.get("msg", "attack A 损伤设置驱动失败")
-	# effect_03 选机甲=enemy_mech（无攻击牌自动回落4伤害，同步完成）-> 续跑进 flash_effect2 弃牌弹窗
+	# effect_03 先确认发动（里昂可取消）再选机甲=enemy_mech（无攻击牌自动回落4伤害，同步完成）-> 续跑进 flash_effect2 弃牌弹窗
+	battle.context.timing_engine.resume_pending_effect(attack_a_id, {"chosen_option_index": 0})
 	battle.context.timing_engine.resume_pending_effect(attack_a_id, {"target_id": enemy_mech.mech_id})
 	# 弃 fodder1 续跑 -> 创建 attack B
 	battle.context.timing_engine.resume_pending_effect(attack_a_id, {"selected_action_card_ids": [fodder1]})
@@ -311,9 +309,7 @@ func test_pilot006_flash_extra_attack_draws() -> Variant:
 	var deck_top_b: StringName = gs.deck_state.action_deck[0] if not gs.deck_state.action_deck.is_empty() else &""
 	# attack B 选目标=enemy_mech(标记)
 	ae.continue_action(attack_b_id, {"target_id": enemy_mech.mech_id})
-	# effect_02 CHOOSE_ONE optional（问题3）：attack B 的 ATTACK_PRE 同样弹窗询问，确认发动
-	battle.context.timing_engine.resume_pending_effect(attack_b_id, {"chosen_option_index": 0})
-	# attack B 的 ATTACK_PRE 应再触发 effect_02 抽1张（牌堆累计-2）
+	# effect_02 直接自动抽牌（无确认弹窗）：attack B 的 ATTACK_PRE 应再抽1张（牌堆累计-2）
 	var deck_after_b: int = gs.deck_state.action_deck.size()
 	if deck_after_b != deck_before - 2:
 		return "attack B 的 ATTACK_PRE 应再抽1张（牌堆累计-2）实=%d（before=%d）" % [deck_after_b, deck_before]

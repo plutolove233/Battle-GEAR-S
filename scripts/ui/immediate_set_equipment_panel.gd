@@ -20,6 +20,11 @@ var _valid_slots: Array = []
 var _mech_id: StringName = &""
 var _allow_sell: bool = false
 var _sell_price: int = 0
+## 隐藏「不设置（弃置抽到的牌）」取消按钮（铠厉链模式：每张必须二选一 设置/弃置获金，无跳过）
+var _hide_cancel: bool = false
+## 卖出按钮文案模板（含 %d 占位=价格）。非空时覆盖默认「卖出（+N金币）」；
+## 铠厉链模式传「弃置此牌（+%d 金币）」——弃置获金按钮复用卖出槽。
+var _sell_button_text: String = ""
 
 var _vbox: VBoxContainer
 var _scroll: ScrollContainer
@@ -40,13 +45,18 @@ const SLOT_NAMES: Dictionary = {
 ## 配置面板：game_context / 抽到的卡实例 id / 合法空槽列表 / 机甲 id
 ## allow_sell/sell_price：effect_065 抽装备"立即设置或卖出"时显示卖出按钮
 ## source_label：来源效果标签（"牌名：效果描述"），显示在面板顶部
-func configure(game_context, drawn_card_id: StringName, valid_slots: Array, mech_id: StringName, allow_sell: bool = false, sell_price: int = 0, source_label: String = "") -> void:
+## hide_cancel：隐藏「不设置（弃置抽到的牌）」取消按钮（铠厉链模式：每张必须二选一 设置/弃置获金，无跳过）
+## sell_button_text：卖出按钮文案模板（含 %d 占位=价格）；非空覆盖默认「卖出（+N金币）」，铠厉传
+## 「弃置此牌（+%d 金币）」——把卖出按钮复用为「弃置获金」按钮（弃置抽到的牌并获牌面 cost 金币）。
+func configure(game_context, drawn_card_id: StringName, valid_slots: Array, mech_id: StringName, allow_sell: bool = false, sell_price: int = 0, source_label: String = "", hide_cancel: bool = false, sell_button_text: String = "") -> void:
 	_context = game_context
 	_drawn_card_id = drawn_card_id
 	_valid_slots = valid_slots
 	_mech_id = mech_id
 	_allow_sell = allow_sell
 	_sell_price = sell_price
+	_hide_cancel = hide_cancel
+	_sell_button_text = sell_button_text
 	_ensure_layout()
 	if _source_label:
 		_source_label.text = source_label
@@ -118,10 +128,12 @@ func _refresh() -> void:
 		var c = _context.game_state.get_card(_drawn_card_id)
 		if c != null and c.def != null:
 			drawn_name = String(c.def.display_name)
-	_drawn_label.text = "抽到：%s\n选择要设置到的区域%s" % [drawn_name, "\n或选择卖出" if _allow_sell else ""]
+	_drawn_label.text = "抽到：%s\n选择要设置到的区域%s" % [drawn_name, ("\n或弃置此牌获得金币" if _allow_sell and _sell_button_text != "" else ("\n或选择卖出" if _allow_sell else ""))]
 	if _sell_btn:
 		_sell_btn.visible = _allow_sell
-		_sell_btn.text = "卖出（+%d 金币）" % _sell_price
+		_sell_btn.text = (_sell_button_text % _sell_price) if _sell_button_text != "" else ("卖出（+%d 金币）" % _sell_price)
+	if _cancel_btn:
+		_cancel_btn.visible = not _hide_cancel
 
 	var content = _scroll.get_meta("content") if _scroll.has_meta("content") else null
 	if content == null:

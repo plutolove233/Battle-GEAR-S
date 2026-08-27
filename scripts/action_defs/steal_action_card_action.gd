@@ -136,7 +136,8 @@ func _step_determine_cards(action: Action) -> Dictionary:
 					"mode": &"need_input",  # 区分闪击 optional 弃牌（走 resume_pending_effect）
 					"executor": executor,
 					"count": count,
-					"face_up": false,  # 攻击者手牌暗牌
+					"face_up": bool(action.record.get("face_up", false)),  # 默认攻击者手牌暗牌；青瞳明牌查看
+					"no_cancel": bool(action.record.get("no_cancel", false)),  # 青瞳强制获得不可取消
 					"discard_player_id": from_player_id,
 					"action_verb": &"gain",  # 识破偷牌=获取（UI 显示"获取"而非"弃置"）
 				},

@@ -940,7 +940,7 @@ func test_pilot_006_fallback_damage() -> Variant:
 	var mock_action = _Action.new()
 	mock_action.action_id = &"test_p006_fallback"
 	mock_action.record = {}
-	battle.context.timing_engine._pilot_006_fallback_damage(enemy_mech.mech_id, mock_action)
+	battle.context.timing_engine._pilot_006_fallback_damage(enemy_mech.mech_id, mock_action, {"source_mech_id": String(player_mech.mech_id)})
 	if enemy_mech.current_hp != hp_before - 4:
 		return "回落应造成4伤害 实HP=%d（before=%d）" % [enemy_mech.current_hp, hp_before]
 	return true
@@ -1463,7 +1463,7 @@ func test_pilot_013_effect_01_non_attack_immunity() -> Variant:
 
 ## 测试：pilot_013 effect_02a stat_changes 数组机制 + UNTIL_NEXT_OWNER_TURN 到期清理
 ## 直接 execute stat_modify with stat_changes，验证护甲/动力上限+当前值-4；源拥有者下回合开始时
-## 上限恢复（POWER_CAP_MODIFIER 移除）+ restore_power 回满当前动力；护甲 PERMANENT 不恢复。
+## 护甲恢复（ARMOR_MODIFIER 移除）+ 上限恢复（POWER_CAP_MODIFIER 移除）+ restore_power 回满当前动力。
 func test_pilot_013_effect_02a_stat_changes_and_expire() -> Variant:
 	var battle := _new_battle()
 	if battle == null or battle.context == null:
@@ -1488,7 +1488,7 @@ func test_pilot_013_effect_02a_stat_changes_and_expire() -> Variant:
 		"source_card_id": &"test_p013_card",
 		"source": {"player_id": &"player"},
 	})
-	# 护甲 -4（ARMOR_MODIFIER PERMANENT，护甲是衍生值无上限故 max_delta 忽略）
+	# 护甲 -4（ARMOR_MODIFIER UNTIL_NEXT_OWNER_TURN，护甲是衍生值无上限故 max_delta 忽略，到期恢复）
 	if player_mech.get_armor() != armor0 - 4:
 		return "护甲应-4 实=%d->%d" % [armor0, player_mech.get_armor()]
 	# 动力上限 -4（POWER_CAP_MODIFIER UNTIL_NEXT_OWNER_TURN）
@@ -1505,9 +1505,9 @@ func test_pilot_013_effect_02a_stat_changes_and_expire() -> Variant:
 	# 当前动力被 restore_power 回满到上限（权威场景m：随后正常回合开始回复动力按恢复后上限执行）
 	if player_mech.get_own_power() != maxp0:
 		return "到期后 restore_power 应回满当前动力到上限 实=%d（应%d）" % [player_mech.get_own_power(), maxp0]
-	# 护甲 PERMANENT 不恢复
-	if player_mech.get_armor() != armor0 - 4:
-		return "到期后护甲不应恢复（PERMANENT）实=%d（应%d）" % [player_mech.get_armor(), armor0 - 4]
+	# 护甲 UNTIL_NEXT_OWNER_TURN 到期恢复（_clean_until_next_owner_turn 移除 ARMOR_MODIFIER）
+	if player_mech.get_armor() != armor0:
+		return "到期后护甲应恢复原值 实=%d（原%d）" % [player_mech.get_armor(), armor0]
 	return true
 
 

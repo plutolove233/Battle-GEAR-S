@@ -21,6 +21,8 @@ extends RefCounted
 const _TC = preload("res://scripts/action_core/TimingConst.gd")
 const _ActionEffect = preload("res://scripts/action_core/ActionEffect.gd")
 const _EquipmentCardDef = preload("res://scripts/card_defs/EquipmentCardDef.gd")
+const _ActionPilotEffects = preload("res://scripts/generated_database/ActionPilotEffects.gd")
+const _GeneratedEventEffects = preload("res://scripts/generated_database/GeneratedEventEffects.gd")
 
 ## card_def_id → [effect_id, ...] 映射（由 CardDatabaseLoader._effect_ids_map 提供）
 ## set_equipment_action 注册时调用 get_effects_for_card 查询
@@ -2594,10 +2596,12 @@ static func build_equipment_effects() -> Dictionary:
 	w101.effect_id = &"equipment_effect_101"
 	w101.display_name = "本次攻击损伤全在同一区域后，可在该区域额外放2损伤"
 	w101.mode = _TC.MODE_LISTEN
-	# priority=30：高于反击 effect2(20)与闪击 effect2，在 ATTACK_SETTLE 最先触发。
+	# priority=40：「本次攻击损伤延续」类装备效果统一 40，先于 ATTACK_SETTLE 上的
+	# 「结算后再攻击」类效果（反击额外攻击/迪恩反击=30、联合=20、闪击=10）。
 	# 本效果是「本次攻击损伤」的延续（+2 落在已放置损伤的同一区域），属本次攻击结算，
-	# 必须在反击/闪击发起新一轮攻击子动作之前完成，否则会被反击链阻塞到所有新攻击结束后才弹窗。
-	w101.priority = 30
+	# 必须在反击/闪击发起新一轮攻击子动作之前完成，否则会被反击链阻塞到所有新攻击结束后才弹窗
+	# （且反击攻击选武器先占共享输入槽，本效果弹窗被排队延后）。
+	w101.priority = 40
 	w101.listen_timing = _TC.ATTACK_SETTLE
 	w101.listen_action_type = &"attack"
 	w101.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"PAYLOAD_ATTACK_HIT"}, {"op": &"DAMAGE_TOKENS_ALL_IN_SAME_SLOT"}])
@@ -2938,13 +2942,14 @@ static func build_equipment_effects() -> Dictionary:
 	effects[w118.effect_id] = w118
 
 	# 119 本次攻击损伤未全在同一区域后，可额外再设置2损伤（25超级火箭筒）
-	# priority=30：高于反击 effect2(20)与闪击 effect2，在 ATTACK_SETTLE 最先触发（与 effect_101 同范式），
+	# priority=40：「本次攻击损伤延续」类装备效果统一 40（与 effect_101 同范式），先于
+	# 「结算后再攻击」类效果（反击额外攻击/迪恩反击=30、联合=20、闪击=10），
 	# 避免被反击链阻塞到所有新攻击结束后才弹窗。额外2损伤由持有者（攻击方）逐枚选择位置（损伤设置面板）。
 	var w119 := _ActionEffect.new()
 	w119.effect_id = &"equipment_effect_119"
 	w119.display_name = "本次攻击损伤未全在同一区域后，可额外再设置2损伤（由我方指定位置）"
 	w119.mode = _TC.MODE_LISTEN
-	w119.priority = 30
+	w119.priority = 40
 	w119.listen_timing = _TC.ATTACK_SETTLE
 	w119.listen_action_type = &"attack"
 	w119.set_conditions([{"op": &"ATTACK_SOURCE_IS_SELF"}, {"op": &"PAYLOAD_ATTACK_HIT"}, {"op": &"ATTACK_MARKERS_ABOVE", "params": {"threshold": 1}}, {"op": &"DAMAGE_TOKENS_NOT_ALL_IN_SAME_SLOT"}])
@@ -3730,29 +3735,31 @@ static func get_virtual_weapon_from_equipment(card) -> Dictionary:
 	}
 
 
-## 狙击装·头部被动远程武器范围加成（派生值实时重算）
-## effect_022（狙击装·头部）远程武器范围+1 / effect_055（狙击影装·头部 / 轰雷装·头部）远程武器范围+2
+## 被动远程武器范围加成（派生值实时重算）
+## 狙击装·头部：effect_022（狙击装·头部）远程武器范围+1 / effect_055（狙击影装·头部 / 轰雷装·头部）远程武器范围+2
+## 机师牌远程武器范围加成（通用机制）：pilot 槽机师牌 def 带 passive_weapon_range_bonus 字段
+## （如克劳德 pilot_029 =1）即生效，克劳德 pilot_029_effect_01 为派生占位（不注册 listener）。
 ## 由 app_root._get_weapon_range（攻击预检查）与 attack_action._step_select_weapon（存入
 ## record["weapon_range"]，命中/选目标校验/高亮自动含之）调用。仅远程武器生效。
-## effect_022/055 已改为派生占位（mode=DIRECT，不注册 listener），与此 helper 配合，
-## 避免与旧的 MODIFY_ATTACK_RANGE 路径双计。机甲仅1个头部，故用基础 weapon_kind 即可
-## （无其他头部效果会改写远程武器类型）。
+## effect_022/055 头部狙击装与机师牌加成合并计算，避免与旧的 MODIFY_ATTACK_RANGE 路径双计。
+## 机甲仅1个头部，故用基础 weapon_kind 即可（无其他头部效果会改写远程武器类型）。
 static func get_passive_weapon_range_bonus(mech, weapon_kind) -> int:
 	if String(weapon_kind) != "远程":
 		return 0
 	if mech == null or mech.get("slots") == null:
 		return 0
+	var bonus: int = 0
 	var head = mech.slots.get(&"头部")
-	if head == null:
-		return 0
-	var c = head.get("equipped_card")
-	if not is_equipment_active(c):
-		return 0
-	if _card_has_effect_id(c, &"equipment_effect_055"):
-		return 2
-	if _card_has_effect_id(c, &"equipment_effect_022"):
-		return 1
-	return 0
+	if head != null:
+		var c = head.get("equipped_card")
+		if is_equipment_active(c):
+			if _card_has_effect_id(c, &"equipment_effect_055"):
+				bonus += 2
+			elif _card_has_effect_id(c, &"equipment_effect_022"):
+				bonus += 1
+	# 机师牌加成（pilot 槽机师牌未禁用、def 带 passive_weapon_range_bonus）：远程武器范围+N
+	bonus += _ActionPilotEffects.get_pilot_passive_weapon_range_bonus(mech)
+	return bonus
 
 
 ## ── 武器装备牌统一威力/范围查询（effect_093+ 用）──
@@ -3809,9 +3816,34 @@ static func get_effective_weapon_stats(card) -> Dictionary:
 		might -= 5
 		range += 2
 
+	# 瓦恩 pilot_083 武器修改：名称附加热能/光束、类型转变近战/远程、威力+3或范围+1（可叠加）。
+	# 聚合自 _ActionPilotEffects.get_pilot_083_weapon_apps(card)（存 counters["pilot_083_apps"]）。
+	# 名称后缀累积（·热能·光束）、类型最新施加生效、might/range 全部叠加；均持续到下个我方回合结束，
+	# 到期/孤儿由 TurnService/ROUND_START 清理。pilot_083_might_bonus 供诺拉纯进攻还原一并清
+	# （attack_action _step_calculate_damage 读 record.weapon_083_might_bonus）。
+	var _p083_apps: Dictionary = _ActionPilotEffects.get_pilot_083_weapon_apps(card)
+	var _p083_might_bonus: int = int(_p083_apps.get("might_bonus", 0))
+	var _p083_range_bonus: int = int(_p083_apps.get("range_bonus", 0))
+	if _p083_might_bonus != 0 or _p083_range_bonus != 0:
+		might += _p083_might_bonus
+		range += _p083_range_bonus
+	var _p083_sufs: Array = _p083_apps.get("suffixes", [])
+	if not _p083_sufs.is_empty():
+		wname = StringName("%s·%s" % [String(wname), String("·".join(_p083_sufs))])
+	var _p083_tov: StringName = _p083_apps.get("type_override", &"")
+	if _p083_tov != &"":
+		wkind = _p083_tov
+
+	# 事件牌派生武器加成（e015 强化：全部武器威力+4；e016 强化：全部武器范围+2）。
+	# 按持械机甲 mech_id 实时查询 GeneratedEventEffects._derived_registry，
+	# 事件牌设置时注册/离场注销，此处零状态读取。
+	if "mech_id" in card and String(card.mech_id) != "":
+		might += _GeneratedEventEffects.get_weapon_might_bonus(StringName(String(card.mech_id)))
+		range += _GeneratedEventEffects.get_weapon_range_bonus(StringName(String(card.mech_id)))
+
 	might = max(0, might)
 	range = max(0, range)
-	return {"might": might, "range_value": range, "weapon_kind": wkind, "weapon_name": wname, "is_virtual": is_virt}
+	return {"might": might, "range_value": range, "weapon_kind": wkind, "weapon_name": wname, "is_virtual": is_virt, "pilot_083_might_bonus": _p083_might_bonus}
 
 
 ## 武器 might/range 修正列表求和（might_modifiers / range_modifiers）

@@ -117,12 +117,14 @@ func _apply_one_stat(action: Action, stat_type: StringName, value: int, method: 
 
 
 ## stat_changes 数组单项处理（pilot_013 effect_02a 护甲/动力上限+当前值原子修正）。
-## 护甲为衍生值（get_armor=装备+派生+modifier），无 max/current/回复机制：
-##   - max_delta 忽略（护甲无上限，到期恢复无实际效果）
-##   - current_delta -> ARMOR_MODIFIER 永久 modifier（计入 get_armor，不恢复）
+## 护甲为衍生值（get_armor=装备+派生+modifier），无 max/current 区分：
+##   - max_delta 忽略（护甲无上限概念）
+##   - current_delta -> ARMOR_MODIFIER（duration=UNTIL_NEXT_OWNER_TURN+duration_owner_id，
+##     计入 get_armor，_clean_until_next_owner_turn 到期移除后恢复）
 ## 动力有 max_power/power：
 ##   - max_delta -> POWER_CAP_MODIFIER（计入 get_total_power/max_power，UNTIL_NEXT_OWNER_TURN 到期恢复）
-##   - current_delta -> current_only 直接减本身动力（clamp [0, max_power]，不恢复）
+##   - current_delta -> current_only 直接减本身动力（clamp [0, max_power]，本身不恢复；
+##     但 max_delta 到期恢复 + 下回合开始 restore_power 回满 => 当前动力到期恢复）
 func _apply_stat_change(action: Action, change: Dictionary) -> void:
 	var stat_type: StringName = change.get("stat_type", &"armor")
 	var max_delta: int = int(change.get("max_delta", 0))
@@ -145,9 +147,10 @@ func _apply_stat_change(action: Action, change: Dictionary) -> void:
 			if current_delta != 0:
 				context.game_actions.modify_armor({
 					"mech_id": target_id, "delta": current_delta,
-					"duration": &"PERMANENT",
+					"duration": duration,
 					"runtime_tag": source_effect_id if source_effect_id != &"" else &"pilot_013_armor_current",
 					"source_card_id": source_card_id,
+					"duration_owner_id": duration_owner_id,
 				})
 		&"power":
 			# max_delta -> POWER_CAP_MODIFIER（计入 max_power，到期恢复）

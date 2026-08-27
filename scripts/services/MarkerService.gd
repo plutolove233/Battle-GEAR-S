@@ -30,6 +30,39 @@ func trigger_marker(mech_id: StringName, marker: Dictionary) -> Dictionary:
 			return {"ok": true, "message": "未知标记类型，无事发生"}
 
 
+## ── 通用「标记生效」atom 模块（效果 _seq 链串行触发用）──
+## 供「标记再生效/标记交互」类效果（如墨尘 pilot_080 移至分支）在效果 _seq 链中
+## 串行触发标记生效：返回单个 atom（由 TimingEngine._continue_seq_effect_actions 执行），
+## 事件标记 -> EXECUTE_SET_EVENT_CARD（抽事件牌堆顶1张设到指定机甲，完整流程）；
+## 金币标记 -> GAIN_GOLD_BY_DIE（标准 1-3/4-5/6 分支掷骰获金）；
+## 陷阱标记 -> EXECUTE_TRAP_EXPLOSION（标准爆炸流程，含连锁）。
+## 与 trigger_marker（正常移动落格触发，顶层执行）是同一套标记语义的两种驱动方式；
+## 复用时直接把本 atom 追加进效果 _seq 即可，无需与具体卡牌/机师绑定。
+func build_marker_trigger_atom(marker: Dictionary, mech_id: StringName, player_id: StringName) -> Dictionary:
+	if marker.is_empty():
+		return {}
+	var marker_type: StringName = marker.get("type", &"")
+	var marker_q: int = int(marker.get("q", 0))
+	var marker_r: int = int(marker.get("r", 0))
+	if player_id == &"":
+		player_id = _get_owner_of_mech(mech_id)
+	if marker_type == &"EVENT":
+		return {"type": &"EXECUTE_SET_EVENT_CARD", "params": {
+			"mech_id": mech_id,
+			"source": {"mech_id": mech_id, "player_id": player_id},
+		}}
+	if marker_type == &"GOLD":
+		return {"type": &"GAIN_GOLD_BY_DIE", "params": {
+			"player_id": player_id, "reason": &"GOLD_MARKER",
+			"branches": [[1, 3, 3], [4, 5, 4], [6, 6, 6]],
+		}}
+	if marker_type == &"TRAP":
+		return {"type": &"EXECUTE_TRAP_EXPLOSION", "params": {
+			"trigger_q": marker_q, "trigger_r": marker_r, "trigger_mech_id": mech_id,
+		}}
+	return {}
+
+
 ## 旧入口兼容：按坐标查找并触发该格所有标记（查找+移除）。
 ## 保留供 legacy GameActions 调用；新流程走 MapService._check_map_markers。
 func trigger_marker_at(mech_id: StringName, hex: Dictionary) -> Dictionary:
@@ -62,7 +95,13 @@ func _trigger_gold_marker(mech_id: StringName, _marker: Dictionary) -> Dictionar
 	var rng = context.rng if (context != null and context.rng != null) else null
 	var roll: int = (rng.randi_range(1, _GameConfig.GOLD_MARKER_D6) if rng != null else (randi() % _GameConfig.GOLD_MARKER_D6 + 1))
 	var gold: int = _GameConfig.gold_marker_payout(roll)
-	player.gold += gold
+	# 统一走 gain_gold 获金时点（GAIN_GOLD_AFTER 等，_fire_gold_timings 虚拟 action fire），
+	# 使「他方获金」类效果（如维罗妮卡获金分半）能监听到金币标记来源；不直接 gold += 绕过时点。
+	# reason=GOLD_MARKER 供监听器区分来源；roll 已用 context.rng（PvP 双端确定性），gain_gold 不耗 rng。
+	if context.game_actions != null:
+		context.game_actions.gain_gold({"player_id": player_id, "amount": gold, "reason": &"GOLD_MARKER"})
+	else:
+		player.gold += gold
 
 	gs.write_log(&"marker_gold", {
 		"mech_id": String(mech_id),
@@ -73,14 +112,18 @@ func _trigger_gold_marker(mech_id: StringName, _marker: Dictionary) -> Dictionar
 	return {"ok": true, "type": "gold", "roll": roll, "gold_gained": gold}
 
 
-## 事件标记：抽1张事件牌并设置到机甲事件槽。
-## 效果待实装，当前仅记录文本。
+## 事件标记：拾取后立即将事件牌堆顶1张设置到机甲事件区域（set_event_card 动作：
+## 顶掉旧牌/注册效果/初始化计时；牌堆耗尽仅记日志）。效果即刻生效（瞬时+持续）。
 func _trigger_event_marker(mech_id: StringName, _marker: Dictionary) -> Dictionary:
 	var gs = context.game_state
 	gs.write_log(&"marker_event", {
 		"mech_id": String(mech_id),
-		"message": "事件标记触发（效果待实装，无事发生）",
 	})
+	if context.action_service != null:
+		context.action_service.execute(&"set_event_card", {
+			"mech_id": mech_id,
+			"source": {"mech_id": mech_id},
+		})
 	return {"ok": true, "type": "event"}
 
 

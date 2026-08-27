@@ -1,0 +1,15 @@
+weapon_016_光束步枪
+weapon_017_热能机枪
+weapon_018_光束霰弹枪
+weapon_019_热能爆弹枪
+weapon_020_火箭筒
+weapon_021_光束狙击枪
+weapon_022_穿甲热能枪
+weapon_023_扩散轨道炮
+weapon_024_密集导弹炮
+weapon_025_超级火箭筒
+weapon_026_大型光束炮
+weapon_027_热能加特林
+weapon_028_雷爆磁轨炮
+weapon_029_超米伽荣光炮
+weapon_030_核聚变神火炮

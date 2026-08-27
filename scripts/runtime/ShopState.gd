@@ -12,6 +12,4 @@ var advanced_slot: StringName = &""
 
 ## 1 张隐藏高级装备牌的 instance_id（背面朝上）
 var hidden_advanced_slot: StringName = &""
-
-## 隐藏高级装备是否已被查看
-var hidden_revealed: bool = false
+## 隐藏高级装备每玩家独立得知：记录在牌实例 CardInstance.known_to（无全局 hidden_revealed）。

@@ -120,9 +120,12 @@ func _serialize_mechs(gs) -> Dictionary:
 			"position": m.position.duplicate(),
 			"destroyed": m.destroyed,
 			"attack_count_this_turn": m.attack_count_this_turn,
+			"has_attacked_this_turn": m.has_attacked_this_turn,
 			"max_attacks_per_turn": m.max_attacks_per_turn,
+			"applied_next_turn_attack_bonus": m.applied_next_turn_attack_bonus,
 			"statuses": m.statuses.duplicate(true),
 			"temp_armor_bonus": m.temp_armor_bonus,
+			"pilot_083_base_apps": m.pilot_083_base_apps.duplicate(true),
 			"slots": slots_out,
 		}
 	return out
@@ -215,7 +218,6 @@ func _serialize_shop(gs) -> Dictionary:
 		"normal_slots": s.normal_slots.duplicate(),
 		"advanced_slot": s.advanced_slot,
 		"hidden_advanced_slot": s.hidden_advanced_slot,
-		"hidden_revealed": s.hidden_revealed,
 	}
 
 
@@ -308,9 +310,12 @@ func apply_snapshot(context, snap: Dictionary) -> void:
 		m.position = m_snap.get("position", {"q": 0, "r": 0}).duplicate()
 		m.destroyed = bool(m_snap.get("destroyed", false))
 		m.attack_count_this_turn = int(m_snap.get("attack_count_this_turn", 0))
+		m.has_attacked_this_turn = bool(m_snap.get("has_attacked_this_turn", false))
 		m.max_attacks_per_turn = int(m_snap.get("max_attacks_per_turn", 1))
+		m.applied_next_turn_attack_bonus = int(m_snap.get("applied_next_turn_attack_bonus", 0))
 		m.statuses = m_snap.get("statuses", []).duplicate(true)
 		m.temp_armor_bonus = int(m_snap.get("temp_armor_bonus", 0))
+		m.pilot_083_base_apps = m_snap.get("pilot_083_base_apps", {}).duplicate(true)
 		var slots_snap: Dictionary = m_snap.get("slots", {})
 		for sid: StringName in slots_snap:
 			var s_snap: Dictionary = slots_snap[sid]
@@ -379,7 +384,6 @@ func _reset_game_state(gs) -> void:
 		gs.shop_state.normal_slots.clear()
 		gs.shop_state.advanced_slot = &""
 		gs.shop_state.hidden_advanced_slot = &""
-		gs.shop_state.hidden_revealed = false
 
 
 ## 从 data_registry 重建 MechFrameDef（与 GameSetupService._create_mech_from_frame 中
@@ -460,4 +464,3 @@ func _apply_shop(gs, shop_snap: Dictionary) -> void:
 		s.normal_slots.append(cid)
 	s.advanced_slot = shop_snap.get("advanced_slot", &"")
 	s.hidden_advanced_slot = shop_snap.get("hidden_advanced_slot", &"")
-	s.hidden_revealed = bool(shop_snap.get("hidden_revealed", false))

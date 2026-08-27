@@ -215,6 +215,10 @@ func move_unit(side: String, target: Dictionary) -> Dictionary:
 	if not mech:
 		return {"ok": false, "message": "mech not found for side: %s" % side}
 
+	# 陷落等 cannot_move 状态：主动移动直接拒绝（UI 高亮已屏蔽，此处兜底网络/程序化路径）
+	if not mech.can_move():
+		return {"ok": false, "message": "机甲无法移动（陷落/动力不足）"}
+
 	var target_hex := {"q": int(target.get("q", 0)), "r": int(target.get("r", 0))}
 	# 可达性预检：动力不足/不可通行/被占/点击自身 时不启动 single_move。
 	# 否则 _step_select_target 会因 find_optimal_path 返回空而转入 select_move_target
@@ -395,9 +399,22 @@ func start_enemy_turn() -> Dictionary:
 
 
 ## 完成敌方回合
+## 挂起（玩家事件牌 every_turn_end 到期/拾荒弹窗在敌方回合结束触发）时返回
+## {"state": "waiting_turn_flow"}，流转（开玩家回合）由 turn_service.end_turn_flow_completed
+## 信号一次性回调完成；调用方无需处理。
 func finish_enemy_turn() -> Dictionary:
-	context.turn_service.end_turn(&"enemy")
+	var end_result: Dictionary = context.turn_service.end_turn(&"enemy")
 	_sync_compat_fields()
+
+	if end_result.get("suspended", false):
+		var flow_cb := func(_pid: StringName) -> void:
+			_sync_compat_fields()
+			if get_result().state != "active":
+				return
+			start_turn("player")
+		if not context.turn_service.end_turn_flow_completed.is_connected(flow_cb):
+			context.turn_service.end_turn_flow_completed.connect(flow_cb, CONNECT_ONE_SHOT)
+		return {"state": "waiting_turn_flow"}
 
 	# 检查胜负
 	if get_result().state != "active":
@@ -483,13 +500,20 @@ func end_player_turn() -> Dictionary:
 	if not context:
 		return {"ok": false, "message": "battle not started"}
 
-	# 结束玩家回合
-	context.turn_service.end_turn(&"player")
+	# 结束玩家回合（挂起时透传 suspended：剩余步骤与敌方回合启动由
+	# app_root 等 end_turn_flow_completed 信号驱动）。
+	# 弃超限牌在流程第5步弹阻塞窗处理（拾荒等时点先结算），选牌经
+	# resume_turn_discard op / TurnService.resume_end_turn_discard 续跑。
+	var end_result: Dictionary = context.turn_service.end_turn(&"player")
 	_sync_compat_fields()
 
 	# 检查胜负
 	if get_result().state != "active":
 		return {"ok": true, "message": "player_turn_ended_battle_over"}
+
+	# 挂起（拾荒/修整/事件到期弹窗等）：调用方暂不流转，等 end_turn_flow_completed
+	if end_result.get("suspended", false):
+		return {"ok": true, "message": "player_turn_flow_suspended", "suspended": true}
 
 	# 不再在这里直接运行敌方回合
 	# 改为由 app_root 调用 start_enemy_turn() 以支持多步交互

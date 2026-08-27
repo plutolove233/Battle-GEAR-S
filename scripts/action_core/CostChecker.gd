@@ -13,6 +13,14 @@ class_name CostChecker
 ## Preloaded references for cross-file custom types
 const _EffectBinding = preload("res://scripts/action_core/EffectBinding.gd")
 const _GameContext = preload("res://scripts/runtime/GameContext.gd")
+const _ActionPilotEffects = preload("res://scripts/generated_database/ActionPilotEffects.gd")
+
+
+## 铠威攻击窗口是否归属指定机甲（窗口攻击数豁免共用）。
+static func _AttackWindowActive(ctx, mech_id: StringName) -> bool:
+	if ctx == null or ctx.game_state == null or mech_id == &"":
+		return false
+	return _ActionPilotEffects.attack_window_active_for_mech(ctx.game_state, mech_id)
 
 
 ## 检查所有费用是否可支付
@@ -55,6 +63,14 @@ static func can_pay_single(binding, payload: Dictionary, cost: Dictionary, ctx) 
 					matching_count += 1
 			return matching_count >= count
 
+		&"DISCARD_ALL_ACTION_CARDS":
+			# 诺拉 effect_02：全部行动手牌当作具名牌。检查手牌至少1张（至少1张才能转化）。
+			var daac_player_id: StringName = cost.get("player_id", binding.get_owner_player_id())
+			var daac_player_state = ctx.game_state.players.get(daac_player_id)
+			if daac_player_state == null:
+				return false
+			return daac_player_state.action_hand.size() >= 1
+
 		&"SPEND_POWER":
 			# 支付动力：检查机甲当前动力是否足够
 			var mech_id: StringName = cost.get("mech_id", binding.get_source_mech_id())
@@ -80,6 +96,9 @@ static func can_pay_single(binding, payload: Dictionary, cost: Dictionary, ctx) 
 			var mech_state = ctx.game_state.mechs.get(mech_id)
 			if mech_state == null:
 				return false
+			# 铠威攻击窗口豁免：窗口归属机甲的攻击不依赖/不消耗回合攻击次数
+			if _AttackWindowActive(ctx, mech_id):
+				return true
 			return mech_state.can_attack()
 
 		&"TAKE_SELF_DAMAGE":
@@ -203,6 +222,36 @@ static func pay_single(binding, payload: Dictionary, cost: Dictionary, ctx) -> b
 					discarded += 1
 			return discarded >= count
 
+		&"DISCARD_ALL_ACTION_CARDS":
+			# 诺拉 effect_02：全部行动手牌移入临时区（to_temp_zone=true，复用迪恩 _move_action_card_to_temp_zone）。
+			# 写 payload["temp_zone_card_ids"] 供链末 DISCARD_TEMP_ZONE_CARDS 读取入弃牌堆。
+			var paac_player_id: StringName = cost.get("player_id", binding.get_owner_player_id())
+			var paac_to_temp_zone: bool = bool(cost.get("params", {}).get("to_temp_zone", false))
+			if ctx.game_actions == null:
+				return false
+			var paac_player_state = ctx.game_state.players.get(paac_player_id)
+			if paac_player_state == null:
+				return false
+			var paac_all_ids: Array = []
+			for paac_cid in paac_player_state.action_hand:
+				paac_all_ids.append(paac_cid)
+			if paac_all_ids.is_empty():
+				return false
+			var paac_moved: Array = []
+			for paac_cid in paac_all_ids:
+				if paac_to_temp_zone:
+					_move_action_card_to_temp_zone(ctx, paac_cid, paac_player_id)
+					paac_moved.append(paac_cid)
+				else:
+					ctx.game_actions.discard_action_card({
+						"player_id": paac_player_id,
+						"card_id": paac_cid,
+						"reason": &"PILOT_015_ALL_AS_NAMED"
+					})
+			if paac_to_temp_zone:
+				payload["temp_zone_card_ids"] = paac_moved
+			return true
+
 		&"SPEND_POWER":
 			# 支付动力
 			var mech_id: StringName = cost.get("mech_id", binding.get_source_mech_id())
@@ -236,6 +285,9 @@ static func pay_single(binding, payload: Dictionary, cost: Dictionary, ctx) -> b
 			var mech_state = ctx.game_state.mechs.get(mech_id)
 			if mech_state == null:
 				return false
+			# 铠威攻击窗口豁免：窗口归属机甲的攻击不消耗回合攻击次数
+			if _AttackWindowActive(ctx, mech_id):
+				return true
 			mech_state.attack_count_this_turn += 1
 			return true
 

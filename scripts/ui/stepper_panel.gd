@@ -21,13 +21,16 @@ var _cancel_btn: Button
 var _current_value: int = 0
 var _min_value: int = 0
 var _max_value: int = 0
+var _step_value: int = 3
 var _range_hint: Label
 
 
 ## 配置面板：显示提示，设置范围。默认值 = min_value（通常 0）。
-func configure(label: String, min_val: int, max_val: int, optional: bool) -> void:
+## step_val：±按钮步长（默认3=玛沙装甲转能；维罗妮卡给金用5）。
+func configure(label: String, min_val: int, max_val: int, optional: bool, step_val: int = 3) -> void:
 	_min_value = min_val
 	_max_value = max_val
+	_step_value = maxi(1, step_val)
 	_current_value = min_val
 	_ensure_layout()
 	_title.text = label
@@ -62,13 +65,13 @@ func _ensure_layout() -> void:
 	_value_label.add_theme_color_override("font_color", Color(0.6, 0.95, 0.7))
 	_vbox.add_child(_value_label)
 
-	# 输入行：[-3] [LineEdit] [+3]
+	# 输入行：[-step] [LineEdit] [+step]
 	var input_row = HBoxContainer.new()
 	input_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	input_row.add_theme_constant_override("separation", 8)
 
 	_minus_btn = Button.new()
-	_minus_btn.text = "-3"
+	_minus_btn.text = "-%d" % _step_value
 	_minus_btn.custom_minimum_size = Vector2(50, 40)
 	_minus_btn.pressed.connect(_on_minus)
 	input_row.add_child(_minus_btn)
@@ -83,7 +86,7 @@ func _ensure_layout() -> void:
 	input_row.add_child(_line_edit)
 
 	_plus_btn = Button.new()
-	_plus_btn.text = "+3"
+	_plus_btn.text = "+%d" % _step_value
 	_plus_btn.custom_minimum_size = Vector2(50, 40)
 	_plus_btn.pressed.connect(_on_plus)
 	input_row.add_child(_plus_btn)
@@ -126,12 +129,12 @@ func _refresh_value() -> void:
 
 
 func _on_plus() -> void:
-	_current_value = mini(_current_value + 3, _max_value)
+	_current_value = mini(_current_value + _step_value, _max_value)
 	_refresh_value()
 
 
 func _on_minus() -> void:
-	_current_value = maxi(_current_value - 3, _min_value)
+	_current_value = maxi(_current_value - _step_value, _min_value)
 	_refresh_value()
 
 

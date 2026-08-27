@@ -2669,7 +2669,7 @@ func test_weapon_101_split_no_trigger() -> Variant:
 
 
 ## effect_101 顺序：玩家A 用光束战戟攻击玩家B，B 反击响应 -> 损伤放置完成后，
-## effect_101(priority=30) 应先于 counter_effect2(priority=20) 触发 -> 弹 CHOOSE_ONE，
+## effect_101(priority=40) 应先于 counter_effect2(priority=30) 触发 -> 弹 CHOOSE_ONE，
 ## 反击攻击B 暂存到 _pending_regular_listeners 待 effect_101 结算后再触发。
 ## 验证用户报告的顺序 bug 已修（原 priority=10 时反击链先跑完才弹 effect_101）。
 func test_weapon_101_fires_before_counter() -> Variant:
@@ -2736,7 +2736,7 @@ func test_weapon_101_fires_before_counter() -> Variant:
 	# 攻击恢复 -> ATTACK_AFTER -> 损伤设置（3枚全放头部）
 	_drive_damage_placement_on_slot(battle, attack_id, &"头部")
 	await _pump_frames(5)
-	# ATTACK_SETTLE：effect_101(priority=30) 应先弹 CHOOSE_ONE，counter_effect2(priority=20) 暂存
+	# ATTACK_SETTLE：effect_101(priority=40) 应先弹 CHOOSE_ONE，counter_effect2(priority=30) 暂存
 	attack = ar.get_action(attack_id)
 	if attack == null:
 		return "ATTACK_SETTLE 后攻击动作丢失（effect_101 未挂起？）"

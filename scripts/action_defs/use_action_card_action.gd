@@ -98,23 +98,47 @@ func _step_validate_card(action: Action) -> Dictionary:
 		if not _ActionPilotEffects.is_card_type_controlled_by(_ctrl_owner_mech.mech_id, _ctrl_type, player_id):
 			return {"error": "无权使用此受控牌（未控制该类型）"}
 
+	# pilot_021 塔莉娅"禁"标签：效果1抽的3张行动牌本回合塔莉娅无法使用（使用前检查）。
+	# 禁标签 owner=塔莉娅玩家（打标签时的持有者），牌离开塔莉娅手牌（转移）时清除，
+	# 故仅塔莉娅本回合手牌中的禁牌会命中。转化/受控路径的牌若带禁标签同样不可用。
+	if _ActionPilotEffects.pilot_021_has_jin(card, player_id):
+		return {"error": "本回合无法使用（塔莉娅赐予牌）"}
+
 	# 检查攻击牌的攻击次数限制
 	# 效果产生的使用攻击牌（联合攻击等，source_action_id 非空）不消耗攻击次数
 	# （_step_settle 对 source_action_id 非空不 +1），故跳过 attack_count 限制；
 	# 但 destroyed / cannot_attack 状态仍阻止攻击。否则 Target 在敌方回合联合攻击时，
 	# 其 attack_count_this_turn 未随敌方回合重置（TurnService 仅重置当前回合玩家机甲），
 	# can_attack() 误拒致 validate 报错、动作链卡死。
-	# 转化行动牌（virtual_transform=true）：转化牌为虚拟牌，不受攻击次数/类型限制，整体跳过。
+	# 转化行动牌（virtual_transform=true）：虚拟牌不受类型限制（任意牌可当攻击牌打出）。
+	# 但 consume_attack_count=true（伏特/莱比尔/诺拉主动转化攻击牌）时仍走攻击次数检查+消耗。
 	var _vt_transform: bool = bool(action.record.get("virtual_transform", false))
-	if not _vt_transform and card.def and card.def.action_type == "攻击":
+	var _consume_atk: bool = bool(action.record.get("consume_attack_count", false))
+	# 使用的牌 action_type：virtual_transform 时按 as_card_def_id 判定（转化猛击=攻击）
+	var _effective_action_type: String = ""
+	if _vt_transform:
+		var _vt_as_id: StringName = action.record.get("as_card_def_id", &"")
+		if _vt_as_id != &"" and context.card_database != null:
+			var _vt_as_def = context.card_database.card_defs.get(_vt_as_id, null)
+			if _vt_as_def != null:
+				_effective_action_type = String(_vt_as_def.action_type)
+	elif card.def != null:
+		_effective_action_type = String(card.def.action_type)
+	if _effective_action_type == "攻击" and (not _vt_transform or _consume_atk):
 		var mech = context.game_state.mechs.get(mech_id)
 		if mech:
+			# 铠威攻击窗口：窗口归属机甲发动攻击不检查/不消耗回合攻击次数（窗口攻击数豁免）。
+			# 攻击动作发起后窗口即关闭，settle 无法再查窗口状态，故此处写 record 持久标志供 settle 判定
+			# （attack_window_attack=true 则 _step_settle 不 +1）。
+			var _window_attack: bool = _ActionPilotEffects.attack_window_active_for_mech(context.game_state, mech_id)
+			if _window_attack:
+				action.record["attack_window_attack"] = true
 			# pilot_010 刻托 effect_03（权限型）：本回合已用3张实体攻击牌则禁止新的实体攻击牌 use_action。
-			# virtual_transform 虚拟当作攻击不进此分支（不计数/不限制，裁定歧义3）。
-			if not _ActionPilotEffects.can_pilot_010_use_physical_attack_card(context.game_state, mech_id):
+			# virtual_transform 虚拟转化牌非实体攻击牌，跳过刻托限制。窗口攻击牌仍受刻托上限约束。
+			if not _vt_transform and not _ActionPilotEffects.can_pilot_010_use_physical_attack_card(context.game_state, mech_id):
 				return {"error": "刻托本回合已使用3张攻击牌，不能再使用"}
 			var src_action_id: StringName = action.source.get("source_action_id", &"") if action.source is Dictionary else &""
-			if src_action_id != &"":
+			if src_action_id != &"" or _window_attack:
 				if mech.destroyed or mech.has_status(&"cannot_attack"):
 					return {"error": "机甲无法攻击"}
 			elif not mech.can_attack():
@@ -197,6 +221,9 @@ func _step_card_to_temp_zone(action: Action) -> Dictionary:
 		var vt_label: String = ("转化%s" % as_name) if as_name != "" else "转化"
 		if card != null:
 			card.counters["transform_label"] = vt_label
+			# 记录虚拟转化的目标 def_id，供 pilot_017 伏特效果2 在 ATTACK 时点
+			# 识别“此攻击由转化的强袭/猛击/破甲发起”（card.def 仍是原牌，需读此计数器）。
+			card.counters["virtual_as_def_id"] = as_id
 		if context.game_state != null:
 			context.game_state.write_log(&"card_transformed", {
 				"card_id": String(card_id),
@@ -289,6 +316,14 @@ func _register_card_effects(action: Action, card_id: StringName) -> void:
 ## 返回 effect_action_created=true 通知 ActionEngine 等待效果动作完成
 func _step_execute_effects(action: Action) -> Dictionary:
 	var result: Dictionary = {}
+	# pilot_028 乌尔效果2「需交牌」：用宣言类型行动牌的机甲不交牌/交不了时，跳过本牌效果阶段。
+	# 由 TimingEngine PILOT_028_FORCE_TRIBUTE 在 USE_ACTION_AT 设 record._pilot_028_skip_effects。
+	# 此处只跳过 DIRECT/LISTEN 效果执行；后续 settle 照常（非虚拟牌进弃牌堆）。
+	if bool(action.record.get("_pilot_028_skip_effects", false)):
+		action.record.erase("_pilot_028_skip_effects")
+		action.record["effect_chain_completed"] = true
+		SLog.log_raw("[DIAG use_action_card] %s pilot_028 需交牌未交，跳过效果执行 def=%s" % [String(action.action_id), String(action.record.get("card_def_id", &""))])
+		return result
 	var card_id: StringName = action.record.get("card_instance_id", &"")
 	var card = context.game_state.get_card(card_id)
 	if card == null or card.def == null:
@@ -465,11 +500,24 @@ func _step_settle(action: Action) -> Dictionary:
 	if not is_virtual and card_id != &"" and context.deck_service != null:
 		var card = context.game_state.get_card(card_id)
 		var _vt_settle: bool = bool(action.record.get("virtual_transform", false))
+		var _consume_atk_settle: bool = bool(action.record.get("consume_attack_count", false))
 		# 只有玩家主动使用攻击牌，才在整张牌效果完成后的结算阶段消耗攻击次数。
-		# 效果产生的“使用攻击牌”不重复占用通常攻击次数。转化行动牌(virtual_transform)不消耗。
-		if not _vt_settle and card != null and card.def != null and card.def.action_type == "攻击":
+		# 效果产生的“使用攻击牌”不重复占用通常攻击次数。转化行动牌(virtual_transform)默认不消耗；
+		# 但 consume_attack_count=true（伏特/莱比尔/诺拉主动转化攻击牌）时消耗。
+		# virtual_transform 时 card.def 是原牌，须按 as_card_def_id 判定是否攻击牌。
+		var _settle_is_attack: bool = false
+		if _vt_settle:
+			var _vs_as_id: StringName = action.record.get("as_card_def_id", &"")
+			if _vs_as_id != &"" and context.card_database != null:
+				var _vs_as_def = context.card_database.card_defs.get(_vs_as_id, null)
+				if _vs_as_def != null and String(_vs_as_def.action_type) == "攻击":
+					_settle_is_attack = true
+		elif card != null and card.def != null and card.def.action_type == "攻击":
+			_settle_is_attack = true
+		if _settle_is_attack and (not _vt_settle or _consume_atk_settle):
 			var source_action_id: StringName = action.source.get("source_action_id", &"")
-			if source_action_id == &"":
+			# 铠威攻击窗口攻击：validate 已写 attack_window_attack 标志（窗口攻击数豁免，不 +1）。
+			if source_action_id == &"" and not bool(action.record.get("attack_window_attack", false)):
 				# pilot_006 里昂狩猎标签：打狩猎标记机甲不计回合攻击数。
 				# 豁免（攻击数=0）时强制选标记机甲，不+1。
 				# 攻击数够时选标记机甲（标签有效）也不+1；选非标记目标正常 +1。
@@ -488,6 +536,16 @@ func _step_settle(action: Action) -> Dictionary:
 			# 若双连卡在此后仍停 temp_zone，说明 discard_card 效果动作未完成/settle 未等它。
 			if _DIAG_USE_CARD:
 				SLog.log_raw("[DIAG use_action_card] %s settle 调 discard_card, pending_sub=%s" % [String(action.action_id), str(action.pending_effect_action_ids)])
+
+	# 通用：效果链把额外燃料牌移入临时区后（如默多克转化选中的 C 写 record.temp_zone_card_ids），
+	# 随主牌一起入弃牌堆。只处理仍在 temp_zone 的牌（主牌已 discard 的不重复弃置）。
+	var extra_tz: Array = action.record.get("temp_zone_card_ids", [])
+	for ecid in extra_tz:
+		if ecid == null or ecid == &"" or context == null or context.game_state == null:
+			continue
+		var ecard = context.game_state.get_card(StringName(ecid))
+		if ecard != null and String(ecard.zone) == &"temp_zone":
+			context.deck_service.discard_card(StringName(ecid), &"ACTION_CARD_PLAYED")
 
 	return result
 

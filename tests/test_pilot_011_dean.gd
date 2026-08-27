@@ -450,8 +450,8 @@ func test_pilot_011_counter_strike_fires_on_settle() -> Variant:
 	var cs = effects.get(&"pilot_011_counter_strike")
 	if cs == null:
 		return "缺 pilot_011_counter_strike"
-	if cs.mode != _TimingConst.MODE_LISTEN or cs.listen_timing != _TimingConst.ATTACK_SETTLE or int(cs.priority) != 20:
-		return "counter_strike 应 LISTEN ATTACK_SETTLE priority20"
+	if cs.mode != _TimingConst.MODE_LISTEN or cs.listen_timing != _TimingConst.ATTACK_SETTLE or int(cs.priority) != 30:
+		return "counter_strike 应 LISTEN ATTACK_SETTLE priority30（与反击额外攻击对齐）"
 	if cs.requires_effect != &"":
 		return "counter_strike 不应有 requires_effect（迪恩反击非出牌触发）"
 	var battle = _new_battle()
@@ -675,10 +675,10 @@ func test_pilot_011_effect_02_redirect_and_conversion() -> Variant:
 	# REDIRECT：攻击目标应由 ally 改为 Dean(player_mech)
 	if StringName(attack.record.get("target_id", &"")) != StringName(player_mech.mech_id):
 		return "REDIRECT 后攻击目标应为迪恩 实=%s 期望=%s" % [String(attack.record.get("target_id", &"")), String(player_mech.mech_id)]
-	if String(attack.record.get("_p011_redirect_from", &"")) != String(ally.mech_id):
-		return "应记录原目标 _p011_redirect_from=ally 实=%s" % String(attack.record.get("_p011_redirect_from", &""))
-	if not bool(attack.record.get("_p011_redirect_rewind", false)):
-		return "REDIRECT 应设 _p011_redirect_rewind 标志（回退 PRE 重 fire）"
+	if String(attack.record.get("_redirect_from", &"")) != String(ally.mech_id):
+		return "应记录原目标 _redirect_from=ally 实=%s" % String(attack.record.get("_redirect_from", &""))
+	if not bool(attack.record.get("_redirect_rewind", false)):
+		return "REDIRECT 应设 _redirect_rewind 标志（回退 PRE 重 fire）"
 	if attack.state != &"waiting_effect_action":
 		return "转化后 attack 应 waiting_effect_action 实=%s" % String(attack.state)
 	return true
@@ -872,7 +872,7 @@ func test_pilot_011_effect_02_cancel_cost_window() -> Variant:
 	return "取消成本窗口后共享次数应未消耗，第2次攻击 effect_02 仍应可用"
 
 
-## 测试20：挡攻转移后回退 ATTACK_PRE 重 fire 白盒（_p011_redirect_rewind 机制）
+## 测试20：挡攻转移后回退 ATTACK_PRE 重 fire 白盒（_redirect_rewind 机制）
 func test_pilot_011_02_rewind_to_pre_mechanism() -> Variant:
 	var battle = _new_battle()
 	if battle == null or battle.context == null:
@@ -898,8 +898,8 @@ func test_pilot_011_02_rewind_to_pre_mechanism() -> Variant:
 		"responded": true,
 		"counter_attacked": false,
 		"response_source": &"pilot_011_effect_02",
-		"_p011_redirect_from": ally.mech_id,
-		"_p011_redirect_rewind": true,
+		"_redirect_from": ally.mech_id,
+		"_redirect_rewind": true,
 	}
 	battle.context.action_registry.register(attack)
 	attack.setup_steps()
@@ -918,15 +918,15 @@ func test_pilot_011_02_rewind_to_pre_mechanism() -> Variant:
 	attack._step_timing_fired = true
 	var sig: StringName = ae._execute_step(attack, at_idx)
 	if sig != &"rewind":
-		return "ATTACK_AT 阶段4 检测 _p011_redirect_rewind 应返回 rewind 实=%s" % String(sig)
+		return "ATTACK_AT 阶段4 检测 _redirect_rewind 应返回 rewind 实=%s" % String(sig)
 	if attack.current_step_index != pre_idx:
 		return "回退后 csi 应=%d(ATTACK_PRE) 实=%d" % [pre_idx, attack.current_step_index]
 	if attack.current_step_phase != &"timing_firing":
 		return "回退后 phase 应 timing_firing（跳过 select_target handler，目标已由 REDIRECT 设定）实=%s" % String(attack.current_step_phase)
 	if attack._step_timing_fired != false:
 		return "回退后 _step_timing_fired 应 false（让 PRE 重新 fire）"
-	if attack.record.has("_p011_redirect_rewind"):
-		return "回退后 _p011_redirect_rewind 应已 erase（防重复回退）"
+	if attack.record.has("_redirect_rewind"):
+		return "回退后 _redirect_rewind 应已 erase（防重复回退）"
 	return true
 
 
@@ -1055,7 +1055,7 @@ func test_pilot_011_ally_respond_hidden_when_dean_out_of_range() -> Variant:
 	return true
 
 
-## 测试24：迪恩用疾行牌替别人响应 -> 攻击目标转移为迪恩（_p011_redirect_rewind 回退 PRE 重 fire）
+## 测试24：迪恩用疾行牌替别人响应 -> 攻击目标转移为迪恩（_redirect_rewind 回退 PRE 重 fire）
 func test_pilot_011_ally_respond_redirects_target() -> Variant:
 	var battle = _new_battle()
 	if battle == null or battle.context == null:
@@ -1079,9 +1079,9 @@ func test_pilot_011_ally_respond_redirects_target() -> Variant:
 		return "迪恩替 ally 响应后 responded 应为 true"
 	if StringName(attack.record.get("target_id", &"")) != StringName(player_mech.mech_id):
 		return "迪恩替 ally 响应后攻击目标应改为迪恩 实=%s 期望=%s" % [String(attack.record.get("target_id", &"")), String(player_mech.mech_id)]
-	if String(attack.record.get("_p011_redirect_from", &"")) != String(ally.mech_id):
-		return "应记录原目标 _p011_redirect_from=ally 实=%s" % String(attack.record.get("_p011_redirect_from", &""))
-	if not bool(attack.record.get("_p011_redirect_rewind", false)):
-		return "迪恩替别人响应应设 _p011_redirect_rewind（回退 PRE 重 fire）"
+	if String(attack.record.get("_redirect_from", &"")) != String(ally.mech_id):
+		return "应记录原目标 _redirect_from=ally 实=%s" % String(attack.record.get("_redirect_from", &""))
+	if not bool(attack.record.get("_redirect_rewind", false)):
+		return "迪恩替别人响应应设 _redirect_rewind（回退 PRE 重 fire）"
 	# 疾行牌 use_action_card 子动作挂起（EXECUTE_SINGLE_MOVE），attack 等其完成
 	return true

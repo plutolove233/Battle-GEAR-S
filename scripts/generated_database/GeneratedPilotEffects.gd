@@ -40,7 +40,7 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_059_effect_01a.actions = [
 		{"type": &"GAIN_GOLD", "params": {"amount": 3}},
 	]
-	pilot_059_effect_01a.description = "我方回合开始时，若机甲损伤数低于4则可以获得3金币。"
+	pilot_059_effect_01a.description = "我方回合开始时，可以移除或设置我方1损伤，之后若机甲损伤数低于4则可以获得3金币。"
 	effects[pilot_059_effect_01a.effect_id] = pilot_059_effect_01a
 
 	# 效果1b：损伤等于4 → 视为使用1张补给
@@ -60,7 +60,7 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_059_effect_01b.actions = [
 		{"type": &"TREAT_CARD_AS_NAMED_TYPE", "params": {"named_type": &"补给"}},
 	]
-	pilot_059_effect_01b.description = "我方回合开始时，若机甲损伤数等于4则可以视为使用1张补给。"
+	pilot_059_effect_01b.description = "我方回合开始时，可以移除或设置我方1损伤，之后若机甲损伤数等于4则可以视为使用出1张补给。"
 	effects[pilot_059_effect_01b.effect_id] = pilot_059_effect_01b
 
 	# 效果1c：损伤高于4 → 移去最多2损伤
@@ -80,615 +80,120 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_059_effect_01c.actions = [
 		{"type": &"REMOVE_DAMAGE_TOKENS", "params": {"amount": 2}},
 	]
-	pilot_059_effect_01c.description = "我方回合开始时，若机甲损伤数大于4则可以移去最多2损伤。"
+	pilot_059_effect_01c.description = "我方回合开始时，可以移除或设置我方1损伤，之后若机甲损伤数大于4则可以移除我方最多2损伤。"
 	effects[pilot_059_effect_01c.effect_id] = pilot_059_effect_01c
 
-	# ── pilot_060 铠德：攻击未命中选择其一 ──
-	# 效果01a：抽2张行动牌
-	var pilot_060_effect_01a := CardEffect.new()
-	pilot_060_effect_01a.effect_id = &"pilot_060_effect_01a"
-	pilot_060_effect_01a.display_name = "铠德-未命中抽2"
-	pilot_060_effect_01a.mode = _EffectConst.MODE_PASSIVE
-	pilot_060_effect_01a.hook = _EffectConst.HOOK_ATTACK_MISS
-	pilot_060_effect_01a.priority = 90
-	pilot_060_effect_01a.once_per_turn_key = &"pilot_060_effect_01"
-	pilot_060_effect_01a.conditions = [
-		{"op": &"PAYLOAD_ATTACK_MISS"},
-		{"op": &"SOURCE_OWNER_IS_ATTACKER"},
-	]
-	pilot_060_effect_01a.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_060_effect_01a.costs = []
-	pilot_060_effect_01a.actions = [
-		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 2}},
-	]
-	pilot_060_effect_01a.description = "若发动的攻击没有命中，则可以选择抽2张行动牌。"
-	effects[pilot_060_effect_01a.effect_id] = pilot_060_effect_01a
 
-	# 效果01b：回复3动力
-	var pilot_060_effect_01b := CardEffect.new()
-	pilot_060_effect_01b.effect_id = &"pilot_060_effect_01b"
-	pilot_060_effect_01b.display_name = "铠德-未命中回3动力"
-	pilot_060_effect_01b.mode = _EffectConst.MODE_PASSIVE
-	pilot_060_effect_01b.hook = _EffectConst.HOOK_ATTACK_MISS
-	pilot_060_effect_01b.priority = 90
-	pilot_060_effect_01b.once_per_turn_key = &"pilot_060_effect_01"
-	pilot_060_effect_01b.conditions = [
-		{"op": &"PAYLOAD_ATTACK_MISS"},
-		{"op": &"SOURCE_OWNER_IS_ATTACKER"},
-	]
-	pilot_060_effect_01b.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_060_effect_01b.costs = []
-	pilot_060_effect_01b.actions = [
-		{"type": &"RESTORE_POWER", "params": {"amount": 3}},
-	]
-	pilot_060_effect_01b.description = "若发动的攻击没有命中，则可以选择回复3动力。"
-	effects[pilot_060_effect_01b.effect_id] = pilot_060_effect_01b
 
-	# 效果01c：获得4金币
-	var pilot_060_effect_01c := CardEffect.new()
-	pilot_060_effect_01c.effect_id = &"pilot_060_effect_01c"
-	pilot_060_effect_01c.display_name = "铠德-未命中获4金"
-	pilot_060_effect_01c.mode = _EffectConst.MODE_PASSIVE
-	pilot_060_effect_01c.hook = _EffectConst.HOOK_ATTACK_MISS
-	pilot_060_effect_01c.priority = 90
-	pilot_060_effect_01c.once_per_turn_key = &"pilot_060_effect_01"
-	pilot_060_effect_01c.conditions = [
-		{"op": &"PAYLOAD_ATTACK_MISS"},
-		{"op": &"SOURCE_OWNER_IS_ATTACKER"},
-	]
-	pilot_060_effect_01c.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_060_effect_01c.costs = []
-	pilot_060_effect_01c.actions = [
-		{"type": &"GAIN_GOLD", "params": {"amount": 4}},
-	]
-	pilot_060_effect_01c.description = "若发动的攻击没有命中，则可以选择获得4金币。"
-	effects[pilot_060_effect_01c.effect_id] = pilot_060_effect_01c
+	# ── pilot_061 艾希：已重做，见 ActionPilotEffects.gd ──
 
-	# ── pilot_061 艾希：额外抽牌后交给其他机甲 ──
-	var pilot_061_effect_01 := CardEffect.new()
-	pilot_061_effect_01.effect_id = &"pilot_061_effect_01"
-	pilot_061_effect_01.display_name = "艾希-抽2交其他机甲"
-	pilot_061_effect_01.mode = _EffectConst.MODE_PASSIVE
-	pilot_061_effect_01.hook = _EffectConst.HOOK_TURN_START
-	pilot_061_effect_01.priority = 90
-	pilot_061_effect_01.once_per_turn_key = &""
-	pilot_061_effect_01.conditions = [{"op": &"ALWAYS"}]
-	pilot_061_effect_01.target_rules = [{"rule": &"CHOOSE_ENEMY_MECH_IN_RANGE", "range": 3}]
-	pilot_061_effect_01.costs = []
-	pilot_061_effect_01.actions = [
-		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 2}},
-		{"type": &"TRANSFER_ACTION_CARDS", "params": {"count": 2, "range": 3}},
-	]
-	pilot_061_effect_01.description = "我方回合开始时，额外抽2张行动牌，之后可以将我方最多2张行动牌交给3格范围内的其他机甲。"
-	effects[pilot_061_effect_01.effect_id] = pilot_061_effect_01
+	# ── pilot_062 洛尔恩：已重做，见 ActionPilotEffects.gd（转化掩护 COVER_WINDOW_EXTRA + 掩护加成）──
 
-	# ── pilot_062 洛尔恩：2张当作掩护使用 ──
-	var pilot_062_effect_01 := CardEffect.new()
-	pilot_062_effect_01.effect_id = &"pilot_062_effect_01"
-	pilot_062_effect_01.display_name = "洛尔恩-当作掩护"
-	pilot_062_effect_01.mode = _EffectConst.MODE_ACTIVE
-	pilot_062_effect_01.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_062_effect_01.priority = 100
-	pilot_062_effect_01.once_per_turn_key = &"pilot_062_effect_01"
-	pilot_062_effect_01.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_062_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_062_effect_01.costs = [
-		{"cost_type": &"DISCARD_ACTION_CARD", "count": 2},
-	]
-	pilot_062_effect_01.actions = [
-		{"type": &"TREAT_CARD_AS_NAMED_TYPE", "params": {"named_type": &"掩护"}},
-	]
-	pilot_062_effect_01.description = "每回合1次，可以将2张行动牌当作掩护使用。"
-	effects[pilot_062_effect_01.effect_id] = pilot_062_effect_01
+	# ── pilot_063 布彻尔：已重做，见 ActionPilotEffects.gd ──
 
-	# pilot_062效果02：掩护消除额外效果并视为进攻
-	var pilot_062_effect_02 := CardEffect.new()
-	pilot_062_effect_02.effect_id = &"pilot_062_effect_02"
-	pilot_062_effect_02.display_name = "洛尔恩-掩护视为进攻"
-	pilot_062_effect_02.mode = _EffectConst.MODE_PASSIVE
-	pilot_062_effect_02.hook = _EffectConst.HOOK_REACTION_CARD_PLAYED
-	pilot_062_effect_02.priority = 80
-	pilot_062_effect_02.once_per_turn_key = &""
-	pilot_062_effect_02.conditions = [
-		{"op": &"PAYLOAD_CARD_HAS_TAG", "tag": &"掩护"},
-		{"op": &"SOURCE_OWNER_IS_TARGET"},
-	]
-	pilot_062_effect_02.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_062_effect_02.costs = []
-	pilot_062_effect_02.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_062_effect_02",
-			"text": "我方使用的掩护获得以下效果：消除该攻击的额外效果，视为进攻。",
-		}},
-	]
-	pilot_062_effect_02.description = "我方使用的掩护获得以下效果：消除该攻击的额外效果，视为进攻。"
-	effects[pilot_062_effect_02.effect_id] = pilot_062_effect_02
+	# ── pilot_064 柏格：已迁移至新 Action Engine（ActionPilotEffects.build_pilot_effects）──
+	# 弃装获金抽装（DIRECT 主动按钮）：弃置未设置的装备牌 -> +2金币 + 抽1张装备牌，
+	# 若弃置的是武器则再抽2张行动牌。旧 MODE_ACTIVE stub 已移除，由新体系定义。
 
-	# ── pilot_063 布彻尔：1张当作进攻使用 ──
-	var pilot_063_effect_01 := CardEffect.new()
-	pilot_063_effect_01.effect_id = &"pilot_063_effect_01"
-	pilot_063_effect_01.display_name = "布彻尔-当作进攻"
-	pilot_063_effect_01.mode = _EffectConst.MODE_ACTIVE
-	pilot_063_effect_01.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_063_effect_01.priority = 100
-	pilot_063_effect_01.once_per_turn_key = &"pilot_063_effect_01"
-	pilot_063_effect_01.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_063_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_063_effect_01.costs = [
-		{"cost_type": &"DISCARD_ACTION_CARD", "count": 1},
-	]
-	pilot_063_effect_01.actions = [
-		{"type": &"TREAT_CARD_AS_NAMED_TYPE", "params": {"named_type": &"进攻"}},
-	]
-	pilot_063_effect_01.description = "每回合1次，可以将1张行动牌当作进攻使用。"
-	effects[pilot_063_effect_01.effect_id] = pilot_063_effect_01
+	# ── pilot_065 银雪：已迁移至新 Action Engine（ActionPilotEffects.build_pilot_effects）──
+	# 旧 MODE_ACTIVE 占位 stub 已移除：窥牌拦截开关（effect_01 DIRECT）+ GAIN_CARD_BEFORE
+	# 窥牌拦截（effect_02 LISTEN，隐藏，描述合并按钮1）由新体系定义，走 SET_CARD_COUNTER /
+	# CARD_COUNTER_IS / PEEK_DECK_TOP_AND_DISCARD 通用模块。
 
-	# pilot_063效果02：进攻被响应则抽2/未被响应则弃置1
-	var pilot_063_effect_02 := CardEffect.new()
-	pilot_063_effect_02.effect_id = &"pilot_063_effect_02"
-	pilot_063_effect_02.display_name = "布彻尔-进攻加成"
-	pilot_063_effect_02.mode = _EffectConst.MODE_PASSIVE
-	pilot_063_effect_02.hook = _EffectConst.HOOK_ATTACK_RESOLVED
-	pilot_063_effect_02.priority = 80
-	pilot_063_effect_02.once_per_turn_key = &""
-	pilot_063_effect_02.conditions = [
-		{"op": &"SOURCE_OWNER_IS_ATTACKER"},
-	]
-	pilot_063_effect_02.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_063_effect_02.costs = []
-	pilot_063_effect_02.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_063_effect_02",
-			"text": "本次攻击被响应则抽2张行动牌，未被响应则弃置目标1张行动牌。",
-		}},
-	]
-	pilot_063_effect_02.description = "我方使用的进攻获得以下效果：本次攻击被响应则抽2张行动牌，未被响应则弃置目标1张行动牌。"
-	effects[pilot_063_effect_02.effect_id] = pilot_063_effect_02
+	# ── pilot_066 骇客：已迁移至新 Action Engine（ActionPilotEffects.build_pilot_effects）──
+	# 移动后查看+类型加成（开关按钮 effect_01 DIRECT + BASIC_MOVE_AFTER 窥牌 effect_02 LISTEN 隐藏）
+	# 由新体系定义，走 SET_CARD_COUNTER / CARD_COUNTER_IS / OTHER_MECH_WITH_ACTION_CARD_IN_HEX_RANGE /
+	# EFFECT_ONCE_PER_TURN_AVAILABLE / VIEW_RANDOM_OTHER_HAND_CARDS 通用模块。旧 MODE_PASSIVE 实现已移除。
 
-	# ── pilot_064 柏格：弃置装备牌获金抽牌 ──
-	var pilot_064_effect_01 := CardEffect.new()
-	pilot_064_effect_01.effect_id = &"pilot_064_effect_01"
-	pilot_064_effect_01.display_name = "柏格-弃装获金抽装"
-	pilot_064_effect_01.mode = _EffectConst.MODE_ACTIVE
-	pilot_064_effect_01.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_064_effect_01.priority = 100
-	pilot_064_effect_01.once_per_turn_key = &"pilot_064_effect_01"
-	pilot_064_effect_01.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_064_effect_01.target_rules = [{"rule": &"CHOOSE_OWN_EQUIPMENT_IN_SLOT"}]
-	pilot_064_effect_01.costs = [
-		{"cost_type": &"DISCARD_EQUIPMENT_CARD", "count": 1},
-	]
-	pilot_064_effect_01.actions = [
-		{"type": &"GAIN_GOLD", "params": {"amount": 2}},
-		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"equipment_deck", "card_kind": &"equipment", "count": 1}},
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_064_weapon_bonus",
-			"text": "若弃置的是武器牌则再抽1张行动牌。",
-		}},
-	]
-	pilot_064_effect_01.description = "我方回合1次，可以弃置1张未设置的装备牌，获得2金币并抽1张装备牌，若弃置的是武器牌则可再抽1张行动牌。"
-	effects[pilot_064_effect_01.effect_id] = pilot_064_effect_01
+	# ── pilot_067 丹：已迁移至新 Action Engine（ActionPilotEffects.build_pilot_effects）──
+	# 效果1「每回合1次，可以将1张行动牌当作双连使用」（DIRECT 主动按钮）+ 效果2「我方使用的双连
+	# 若指定了2个目标，则威力+3，命中额外产生1损伤」（LISTEN 被动）由新体系定义，走
+	# CHOOSE_MANY_CARDS / MOVE_ACTION_CARDS_TO_TEMP_ZONE / PLAY_AS_NAMED / MODIFY_ATTACK_MIGHT /
+	# MODIFY_ATTACK_MARKERS(fork_persist) / ATTACK_IS_NAMED_CARD / ATTACK_TARGET_COUNT_AT_LEAST
+	# 通用模块。旧 MODE_ACTIVE（误消耗2张）实现已移除。
 
-	# ── pilot_065 柔嘉：牌堆顶翻看（CUSTOM） ──
-	var pilot_065_effect_01 := CardEffect.new()
-	pilot_065_effect_01.effect_id = &"pilot_065_effect_01"
-	pilot_065_effect_01.display_name = "柔嘉-牌堆顶翻看"
-	pilot_065_effect_01.mode = _EffectConst.MODE_ACTIVE
-	pilot_065_effect_01.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_065_effect_01.priority = 100
-	pilot_065_effect_01.once_per_turn_key = &"pilot_065_effect_01"
-	pilot_065_effect_01.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_065_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_065_effect_01.costs = [
-		{"cost_type": &"DISCARD_ACTION_CARD", "count": 1},
-	]
-	pilot_065_effect_01.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_065_effect_01",
-			"text": "3格范围内的机甲抽取行动牌前，我方可以弃置1张行动牌，翻开行动牌堆顶3张牌，弃置其中的任意牌，剩下的放回牌堆顶。",
-		}},
-	]
-	pilot_065_effect_01.description = "每回合1次，3格范围内的机甲抽取行动牌前，我方可以弃置1张行动牌，翻开行动牌堆顶3张牌，弃置其中的任意牌，剩下的放回牌堆顶。"
-	effects[pilot_065_effect_01.effect_id] = pilot_065_effect_01
+	# ── pilot_068 冰魄：已迁移至新 Action Engine（ActionPilotEffects.build_pilot_effects）──
+	# 效果「我方使用迎击牌响应攻击时，该攻击范围-2（不会低于1）。若该攻击没有命中，我方抽2张行动牌。」
+	# 由新体系拆为 2 个 LISTEN 效果（按钮1 + 隐藏合并描述）：
+	#   effect_01（USE_ACTION_AT）：迎击响应时先于迎击牌效果前 MODIFY_ATTACK_RANGE -2(min 1) +
+	#     SET_ACTION_RECORD_FLAG；effect_02（ATTACK_AFTER）：flag 已设 + PAYLOAD_ATTACK_MISS 时
+	#     EXECUTE_GAIN_CARD 抽2。旧 MODE_PASSIVE（CUSTOM_EFFECT_CHECK_TEXT 假动作）实现已移除。
 
-	# ── pilot_066 骇客：移动后查看+条件回复 ──
-	var pilot_066_effect_01 := CardEffect.new()
-	pilot_066_effect_01.effect_id = &"pilot_066_effect_01"
-	pilot_066_effect_01.display_name = "骇客-移动查看加成"
-	pilot_066_effect_01.mode = _EffectConst.MODE_PASSIVE
-	pilot_066_effect_01.hook = _EffectConst.HOOK_MECH_MOVED
-	pilot_066_effect_01.priority = 90
-	pilot_066_effect_01.once_per_turn_key = &"pilot_066_effect_01"  # 每回合2次
-	pilot_066_effect_01.conditions = [
-		{"op": &"MOVED_DISTANCE_THIS_TURN_ABOVE", "threshold": 1},
-	]
-	pilot_066_effect_01.target_rules = [{"rule": &"CHOOSE_ENEMY_MECH_IN_RANGE", "range": 3}]
-	pilot_066_effect_01.costs = []
-	pilot_066_effect_01.actions = [
-		{"type": &"REVEAL_OR_PEEK_CARD", "params": {"mode": &"peek"}},
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_066_effect_01",
-			"text": "移动后可以查看3格范围内1台其他机甲的1张随机行动牌。若该牌是攻击牌，我方回复2动力，本回合攻击次数+1。",
-		}},
-	]
-	pilot_066_effect_01.description = "我方回合2次，移动后可以查看3格范围内1台其他机甲的1张随机行动牌。若该牌是攻击牌，我方回复2动力，本回合攻击次数+1。"
-	effects[pilot_066_effect_01.effect_id] = pilot_066_effect_01
+	# ── pilot_069 影刹：已迁移至新 Action Engine（ActionPilotEffects.build_pilot_effects）──
+	# 效果「每个我方回合结束时，若本回合未发动攻击，则下次攻击威力+3；若本回合移动未超过4格，
+	# 则下次攻击范围+1。上述效果可叠加。」由新体系拆为 3 个 LISTEN 效果（按钮1 + 两个隐藏合并描述）：
+	#   effect_01（TURN_END）：通用 ACCUMULATE_NEXT_ATTACK_BONUS 读机甲 has_attacked_this_turn /
+	#     cells_moved_this_turn 累加两张牌计数器（pilot_069_next_might/next_range，跨回合叠加）；
+	#   effect_02（ATTACK_BEFORE）：通用 APPLY_NEXT_ATTACK_BONUS 读计数器写 attack.record 的
+	#     extra_might/extra_range（选目标前生效、双连 fork 深拷贝继承）；effect_03（ATTACK_SETTLE）：
+	#     SET_CARD_COUNTER 置 0（攻击完全结算后消失，取消攻击保留）。
+	# 旧 MODE_PASSIVE（01a MODIFY_NEXT_DAMAGE_DEALT/01b CUSTOM_EFFECT_CHECK_TEXT 假动作）实现已移除。
 
-	# ── pilot_067 丹：2张当作双连使用+双连加成 ──
-	var pilot_067_effect_01 := CardEffect.new()
-	pilot_067_effect_01.effect_id = &"pilot_067_effect_01"
-	pilot_067_effect_01.display_name = "丹-当作双连"
-	pilot_067_effect_01.mode = _EffectConst.MODE_ACTIVE
-	pilot_067_effect_01.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_067_effect_01.priority = 100
-	pilot_067_effect_01.once_per_turn_key = &"pilot_067_effect_01"
-	pilot_067_effect_01.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_067_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_067_effect_01.costs = [
-		{"cost_type": &"DISCARD_ACTION_CARD", "count": 2},
-	]
-	pilot_067_effect_01.actions = [
-		{"type": &"TREAT_CARD_AS_NAMED_TYPE", "params": {"named_type": &"双连"}},
-	]
-	pilot_067_effect_01.description = "每回合1次，可以将2张行动牌当作双连使用。"
-	effects[pilot_067_effect_01.effect_id] = pilot_067_effect_01
+	# ── pilot_070 烈火：已迁移至新 Action Engine（ActionPilotEffects.build_pilot_effects）──
+	# 效果「若发动的攻击命中，则可以抽3张行动牌（这些牌本回合不占行动牌上限）。」
+	# 由新体系定义为 1 个 LISTEN 效果（按钮1，build_attack_hit_draw_and_tag_effect 通用模块）：
+	#   effect_01（ATTACK_AFTER / attack）：SELF_MECH_IS_ATTACKER + PAYLOAD_ATTACK_HIT 时
+	#     EXECUTE_GAIN_CARD 抽3 行动牌，_tag_on_draw 给抽到的牌打"燃"标签（本回合不占行动牌上限，
+	#     弃超上限牌时排除；回合结束后由 TurnService 步骤7.1 清标签）。
+	# 旧 MODE_PASSIVE（HOOK_ATTACK_HIT + SOURCE_OWNER_IS_ATTACKER，新引擎不可用的旧条件）实现已移除。
 
-	# ── pilot_068 冰魄：迎击时攻击范围-2+未命中抽2 ──
-	var pilot_068_effect_01 := CardEffect.new()
-	pilot_068_effect_01.effect_id = &"pilot_068_effect_01"
-	pilot_068_effect_01.display_name = "冰魄-迎击范围-2"
-	pilot_068_effect_01.mode = _EffectConst.MODE_PASSIVE
-	pilot_068_effect_01.hook = _EffectConst.HOOK_REACTION_CARD_PLAYED
-	pilot_068_effect_01.priority = 80
-	pilot_068_effect_01.once_per_turn_key = &"pilot_068_effect_01"
-	pilot_068_effect_01.conditions = [
-		{"op": &"SOURCE_OWNER_IS_TARGET"},
-	]
-	pilot_068_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_068_effect_01.costs = []
-	pilot_068_effect_01.actions = [
-		{"type": &"MODIFY_ATTACK_RANGE", "params": {"delta": -2, "duration": &"THIS_ATTACK"}},
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_068_miss_draw",
-			"text": "若该攻击没有命中，我方抽2张行动牌。",
-		}},
-	]
-	pilot_068_effect_01.description = "每回合1次，我方响应攻击使用迎击牌时，可以使该攻击范围-2。若该攻击没有命中，我方抽2张行动牌。"
-	effects[pilot_068_effect_01.effect_id] = pilot_068_effect_01
+	# ── pilot_071 弥雅：已迁移至新 Action Engine（ActionPilotEffects.build_pilot_effects）──
+	# 效果「每个我方回合结束后，可以选择1台3格范围内的机甲（包括我方）使其抽3张行动牌，
+	# 之后其再弃置1张牌。」由新体系定义为 1 个 LISTEN 效果（按钮1，build_turn_end_choose_mech_draw_discard_effect
+	# 通用模块）：TURN_AFTER_END + IS_OWNER_TURN 时 CHOOSE_MANY_MECHS 选1台3格内机甲（含自己、可取消）
+	# + EXECUTE_GAIN_CARD 抽3（mech_ids 反查目标玩家）+ EXECUTE_DISCARD 被选玩家必弃1（空手跳过）。
+	# 旧 MODE_ACTIVE（HOOK_TURN_END + CHOOSE_ENEMY_MECH_IN_RANGE + 非法 DISCARD_ACTION_CARD）实现已移除。
 
-	# ── pilot_069 影刹：未攻击+4/未移动+2 ──
-	# 效果01a：回合结束未攻击 → 下次攻击威力+4
-	var pilot_069_effect_01a := CardEffect.new()
-	pilot_069_effect_01a.effect_id = &"pilot_069_effect_01a"
-	pilot_069_effect_01a.display_name = "影刹-未攻+4威力"
-	pilot_069_effect_01a.mode = _EffectConst.MODE_PASSIVE
-	pilot_069_effect_01a.hook = _EffectConst.HOOK_TURN_END
-	pilot_069_effect_01a.priority = 90
-	pilot_069_effect_01a.once_per_turn_key = &"pilot_069_effect_01"
-	pilot_069_effect_01a.conditions = [
-		{"op": &"ATTACK_COUNT_BELOW", "max_count": 1},
-	]
-	pilot_069_effect_01a.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_069_effect_01a.costs = []
-	pilot_069_effect_01a.actions = [
-		{"type": &"MODIFY_NEXT_DAMAGE_DEALT", "params": {"delta": 4}},
-	]
-	pilot_069_effect_01a.description = "每个我方回合结束时，若本回合未发动攻击，则下次攻击威力+4。"
-	effects[pilot_069_effect_01a.effect_id] = pilot_069_effect_01a
+	# ── pilot_072 卡修：已迁移至新 Action Engine（ActionPilotEffects.build_pilot_effects）──
+	# 效果「每个效果每回合1次：使用攻击牌时，回复5动力；使用迎击牌时，回复4动力；使用辅助牌时，回复3动力。」
+	# 由新体系拆为 3 个 LISTEN 效果（按钮1 + 两个隐藏合并描述），共用通用模块
+	# build_use_action_type_restore_power_effect：USE_ACTION_AT + USED_CARD_OWNER_IS_SELF +
+	#   USED_CARD_TYPE_IS（攻击/迎击/辅助）+ RESTORE_POWER（method=restore）。每分支各自
+	#   once_per_turn_key（pilot_072_attack/counter/support_restore），每回合各1次互不影响。
+	# 旧 MODE_PASSIVE（HOOK_ACTION_CARD_PLAYED 等旧条件）实现已移除。
 
-	# 效果01b：回合结束未移动 → 下次攻击范围+2
-	var pilot_069_effect_01b := CardEffect.new()
-	pilot_069_effect_01b.effect_id = &"pilot_069_effect_01b"
-	pilot_069_effect_01b.display_name = "影刹-未移+2范围"
-	pilot_069_effect_01b.mode = _EffectConst.MODE_PASSIVE
-	pilot_069_effect_01b.hook = _EffectConst.HOOK_TURN_END
-	pilot_069_effect_01b.priority = 90
-	pilot_069_effect_01b.once_per_turn_key = &"pilot_069_effect_01"
-	pilot_069_effect_01b.conditions = [
-		{"op": &"ALWAYS"},  # 未移动条件需要通过 moved_cells_this_turn == 0 判断
-	]
-	pilot_069_effect_01b.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_069_effect_01b.costs = []
-	pilot_069_effect_01b.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_069_no_move_bonus",
-			"text": "若本回合未移动，下次攻击范围+2。上述效果无法累加。",
-		}},
-	]
-	pilot_069_effect_01b.description = "每个我方回合结束时，若本回合未移动，则下次攻击范围+2。上述效果无法累加。"
-	effects[pilot_069_effect_01b.effect_id] = pilot_069_effect_01b
+	# ── pilot_073 法尔科：已迁移至新 Action Engine（ActionPilotEffects.build_pilot_effects）──
+	# 效果「我方回合1次，可以弃置2张行动牌，之后抽取1张高级装备牌，并背面朝上置于我方或其他机甲
+	# 的备用区，直到下个我方回合开始后，该高级装备牌不能主动设置与卖出。」由新体系定义为 1 个
+	# DIRECT 效果（按钮1，build_discard_draw_advanced_equip_set_reserve_effect 通用模块）：
+	#   CHOOSE_MANY_CARDS 弃2行动（可取消）→ EXECUTE_DISCARD → EXECUTE_GAIN_CARD 抽1高级装备
+	#   （_tag_on_draw 打"禁"标签 + _draw_result_sink 回写抽到的牌）→ 新 act_type
+	#   CHOOSE_RESERVE_SLOT_AND_SET_EQUIP（TimingEngine 弹备用区选择，仅显示占位不翻牌，
+	#   效果驱动设置绕过主动设置/卖出拦截）。"禁"标签在持有者下个我方回合开始后由 TurnService
+	#   （TURN_AFTER_START）清除。旧 MODE_ACTIVE（HOOK_OWNER_MAIN_PHASE + DRAW_ADVANCED_EQUIPMENT
+	#   + 假 CUSTOM_EFFECT_CHECK_TEXT，无备用区选择/无背面设置/无禁用）实现已移除。
 
-	# ── pilot_070 烈火：攻击命中抽3 ──
-	var pilot_070_effect_01 := CardEffect.new()
-	pilot_070_effect_01.effect_id = &"pilot_070_effect_01"
-	pilot_070_effect_01.display_name = "烈火-命中抽3"
-	pilot_070_effect_01.mode = _EffectConst.MODE_PASSIVE
-	pilot_070_effect_01.hook = _EffectConst.HOOK_ATTACK_HIT
-	pilot_070_effect_01.priority = 90
-	pilot_070_effect_01.once_per_turn_key = &""
-	pilot_070_effect_01.conditions = [
-		{"op": &"SOURCE_OWNER_IS_ATTACKER"},
-		{"op": &"PAYLOAD_ATTACK_HIT"},
-	]
-	pilot_070_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_070_effect_01.costs = []
-	pilot_070_effect_01.actions = [
-		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 3}},
-	]
-	pilot_070_effect_01.description = "若发动的攻击命中，则可以抽3张行动牌。"
-	effects[pilot_070_effect_01.effect_id] = pilot_070_effect_01
+	# ── pilot_074 泰特：近战弃1+3威力/授予他机（已迁移到新 Action 体系）──
+	# 旧 MODE_PASSIVE（HOOK_ATTACK_MODIFIER_WINDOW + EQUIPPED_WEAPON_KIND + DISCARD_ACTION_CARD cost +
+	# MODIFY_ATTACK_POWER / HOOK_OTHER_MECH_TURN_START + TOGGLE_EFFECT_ON_MECH）实现已移除，
+	# 新实现见 ActionPilotEffects.build_pilot_effects() pilot_074 段（DIRECT 按钮1/2 +
+	# 隐藏 LISTEN apply/consume/turnend/expire + "近战弃牌威力"通用模块）。
 
-	# ── pilot_071 弥雅：回合后选机甲抽3弃1 ──
-	var pilot_071_effect_01 := CardEffect.new()
-	pilot_071_effect_01.effect_id = &"pilot_071_effect_01"
-	pilot_071_effect_01.display_name = "弥雅-选机甲抽3弃1"
-	pilot_071_effect_01.mode = _EffectConst.MODE_ACTIVE
-	pilot_071_effect_01.hook = _EffectConst.HOOK_TURN_END
-	pilot_071_effect_01.priority = 100
-	pilot_071_effect_01.once_per_turn_key = &""
-	pilot_071_effect_01.conditions = [{"op": &"ALWAYS"}]
-	pilot_071_effect_01.target_rules = [{"rule": &"CHOOSE_ENEMY_MECH_IN_RANGE", "range": 3}]
-	pilot_071_effect_01.costs = []
-	pilot_071_effect_01.actions = [
-		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 3}},
-		{"type": &"DISCARD_ACTION_CARD", "params": {"count": 1}},
-	]
-	pilot_071_effect_01.description = "每个我方回合结束后，可以选择1台3格范围内的机甲使其抽3张行动牌，之后其再弃置1张牌。"
-	effects[pilot_071_effect_01.effect_id] = pilot_071_effect_01
+	# ── pilot_075 肯尼斯：弃1行动牌3次/弃置加成（已迁移到新 Action 体系）──
+	# 旧 MODE_ACTIVE(HOOK_OWNER_MAIN_PHASE) + MODE_PASSIVE(HOOK_CARD_DISCARDED +
+	# CUSTOM_EFFECT_CHECK_TEXT) 实现已移除，新实现见
+	# ActionPilotEffects.build_pilot_effects() pilot_075 段：
+	#   · pilot_075_effect_01（DIRECT 按钮1，我方回合3次弃1行动牌，显式 MARK 计次）
+	#   · pilot_075_effect_02（LISTEN DISCARD_AFTER 按钮2，弃置行动牌后弹窗抽1/威力+2，含辅助牌自动双效果）
+	#   · 隐藏 effect_02_auto/_apply/_consume/_turnend（含辅助牌自动执行 / ATTACK_BEFORE 应用 / ATTACK_SETTLE 消耗 / TURN_AFTER_END 清空）
+	#   · 待发威力走来源牌实例计数器 var_p075_next_might（INCREMENT_VARIABLE/APPLY_NEXT_ATTACK_BONUS/SET_CARD_COUNTER，
+	#     零新增原子动作，与效果绑定不绑机师）
 
-	# ── pilot_072 卡修：使用各类型回复动力 ──
-	# 辅助牌 → 回复4动力
-	var pilot_072_effect_01a := CardEffect.new()
-	pilot_072_effect_01a.effect_id = &"pilot_072_effect_01a"
-	pilot_072_effect_01a.display_name = "卡修-辅助回4动"
-	pilot_072_effect_01a.mode = _EffectConst.MODE_PASSIVE
-	pilot_072_effect_01a.hook = _EffectConst.HOOK_ACTION_CARD_PLAYED
-	pilot_072_effect_01a.priority = 80
-	pilot_072_effect_01a.once_per_turn_key = &"pilot_072_support_restore"
-	pilot_072_effect_01a.conditions = [
-		{"op": &"PAYLOAD_CARD_HAS_TAG", "tag": &"辅助"},
-	]
-	pilot_072_effect_01a.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_072_effect_01a.costs = []
-	pilot_072_effect_01a.actions = [
-		{"type": &"RESTORE_POWER", "params": {"amount": 4}},
-	]
-	pilot_072_effect_01a.description = "使用辅助牌时，回复4动力。"
-	effects[pilot_072_effect_01a.effect_id] = pilot_072_effect_01a
+	# ── pilot_076 疾风：已迁至 ActionPilotEffects.build_pilot_effects()（新 Action 体系）──
+	# 旧 MODE_PASSIVE (HOOK_ATTACK_RESOLVED + CUSTOM_EFFECT_CHECK_TEXT) 占位实现已移除，
+	# 新实现见 ActionPilotEffects pilot_076 段：effect_01 (LISTEN USE_ACTION_BEFORE 强制消耗动力
+	# + COUNTER_POWER_DRAIN_TARGET) + effect_02 (隐藏 LISTEN USE_ACTION_SETTLE 自动 CLAIM 获牌
+	# + COUNTER_CLAIM_TRIGGERED)。通用件不绑机师，复用珀修斯 pilot_007 CLAIM 弃牌堆回收。
 
-	# 攻击牌 → 回复4动力
-	var pilot_072_effect_01b := CardEffect.new()
-	pilot_072_effect_01b.effect_id = &"pilot_072_effect_01b"
-	pilot_072_effect_01b.display_name = "卡修-攻击回4动"
-	pilot_072_effect_01b.mode = _EffectConst.MODE_PASSIVE
-	pilot_072_effect_01b.hook = _EffectConst.HOOK_ATTACK_CARD_PLAYED
-	pilot_072_effect_01b.priority = 80
-	pilot_072_effect_01b.once_per_turn_key = &"pilot_072_attack_restore"
-	pilot_072_effect_01b.conditions = [{"op": &"ALWAYS"}]
-	pilot_072_effect_01b.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_072_effect_01b.costs = []
-	pilot_072_effect_01b.actions = [
-		{"type": &"RESTORE_POWER", "params": {"amount": 4}},
-	]
-	pilot_072_effect_01b.description = "使用攻击牌时，回复4动力。"
-	effects[pilot_072_effect_01b.effect_id] = pilot_072_effect_01b
+	# ── pilot_077 维奥拉（已迁移至新 Action 系统：ActionPilotEffects.build_attack_settle_draw_discard_reattack_effect）──
 
-	# 迎击牌 → 回复5动力
-	var pilot_072_effect_01c := CardEffect.new()
-	pilot_072_effect_01c.effect_id = &"pilot_072_effect_01c"
-	pilot_072_effect_01c.display_name = "卡修-迎击回5动"
-	pilot_072_effect_01c.mode = _EffectConst.MODE_PASSIVE
-	pilot_072_effect_01c.hook = _EffectConst.HOOK_REACTION_CARD_PLAYED
-	pilot_072_effect_01c.priority = 80
-	pilot_072_effect_01c.once_per_turn_key = &"pilot_072_counter_restore"
-	pilot_072_effect_01c.conditions = [{"op": &"ALWAYS"}]
-	pilot_072_effect_01c.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_072_effect_01c.costs = []
-	pilot_072_effect_01c.actions = [
-		{"type": &"RESTORE_POWER", "params": {"amount": 5}},
-	]
-	pilot_072_effect_01c.description = "使用迎击牌时，回复5动力。"
-	effects[pilot_072_effect_01c.effect_id] = pilot_072_effect_01c
+	# ── pilot_078 芮贝卡（已迁移至新 Action 系统：ActionPilotEffects.build_injury_heal_draw_effect）──
 
-	# ── pilot_073 法尔科：弃2行动抽1高级装备 ──
-	var pilot_073_effect_01 := CardEffect.new()
-	pilot_073_effect_01.effect_id = &"pilot_073_effect_01"
-	pilot_073_effect_01.display_name = "法尔科-弃2抽高级装"
-	pilot_073_effect_01.mode = _EffectConst.MODE_ACTIVE
-	pilot_073_effect_01.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_073_effect_01.priority = 100
-	pilot_073_effect_01.once_per_turn_key = &"pilot_073_effect_01"
-	pilot_073_effect_01.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_073_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_073_effect_01.costs = [
-		{"cost_type": &"DISCARD_ACTION_CARD", "count": 2},
-	]
-	pilot_073_effect_01.actions = [
-		{"type": &"DRAW_ADVANCED_EQUIPMENT", "params": {"count": 1}},
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_073_face_down_reserve",
-			"text": "抽1张高级装备牌背面朝上置于备用区，直到下个我方回合结束不能主动设置与卖出。",
-		}},
-	]
-	pilot_073_effect_01.description = "我方回合1次，可以弃置2张行动牌，之后抽取1张高级装备牌背面朝上置于备用区。"
-	effects[pilot_073_effect_01.effect_id] = pilot_073_effect_01
-
-	# ── pilot_074 泰特：近战弃1+3威力/其他机甲获得 ──
-	var pilot_074_effect_01 := CardEffect.new()
-	pilot_074_effect_01.effect_id = &"pilot_074_effect_01"
-	pilot_074_effect_01.display_name = "泰特-近战弃1+3威"
-	pilot_074_effect_01.mode = _EffectConst.MODE_PASSIVE
-	pilot_074_effect_01.hook = _EffectConst.HOOK_ATTACK_MODIFIER_WINDOW
-	pilot_074_effect_01.priority = 90
-	pilot_074_effect_01.once_per_turn_key = &"pilot_074_effect_01"
-	pilot_074_effect_01.conditions = [
-		{"op": &"EQUIPPED_WEAPON_KIND", "weapon_kind": &"近战"},
-	]
-	pilot_074_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_074_effect_01.costs = [
-		{"cost_type": &"DISCARD_ACTION_CARD", "count": 1},
-	]
-	pilot_074_effect_01.actions = [
-		{"type": &"MODIFY_ATTACK_POWER", "params": {"delta": 3}},
-	]
-	pilot_074_effect_01.description = "使用近战武器攻击时，可以弃置1张行动牌使威力+3。"
-	effects[pilot_074_effect_01.effect_id] = pilot_074_effect_01
-
-	# pilot_074效果02：其他机甲回合开始弃1行动获得此效果
-	var pilot_074_effect_02 := CardEffect.new()
-	pilot_074_effect_02.effect_id = &"pilot_074_effect_02"
-	pilot_074_effect_02.display_name = "泰特-他方获效"
-	pilot_074_effect_02.mode = _EffectConst.MODE_PASSIVE
-	pilot_074_effect_02.hook = _EffectConst.HOOK_OTHER_MECH_TURN_START
-	pilot_074_effect_02.priority = 90
-	pilot_074_effect_02.once_per_turn_key = &""
-	pilot_074_effect_02.conditions = [{"op": &"ALWAYS"}]
-	pilot_074_effect_02.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_074_effect_02.costs = [
-		{"cost_type": &"DISCARD_ACTION_CARD", "count": 1},
-	]
-	pilot_074_effect_02.actions = [
-		{"type": &"TOGGLE_EFFECT_ON_MECH", "params": {
-			"effect_id": &"pilot_074_effect_01",
-			"toggle": &"restore",
-		}},
-	]
-	pilot_074_effect_02.description = "其他机甲回合开始时，可以通过弃置1张行动牌使该机甲在当前回合内获得近战威力+3效果。"
-	effects[pilot_074_effect_02.effect_id] = pilot_074_effect_02
-
-	# ── pilot_075 肯尼斯：弃牌选择抽1或+3威力 ──
-	var pilot_075_effect_01 := CardEffect.new()
-	pilot_075_effect_01.effect_id = &"pilot_075_effect_01"
-	pilot_075_effect_01.display_name = "肯尼斯-弃1行动"
-	pilot_075_effect_01.mode = _EffectConst.MODE_ACTIVE
-	pilot_075_effect_01.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_075_effect_01.priority = 100
-	pilot_075_effect_01.once_per_turn_key = &"pilot_075_effect_01"
-	pilot_075_effect_01.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_075_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_075_effect_01.costs = [
-		{"cost_type": &"DISCARD_ACTION_CARD", "count": 1},
-	]
-	pilot_075_effect_01.actions = []
-	pilot_075_effect_01.description = "我方回合1次，可以弃置1张行动牌。"
-	effects[pilot_075_effect_01.effect_id] = pilot_075_effect_01
-
-	# pilot_075效果02：行动牌被弃置时选择加成
-	var pilot_075_effect_02 := CardEffect.new()
-	pilot_075_effect_02.effect_id = &"pilot_075_effect_02"
-	pilot_075_effect_02.display_name = "肯尼斯-弃置加成"
-	pilot_075_effect_02.mode = _EffectConst.MODE_PASSIVE
-	pilot_075_effect_02.hook = _EffectConst.HOOK_CARD_DISCARDED
-	pilot_075_effect_02.priority = 80
-	pilot_075_effect_02.once_per_turn_key = &""
-	pilot_075_effect_02.conditions = [
-		{"op": &"PAYLOAD_CARD_HAS_TAG", "tag": &"行动牌"},
-	]
-	pilot_075_effect_02.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_075_effect_02.costs = []
-	pilot_075_effect_02.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_075_effect_02",
-			"text": "每次我方行动牌被弃置，可以选择抽1张行动牌或使本回合下一次攻击威力+3。若弃置的是辅助牌，则两个效果都执行。",
-		}},
-	]
-	pilot_075_effect_02.description = "每次我方行动牌被弃置，可以选择抽1张行动牌或使本回合下一次攻击威力+3。若弃置的是辅助牌，则两个效果都执行。"
-	effects[pilot_075_effect_02.effect_id] = pilot_075_effect_02
-
-	# ── pilot_076 疾风：获得迎击牌/获得攻击牌 ──
-	var pilot_076_effect_01 := CardEffect.new()
-	pilot_076_effect_01.effect_id = &"pilot_076_effect_01"
-	pilot_076_effect_01.display_name = "疾风-获响应牌"
-	pilot_076_effect_01.mode = _EffectConst.MODE_PASSIVE
-	pilot_076_effect_01.hook = _EffectConst.HOOK_ATTACK_RESOLVED
-	pilot_076_effect_01.priority = 80
-	pilot_076_effect_01.once_per_turn_key = &""
-	pilot_076_effect_01.conditions = [{"op": &"ALWAYS"}]
-	pilot_076_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_076_effect_01.costs = []
-	pilot_076_effect_01.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_076_effect_01",
-			"text": "我方发动的攻击被迎击牌响应后，可以获得该迎击牌。用迎击牌响应攻击牌发动的攻击后，可以获得该攻击牌。",
-		}},
-	]
-	pilot_076_effect_01.description = "我方发动的攻击被迎击牌响应后，可以获得该迎击牌。用迎击牌响应攻击牌发动的攻击后，可以获得该攻击牌。"
-	effects[pilot_076_effect_01.effect_id] = pilot_076_effect_01
-
-	# ── pilot_077 维奥拉：当作推进+推进加成 ──
-	var pilot_077_effect_01 := CardEffect.new()
-	pilot_077_effect_01.effect_id = &"pilot_077_effect_01"
-	pilot_077_effect_01.display_name = "维奥拉-当作推进"
-	pilot_077_effect_01.mode = _EffectConst.MODE_ACTIVE
-	pilot_077_effect_01.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_077_effect_01.priority = 100
-	pilot_077_effect_01.once_per_turn_key = &"pilot_077_effect_01"
-	pilot_077_effect_01.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_077_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_077_effect_01.costs = [
-		{"cost_type": &"DISCARD_ACTION_CARD", "count": 1},
-	]
-	pilot_077_effect_01.actions = [
-		{"type": &"TREAT_CARD_AS_NAMED_TYPE", "params": {"named_type": &"推进"}},
-	]
-	pilot_077_effect_01.description = "每回合1次，可以将1张行动牌当作推进使用。"
-	effects[pilot_077_effect_01.effect_id] = pilot_077_effect_01
-
-	# pilot_077效果02：推进下次攻击+2威力+可对2格范围机甲使用
-	var pilot_077_effect_02 := CardEffect.new()
-	pilot_077_effect_02.effect_id = &"pilot_077_effect_02"
-	pilot_077_effect_02.display_name = "维奥拉-推进+2威"
-	pilot_077_effect_02.mode = _EffectConst.MODE_PASSIVE
-	pilot_077_effect_02.hook = _EffectConst.HOOK_ATTACK_MODIFIER_WINDOW
-	pilot_077_effect_02.priority = 80
-	pilot_077_effect_02.once_per_turn_key = &""
-	pilot_077_effect_02.conditions = [
-		{"op": &"PAYLOAD_CARD_HAS_TAG", "tag": &"推进"},
-	]
-	pilot_077_effect_02.target_rules = [{"rule": &"CHOOSE_ENEMY_MECH_IN_RANGE", "range": 2}]
-	pilot_077_effect_02.costs = []
-	pilot_077_effect_02.actions = [
-		{"type": &"MODIFY_NEXT_DAMAGE_DEALT", "params": {"delta": 2}},
-	]
-	pilot_077_effect_02.description = "我方使用的推进获得以下效果：本回合下次攻击威力+2。可以对2格范围内的其他机甲使用。"
-	effects[pilot_077_effect_02.effect_id] = pilot_077_effect_02
-
-	# ── pilot_078 芮贝卡：范围内受伤弃1回复2+抽1 ──
-	var pilot_078_effect_01 := CardEffect.new()
-	pilot_078_effect_01.effect_id = &"pilot_078_effect_01"
-	pilot_078_effect_01.display_name = "芮贝卡-受伤回复"
-	pilot_078_effect_01.mode = _EffectConst.MODE_PASSIVE
-	pilot_078_effect_01.hook = _EffectConst.HOOK_OWNER_TAKE_DAMAGE
-	pilot_078_effect_01.priority = 80
-	pilot_078_effect_01.once_per_turn_key = &"pilot_078_effect_01"
-	pilot_078_effect_01.conditions = [{"op": &"ALWAYS"}]
-	pilot_078_effect_01.target_rules = [{"rule": &"TARGET_IN_RANGE", "range": 3}]
-	pilot_078_effect_01.costs = [
-		{"cost_type": &"DISCARD_ACTION_CARD", "count": 1},
-	]
-	pilot_078_effect_01.actions = [
-		{"type": &"HEAL_HP", "params": {"amount": 2}},
-		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 1}},
-	]
-	pilot_078_effect_01.description = "每回合2次，3格范围内的机甲受到伤害后，可以弃置1张行动牌，使其回复2生命并抽1张行动牌。"
-	effects[pilot_078_effect_01.effect_id] = pilot_078_effect_01
-
-	# ── pilot_079 莉诺：原价购买商店装备 ──
-	var pilot_079_effect_01 := CardEffect.new()
-	pilot_079_effect_01.effect_id = &"pilot_079_effect_01"
-	pilot_079_effect_01.display_name = "莉诺-原价购买"
-	pilot_079_effect_01.mode = _EffectConst.MODE_ACTIVE
-	pilot_079_effect_01.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_079_effect_01.priority = 100
-	pilot_079_effect_01.once_per_turn_key = &"pilot_079_effect_01"
-	pilot_079_effect_01.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_079_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_079_effect_01.costs = []
-	pilot_079_effect_01.actions = [
-		{"type": &"SHOP_BUY_MODIFIER", "params": {"scope": &"ORIGINAL_PRICE"}},
-	]
-	pilot_079_effect_01.description = "我方回合2次，可以用原价购买商店里的1张装备牌。"
-	effects[pilot_079_effect_01.effect_id] = pilot_079_effect_01
+	# ── pilot_079 莉诺：原价购买商店装备（已迁移至新 Action 体系）──
+	# 新实现见 ActionPilotEffects.build_pilot_effects() pilot_079 段 + 通用
+	#   build_face_value_buy_effect 模块（LISTEN TURN_START 重置计数器 + 商店弹窗独立
+	#   "原价购买"选项 + ShopService 购买消耗），不再使用废弃的 SHOP_BUY_MODIFIER。
+	# 原旧版 SHOP_BUY_MODIFIER 实现已移除。
 
 	# ── pilot_080 墨尘：地图标记交互（CUSTOM） ──
 	var pilot_080_effect_01 := CardEffect.new()
@@ -710,159 +215,11 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_080_effect_01.description = "我方回合中，若机甲相邻的格子上存在标记，则可以移去该标记；或立即移至该格子上，之后该标记生效后可以使该效果再生效1次。"
 	effects[pilot_080_effect_01.effect_id] = pilot_080_effect_01
 
-	# ── pilot_081 汀兰：绿格子光环（CUSTOM） ──
-	# 效果01：绿格子1动力+周围变绿
-	var pilot_081_effect_01 := CardEffect.new()
-	pilot_081_effect_01.effect_id = &"pilot_081_effect_01"
-	pilot_081_effect_01.display_name = "汀兰-绿格子光环"
-	pilot_081_effect_01.mode = _EffectConst.MODE_STATIC
-	pilot_081_effect_01.hook = _EffectConst.HOOK_STAT_RECALCULATE
-	pilot_081_effect_01.priority = 70
-	pilot_081_effect_01.once_per_turn_key = &""
-	pilot_081_effect_01.conditions = [{"op": &"ALWAYS"}]
-	pilot_081_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_081_effect_01.costs = []
-	pilot_081_effect_01.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_081_effect_01",
-			"text": "绿格子对我方仅消耗1动力。我方所在的格子与周围相邻的所有格子（红格子除外）视为绿格子。",
-		}},
-	]
-	pilot_081_effect_01.description = "绿格子对我方仅消耗1动力。我方所在的格子与周围相邻的所有格子（红格子除外）视为绿格子。"
-	effects[pilot_081_effect_01.effect_id] = pilot_081_effect_01
+	# ── pilot_081 汀兰：已迁移至 ActionPilotEffects（新动作引擎，绿格光环按需派生 + RE 请求回复） ──
 
-	# 效果02：绿格上回复2+获2金
-	var pilot_081_effect_02 := CardEffect.new()
-	pilot_081_effect_02.effect_id = &"pilot_081_effect_02"
-	pilot_081_effect_02.display_name = "汀兰-绿格回2获2金"
-	pilot_081_effect_02.mode = _EffectConst.MODE_PASSIVE
-	pilot_081_effect_02.hook = _EffectConst.HOOK_OTHER_MECH_TURN_START
-	pilot_081_effect_02.priority = 80
-	pilot_081_effect_02.once_per_turn_key = &""
-	pilot_081_effect_02.conditions = [{"op": &"ALWAYS"}]
-	pilot_081_effect_02.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_081_effect_02.costs = []
-	pilot_081_effect_02.actions = [
-		{"type": &"HEAL_HP", "params": {"amount": 2}},
-		{"type": &"GAIN_GOLD", "params": {"amount": 2}},
-	]
-	pilot_081_effect_02.description = "处在绿格子上的机甲在其回合内1次，我方可以使其回复2点生命，获得2金币。"
-	effects[pilot_081_effect_02.effect_id] = pilot_081_effect_02
+	# ── pilot_082 温斯顿：已迁移至 ActionPilotEffects（新动作引擎，交牌+联标签+当作3类型） ──
 
-	# ── pilot_082 温斯顿：交牌+攻击次数+当作3类型 ──
-	# 效果01：交牌+下回合攻击数+1
-	var pilot_082_effect_01 := CardEffect.new()
-	pilot_082_effect_01.effect_id = &"pilot_082_effect_01"
-	pilot_082_effect_01.display_name = "温斯顿-交牌攻击+1"
-	pilot_082_effect_01.mode = _EffectConst.MODE_ACTIVE
-	pilot_082_effect_01.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_082_effect_01.priority = 100
-	pilot_082_effect_01.once_per_turn_key = &"pilot_082_effect_01"
-	pilot_082_effect_01.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_082_effect_01.target_rules = [{"rule": &"CHOOSE_ENEMY_MECH_IN_RANGE", "range": 3}]
-	pilot_082_effect_01.costs = []
-	pilot_082_effect_01.actions = [
-		{"type": &"TRANSFER_ACTION_CARDS", "params": {"count": 0}},  # 任意张
-		{"type": &"MODIFY_ATTACK_COUNT", "params": {"delta": 1, "duration": &"NEXT_TURN"}},
-	]
-	pilot_082_effect_01.description = "我方回合1次，可以将任意张行动牌交给3格内的1台其他机甲，令其下回合的攻击次数+1。"
-	effects[pilot_082_effect_01.effect_id] = pilot_082_effect_01
-
-	# 效果02：攻击牌当作掩护/维修/推进（3个共享once_per_turn_key的选择）
-	var pilot_082_effect_02a := CardEffect.new()
-	pilot_082_effect_02a.effect_id = &"pilot_082_effect_02a"
-	pilot_082_effect_02a.display_name = "温斯顿-当作掩护"
-	pilot_082_effect_02a.mode = _EffectConst.MODE_ACTIVE
-	pilot_082_effect_02a.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_082_effect_02a.priority = 100
-	pilot_082_effect_02a.once_per_turn_key = &"pilot_082_effect_02"
-	pilot_082_effect_02a.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_082_effect_02a.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_082_effect_02a.costs = [
-		{"cost_type": &"DISCARD_ACTION_CARD", "count": 1},
-	]
-	pilot_082_effect_02a.actions = [
-		{"type": &"TREAT_CARD_AS_NAMED_TYPE", "params": {"named_type": &"掩护"}},
-	]
-	pilot_082_effect_02a.description = "我方可以把攻击牌当作掩护使用。"
-	effects[pilot_082_effect_02a.effect_id] = pilot_082_effect_02a
-
-	var pilot_082_effect_02b := CardEffect.new()
-	pilot_082_effect_02b.effect_id = &"pilot_082_effect_02b"
-	pilot_082_effect_02b.display_name = "温斯顿-当作维修"
-	pilot_082_effect_02b.mode = _EffectConst.MODE_ACTIVE
-	pilot_082_effect_02b.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_082_effect_02b.priority = 100
-	pilot_082_effect_02b.once_per_turn_key = &"pilot_082_effect_02"
-	pilot_082_effect_02b.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_082_effect_02b.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_082_effect_02b.costs = [
-		{"cost_type": &"DISCARD_ACTION_CARD", "count": 1},
-	]
-	pilot_082_effect_02b.actions = [
-		{"type": &"TREAT_CARD_AS_NAMED_TYPE", "params": {"named_type": &"维修"}},
-	]
-	pilot_082_effect_02b.description = "我方可以把攻击牌当作维修使用。"
-	effects[pilot_082_effect_02b.effect_id] = pilot_082_effect_02b
-
-	var pilot_082_effect_02c := CardEffect.new()
-	pilot_082_effect_02c.effect_id = &"pilot_082_effect_02c"
-	pilot_082_effect_02c.display_name = "温斯顿-当作推进"
-	pilot_082_effect_02c.mode = _EffectConst.MODE_ACTIVE
-	pilot_082_effect_02c.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_082_effect_02c.priority = 100
-	pilot_082_effect_02c.once_per_turn_key = &"pilot_082_effect_02"
-	pilot_082_effect_02c.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_082_effect_02c.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_082_effect_02c.costs = [
-		{"cost_type": &"DISCARD_ACTION_CARD", "count": 1},
-	]
-	pilot_082_effect_02c.actions = [
-		{"type": &"TREAT_CARD_AS_NAMED_TYPE", "params": {"named_type": &"推进"}},
-	]
-	pilot_082_effect_02c.description = "我方可以把攻击牌当作推进使用。"
-	effects[pilot_082_effect_02c.effect_id] = pilot_082_effect_02c
-
-	# ── pilot_083 瓦恩：武器修改+他方获效 ──
-	var pilot_083_effect_01 := CardEffect.new()
-	pilot_083_effect_01.effect_id = &"pilot_083_effect_01"
-	pilot_083_effect_01.display_name = "瓦恩-武器修改"
-	pilot_083_effect_01.mode = _EffectConst.MODE_ACTIVE
-	pilot_083_effect_01.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_083_effect_01.priority = 100
-	pilot_083_effect_01.once_per_turn_key = &"pilot_083_effect_01"
-	pilot_083_effect_01.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_083_effect_01.target_rules = [{"rule": &"CHOOSE_OWN_WEAPON"}]
-	pilot_083_effect_01.costs = []
-	pilot_083_effect_01.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_083_effect_01",
-			"text": "每回合1次，可以将1把武器名称加上热能或光束，类型转变为近战或远程武器，并使威力+3或范围+1（持续到当前回合结束）。",
-		}},
-	]
-	pilot_083_effect_01.description = "每回合1次，可以将1把武器名称加上热能或光束，类型转变为近战或远程武器，并使威力+3或范围+1。"
-	effects[pilot_083_effect_01.effect_id] = pilot_083_effect_01
-
-	var pilot_083_effect_02 := CardEffect.new()
-	pilot_083_effect_02.effect_id = &"pilot_083_effect_02"
-	pilot_083_effect_02.display_name = "瓦恩-他方获效"
-	pilot_083_effect_02.mode = _EffectConst.MODE_PASSIVE
-	pilot_083_effect_02.hook = _EffectConst.HOOK_OTHER_MECH_TURN_START
-	pilot_083_effect_02.priority = 90
-	pilot_083_effect_02.once_per_turn_key = &""
-	pilot_083_effect_02.conditions = [{"op": &"ALWAYS"}]
-	pilot_083_effect_02.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_083_effect_02.costs = [
-		{"cost_type": &"SPEND_GOLD", "amount": 2},
-	]
-	pilot_083_effect_02.actions = [
-		{"type": &"TOGGLE_EFFECT_ON_MECH", "params": {
-			"effect_id": &"pilot_083_effect_01",
-			"toggle": &"restore",
-		}},
-	]
-	pilot_083_effect_02.description = "在3格内的其他机甲可以在其回合内，消耗2金币使我方可以对其使用上述所有效果。"
-	effects[pilot_083_effect_02.effect_id] = pilot_083_effect_02
+	# ── pilot_083 瓦恩：已迁移至 ActionPilotEffects（新动作引擎，武器修改两阶段流程 + RE 请求） ──
 
 	# ── pilot_084 莎菲雅：2张当作联合+抽2 ──
 	var pilot_084_effect_01 := CardEffect.new()
@@ -942,86 +299,19 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_085_effect_01b.description = "场上其他机甲上正面设置的装备牌弃置时，可立即获得3金币。"
 	effects[pilot_085_effect_01b.effect_id] = pilot_085_effect_01b
 
-	# ── pilot_086 獠鼠：攻击骰子分支 ──
-	var pilot_086_effect_01 := CardEffect.new()
-	pilot_086_effect_01.effect_id = &"pilot_086_effect_01"
-	pilot_086_effect_01.display_name = "獠鼠-骰子攻击"
-	pilot_086_effect_01.mode = _EffectConst.MODE_PASSIVE
-	pilot_086_effect_01.hook = _EffectConst.HOOK_ATTACK_DECLARED
-	pilot_086_effect_01.priority = 80
-	pilot_086_effect_01.once_per_turn_key = &""
-	pilot_086_effect_01.conditions = [
-		{"op": &"SOURCE_OWNER_IS_ATTACKER"},
-	]
-	pilot_086_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_086_effect_01.costs = []
-	pilot_086_effect_01.actions = [
-		{"type": &"ROLL_D6", "params": {"store_key": &"pilot_086_dice_result"}},
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_086_effect_01",
-			"text": "指定目标发动攻击时，可以投掷1个骰子：1：我方机甲设置1损伤；2~3：弃置目标1张行动牌；4~5：我方抽2张行动牌；6：对目标施加锁定效果。",
-		}},
-	]
-	pilot_086_effect_01.description = "指定目标发动攻击时，可以投掷1个骰子：1：我方机甲设置1损伤；2~3：弃置目标1张行动牌；4~5：我方抽2张行动牌；6：对目标施加锁定效果。"
-	effects[pilot_086_effect_01.effect_id] = pilot_086_effect_01
+	# ── pilot_086 獠鼠：已迁移到新系统 ActionPilotEffects.pilot_086_effect_01 ──
 
-	# ── pilot_087 塔妮拉：交牌获金+使用后各抽1 ──
-	var pilot_087_effect_01 := CardEffect.new()
-	pilot_087_effect_01.effect_id = &"pilot_087_effect_01"
-	pilot_087_effect_01.display_name = "塔妮拉-交牌获2金"
-	pilot_087_effect_01.mode = _EffectConst.MODE_ACTIVE
-	pilot_087_effect_01.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_087_effect_01.priority = 100
-	pilot_087_effect_01.once_per_turn_key = &"pilot_087_effect_01"
-	pilot_087_effect_01.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_087_effect_01.target_rules = [{"rule": &"CHOOSE_ENEMY_MECH_IN_RANGE", "range": 3}]
-	pilot_087_effect_01.costs = []
-	pilot_087_effect_01.actions = [
-		{"type": &"TRANSFER_ACTION_CARDS", "params": {"count": 1}},
-		{"type": &"GAIN_GOLD", "params": {"amount": 2}},
-	]
-	pilot_087_effect_01.description = "我方回合2次，可以将1张行动牌交给1台3格范围内的其他机甲，之后我方获得2金币。"
-	effects[pilot_087_effect_01.effect_id] = pilot_087_effect_01
+	# ── pilot_087 塔妮拉：已迁移至新 Action Engine（ActionPilotEffects.build_pilot_effects）──
+	#   见 ActionPilotEffects.p087e1（DIRECT 交牌获2金，每我方回合2次，仿 pilot_082 模式：
+	#   target_rule CHOOSE_OTHER_MECH + TARGET_IN_RANGE:3 → CHOOSE_MANY_CARDS 选1张我方手牌
+	#   no_cancel:true → post_actions TRANSFER_ACTION_CARDS 打"交"标签 + GAIN_GOLD amount:2）。
+	#   效果2 p087e2（LISTEN 置灰+悬停）：实际逻辑在 discard_card_action._step_transfer_to_pile
+	#   挂钩，由 pilot_087_trigger_jiao_draw 触发双方各抽1。"交"标签生命周期由
+	#   GameActions.transfer_action_cards / steal_action_card 挂钩打标签，discard 挂钩清标签；
+	#   GameSetupService._on_pilot_unset 清塔妮拉名下全部"交"标签。
 
-	var pilot_087_effect_02 := CardEffect.new()
-	pilot_087_effect_02.effect_id = &"pilot_087_effect_02"
-	pilot_087_effect_02.display_name = "塔妮拉-他用后各抽1"
-	pilot_087_effect_02.mode = _EffectConst.MODE_PASSIVE
-	pilot_087_effect_02.hook = _EffectConst.HOOK_CARD_PLAYED
-	pilot_087_effect_02.priority = 80
-	pilot_087_effect_02.once_per_turn_key = &""
-	pilot_087_effect_02.conditions = [
-		{"op": &"PAYLOAD_CARD_HAS_TAG", "tag": &"从我方处获得"},
-	]
-	pilot_087_effect_02.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_087_effect_02.costs = []
-	pilot_087_effect_02.actions = [
-		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 1}},
-	]
-	pilot_087_effect_02.description = "其他机甲使用从我方处获得的行动牌后，该机甲和我方各抽1张行动牌。"
-	effects[pilot_087_effect_02.effect_id] = pilot_087_effect_02
-
-	# ── pilot_088 征服：宣言+展示+弃置 ──
-	var pilot_088_effect_01 := CardEffect.new()
-	pilot_088_effect_01.effect_id = &"pilot_088_effect_01"
-	pilot_088_effect_01.display_name = "征服-宣言弃置"
-	pilot_088_effect_01.mode = _EffectConst.MODE_ACTIVE
-	pilot_088_effect_01.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_088_effect_01.priority = 100
-	pilot_088_effect_01.once_per_turn_key = &"pilot_088_effect_01"
-	pilot_088_effect_01.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_088_effect_01.target_rules = [{"rule": &"CHOOSE_ENEMY_MECH_IN_RANGE", "range": 3}]
-	pilot_088_effect_01.costs = []
-	pilot_088_effect_01.actions = [
-		{"type": &"DECLARE_CARD_TYPE", "params": {}},
-		{"type": &"REVEAL_OR_PEEK_CARD", "params": {"mode": &"peek"}},
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_088_effect_01",
-			"text": "我方回合1次，可以宣言1种行动牌类型，并展示3格范围内1台其他机甲的1张随机行动牌。若该牌类型与宣言相同，则弃置该机甲其余未展示的牌；否则弃置该展示的牌。",
-		}},
-	]
-	pilot_088_effect_01.description = "我方回合1次，可以宣言1种行动牌类型，并展示3格范围内1台其他机甲的1张随机行动牌。若该牌类型与宣言相同，则弃置其余牌；否则弃置该牌。"
-	effects[pilot_088_effect_01.effect_id] = pilot_088_effect_01
+	# ── pilot_088 征服：已迁移到 ActionPilotEffects.p088e1（DIRECT 主动按钮+入口骨架；
+	#   完整选机甲/选类型/展示/弃置流程在 ActionPilotEffects.gd 第二步实现）──
 
 	# ═══════════════════════════════════════════
 	# 批次L：R稀有度机师效果（pilot_029-058）
@@ -1118,10 +408,10 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_031_effect_01.actions = [
 		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
 			"effect_id": &"pilot_031_effect_01",
-			"text": "我方回合1次，可以将任意张行动牌交给4格范围内1台其他机甲，每给出2张牌，之后我方和该机甲可以各抽1张行动牌，护甲+1（持续到下个我方回合开始）。",
+			"text": "我方回合1次，可以将任意张行动牌交给4格范围内1台其他机甲，每给出2张牌，之后我方和该机甲可以各抽1张行动牌，护甲+2（持续到下个我方回合开始）。",
 		}},
 	]
-	pilot_031_effect_01.description = "我方回合1次，可以将任意张行动牌交给4格范围内1台其他机甲，每给出2张牌，之后我方和该机甲可以各抽1张行动牌，护甲+1。"
+	pilot_031_effect_01.description = "我方回合1次，可以将任意张行动牌交给4格范围内1台其他机甲，每给出2张牌，之后我方和该机甲可以各抽1张行动牌，护甲+2。"
 	effects[pilot_031_effect_01.effect_id] = pilot_031_effect_01
 
 	# ── pilot_032 弃1行动牌上限+2 ──
@@ -1140,142 +430,12 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_032_effect_01.actions = [
 		{"type": &"MODIFY_ACTION_HAND_LIMIT", "params": {"delta": 2, "duration": &"NEXT_OWNER_TURN"}},
 	]
-	pilot_032_effect_01.description = "我方回合1次，可以弃置1张行动牌使行动牌上限+2(持续到下个我方回合开始)。"
+	pilot_032_effect_01.description = "我方回合1次，可以选择场上1张机师牌，弃置1张行动牌，使其行动牌上限+2（效果持续到下个我方回合开始）。"
 	effects[pilot_032_effect_01.effect_id] = pilot_032_effect_01
 
-	# ── pilot_033 弃装备抽装备 + 本局1次弃2抽高级 ──
-	var pilot_033_effect_01 := CardEffect.new()
-	pilot_033_effect_01.effect_id = &"pilot_033_effect_01"
-	pilot_033_effect_01.display_name = "弃装抽装"
-	pilot_033_effect_01.mode = _EffectConst.MODE_ACTIVE
-	pilot_033_effect_01.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_033_effect_01.priority = 100
-	pilot_033_effect_01.once_per_turn_key = &"pilot_033_effect_01"
-	pilot_033_effect_01.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_033_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_033_effect_01.costs = [
-		{"cost_type": &"DISCARD_EQUIPMENT_CARD", "count": 1},
-	]
-	pilot_033_effect_01.actions = [
-		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"equipment_deck", "card_kind": &"equipment", "count": 1}},
-	]
-	pilot_033_effect_01.description = "我方回合1次，可以弃置1张装备牌，之后抽1张装备牌。"
-	effects[pilot_033_effect_01.effect_id] = pilot_033_effect_01
-
-	var pilot_033_effect_02 := CardEffect.new()
-	pilot_033_effect_02.effect_id = &"pilot_033_effect_02"
-	pilot_033_effect_02.display_name = "弃2装抽高级"
-	pilot_033_effect_02.mode = _EffectConst.MODE_ACTIVE
-	pilot_033_effect_02.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_033_effect_02.priority = 100
-	pilot_033_effect_02.once_per_turn_key = &"pilot_033_effect_02_per_game"
-	pilot_033_effect_02.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_033_effect_02.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_033_effect_02.costs = [
-		{"cost_type": &"DISCARD_EQUIPMENT_CARD", "count": 2},
-	]
-	pilot_033_effect_02.actions = [
-		{"type": &"DRAW_ADVANCED_EQUIPMENT", "params": {"count": 1}},
-	]
-	pilot_033_effect_02.description = "本局游戏1次，可以弃置2张装备牌，之后抽1张高级装备牌。"
-	effects[pilot_033_effect_02.effect_id] = pilot_033_effect_02
-
-	# ── pilot_034 未伤害攻击损伤-1 + 记录伤害机甲+命中加成 ──
-	var pilot_034_effect_01 := CardEffect.new()
-	pilot_034_effect_01.effect_id = &"pilot_034_effect_01"
-	pilot_034_effect_01.display_name = "未伤害攻击损伤-1"
-	pilot_034_effect_01.mode = _EffectConst.MODE_PASSIVE
-	pilot_034_effect_01.hook = _EffectConst.HOOK_DAMAGE_MODIFIER_WINDOW
-	pilot_034_effect_01.priority = 80
-	pilot_034_effect_01.once_per_turn_key = &""
-	pilot_034_effect_01.conditions = [
-		{"op": &"ATTACK_DEALT_NO_HP_DAMAGE"},
-	]
-	pilot_034_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_034_effect_01.costs = []
-	pilot_034_effect_01.actions = [
-		{"type": &"MODIFY_DAMAGE_TOKENS", "params": {"delta": -1}},
-	]
-	pilot_034_effect_01.description = "未对我方造成伤害的攻击产生的损伤-1。"
-	effects[pilot_034_effect_01.effect_id] = pilot_034_effect_01
-
-	var pilot_034_effect_02 := CardEffect.new()
-	pilot_034_effect_02.effect_id = &"pilot_034_effect_02"
-	pilot_034_effect_02.display_name = "记录伤害+命中加3"
-	pilot_034_effect_02.mode = _EffectConst.MODE_PASSIVE
-	pilot_034_effect_02.hook = _EffectConst.HOOK_ATTACK_HIT
-	pilot_034_effect_02.priority = 80
-	pilot_034_effect_02.once_per_turn_key = &""
-	pilot_034_effect_02.conditions = [
-		{"op": &"SOURCE_OWNER_IS_ATTACKER"},
-	]
-	pilot_034_effect_02.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_034_effect_02.costs = []
-	pilot_034_effect_02.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_034_effect_02",
-			"text": "记录对我方造成过伤害的其他机甲，当我方对其攻击命中时，可额外造成3伤害，并回复我方3生命。",
-		}},
-	]
-	pilot_034_effect_02.description = "记录对我方造成过伤害的其他机甲，当我方对其攻击命中时，可额外造成3伤害，并回复我方3生命。"
-	effects[pilot_034_effect_02.effect_id] = pilot_034_effect_02
-
-	# ── pilot_035 轮开始选机甲+抽牌跟踪 ──
-	var pilot_035_effect_01 := CardEffect.new()
-	pilot_035_effect_01.effect_id = &"pilot_035_effect_01"
-	pilot_035_effect_01.display_name = "选机甲跟踪抽牌"
-	pilot_035_effect_01.mode = _EffectConst.MODE_ACTIVE
-	pilot_035_effect_01.hook = _EffectConst.HOOK_ROUND_START
-	pilot_035_effect_01.priority = 100
-	pilot_035_effect_01.once_per_turn_key = &""
-	pilot_035_effect_01.conditions = [{"op": &"ALWAYS"}]
-	pilot_035_effect_01.target_rules = [{"rule": &"CHOOSE_ENEMY_MECH"}]
-	pilot_035_effect_01.costs = []
-	pilot_035_effect_01.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_035_effect_01",
-			"text": "每轮开始时，选择1台其他机甲，本轮中该机甲每次抽取行动牌时，我方可抽1张行动牌。",
-		}},
-	]
-	pilot_035_effect_01.description = "每轮开始时，选择1台其他机甲，本轮中该机甲每次抽取行动牌时，我方可抽1张行动牌。"
-	effects[pilot_035_effect_01.effect_id] = pilot_035_effect_01
-
-	# ── pilot_036 消耗2金抽1 + 弃2行动获3金 ──
-	var pilot_036_effect_01 := CardEffect.new()
-	pilot_036_effect_01.effect_id = &"pilot_036_effect_01"
-	pilot_036_effect_01.display_name = "消耗2金抽1"
-	pilot_036_effect_01.mode = _EffectConst.MODE_ACTIVE
-	pilot_036_effect_01.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_036_effect_01.priority = 100
-	pilot_036_effect_01.once_per_turn_key = &"pilot_036_effect_01"
-	pilot_036_effect_01.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_036_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_036_effect_01.costs = [
-		{"cost_type": &"SPEND_GOLD", "amount": 2},
-	]
-	pilot_036_effect_01.actions = [
-		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 1}},
-	]
-	pilot_036_effect_01.description = "我方回合2次，可以消耗2金币抽1张行动牌。"
-	effects[pilot_036_effect_01.effect_id] = pilot_036_effect_01
-
-	var pilot_036_effect_02 := CardEffect.new()
-	pilot_036_effect_02.effect_id = &"pilot_036_effect_02"
-	pilot_036_effect_02.display_name = "弃2行动获3金"
-	pilot_036_effect_02.mode = _EffectConst.MODE_ACTIVE
-	pilot_036_effect_02.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_036_effect_02.priority = 100
-	pilot_036_effect_02.once_per_turn_key = &"pilot_036_effect_02"
-	pilot_036_effect_02.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_036_effect_02.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_036_effect_02.costs = [
-		{"cost_type": &"DISCARD_ACTION_CARD", "count": 2},
-	]
-	pilot_036_effect_02.actions = [
-		{"type": &"GAIN_GOLD", "params": {"amount": 3}},
-	]
-	pilot_036_effect_02.description = "我方回合1次，可以弃置2张行动牌获得3金币。"
-	effects[pilot_036_effect_02.effect_id] = pilot_036_effect_02
+	# ── pilot_036 菲丽丝：已迁移至 ActionPilotEffects.gd（新 ActionEffect 体系）──
+	# 效果01「消耗2金币抽1」（我方回合2次）+ 效果02「弃2行动获4金」（我方回合1次）
+	# 见 ActionPilotEffects.build_pilot_effects() 的 pilot_036 实现。
 
 	# ── pilot_037 被攻击查看+偷牌+手牌多攻击-5 ──
 	var pilot_037_effect_01 := CardEffect.new()
@@ -1301,23 +461,10 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_037_effect_01.description = "每回合2次，查看对我方发动攻击的机甲的所持行动牌，并选择获得其中1张，若之后我方所持行动牌数大于攻击方，则该攻击威力-5。"
 	effects[pilot_037_effect_01.effect_id] = pilot_037_effect_01
 
-	# ── pilot_038 选2台机甲抽1回3动 ──
-	var pilot_038_effect_01 := CardEffect.new()
-	pilot_038_effect_01.effect_id = &"pilot_038_effect_01"
-	pilot_038_effect_01.display_name = "选2台抽1回3动"
-	pilot_038_effect_01.mode = _EffectConst.MODE_ACTIVE
-	pilot_038_effect_01.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_038_effect_01.priority = 100
-	pilot_038_effect_01.once_per_turn_key = &"pilot_038_effect_01"
-	pilot_038_effect_01.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_038_effect_01.target_rules = [{"rule": &"CHOOSE_ENEMY_MECH_IN_RANGE", "range": 4}]
-	pilot_038_effect_01.costs = []
-	pilot_038_effect_01.actions = [
-		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 1}},
-		{"type": &"RESTORE_POWER", "params": {"amount": 3}},
-	]
-	pilot_038_effect_01.description = "我方回合1次，可以选择最多2台4格范围内的机甲，使其抽1张行动牌，回复3动力。"
-	effects[pilot_038_effect_01.effect_id] = pilot_038_effect_01
+	# ── pilot_038 奥黛尔：已迁移至 ActionPilotEffects.gd（新 ActionEffect 体系）──
+	# 效果01「战术协同」（我方回合1次）：选择最多2台4格范围内机甲（含我方）抽2张行动牌+回复3动力。
+	# 通用机制组装（CHOOSE_MANY_MECHS 多选机甲 + 显式 MARK 计次 + FOR_EACH_TARGET 逐目标）。
+	# 见 ActionPilotEffects.build_pilot_effects() 的 pilot_038 实现。
 
 	# ── pilot_039 攻击未命中抽1+再攻 ──
 	var pilot_039_effect_01 := CardEffect.new()
@@ -1362,24 +509,10 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_040_effect_01.description = "每回合1次，使用近战武器攻击时，可弃置1张行动牌对目标施加锁定效果。"
 	effects[pilot_040_effect_01.effect_id] = pilot_040_effect_01
 
-	# ── pilot_041 花费3金抽2行动 ──
-	var pilot_041_effect_01 := CardEffect.new()
-	pilot_041_effect_01.effect_id = &"pilot_041_effect_01"
-	pilot_041_effect_01.display_name = "花费3金抽2"
-	pilot_041_effect_01.mode = _EffectConst.MODE_ACTIVE
-	pilot_041_effect_01.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_041_effect_01.priority = 100
-	pilot_041_effect_01.once_per_turn_key = &"pilot_041_effect_01"
-	pilot_041_effect_01.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_041_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_041_effect_01.costs = [
-		{"cost_type": &"SPEND_GOLD", "amount": 3},
-	]
-	pilot_041_effect_01.actions = [
-		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 2}},
-	]
-	pilot_041_effect_01.description = "我方回合1次，可以花费3金币抽2张行动牌。"
-	effects[pilot_041_effect_01.effect_id] = pilot_041_effect_01
+	# ── pilot_041 盖奇特：已迁移至 ActionPilotEffects.gd（新 ActionEffect 体系）──
+	# 效果01「花费3金抽2」（我方回合1次）：DIRECT 主动按钮，金币≥3 才可点（GOLD_ABOVE threshold=2），
+	# 动作链 SPEND_GOLD(3) -> EXECUTE_GAIN_CARD(action_deck,2)。
+	# 见 ActionPilotEffects.build_pilot_effects() 的 pilot_041 实现。
 
 	# ── pilot_042 弃牌后抽1 + 弃所有抽1 ──
 	var pilot_042_effect_01 := CardEffect.new()
@@ -1424,10 +557,10 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_043_effect_01.description = "即将抽取行动牌时，可以宣言1种行动牌类型，若之后抽到的牌中存在宣言类型，则可以再抽1张行动牌。"
 	effects[pilot_043_effect_01.effect_id] = pilot_043_effect_01
 
-	# ── pilot_044 损伤数X抽X弃X-1 ──
+	# ── pilot_044 损伤数X抽X+1弃X ──
 	var pilot_044_effect_01 := CardEffect.new()
 	pilot_044_effect_01.effect_id = &"pilot_044_effect_01"
-	pilot_044_effect_01.display_name = "损伤X抽X弃X-1"
+	pilot_044_effect_01.display_name = "损伤X抽X+1弃X"
 	pilot_044_effect_01.mode = _EffectConst.MODE_PASSIVE
 	pilot_044_effect_01.hook = _EffectConst.HOOK_TURN_START
 	pilot_044_effect_01.priority = 80
@@ -1438,191 +571,61 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_044_effect_01.actions = [
 		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
 			"effect_id": &"pilot_044_effect_01",
-			"text": "每个我方回合开始时与回合结束后，记录机甲所有区域的损伤数为X，之后抽X张行动牌，再弃置X-1（最低为0）张行动牌。",
+			"text": "每个我方回合开始时与回合结束后，记录机甲所有区域的损伤数为X，之后抽X+1张行动牌，再弃置X张行动牌。",
 		}},
 	]
-	pilot_044_effect_01.description = "每个我方回合开始时与回合结束后，记录机甲所有区域的损伤数为X，之后抽X张行动牌，再弃置X-1张行动牌。"
+	pilot_044_effect_01.description = "每个我方回合开始时与回合结束后，记录机甲所有区域的损伤数为X，之后抽X+1张行动牌，再弃置X张行动牌。"
 	effects[pilot_044_effect_01.effect_id] = pilot_044_effect_01
 
-	# ── pilot_045 弃3行动获攻牌 + 每2次4伤害 ──
-	var pilot_045_effect_01 := CardEffect.new()
-	pilot_045_effect_01.effect_id = &"pilot_045_effect_01"
-	pilot_045_effect_01.display_name = "弃3获攻牌"
-	pilot_045_effect_01.mode = _EffectConst.MODE_ACTIVE
-	pilot_045_effect_01.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_045_effect_01.priority = 100
-	pilot_045_effect_01.once_per_turn_key = &"pilot_045_effect_01"
-	pilot_045_effect_01.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_045_effect_01.target_rules = [{"rule": &"CHOOSE_ENEMY_MECH_IN_RANGE", "range": 4}]
-	pilot_045_effect_01.costs = []
-	pilot_045_effect_01.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_045_effect_01",
-			"text": "我方回合1次，可以弃置4格范围内所有其他机甲3张行动牌，之后获得被弃置牌中的所有攻击牌。",
-		}},
-	]
-	pilot_045_effect_01.description = "我方回合1次，可以弃置4格范围内所有其他机甲3张行动牌，之后获得被弃置牌中的所有攻击牌。"
-	effects[pilot_045_effect_01.effect_id] = pilot_045_effect_01
+	# ── pilot_045 遗弃回收（旧 CardEffect 已迁移到 ActionPilotEffects.gd 的 ActionEffect）──
+	# 旧实现：弃3行动获攻牌 + 每2次4伤害（MODE_ACTIVE CHOOSE_ENEMY_MECH_IN_RANGE + MODE_PASSIVE 回合末计数）。
+	# 新实现（ActionPilotEffects.pilot_045_effect_01）：CHOOSE_ONE 确认 + FOR_EACH_TARGET(range 扫描目标源)
+	#   + RANDOM_DISCARD_ACTION_CARD 捕获攻击牌 + EXECUTE_GAIN_CARD + MODIFY_ATTACK_COUNT + EXECUTE_HP_CHANGE，
+	#   全部通用机制组装，不再依赖本遗留模块。如需复用请复制 ActionPilotEffects.gd 中整段定义改参数。
 
-	var pilot_045_effect_02 := CardEffect.new()
-	pilot_045_effect_02.effect_id = &"pilot_045_effect_02"
-	pilot_045_effect_02.display_name = "每2次4伤害"
-	pilot_045_effect_02.mode = _EffectConst.MODE_PASSIVE
-	pilot_045_effect_02.hook = _EffectConst.HOOK_TURN_END
-	pilot_045_effect_02.priority = 80
-	pilot_045_effect_02.once_per_turn_key = &""
-	pilot_045_effect_02.conditions = [{"op": &"ALWAYS"}]
-	pilot_045_effect_02.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_045_effect_02.costs = []
-	pilot_045_effect_02.actions = [
-		{"type": &"INCREMENT_VARIABLE", "params": {"variable_name": &"pilot_045_activation_count", "delta": 1}},
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_045_effect_02",
-			"text": "上述效果每发动2次，我方将受到4伤害。",
-		}},
-	]
-	pilot_045_effect_02.description = "上述效果每发动2次，我方将受到4伤害。"
-	effects[pilot_045_effect_02.effect_id] = pilot_045_effect_02
+	# ── pilot_046 查看获取隐藏装（旧 CardEffect 已迁移到 ActionPilotEffects.gd 的 ActionEffect）──
+	# 旧实现：CUSTOM_EFFECT_CHECK_TEXT 占位（无实际效果）。
+	# 新实现（ActionPilotEffects.pilot_046_effect_01）：通用 HIDDEN_VIEW_AND_ACQUIRE act_type，
+	#   查看商店隐藏高级装备 + 其他玩家备用区白板（打开面板即 known_to 标记商店隐藏牌），
+	#   我方回合1次消耗牌面金币获取该牌，背面朝上置于任意机甲备用区。完整实现见
+	#   ActionPilotEffects.gd 与 TimingEngine._handle_hidden_view_and_acquire / resume 阶段。
 
-	# ── pilot_046 查看隐藏装备+获取 ──
-	var pilot_046_effect_01 := CardEffect.new()
-	pilot_046_effect_01.effect_id = &"pilot_046_effect_01"
-	pilot_046_effect_01.display_name = "查看获取隐藏装"
-	pilot_046_effect_01.mode = _EffectConst.MODE_ACTIVE
-	pilot_046_effect_01.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_046_effect_01.priority = 100
-	pilot_046_effect_01.once_per_turn_key = &"pilot_046_effect_01"
-	pilot_046_effect_01.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_046_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_046_effect_01.costs = []
-	pilot_046_effect_01.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_046_effect_01",
-			"text": "我方可以无条件查看商店和其他机甲备用区域内的隐藏装备牌。我方回合1次，可以消耗隐藏装备牌其上记述的金币获得该牌，之后将其背面朝上置于我方或其他机甲的备用区域上。",
-		}},
-	]
-	pilot_046_effect_01.description = "我方可以无条件查看隐藏装备牌。我方回合1次，可以消耗其金币获得该牌。"
-	effects[pilot_046_effect_01.effect_id] = pilot_046_effect_01
+	# ── pilot_047 里欧娜：迁移至 ActionPilotEffects.gd（LISTEN ATTACK_SETTLE 阻塞式）──
+	# 重做后效果：我方攻击结算后，可以选择1台4格范围内的其他机甲，其选择立即使用1张攻击牌，
+	# 否则必须交给我方3张行动牌，若数量不足则每少1张该机甲将受到2伤害。
+	# 旧实现（HOOK_ATTACK_DECLARED + FORCE_MECH_ACTION，不符合新版 action engine）已删除，
+	# 完整实现见 ActionPilotEffects.gd pilot_047_effect_01 + TimingEngine PILOT_047_* handler。
 
-	# ── pilot_047 攻击时强制或交牌 ──
-	var pilot_047_effect_01 := CardEffect.new()
-	pilot_047_effect_01.effect_id = &"pilot_047_effect_01"
-	pilot_047_effect_01.display_name = "攻击强制或交牌"
-	pilot_047_effect_01.mode = _EffectConst.MODE_PASSIVE
-	pilot_047_effect_01.hook = _EffectConst.HOOK_ATTACK_DECLARED
-	pilot_047_effect_01.priority = 80
-	pilot_047_effect_01.once_per_turn_key = &"pilot_047_effect_01"
-	pilot_047_effect_01.conditions = [
-		{"op": &"SOURCE_OWNER_IS_ATTACKER"},
-	]
-	pilot_047_effect_01.target_rules = [{"rule": &"CHOOSE_ENEMY_MECH_IN_RANGE", "range": 4}]
-	pilot_047_effect_01.costs = []
-	pilot_047_effect_01.actions = [
-		{"type": &"FORCE_MECH_ACTION", "params": {"action_type": &"attack"}},
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_047_alternative",
-			"text": "选择1台4格范围内的其他机甲，其选择立即使用1张攻击牌，或必须交给我方2张行动牌，若数量不足则每少1张将受到2伤害。",
-		}},
-	]
-	pilot_047_effect_01.description = "每回合1次，我方攻击时，选择1台4格范围内的其他机甲，其选择立即使用1张攻击牌，或必须交给我方2张行动牌。"
-	effects[pilot_047_effect_01.effect_id] = pilot_047_effect_01
+	# ── pilot_048 赤牙：迁移至 ActionPilotEffects.gd（LISTEN ATTACK_AFTER 通用机制组装）──
+	# 重做后效果：我方攻击造成的损伤+1（MODIFY_ATTACK_MARKERS）。我方发动的攻击即使被目标响应，
+	# 也依然由我方来决定损伤设置的位置（SET_ACTION_RECORD_FLAG 通用flag + attack_action 第⑦步读取）。
+	# 旧实现（HOOK_ATTACK_HIT + MODIFY_DAMAGE_TOKENS + 只写文字的 CUSTOM_EFFECT_CHECK_TEXT，
+	# 不符合新版 action engine、损伤放置决定逻辑缺失）已删除，
+	# 完整实现见 ActionPilotEffects.gd pilot_048_effect_01。
 
-	# ── pilot_048 攻击损伤+1+优先决定 ──
-	var pilot_048_effect_01 := CardEffect.new()
-	pilot_048_effect_01.effect_id = &"pilot_048_effect_01"
-	pilot_048_effect_01.display_name = "攻击损伤+1+优先"
-	pilot_048_effect_01.mode = _EffectConst.MODE_PASSIVE
-	pilot_048_effect_01.hook = _EffectConst.HOOK_ATTACK_HIT
-	pilot_048_effect_01.priority = 80
-	pilot_048_effect_01.once_per_turn_key = &""
-	pilot_048_effect_01.conditions = [
-		{"op": &"SOURCE_OWNER_IS_ATTACKER"},
-		{"op": &"PAYLOAD_ATTACK_HIT"},
-	]
-	pilot_048_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_048_effect_01.costs = []
-	pilot_048_effect_01.actions = [
-		{"type": &"MODIFY_DAMAGE_TOKENS", "params": {"delta": 1}},
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_048_priority",
-			"text": "我方攻击造成的损伤必须由我方优先决定设置的位置。",
-		}},
-	]
-	pilot_048_effect_01.description = "我方攻击造成的损伤+1。我方攻击造成的损伤必须由我方优先决定设置的位置。"
-	effects[pilot_048_effect_01.effect_id] = pilot_048_effect_01
+	# ── pilot_049 杰狞（伤害转移 + 受伤加伤）已迁移至 ActionPilotEffects.gd ──
+	# 重做后效果（杰狞 pilot_049）：
+	#   效果1 伤害转移：LISTEN(HP_CHANGE_BEFORE priority -1)，4格范围内其他机甲即将受到伤害时
+	#     弹确认将该伤害转移由我方承受（REDIRECT_HP_CHANGE_TARGET 改 hp_change mech_ids，只转HP伤害）。
+	#   效果2 受伤加伤：LISTEN(HP_CHANGE_BEFORE)，我方造成伤害时按受伤计数 X 加伤 +4*X 并清零
+	#     （MODIFY_HP_CHANGE_VALUE_BY_VARIABLE）；隐藏效果02b LISTEN(HP_CHANGE_SETTLE) 每受1次伤 X+1。
+	# 旧实现（HOOK_OWNER_TAKE_DAMAGE + CUSTOM_EFFECT_CHECK_TEXT + MODIFY_NEXT_DAMAGE_DEALT delta 0，
+	# 阵营限定帝国、只写文字不实际转移/加伤，不符合新版 action engine）已删除，
+	# 完整实现见 ActionPilotEffects.gd pilot_049_effect_01/02/02b。
 
-	# ── pilot_049 帝国机甲伤害转移 + 受伤后下次+X ──
-	var pilot_049_effect_01 := CardEffect.new()
-	pilot_049_effect_01.effect_id = &"pilot_049_effect_01"
-	pilot_049_effect_01.display_name = "帝国伤害转移"
-	pilot_049_effect_01.mode = _EffectConst.MODE_PASSIVE
-	pilot_049_effect_01.hook = _EffectConst.HOOK_OWNER_TAKE_DAMAGE
-	pilot_049_effect_01.priority = 80
-	pilot_049_effect_01.once_per_turn_key = &""
-	pilot_049_effect_01.conditions = [{"op": &"ALWAYS"}]
-	pilot_049_effect_01.target_rules = [{"rule": &"CHOOSE_MECH_IN_VARIABLE_RANGE", "base_range": 4}]
-	pilot_049_effect_01.costs = []
-	pilot_049_effect_01.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_049_effect_01",
-			"text": "4格范围内其他的机师或机甲框架阵营为帝国的机甲即将受到伤害时，可以将该伤害转移由我方承受。",
-		}},
-	]
-	pilot_049_effect_01.description = "4格范围内帝国阵营机甲即将受到伤害时，可以将该伤害转移由我方承受。"
-	effects[pilot_049_effect_01.effect_id] = pilot_049_effect_01
-
-	var pilot_049_effect_02 := CardEffect.new()
-	pilot_049_effect_02.effect_id = &"pilot_049_effect_02"
-	pilot_049_effect_02.display_name = "受伤后下次+X"
-	pilot_049_effect_02.mode = _EffectConst.MODE_PASSIVE
-	pilot_049_effect_02.hook = _EffectConst.HOOK_OWNER_TAKE_DAMAGE
-	pilot_049_effect_02.priority = 85
-	pilot_049_effect_02.once_per_turn_key = &""
-	pilot_049_effect_02.conditions = [{"op": &"ALWAYS"}]
-	pilot_049_effect_02.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_049_effect_02.costs = []
-	pilot_049_effect_02.actions = [
-		{"type": &"MODIFY_NEXT_DAMAGE_DEALT", "params": {"delta": 0}},
-	]
-	pilot_049_effect_02.description = "我方受到X伤害后，使下次我方造成的伤害+X（不可叠加）。"
-	effects[pilot_049_effect_02.effect_id] = pilot_049_effect_02
-
-	# ── pilot_050 4+X范围耗2动1伤害 + 受伤X+1弃牌 ──
-	var pilot_050_effect_01 := CardEffect.new()
-	pilot_050_effect_01.effect_id = &"pilot_050_effect_01"
-	pilot_050_effect_01.display_name = "范围耗动伤害"
-	pilot_050_effect_01.mode = _EffectConst.MODE_PASSIVE
-	pilot_050_effect_01.hook = _EffectConst.HOOK_TURN_END
-	pilot_050_effect_01.priority = 80
-	pilot_050_effect_01.once_per_turn_key = &""
-	pilot_050_effect_01.conditions = [{"op": &"ALWAYS"}]
-	pilot_050_effect_01.target_rules = [{"rule": &"CHOOSE_MECH_IN_VARIABLE_RANGE", "base_range": 4, "variable_name": &"pilot_050_X"}]
-	pilot_050_effect_01.costs = []
-	pilot_050_effect_01.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_050_effect_01",
-			"text": "4+X格范围内的其他机甲每消耗2动力，可以使我方和该机甲各受到1伤害（X初始为0）。",
-		}},
-	]
-	pilot_050_effect_01.description = "4+X格范围内的其他机甲每消耗2动力，可以使我方和该机甲各受到1伤害。"
-	effects[pilot_050_effect_01.effect_id] = pilot_050_effect_01
-
-	var pilot_050_effect_02 := CardEffect.new()
-	pilot_050_effect_02.effect_id = &"pilot_050_effect_02"
-	pilot_050_effect_02.display_name = "受伤X+1弃牌"
-	pilot_050_effect_02.mode = _EffectConst.MODE_PASSIVE
-	pilot_050_effect_02.hook = _EffectConst.HOOK_OWNER_TAKE_DAMAGE
-	pilot_050_effect_02.priority = 85
-	pilot_050_effect_02.once_per_turn_key = &"pilot_050_effect_02"
-	pilot_050_effect_02.conditions = [{"op": &"ALWAYS"}]
-	pilot_050_effect_02.target_rules = [{"rule": &"CHOOSE_MECH_IN_VARIABLE_RANGE", "base_range": 4, "variable_name": &"pilot_050_X"}]
-	pilot_050_effect_02.costs = []
-	pilot_050_effect_02.actions = [
-		{"type": &"INCREMENT_VARIABLE", "params": {"variable_name": &"pilot_050_X", "delta": 1}},
-		{"type": &"DISCARD_ACTION_CARD", "params": {"count": 2}},
-	]
-	pilot_050_effect_02.description = "每回合1次，我方受到伤害后X的数值+1，之后可以弃置我方和4+X格范围内的1台其他机甲各2张行动牌。"
-	effects[pilot_050_effect_02.effect_id] = pilot_050_effect_02
+	# ── pilot_050 杰西卡（动力税 + 受伤X+1弃牌）已迁移至 ActionPilotEffects.gd ──
+	# 重做后效果（杰西卡 pilot_050）：
+	#   效果1 动力税：e01 LISTEN(BASIC_MOVE_AT) 移动消耗 + e01b LISTEN(power_spent 虚拟时点)
+	#     非移动消耗（GameActions.spend_power 统一通知，reason=BASIC_MOVE 除外防双计）。
+	#     4+X格内其他机甲每累计消耗2动力弹确认，确认 -> 两次独立 hp_change（先该机甲后我方），
+	#     确认/拒绝都清这2点累计，一次消耗N点=floor(N/2)次询问串行（POWER_SPEND_TAX 通用机制）。
+	#   效果2 受伤X+1弃牌：LISTEN(HP_CHANGE_SETTLE) 我方实际掉血，每回合1次（取消不消耗），
+	#     确认 -> X+1（先于范围计算）-> 按新X选范围内其他机甲（无候选仅X+1）-> 我方/目标
+	#     各弃2张行动牌（chooser均为我方，目标牌牌背；≤2张直接全选）（POWER_TAX_TRIBUTE 状态机）。
+	# 旧实现（HOOK_TURN_END + CUSTOM_EFFECT_CHECK_TEXT 各受到1伤害只写文字不实际结算 /
+	# HOOK_OWNER_TAKE_DAMAGE + INCREMENT_VARIABLE pilot_050_X 与新 counter 命名不一致，
+	# 不符合新版 action engine）已删除，完整实现见 ActionPilotEffects.gd
+	# pilot_050_effect_01/01b/02。
 
 	# ── pilot_051 失去事件牌抽1 + 本局1次取消事件 ──
 	var pilot_051_effect_01 := CardEffect.new()
@@ -1662,123 +665,34 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_051_effect_02.description = "本局游戏1次，当1张事件牌被设置时，可以立即取消其效果，并弃置或设置到我方区域。"
 	effects[pilot_051_effect_02.effect_id] = pilot_051_effect_02
 
-	# ── pilot_052 弃1行动抽1装备 ──
-	var pilot_052_effect_01 := CardEffect.new()
-	pilot_052_effect_01.effect_id = &"pilot_052_effect_01"
-	pilot_052_effect_01.display_name = "弃1行动抽1装"
-	pilot_052_effect_01.mode = _EffectConst.MODE_ACTIVE
-	pilot_052_effect_01.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_052_effect_01.priority = 100
-	pilot_052_effect_01.once_per_turn_key = &"pilot_052_effect_01"
-	pilot_052_effect_01.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_052_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_052_effect_01.costs = [
-		{"cost_type": &"DISCARD_ACTION_CARD", "count": 1},
-	]
-	pilot_052_effect_01.actions = [
-		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"equipment_deck", "card_kind": &"equipment", "count": 1}},
-	]
-	pilot_052_effect_01.description = "我方回合2次，可以弃置1张行动牌，之后抽1张装备牌。"
-	effects[pilot_052_effect_01.effect_id] = pilot_052_effect_01
+	# ── pilot_052 萨伊（弃1行动抽1装备）已迁移至 ActionPilotEffects.gd ──
+	# 重做后效果（萨伊 pilot_052）：
+	#   我方回合2次（once_per_turn_max=2）主动 DIRECT 按钮：点击弹"选1张行动牌"窗
+	#     （OWNER_ACTION_HAND 必选1张、可取消不计次数），弃置所选行动牌后抽1张装备牌。
+	# 旧实现（MODE_ACTIVE + DISCARD_ACTION_CARD 费用只写1次/回合、费用弃牌无单选UI）已删除，
+	# 完整实现见 ActionPilotEffects.gd pilot_052_effect_01。
 
-	# ── pilot_053 装备设置/弃置抽2+上限+1 ──
-	var pilot_053_effect_01 := CardEffect.new()
-	pilot_053_effect_01.effect_id = &"pilot_053_effect_01"
-	pilot_053_effect_01.display_name = "装备变抽2+限+1"
-	pilot_053_effect_01.mode = _EffectConst.MODE_PASSIVE
-	pilot_053_effect_01.hook = _EffectConst.HOOK_EQUIPMENT_SET
-	pilot_053_effect_01.priority = 80
-	pilot_053_effect_01.once_per_turn_key = &""
-	pilot_053_effect_01.conditions = [{"op": &"ALWAYS"}]
-	pilot_053_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_053_effect_01.costs = []
-	pilot_053_effect_01.actions = [
-		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 2}},
-		{"type": &"MODIFY_ACTION_HAND_LIMIT", "params": {"delta": 1, "duration": &"NEXT_OWNER_TURN"}},
-	]
-	pilot_053_effect_01.description = "每回合1次，我方区域每次有正面朝上的装备牌被设置/弃置，立即抽2张行动牌，直到下个我方回合开始行动牌上限+1。"
-	effects[pilot_053_effect_01.effect_id] = pilot_053_effect_01
+	# ── pilot_053 亚林（装备设置/弃置抽2+上限+1）已迁移至 ActionPilotEffects.gd ──
+	# 重做后效果（亚林 pilot_053，每回合2次，被动双监听共享额度）：
+	#   我方区域有正面朝上的装备牌被设置（SET_EQUIP_AT）或弃置（DISCARD_AFTER，含敌方回合
+	#   损伤损坏弃置）时，弹确认窗（可取消不计次），确认后抽2张行动牌、行动牌上限+1
+	#   （立即生效，下个我方回合开始到期清除，可叠加）。
+	# 旧实现（只监听设置、无每回合次数、MODIFY_ACTION_HAND_LIMIT NEXT_OWNER_TURN 上限永久
+	#   泄漏不恢复、无确认弹窗）已删除，完整实现见 ActionPilotEffects.gd pilot_053_effect_01/01b。
 
-	# ── pilot_054 购买后获3金或抽1 ──
-	var pilot_054_effect_01 := CardEffect.new()
-	pilot_054_effect_01.effect_id = &"pilot_054_effect_01"
-	pilot_054_effect_01.display_name = "购买后获金或抽"
-	pilot_054_effect_01.mode = _EffectConst.MODE_PASSIVE
-	pilot_054_effect_01.hook = _EffectConst.HOOK_SHOP_CARD_BOUGHT
-	pilot_054_effect_01.priority = 80
-	pilot_054_effect_01.once_per_turn_key = &"pilot_054_effect_01"
-	pilot_054_effect_01.conditions = [{"op": &"ALWAYS"}]
-	pilot_054_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_054_effect_01.costs = []
-	pilot_054_effect_01.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_054_effect_01",
-			"text": "我方回合2次，从商店购买装备牌后可以获得3金币或抽1张行动牌。若购买的是隐藏装备牌，则两个效果都可以执行。",
-		}},
-	]
-	pilot_054_effect_01.description = "我方回合2次，从商店购买装备牌后可以获得3金币或抽1张行动牌。若购买的是隐藏装备牌，则两个效果都可以执行。"
-	effects[pilot_054_effect_01.effect_id] = pilot_054_effect_01
+	# ── pilot_054 购买后获金/抽牌（已迁移）──
+	# 旧实现（只监听未触发的 HOOK_SHOP_CARD_BOUGHT、无确认弹窗、无高级装备判定）已删除，
+	# 完整实现见 ActionPilotEffects.gd pilot_054_effect_01（监听通用时点 SHOP_BUY_AFTER）。
 
-	# ── pilot_055 卖出价格×2 ──
-	var pilot_055_effect_01 := CardEffect.new()
-	pilot_055_effect_01.effect_id = &"pilot_055_effect_01"
-	pilot_055_effect_01.display_name = "卖出价格×2"
-	pilot_055_effect_01.mode = _EffectConst.MODE_PASSIVE
-	pilot_055_effect_01.hook = _EffectConst.HOOK_EQUIPMENT_SOLD
-	pilot_055_effect_01.priority = 80
-	pilot_055_effect_01.once_per_turn_key = &"pilot_055_effect_01"
-	pilot_055_effect_01.conditions = [{"op": &"ALWAYS"}]
-	pilot_055_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_055_effect_01.costs = []
-	pilot_055_effect_01.actions = [
-		{"type": &"GAIN_GOLD", "params": {"amount": 0}},
-	]
-	pilot_055_effect_01.description = "每回合1次，卖出装备牌获得的金币×2。"
-	effects[pilot_055_effect_01.effect_id] = pilot_055_effect_01
+	# ── pilot_055 卖出翻倍（已迁移至 ActionPilotEffects.gd）──
+	# 旧实现（监听无触发点的 HOOK_EQUIPMENT_SOLD、GAIN_GOLD amount=0，未实现×2）已删除，
+	# 完整实现见 ActionPilotEffects.gd pilot_055_effect_01（LISTEN 监听 DISCARD_BEFORE，
+	# 条件=卖出reason+归属自己+每回合1次，确认弹窗后补发1倍卖价+高级3金）。
 
-	# ── pilot_056 攻击未命中抽装备+他方获效 ──
-	var pilot_056_effect_01 := CardEffect.new()
-	pilot_056_effect_01.effect_id = &"pilot_056_effect_01"
-	pilot_056_effect_01.display_name = "未命中抽装或获金"
-	pilot_056_effect_01.mode = _EffectConst.MODE_PASSIVE
-	pilot_056_effect_01.hook = _EffectConst.HOOK_ATTACK_MISS
-	pilot_056_effect_01.priority = 80
-	pilot_056_effect_01.once_per_turn_key = &""
-	pilot_056_effect_01.conditions = [
-		{"op": &"PAYLOAD_ATTACK_MISS"},
-		{"op": &"SOURCE_OWNER_IS_ATTACKER"},
-	]
-	pilot_056_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_056_effect_01.costs = []
-	pilot_056_effect_01.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_056_effect_01",
-			"text": "若发动的攻击没有命中，则可以抽1张装备牌，之后设置到区域上，否则获得牌面记述数量的金币并立即弃置。",
-		}},
-	]
-	pilot_056_effect_01.description = "若发动的攻击没有命中，则可以抽1张装备牌设置到区域上，否则获得牌面记述数量的金币并立即弃置。"
-	effects[pilot_056_effect_01.effect_id] = pilot_056_effect_01
-
-	var pilot_056_effect_02 := CardEffect.new()
-	pilot_056_effect_02.effect_id = &"pilot_056_effect_02"
-	pilot_056_effect_02.display_name = "他方获此效"
-	pilot_056_effect_02.mode = _EffectConst.MODE_PASSIVE
-	pilot_056_effect_02.hook = _EffectConst.HOOK_OTHER_MECH_TURN_START
-	pilot_056_effect_02.priority = 80
-	pilot_056_effect_02.once_per_turn_key = &""
-	pilot_056_effect_02.conditions = [{"op": &"ALWAYS"}]
-	pilot_056_effect_02.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_056_effect_02.costs = [
-		{"cost_type": &"SPEND_GOLD", "amount": 2},
-	]
-	pilot_056_effect_02.actions = [
-		{"type": &"TOGGLE_EFFECT_ON_MECH", "params": {
-			"effect_id": &"pilot_056_effect_01",
-			"toggle": &"restore",
-		}},
-	]
-	pilot_056_effect_02.description = "其他机甲回合开始时，可以通过消耗2金币使该机甲在当前回合内获得以上效果。"
-	effects[pilot_056_effect_02.effect_id] = pilot_056_effect_02
+	# pilot_056 铠厉 已迁移至 ActionPilotEffects.gd（新 ActionEffect 体系）。
+	# 效果01「被响应→抽2装备→逐张设置/弃置获金」：被动 LISTEN ATTACK_SETTLE，条件=我方为攻击方且本次攻击被响应，
+	# 调度到攻击动作完全结算后弹确认，确认后抽2张装备牌，逐张弹「立即设置/弃置获金(cost)」面板。
+	# 通用链式模块（responded_equip_chain_*，不绑机师）见 ActionPilotEffects.gd。
 
 	# ── pilot_057 当作设陷 + 弃牌移陷阱 ──
 	var pilot_057_effect_01 := CardEffect.new()
@@ -1820,28 +734,6 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_057_effect_02.description = "我方回合中，可以通过弃置任意张行动牌，选择4格范围内的1个陷阱，每弃置1张牌就可使该陷阱移动4格。"
 	effects[pilot_057_effect_02.effect_id] = pilot_057_effect_02
 
-	# ── pilot_058 展示行动牌+按类型加成 ──
-	var pilot_058_effect_01 := CardEffect.new()
-	pilot_058_effect_01.effect_id = &"pilot_058_effect_01"
-	pilot_058_effect_01.display_name = "展示牌型加成"
-	pilot_058_effect_01.mode = _EffectConst.MODE_PASSIVE
-	pilot_058_effect_01.hook = _EffectConst.HOOK_ATTACK_MODIFIER_WINDOW
-	pilot_058_effect_01.priority = 90
-	pilot_058_effect_01.once_per_turn_key = &""
-	pilot_058_effect_01.conditions = [
-		{"op": &"SOURCE_OWNER_IS_ATTACKER"},
-	]
-	pilot_058_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_058_effect_01.costs = []
-	pilot_058_effect_01.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_058_effect_01",
-			"text": "发动攻击时可以展示所持任意张行动牌，其中每包含1种类型(攻击，迎击，辅助)，则本次攻击威力+2；若展示的行动牌包含3种类型，则本次攻击范围+2。",
-		}},
-	]
-	pilot_058_effect_01.description = "发动攻击时可以展示所持行动牌，每包含1种类型则威力+2；若包含3种类型则范围+2。"
-	effects[pilot_058_effect_01.effect_id] = pilot_058_effect_01
-
 
 	# ═══════════════════════════════════════════
 	# 效果路由器：将 JSON 中的原始 effect_id 映射到分解后的子效果
@@ -1865,71 +757,14 @@ static func build_pilot_effects() -> Dictionary:
 			"text": "我方回合开始时，若机甲损伤数低于4则可以获得3金币/等于4则可以视为使用1张补给/大于4则可以移去最多2损伤。",
 		}},
 	]
-	pilot_059_router.description = "我方回合开始时，若机甲损伤数低于4则可以获得3金币/等于4则可以视为使用1张补给/大于4则可以移去最多2损伤。"
+	pilot_059_router.description = "我方回合开始时，可以移除或设置我方1损伤，之后若机甲损伤数低于4则可以获得3金币/等于4则可以视为使用出1张补给/大于4则可以移除我方最多2损伤。"
 	effects[pilot_059_router.effect_id] = pilot_059_router
 
-	# pilot_060 原始ID路由器
-	var pilot_060_router := CardEffect.new()
-	pilot_060_router.effect_id = &"pilot_060_effect_01"
-	pilot_060_router.display_name = "铠德-未命中选择"
-	pilot_060_router.mode = _EffectConst.MODE_PASSIVE
-	pilot_060_router.hook = _EffectConst.HOOK_ATTACK_MISS
-	pilot_060_router.priority = 90
-	pilot_060_router.once_per_turn_key = &"pilot_060_effect_01"
-	pilot_060_router.conditions = [
-		{"op": &"PAYLOAD_ATTACK_MISS"},
-		{"op": &"SOURCE_OWNER_IS_ATTACKER"},
-	]
-	pilot_060_router.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_060_router.costs = []
-	pilot_060_router.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_060_effect_01",
-			"text": "若发动的攻击没有命中，则可以选择其一：抽2张行动牌/回复3动力/获得4金币。",
-		}},
-	]
-	pilot_060_router.description = "若发动的攻击没有命中，则可以选择其一：抽2张行动牌/回复3动力/获得4金币。"
-	effects[pilot_060_router.effect_id] = pilot_060_router
 
-	# pilot_069 原始ID路由器
-	var pilot_069_router := CardEffect.new()
-	pilot_069_router.effect_id = &"pilot_069_effect_01"
-	pilot_069_router.display_name = "影刹-未攻未移加成"
-	pilot_069_router.mode = _EffectConst.MODE_PASSIVE
-	pilot_069_router.hook = _EffectConst.HOOK_TURN_END
-	pilot_069_router.priority = 90
-	pilot_069_router.once_per_turn_key = &"pilot_069_effect_01"
-	pilot_069_router.conditions = [{"op": &"ALWAYS"}]
-	pilot_069_router.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_069_router.costs = []
-	pilot_069_router.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_069_effect_01",
-			"text": "每个我方回合结束时，若本回合未发动攻击，则下次攻击威力+4；若本回合未移动，则下次攻击范围+2。上述效果无法累加。",
-		}},
-	]
-	pilot_069_router.description = "每个我方回合结束时，若本回合未发动攻击，则下次攻击威力+4；若本回合未移动，则下次攻击范围+2。"
-	effects[pilot_069_router.effect_id] = pilot_069_router
 
-	# pilot_072 原始ID路由器
-	var pilot_072_router := CardEffect.new()
-	pilot_072_router.effect_id = &"pilot_072_effect_01"
-	pilot_072_router.display_name = "卡修-牌型回复动力"
-	pilot_072_router.mode = _EffectConst.MODE_PASSIVE
-	pilot_072_router.hook = _EffectConst.HOOK_ACTION_CARD_PLAYED
-	pilot_072_router.priority = 80
-	pilot_072_router.once_per_turn_key = &""
-	pilot_072_router.conditions = [{"op": &"ALWAYS"}]
-	pilot_072_router.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_072_router.costs = []
-	pilot_072_router.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_072_effect_01",
-			"text": "每个效果每回合1次：使用辅助牌时，回复4动力；使用攻击牌时，回复4动力；使用迎击牌时，回复5动力。",
-		}},
-	]
-	pilot_072_router.description = "每个效果每回合1次：使用辅助牌时，回复4动力；使用攻击牌时，回复4动力；使用迎击牌时，回复5动力。"
-	effects[pilot_072_router.effect_id] = pilot_072_router
+	# pilot_069 已迁移（effect_id 由新体系 pilot_069_effect_01/02/03 承担），旧路由定义移除。
+
+	# pilot_072 已迁移（effect_id 由新体系 pilot_072_effect_01a/01b/01c 承担），旧路由定义移除。
 
 	# pilot_082 效果02原始ID路由器
 	var pilot_082_effect_02_router := CardEffect.new()
@@ -2161,86 +996,7 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_014_effect_01.description = "我方回合2次，可以选择场上1张机师牌，使其行动牌上限+2（效果持续至下个我方回合开始）。"
 	effects[pilot_014_effect_01.effect_id] = pilot_014_effect_01
 
-	# ── pilot_015 诺拉：空手时攻击牌视为进攻/迎击牌视为防御 + 全部牌视为进攻/防御 ──
-	var pilot_015_effect_01 := CardEffect.new()
-	pilot_015_effect_01.effect_id = &"pilot_015_effect_01"
-	pilot_015_effect_01.display_name = "空手类型转换"
-	pilot_015_effect_01.mode = _EffectConst.MODE_PASSIVE
-	pilot_015_effect_01.hook = _EffectConst.HOOK_ATTACK_MODIFIER_WINDOW
-	pilot_015_effect_01.priority = 90
-	pilot_015_effect_01.once_per_turn_key = &""
-	pilot_015_effect_01.conditions = [
-		{"op": &"OWNER_ACTION_HAND_EMPTY"},
-	]
-	pilot_015_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_015_effect_01.costs = []
-	pilot_015_effect_01.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_015_effect_01",
-			"text": "我方所持行动牌数为0时，指定我方为攻击目标的攻击牌全部视为进攻，并还原威力为牌面记述的数值；响应我方攻击的迎击牌全部视为防御。",
-		}},
-	]
-	pilot_015_effect_01.description = "我方所持行动牌数为0时，指定我方为攻击目标的攻击牌全部视为进攻，并还原威力为牌面记述的数值；响应我方攻击的迎击牌全部视为防御。"
-	effects[pilot_015_effect_01.effect_id] = pilot_015_effect_01
-
-	# 效果02：每回合1次，将全部行动牌视为进攻/防御之一使用
-	var pilot_015_effect_02a := CardEffect.new()
-	pilot_015_effect_02a.effect_id = &"pilot_015_effect_02a"
-	pilot_015_effect_02a.display_name = "全部当进攻"
-	pilot_015_effect_02a.mode = _EffectConst.MODE_ACTIVE
-	pilot_015_effect_02a.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_015_effect_02a.priority = 100
-	pilot_015_effect_02a.once_per_turn_key = &"pilot_015_effect_02"
-	pilot_015_effect_02a.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_015_effect_02a.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_015_effect_02a.costs = []
-	pilot_015_effect_02a.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_015_effect_02a",
-			"text": "每回合1次，可以将全部行动牌（至少1张）视为进攻使用。",
-		}},
-	]
-	pilot_015_effect_02a.description = "每回合1次，可以将全部行动牌（至少1张）视为进攻使用。"
-	effects[pilot_015_effect_02a.effect_id] = pilot_015_effect_02a
-
-	var pilot_015_effect_02b := CardEffect.new()
-	pilot_015_effect_02b.effect_id = &"pilot_015_effect_02b"
-	pilot_015_effect_02b.display_name = "全部当防御"
-	pilot_015_effect_02b.mode = _EffectConst.MODE_ACTIVE
-	pilot_015_effect_02b.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_015_effect_02b.priority = 100
-	pilot_015_effect_02b.once_per_turn_key = &"pilot_015_effect_02"
-	pilot_015_effect_02b.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_015_effect_02b.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_015_effect_02b.costs = []
-	pilot_015_effect_02b.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_015_effect_02b",
-			"text": "每回合1次，可以将全部行动牌（至少1张）视为防御使用。",
-		}},
-	]
-	pilot_015_effect_02b.description = "每回合1次，可以将全部行动牌（至少1张）视为防御使用。"
-	effects[pilot_015_effect_02b.effect_id] = pilot_015_effect_02b
-
-	# ── pilot_016 默多克：展示1张+2张视为该牌 ──
-	var pilot_016_effect_01 := CardEffect.new()
-	pilot_016_effect_01.effect_id = &"pilot_016_effect_01"
-	pilot_016_effect_01.display_name = "展示1+2张视为该牌"
-	pilot_016_effect_01.mode = _EffectConst.MODE_ACTIVE
-	pilot_016_effect_01.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_016_effect_01.priority = 100
-	pilot_016_effect_01.once_per_turn_key = &"pilot_016_effect_01"
-	pilot_016_effect_01.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_016_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_016_effect_01.costs = []
-	pilot_016_effect_01.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_016_effect_01",
-			"text": "每回合1次，可以展示持有的1张行动牌，之后将另外2张行动牌视为该展示的牌使用。",
-		}},
-	]
-	pilot_016_effect_01.description = "每回合1次，可以展示持有的1张行动牌，之后将另外2张行动牌视为该展示的牌使用。"
-	effects[pilot_016_effect_01.effect_id] = pilot_016_effect_01
+	# ── pilot_015 诺拉：已迁移至 ActionPilotEffects.gd（新 ActionEffect 体系）──
 
 	# ── pilot_017 伏特：当作强袭/猛击/破甲 + 使用时加成 ──
 	# 效果01：每回合1次，将2张行动牌当作强袭/猛击/破甲之一使用
@@ -2358,28 +1114,7 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_017_effect_02c.description = "破甲命中后产生损伤+2。"
 	effects[pilot_017_effect_02c.effect_id] = pilot_017_effect_02c
 
-	# ── pilot_018 苔丝：被攻击时抽2张，迎击后弃攻击方牌 ──
-	var pilot_018_effect_01 := CardEffect.new()
-	pilot_018_effect_01.effect_id = &"pilot_018_effect_01"
-	pilot_018_effect_01.display_name = "被攻抽牌+迎击弃牌"
-	pilot_018_effect_01.mode = _EffectConst.MODE_PASSIVE
-	pilot_018_effect_01.hook = _EffectConst.HOOK_MECH_TARGETED_BY_ATTACK
-	pilot_018_effect_01.priority = 90
-	pilot_018_effect_01.once_per_turn_key = &"pilot_018_effect_01"
-	pilot_018_effect_01.conditions = [
-		{"op": &"SOURCE_OWNER_IS_TARGET"},
-	]
-	pilot_018_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_018_effect_01.costs = []
-	pilot_018_effect_01.actions = [
-		{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 2}},
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_018_effect_01_counter",
-			"text": "若我方通过使用迎击牌响应了此攻击，则弃置攻击方的3张行动牌或1张设置损伤≥2的装备牌。",
-		}},
-	]
-	pilot_018_effect_01.description = "每回合1次，被攻击时，可立即抽2张行动牌，若迎击则弃攻击方的3张行动牌或1张损伤≥2装备牌。"
-	effects[pilot_018_effect_01.effect_id] = pilot_018_effect_01
+	# ── pilot_018 苔丝：已迁移至 ActionPilotEffects.gd（新 ActionEffect 体系）──
 
 	# ── pilot_019 肯耳忒：弃X张→对手弃X+1张→清空则3伤害 ──
 	var pilot_019_effect_01 := CardEffect.new()
@@ -2401,107 +1136,6 @@ static func build_pilot_effects() -> Dictionary:
 	]
 	pilot_019_effect_01.description = "我方回合2次，弃X张行动牌→对手弃X+1张→清空则3伤害。"
 	effects[pilot_019_effect_01.effect_id] = pilot_019_effect_01
-
-	# ── pilot_020 肯德：弃牌+阈值分级效果 ──
-	# 效果01：主动弃牌（每回合1次）
-	var pilot_020_effect_01 := CardEffect.new()
-	pilot_020_effect_01.effect_id = &"pilot_020_effect_01"
-	pilot_020_effect_01.display_name = "弃任意行动牌"
-	pilot_020_effect_01.mode = _EffectConst.MODE_ACTIVE
-	pilot_020_effect_01.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_020_effect_01.priority = 100
-	pilot_020_effect_01.once_per_turn_key = &"pilot_020_effect_01"
-	pilot_020_effect_01.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_020_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_020_effect_01.costs = []
-	pilot_020_effect_01.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_020_effect_01",
-			"text": "我方回合1次，可以弃置任意张行动牌。",
-		}},
-	]
-	pilot_020_effect_01.description = "我方回合1次，可以弃置任意张行动牌。"
-	effects[pilot_020_effect_01.effect_id] = pilot_020_effect_01
-
-	# 效果02：弃牌>1时，护甲+2动力+3
-	var pilot_020_effect_02 := CardEffect.new()
-	pilot_020_effect_02.effect_id = &"pilot_020_effect_02"
-	pilot_020_effect_02.display_name = "弃牌>1护甲+2动力+3"
-	pilot_020_effect_02.mode = _EffectConst.MODE_PASSIVE
-	pilot_020_effect_02.hook = _EffectConst.HOOK_CARD_DISCARDED
-	pilot_020_effect_02.priority = 80
-	pilot_020_effect_02.once_per_turn_key = &""
-	pilot_020_effect_02.conditions = [{"op": &"ALWAYS"}]
-	pilot_020_effect_02.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_020_effect_02.costs = []
-	pilot_020_effect_02.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_020_effect_02",
-			"text": "每个回合我方行动牌被弃置大于1时，当前回合我方护甲+2，动力+3。",
-		}},
-	]
-	pilot_020_effect_02.description = "弃牌>1时，当前回合护甲+2，动力+3。"
-	effects[pilot_020_effect_02.effect_id] = pilot_020_effect_02
-
-	# 效果03：弃牌>3时，攻击威力+2范围+1
-	var pilot_020_effect_03 := CardEffect.new()
-	pilot_020_effect_03.effect_id = &"pilot_020_effect_03"
-	pilot_020_effect_03.display_name = "弃牌>3威力+2范围+1"
-	pilot_020_effect_03.mode = _EffectConst.MODE_PASSIVE
-	pilot_020_effect_03.hook = _EffectConst.HOOK_CARD_DISCARDED
-	pilot_020_effect_03.priority = 70
-	pilot_020_effect_03.once_per_turn_key = &""
-	pilot_020_effect_03.conditions = [{"op": &"ALWAYS"}]
-	pilot_020_effect_03.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_020_effect_03.costs = []
-	pilot_020_effect_03.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_020_effect_03",
-			"text": "每个回合我方行动牌被弃置大于3时，当前回合攻击时，威力+2，范围+1。",
-		}},
-	]
-	pilot_020_effect_03.description = "弃牌>3时，当前回合攻击威力+2，范围+1。"
-	effects[pilot_020_effect_03.effect_id] = pilot_020_effect_03
-
-	# 效果04：弃牌>5时，回合结束抽被弃置数量
-	var pilot_020_effect_04 := CardEffect.new()
-	pilot_020_effect_04.effect_id = &"pilot_020_effect_04"
-	pilot_020_effect_04.display_name = "弃牌>5回合结束抽牌"
-	pilot_020_effect_04.mode = _EffectConst.MODE_PASSIVE
-	pilot_020_effect_04.hook = _EffectConst.HOOK_CARD_DISCARDED
-	pilot_020_effect_04.priority = 60
-	pilot_020_effect_04.once_per_turn_key = &""
-	pilot_020_effect_04.conditions = [{"op": &"ALWAYS"}]
-	pilot_020_effect_04.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_020_effect_04.costs = []
-	pilot_020_effect_04.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_020_effect_04",
-			"text": "每个回合我方行动牌被弃置大于5时，当前回合结束后抽取被弃置数量的行动牌。",
-		}},
-	]
-	pilot_020_effect_04.description = "弃牌>5时，回合结束后抽被弃置数量的行动牌。"
-	effects[pilot_020_effect_04.effect_id] = pilot_020_effect_04
-
-	# 效果05：综合路由器（描述完整效果）
-	var pilot_020_effect_05 := CardEffect.new()
-	pilot_020_effect_05.effect_id = &"pilot_020_effect_05"
-	pilot_020_effect_05.display_name = "肯德-弃牌阈值分级"
-	pilot_020_effect_05.mode = _EffectConst.MODE_PASSIVE
-	pilot_020_effect_05.hook = _EffectConst.HOOK_CARD_DISCARDED
-	pilot_020_effect_05.priority = 90
-	pilot_020_effect_05.once_per_turn_key = &""
-	pilot_020_effect_05.conditions = [{"op": &"ALWAYS"}]
-	pilot_020_effect_05.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_020_effect_05.costs = []
-	pilot_020_effect_05.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_020_effect_05",
-			"text": "每个回合我方行动牌被弃置一定数目，可获得对应效果：大于1：当前回合我方护甲+2，动力+3；大于3：当前回合攻击时，威力+2，范围+1；大于5：当前回合结束后抽取被弃置数量的行动牌。",
-		}},
-	]
-	pilot_020_effect_05.description = "弃牌分级：>1护甲+2动力+3；>3威力+2范围+1；>5回合结束抽牌。"
-	effects[pilot_020_effect_05.effect_id] = pilot_020_effect_05
 
 	# ── pilot_021 塔莉娅：抽3分配+使用后抽2 ──
 	var pilot_021_effect_01 := CardEffect.new()
@@ -2565,44 +1199,6 @@ static func build_pilot_effects() -> Dictionary:
 	]
 	pilot_022_effect_01.description = "本局游戏1次，攻击威力1.5倍(向下取整)+范围+3+锁定。"
 	effects[pilot_022_effect_01.effect_id] = pilot_022_effect_01
-
-	# ── pilot_023 坎得：当作维修 + 维修额外移2损伤+相邻可用 ──
-	var pilot_023_effect_01 := CardEffect.new()
-	pilot_023_effect_01.effect_id = &"pilot_023_effect_01"
-	pilot_023_effect_01.display_name = "当作维修"
-	pilot_023_effect_01.mode = _EffectConst.MODE_ACTIVE
-	pilot_023_effect_01.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_023_effect_01.priority = 100
-	pilot_023_effect_01.once_per_turn_key = &"pilot_023_effect_01"
-	pilot_023_effect_01.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_023_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_023_effect_01.costs = [
-		{"cost_type": &"DISCARD_ACTION_CARD", "count": 1},
-	]
-	pilot_023_effect_01.actions = [
-		{"type": &"TREAT_CARD_AS_NAMED_TYPE", "params": {"named_type": &"维修"}},
-	]
-	pilot_023_effect_01.description = "每回合1次，可以将1张行动牌当作维修使用。"
-	effects[pilot_023_effect_01.effect_id] = pilot_023_effect_01
-
-	# 效果02：维修时额外移2损伤+可对相邻4格其他机甲使用
-	var pilot_023_effect_02 := CardEffect.new()
-	pilot_023_effect_02.effect_id = &"pilot_023_effect_02"
-	pilot_023_effect_02.display_name = "维修增强+相邻可用"
-	pilot_023_effect_02.mode = _EffectConst.MODE_PASSIVE
-	pilot_023_effect_02.hook = _EffectConst.HOOK_BEFORE_REMOVE_DAMAGE_TOKENS
-	pilot_023_effect_02.priority = 80
-	pilot_023_effect_02.once_per_turn_key = &""
-	pilot_023_effect_02.conditions = [
-		{"op": &"PAYLOAD_CARD_HAS_TAG", "tag": &"维修"},
-	]
-	pilot_023_effect_02.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_023_effect_02.costs = []
-	pilot_023_effect_02.actions = [
-		{"type": &"REMOVE_DAMAGE_TOKENS", "params": {"count": 2}},
-	]
-	pilot_023_effect_02.description = "我方使用的维修获得：额外移去2损伤，可以对相邻4格的其他机甲使用。"
-	effects[pilot_023_effect_02.effect_id] = pilot_023_effect_02
 
 	# ── pilot_024 琳：当作维修 + 远程维修交互 ──
 	var pilot_024_effect_01 := CardEffect.new()
@@ -2745,6 +1341,7 @@ static func build_pilot_effects() -> Dictionary:
 	effects[pilot_025_effect_03.effect_id] = pilot_025_effect_03
 
 	# ── pilot_026 伊万：当作设陷+4次陷阱+陷阱改伤害 ──
+	# 注：机师效果运行时走 ActionPilotEffects（新体系），此处 legacy 定义仅保持数据一致。
 	var pilot_026_effect_01 := CardEffect.new()
 	pilot_026_effect_01.effect_id = &"pilot_026_effect_01"
 	pilot_026_effect_01.display_name = "当作设陷"
@@ -2752,15 +1349,18 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_026_effect_01.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
 	pilot_026_effect_01.priority = 100
 	pilot_026_effect_01.once_per_turn_key = &"pilot_026_effect_01"
-	pilot_026_effect_01.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
+	pilot_026_effect_01.conditions = [
+		{"op": &"IS_OWNER_MAIN_PHASE"},
+		{"op": &"ATTACK_COUNT_ABOVE", "params": {"threshold": 0}},
+	]
 	pilot_026_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
 	pilot_026_effect_01.costs = [
-		{"cost_type": &"DISCARD_ACTION_CARD", "count": 1},
+		{"cost_type": &"SPEND_ATTACK_CHANCE"},
 	]
 	pilot_026_effect_01.actions = [
-		{"type": &"TREAT_CARD_AS_NAMED_TYPE", "params": {"named_type": &"设陷"}},
+		{"type": &"ADD_STATUS", "params": {"status_type": &"SET_TRAP", "stacks": 2}},
 	]
-	pilot_026_effect_01.description = "每回合1次，可以将1张行动牌当作设陷使用。"
+	pilot_026_effect_01.description = "每回合1次，消耗1点当前回合攻击数，视为使用出1张设陷。"
 	effects[pilot_026_effect_01.effect_id] = pilot_026_effect_01
 
 	# 效果02：设陷共4次机会设置陷阱
@@ -2805,66 +1405,7 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_026_effect_03.description = "陷阱对我方仅会造成伤害，不会设置损伤。"
 	effects[pilot_026_effect_03.effect_id] = pilot_026_effect_03
 
-	# ── pilot_027 维罗妮卡：金币分半+给金2+使用行动牌 ──
-	# 效果01：4+X格范围内其他机甲获金时我方获一半
-	var pilot_027_effect_01 := CardEffect.new()
-	pilot_027_effect_01.effect_id = &"pilot_027_effect_01"
-	pilot_027_effect_01.display_name = "获金分半"
-	pilot_027_effect_01.mode = _EffectConst.MODE_PASSIVE
-	pilot_027_effect_01.hook = _EffectConst.HOOK_OTHER_MECH_GAIN_GOLD
-	pilot_027_effect_01.priority = 80
-	pilot_027_effect_01.once_per_turn_key = &""
-	pilot_027_effect_01.conditions = [{"op": &"ALWAYS"}]
-	pilot_027_effect_01.target_rules = [{"rule": &"CHOOSE_MECH_IN_VARIABLE_RANGE", "base_range": 4, "variable_name": &"pilot_027_x"}]
-	pilot_027_effect_01.costs = []
-	pilot_027_effect_01.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_027_effect_01",
-			"text": "4+X格范围内的其他机甲获得金币时（X初始为0，我方每次给予其他机甲金币会使X数值+1），我方获得其中的一半金币（向下取整）。",
-		}},
-	]
-	pilot_027_effect_01.description = "4+X格范围内其他机甲获金时我方获一半(X初始0,给金+1)。"
-	effects[pilot_027_effect_01.effect_id] = pilot_027_effect_01
-
-	# 效果02：每回合1次，给4+X格范围其他机甲2金+使其使用1张行动牌
-	var pilot_027_effect_02 := CardEffect.new()
-	pilot_027_effect_02.effect_id = &"pilot_027_effect_02"
-	pilot_027_effect_02.display_name = "给金2+使用行动牌"
-	pilot_027_effect_02.mode = _EffectConst.MODE_ACTIVE
-	pilot_027_effect_02.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_027_effect_02.priority = 100
-	pilot_027_effect_02.once_per_turn_key = &"pilot_027_effect_02"
-	pilot_027_effect_02.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_027_effect_02.target_rules = [{"rule": &"CHOOSE_MECH_IN_VARIABLE_RANGE", "base_range": 4, "variable_name": &"pilot_027_x"}]
-	pilot_027_effect_02.costs = [
-		{"cost_type": &"SPEND_GOLD", "amount": 2},
-	]
-	pilot_027_effect_02.actions = [
-		{"type": &"INCREMENT_VARIABLE", "params": {"variable_name": &"pilot_027_x", "delta": 1}},
-		{"type": &"FORCE_MECH_ACTION", "params": {"action": &"use_one_action_card"}},
-	]
-	pilot_027_effect_02.description = "每回合1次，给予4+X格范围内其他机甲2金币，使其使用1张行动牌。"
-	effects[pilot_027_effect_02.effect_id] = pilot_027_effect_02
-
-	# ── pilot_028 乌尔：宣言类型+获得/弃置宣言牌后抽1 ──
-	var pilot_028_effect_01 := CardEffect.new()
-	pilot_028_effect_01.effect_id = &"pilot_028_effect_01"
-	pilot_028_effect_01.display_name = "宣言+获得宣言牌"
-	pilot_028_effect_01.mode = _EffectConst.MODE_PASSIVE
-	pilot_028_effect_01.hook = _EffectConst.HOOK_TURN_START
-	pilot_028_effect_01.priority = 90
-	pilot_028_effect_01.once_per_turn_key = &""
-	pilot_028_effect_01.conditions = [{"op": &"ALWAYS"}]
-	pilot_028_effect_01.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_028_effect_01.costs = []
-	pilot_028_effect_01.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_028_effect_01",
-			"text": "每个回合开始时，可以宣言1种行动牌类型(攻击，迎击，辅助)，若在本回合使用/弃置了宣言类型的行动牌，则我方之后获得之并抽1张行动牌。",
-		}},
-	]
-	pilot_028_effect_01.description = "每回合开始宣言1种类型，使用/弃置宣言牌后获得之并抽1张。"
-	effects[pilot_028_effect_01.effect_id] = pilot_028_effect_01
+	# ── pilot_028 乌尔：已重做为宣言/需交牌/X+1（见 ActionPilotEffects.pilot_028_*），旧效果移除 ──
 
 
 	# ═══════════════════════════════════════════
@@ -2933,25 +1474,7 @@ static func build_pilot_effects() -> Dictionary:
 	pilot_012_effect_01_router.description = "每回合1次，对其他机甲发动攻击时，可获得目标的1张行动牌并使目标当前动力-3，若攻击命中则我方可抽1张行动牌并回复3动力。"
 	effects[pilot_012_effect_01_router.effect_id] = pilot_012_effect_01_router
 
-	# pilot_015 效果02路由器
-	var pilot_015_effect_02_router := CardEffect.new()
-	pilot_015_effect_02_router.effect_id = &"pilot_015_effect_02"
-	pilot_015_effect_02_router.display_name = "诺拉-全部视为进攻/防御"
-	pilot_015_effect_02_router.mode = _EffectConst.MODE_ACTIVE
-	pilot_015_effect_02_router.hook = _EffectConst.HOOK_OWNER_MAIN_PHASE
-	pilot_015_effect_02_router.priority = 100
-	pilot_015_effect_02_router.once_per_turn_key = &"pilot_015_effect_02"
-	pilot_015_effect_02_router.conditions = [{"op": &"IS_OWNER_MAIN_PHASE"}]
-	pilot_015_effect_02_router.target_rules = [{"rule": &"NO_TARGET"}]
-	pilot_015_effect_02_router.costs = []
-	pilot_015_effect_02_router.actions = [
-		{"type": &"CUSTOM_EFFECT_CHECK_TEXT", "params": {
-			"effect_id": &"pilot_015_effect_02",
-			"text": "每回合1次，可以将全部行动牌（至少1张）视为进攻/防御之一使用。",
-		}},
-	]
-	pilot_015_effect_02_router.description = "每回合1次，可以将全部行动牌（至少1张）视为进攻/防御之一使用。"
-	effects[pilot_015_effect_02_router.effect_id] = pilot_015_effect_02_router
+	# pilot_015 已迁移至 ActionPilotEffects.gd（新 ActionEffect 体系）
 
 	# pilot_017 效果01路由器
 	var pilot_017_effect_01_router := CardEffect.new()

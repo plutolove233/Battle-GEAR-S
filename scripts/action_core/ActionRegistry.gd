@@ -46,6 +46,15 @@ func get_actions_by_type(action_type: StringName) -> Array:
 
 ## 动作结算后清理：移除动作实例，同时清理关联的临时监听器与抑制效果
 func cleanup_action(action_id: StringName) -> void:
+	# 流程续跑回调（回合结束/事件计时等分段流程挂起时写入 _flow_resume_call）：
+	# 携带者的动作完成（completed 或 cancelled 皆走本出口）即代表挂起交互已结束，
+	# call_deferred 续跑流程剩余步骤（cleanup 常在动作树递归深处，deferred 防重入）。
+	var flow_act: Action = active_actions.get(action_id)
+	if flow_act != null and flow_act.record != null:
+		var flow_cb = flow_act.record.get("_flow_resume_call", null)
+		if flow_cb is Callable and flow_cb.is_valid():
+			flow_act.record.erase("_flow_resume_call")
+			flow_cb.call_deferred()
 	# 清理 TimingEngine 中关联的临时监听器与抑制效果
 	if context != null and context.timing_engine != null:
 		context.timing_engine.unregister_listeners_for_action(action_id)

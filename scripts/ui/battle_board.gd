@@ -240,20 +240,26 @@ func _draw() -> void:
 	_draw_background()
 	# 地图标记叠加层查找表（标记点常驻 + 活动标记），每帧从 _context 读取（标记会变化）
 	var marker_lookup := _build_marker_lookup()
+	# 汀兰 pilot_081 绿格光环叠加层：各存活持有者+6邻居（红格除外），每帧从 _context 派生
+	var aura_lookup := _build_aura_lookup()
 	# 绘制所有格子
 	for key in tiles.keys():
 		var tile: Dictionary = tiles[key]
 		var center := _grid_to_world(tile.col, tile.row)
 		var points := _hex_points(center)
-		var fill_color: Color = _get_fill_color(tile.type)
-		var border_color: Color = _get_border_color(tile.type)
+		var tile_key := "%s,%s" % [tile.q, tile.r]
+		# 汀兰光环：normal/green 格在光环内渲为绿格（red/blocked 不受影响，光环本就排除红格）
+		var eff_type: String = tile.type
+		if eff_type != "red" and eff_type != "blocked" and aura_lookup.has(tile_key):
+			eff_type = "green"
+		var fill_color: Color = _get_fill_color(eff_type)
+		var border_color: Color = _get_border_color(eff_type)
 		# 悬停高亮 - 比较 q/r 坐标
 		var tile_axial := {"q": tile.q, "r": tile.r}
 		if _same_hex(tile_axial, hovered_hex):
 			fill_color = HOVER_FILL
 			border_color = HOVER_BORDER
 		# 范围高亮（攻击/移动范围）
-		var tile_key := "%s,%s" % [tile.q, tile.r]
 		if highlighted_hexes.has(tile_key):
 			fill_color = HIGHLIGHT_FILL
 			border_color = HIGHLIGHT_BORDER
@@ -403,6 +409,14 @@ func _build_marker_lookup() -> Dictionary:
 			lookup[k] = {"point_type": &"", "marker_types": []}
 		lookup[k]["marker_types"].append(m.get("type", &""))
 	return lookup
+
+## 通用光环覆盖格查找表（"q,r" -> true）。每帧从 _context 派生：
+## 场上所有移动修正效果（move_cost_mod 声明 aura_shape，如汀兰绿格光环 adjacent_6）
+## 的光环并集：持有者所在格 + 6 邻居（红格除外）。持有者移动/死亡/卸下后自动跟随/消失。
+func _build_aura_lookup() -> Dictionary:
+	if _context == null or _context.game_state == null or _context.map_service == null:
+		return {}
+	return _context.map_service.resolve_move_cost_params(null)["aura_cells"]
 
 ## 绘制某格的标记点（淡色小图标）+ 活动标记（亮色大图标+光晕）
 func _draw_marker_overlay(tile: Dictionary, center: Vector2, lookup: Dictionary) -> void:
@@ -646,18 +660,15 @@ func clear_multi_target_marks() -> void:
 		multi_target_marks.clear()
 		queue_redraw()
 
-## 画多目标序号圆标：金黄色实心圆 + 白色序号数字
+## 画多目标序号标签：白色数字直接叠在目标中心（黑描边保证可读，无底色圆）。
 func _draw_multi_target_mark(center: Vector2, index: int) -> void:
-	var r := (HEX_RADIUS * 0.42) / _grid_scale
-	var bg := Color(1.0, 0.78, 0.12, 0.92)
-	var edge := Color(0.35, 0.22, 0.0, 0.95)
-	# 标记偏向格子右上角，避开格子中央的机甲贴图
-	var mark_center := center + Vector2(HEX_RADIUS * 0.34, -HEX_HEIGHT * 0.28) / _grid_scale
-	draw_circle(mark_center, r, bg)
-	draw_arc(mark_center, r, 0.0, TAU, 24, edge, 2.0 / _grid_scale)
 	var font := _draw_font()
-	if font != null:
-		var font_size := int(r * 1.5)
-		var text := str(index)
-		var ts := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
-		draw_string(font, mark_center - ts * 0.5 + Vector2(0, r * 0.55), text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(0.1, 0.07, 0.0, 1.0))
+	if font == null:
+		return
+	var font_size := int((HEX_RADIUS * 0.52) / _grid_scale)
+	var text := str(index)
+	var ts := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
+	var draw_pos := center - ts * 0.5 + Vector2(0, font_size * 0.32)
+	var outline_w := maxi(2, int(2.0 / _grid_scale))
+	font.draw_string_outline(get_canvas_item(), draw_pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, outline_w, Color(0, 0, 0, 0.9))
+	font.draw_string(get_canvas_item(), draw_pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(1, 1, 1, 1.0))

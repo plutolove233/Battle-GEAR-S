@@ -10,6 +10,7 @@ var context = null  # type: GameContext
 
 const _EquipmentCardDef = preload("res://scripts/card_defs/EquipmentCardDef.gd")
 const _GameConfig = preload("res://scripts/config/GameConfig.gd")
+const _ActionPilotEffects = preload("res://scripts/generated_database/ActionPilotEffects.gd")
 
 
 ## 设置装备到槽位
@@ -40,6 +41,12 @@ func set_equipment(player_id: StringName, card_id: StringName, slot_id: StringNa
 	var card: CardInstance = gs.get_card(card_id)
 	if card == null:
 		return {"ok": false, "message": "卡牌实例不存在"}
+
+	# ── 主动设置拦截："禁"标签装备（法尔科 pilot_073 弃2抽高级装备置备用区等）在打标签玩家
+	# 下个回合开始前不能主动设置。效果驱动设置（EXECUTE_SET_EQUIP 走 set_equipment 动作，
+	# 不经本服务）不受影响——霍恩/约书亚等效果路径正常。 ──
+	if _ActionPilotEffects.equip_forbid_tagged(card):
+		return {"ok": false, "message": "该装备尚不能主动设置"}
 
 	if not _is_slot_type_compatible(slot.slot_kind, card):
 		return {"ok": false, "message": "装备类型与槽位不匹配"}
@@ -131,6 +138,11 @@ func sell_equipment(player_id: StringName, card_id: StringName) -> Dictionary:
 
 	if not in_equipment_hand and not in_reserve and not in_set_slot:
 		return {"ok": false, "message": "装备不在手牌中或备用区"}
+
+	# ── 主动卖出拦截："禁"标签装备（法尔科 pilot_073 弃2抽高级装备置备用区等）在打标签玩家
+	# 下个回合开始前不能主动卖出。 ──
+	if _ActionPilotEffects.equip_forbid_tagged(card):
+		return {"ok": false, "message": "该装备尚不能主动卖出"}
 
 	# ── 计算出售价格（使用装备牌的 cost 字段） ──
 	var sell_price: int = 1

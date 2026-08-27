@@ -12,6 +12,7 @@ const _EffectConst = preload("res://scripts/effect_core/EffectConst.gd")
 const _MapCellState = preload("res://scripts/runtime/MapCellState.gd")
 const _GameConfig = preload("res://scripts/config/GameConfig.gd")
 const _ActionPilotEffects = preload("res://scripts/generated_database/ActionPilotEffects.gd")
+const _GeneratedActionEffects = preload("res://scripts/action_core/GeneratedActionEffects.gd")
 const _TimingConst = preload("res://scripts/action_core/TimingConst.gd")
 
 
@@ -350,6 +351,10 @@ func unset_pilot(mech_id: StringName) -> void:
 		context.timing_engine.unregister_permanent_listeners_for_card(old_card.instance_id)
 	# 注销阵营光环（pilot_002/005 换机师即时失效）
 	_ActionPilotEffects.unregister_faction_aura(old_card.instance_id)
+	# pilot_014 亚伦 +2 离场清理：任意机师牌换下，清理以其为目标(target)或来源(source)的 +2。
+	# 目标机师牌换下 -> 其 +2 扣回；亚伦(来源)换下 -> 其施加的全部 +2 扣回。
+	if context.game_actions != null:
+		context.game_actions.remove_pilot_014_bonus_for_pilot_instance(old_card.instance_id)
 	# pilot_002 莱比尔离场：清除所有已转移批次权限（裁定歧义4：离场后所有权限和增益都没了）
 	if old_card.def != null and String(old_card.def.card_id) == "pilot_002_莱比尔":
 		_ActionPilotEffects.clear_pilot_002_batches_for_source(old_card.instance_id)
@@ -362,6 +367,25 @@ func unset_pilot(mech_id: StringName) -> void:
 	# pilot_006 里昂离场：清除悬赏标记（持续效果随离场终止）
 	if old_card.def != null and String(old_card.def.card_id) == "pilot_006_里昂":
 		_ActionPilotEffects.clear_pilot_006_mark(old_card.instance_id)
+	# pilot_035 库马斯离场：清除本轮标记机甲（持续效果随离场终止）
+	if old_card.def != null and String(old_card.def.card_id) == "pilot_035_库马斯":
+		_ActionPilotEffects.clear_pilot_035_mark(old_card.instance_id)
+	# pilot_021 塔莉娅离场：清除其玩家手牌的"禁"标签（剩余赐予牌恢复可用）
+	# + 清其名下"策"标签（他人持有的赐予牌不再触发其抽2）
+	if old_card.def != null and String(old_card.def.card_id) == "pilot_021_塔莉娅":
+		_ActionPilotEffects.pilot_021_clear_all_jin_for_player(context.game_state, old_card.owner_player_id)
+		_ActionPilotEffects.pilot_021_clear_all_ce_for_player(context.game_state, old_card.owner_player_id)
+	# pilot_082 温斯顿离场：清除其名下全部"联"标签（他人持有的联牌不再触发对其施加联合）。
+	if old_card.def != null and String(old_card.def.card_id) == "pilot_082_温斯顿":
+		_ActionPilotEffects.pilot_082_clear_all_lian_for_player(context.game_state, old_card.owner_player_id)
+	# pilot_087 塔妮拉离场：清除其名下全部"交"标签（他人持有的交牌不再触发其抽1）。
+	if old_card.def != null and String(old_card.def.card_id) == "pilot_087_塔妮拉":
+		_ActionPilotEffects.pilot_087_clear_all_jiao_for_player(context.game_state, old_card.owner_player_id)
+	# pilot_074 泰特离场：清除近战弃牌威力状态（待发 buff + 授予登记）。
+	# unregister_permanent_listeners_for_card 已注销全部绑定该实例的监听器（含他机授予），
+	# 静态 registry 须手动清，避免残留（换回泰特时旧 buff/授予不复活）。
+	if old_card.def != null and String(old_card.def.card_id) == "pilot_074_泰特":
+		_ActionPilotEffects.clear_melee_might_for_source(old_card.instance_id)
 	slot.equipped_card = null
 	old_card.zone = &""
 	old_card.slot_id = &""
@@ -410,6 +434,13 @@ func _register_pilot_effects(card, mech_id: StringName) -> void:
 		var effect = all_effects.get(effect_id)
 		if effect == null:
 			continue
+		# 通用 init_counters：效果注册即初始化计数器（仅当键不存在，不覆盖运行中已消耗值）。
+		# 解决"中途换上机师牌要等下回合才生效"（如莉诺原价购买次数初始为0直到首个回合开始）。
+		# 与机师ID无关：任何效果声明 init_counters 即生效。
+		if not effect.init_counters.is_empty() and card != null and "counters" in card:
+			for ck in effect.init_counters:
+				if not card.counters.has(ck):
+					card.counters[ck] = effect.init_counters[ck]
 		# 派生值型效果不注册监听器（pilot_002 effect_02 护甲+4 / pilot_005 effect_02 动力+4 实时重算）
 		if _ActionPilotEffects.is_pilot_derived_effect(effect_id):
 			continue
@@ -420,6 +451,66 @@ func _register_pilot_effects(card, mech_id: StringName) -> void:
 		# LISTEN / AVAILABILITY：注册到 effect.listen_timing
 		if (effect.mode == _TimingConst.MODE_LISTEN or effect.mode == _TimingConst.MODE_AVAILABILITY) and effect.listen_timing != &"":
 			context.timing_engine.register_permanent_listener(effect.listen_timing, effect, binding_ctx)
+	# 琳 pilot_024 RE 请求（DIRECT 无 listen_timing）：不在卡牌 effect_ids 里（不渲染第4按钮），
+	# 单独注册到虚拟时点 pilot_024_re_request，供请求方 equipment_panel RE 按钮 granted_effect_clicked
+	# -> effect_fire 直发时 _execute_effect_by_id 能查找到。binding mech_id/player_id 留空：
+	# RE 来源是"请求方"而非琳，_make_binding 回退 action.source 取请求方机甲/玩家；
+	# 空 mech 也不被 _execute_effect_by_id 的 want_mech_id 过滤跳过（任意请求方都能命中）；
+	# 且装备面板 _active_by_card 的 mech 过滤（mech==本机甲）会跳过空 mech，不会多渲染按钮。
+	if card.def.card_id == &"pilot_024_琳":
+		var re_eff = all_effects.get(&"pilot_024_re_request")
+		if re_eff != null:
+			# 注意：不能带 mech_id/player_id 键（即使置空）。带空键会导致下游 .get("mech_id",
+			# payload.get("mech_id")) 命中空键返回空串而非回退 payload——RE 请求方标记/确认
+			# 会取空机甲而失效。省略键 → .get 走默认回退 action.source 取请求方机甲/玩家。
+			context.timing_engine.register_permanent_listener(&"pilot_024_re_request", re_eff, {
+				"card_instance_id": card.instance_id,
+				"card_def_id": card.def.card_id,
+				"slot_id": &"pilot",
+			})
+	# 汀兰 pilot_081 RE 请求回复（DIRECT 无 listen_timing）：不在卡牌 effect_ids 里（不渲染额外按钮），
+	# 单独注册到虚拟时点 pilot_081_re_request，供光环格上机甲 equipment_panel RE 按钮
+	# granted_effect_clicked -> effect_fire 直发时 _execute_effect_by_id 查找。
+	# binding 不带 mech_id/player_id（同琳）：RE 来源是"请求方"而非持有者，回退 action.source 取请求方；
+	# card_instance_id = 持有者 pilot 牌实例，多汀兰场景据此精确定位弹窗给哪个持有者。
+	if card.def.card_id == &"pilot_081_汀兰":
+		var p081_re_eff = all_effects.get(&"pilot_081_re_request")
+		if p081_re_eff != null:
+			context.timing_engine.register_permanent_listener(&"pilot_081_re_request", p081_re_eff, {
+				"card_instance_id": card.instance_id,
+				"card_def_id": card.def.card_id,
+				"slot_id": &"pilot",
+			})
+	# 瓦恩 pilot_083 RE 请求武器修改（DIRECT 无 listen_timing）：不在卡牌 effect_ids 里渲染按钮
+	# （re_request hide_button=true），单独注册到虚拟时点 pilot_083_re_request，供3格内机甲
+	# equipment_panel RE 按钮 granted_effect_clicked -> effect_fire 直发时 _execute_effect_by_id 查找。
+	# binding 不带 mech_id/player_id（同琳/汀兰）：RE 来源是"请求方"而非持有者，回退 action.source
+	# 取请求方；card_instance_id = 持有者瓦恩 pilot 牌实例，多瓦恩场景据此精确定位弹窗给哪个持有者。
+	if card.def.card_id == &"pilot_083_瓦恩":
+		var p083_re_eff = all_effects.get(&"pilot_083_re_request")
+		if p083_re_eff != null:
+			context.timing_engine.register_permanent_listener(&"pilot_083_re_request", p083_re_eff, {
+				"card_instance_id": card.instance_id,
+				"card_def_id": card.def.card_id,
+				"slot_id": &"pilot",
+			})
+	# 克劳德 pilot_029 当作聚能：完全复用标准聚能（energy_direct，来自 GeneratedActionEffects），
+	# 不在克劳德 effect_ids 里（不渲染第3按钮），单独注册到虚拟时点 &"energy_direct"，
+	# 供 effect_02 的 EXECUTE_EFFECT_FIRE 直发时 _execute_effect_by_id 查找。
+	# 真实聚能牌走 use_action_card → _execute_effect（非 _execute_effect_by_id），两条路径独立，
+	# 注册不干扰聚能牌本身。binding 须带 mech_id/player_id（非空真实值）：CHOOSE_OWN_WEAPON 的
+	# 武器选择窗按 binding_context.mech_id 取本机甲武器，APPLY_ENERGY_TO_WEAPON 按 source_mech_id
+	# 施加聚能；多克劳德场景 _execute_effect_by_id 按 want_mech_id 各自命中对应 listener。
+	if card.def.card_id == &"pilot_029_克劳德":
+		var p029_energy_eff = _GeneratedActionEffects.build_all_effects().get(&"energy_direct")
+		if p029_energy_eff != null:
+			context.timing_engine.register_permanent_listener(&"energy_direct", p029_energy_eff, {
+				"card_instance_id": card.instance_id,
+				"mech_id": mech_id,
+				"player_id": player_id,
+				"card_def_id": card.def.card_id,
+				"slot_id": &"pilot",
+			})
 
 
 ## pilot_005 effect_01 授予机制：向所有帝国阵营机甲注册 granted ATTACK_PRE 弃牌 listener。

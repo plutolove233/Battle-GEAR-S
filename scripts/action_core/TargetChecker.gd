@@ -16,6 +16,7 @@ class_name TargetChecker
 const _EffectBinding = preload("res://scripts/action_core/EffectBinding.gd")
 const _RangeCalculator = preload("res://scripts/battle/RangeCalculator.gd")
 const _HexGrid = preload("res://scripts/battle/hex_grid.gd")
+const _ActionPilotEffects = preload("res://scripts/generated_database/ActionPilotEffects.gd")
 
 
 ## 检查所有目标规则
@@ -54,6 +55,17 @@ static func check_single(binding, payload: Dictionary, rule: Dictionary) -> bool
 			var source_pos: Dictionary = payload.get("source_pos", {})
 			var target_pos: Dictionary = payload.get("target_pos", {})
 			var range_value: int = int(range_params.get("range", rule.get("range", 1)))
+			# 可变范围（通用，不绑机师ID）：counter_key 非空时额外加绑定卡实例
+			# counters["var_<counter_key>"]（INCREMENT_VARIABLE 写入，杰西卡 pilot_050 4+X 用）。
+			var range_counter_key: StringName = range_params.get("counter_key", &"")
+			if range_counter_key != &"" and binding != null and binding.context != null and binding.context.game_state != null:
+				var tr_bind: Dictionary = payload.get("binding_context", {})
+				var tr_cid: StringName = tr_bind.get("card_instance_id", &"")
+				if tr_cid != &"":
+					var tr_card = binding.context.game_state.get_card(tr_cid)
+					if tr_card != null:
+						var tr_counters: Dictionary = tr_card.counters if tr_card.counters != null else {}
+						range_value += int(tr_counters.get("var_%s" % String(range_counter_key), 0))
 			# DIRECT 主动效果（effect_fire）payload 无 source_pos/target_pos/distance：从 binding.context
 			# 反查 source_mech_id/target_id 对应机甲位置（与 TARGET_IS_ADJACENT_OR_SELF 同款回退），
 			# 否则 pilot_009 等 DIRECT 效果目标选择 resume 后 target 检查永假，反复弹目标选择窗死循环。
@@ -80,11 +92,12 @@ static func check_single(binding, payload: Dictionary, rule: Dictionary) -> bool
 			var target_pos: Dictionary = payload.get("target_pos", {})
 			var range_value: int = int(payload.get("weapon_range", 1))
 			var map_cells: Dictionary = payload.get("map_cells", {})
+			var aura_cells: Dictionary = payload.get("aura_green_cells", {})
 			if source_pos.is_empty() or target_pos.is_empty():
 				return false
 			if map_cells.is_empty():
 				return _HexGrid.distance(source_pos, target_pos) <= range_value
-			return _RangeCalculator.is_in_weapon_range(source_pos, target_pos, range_value, map_cells)
+			return _RangeCalculator.is_in_weapon_range(source_pos, target_pos, range_value, map_cells, aura_cells)
 
 		&"TARGET_IS_ADJACENT":
 			var source_pos: Dictionary = payload.get("source_pos", {})
@@ -94,7 +107,8 @@ static func check_single(binding, payload: Dictionary, rule: Dictionary) -> bool
 			return _HexGrid.distance(source_pos, target_pos) <= 1
 
 		&"TARGET_IS_ADJACENT_OR_SELF":
-			# 维修等效果：目标包含自身与周围1格内的机甲
+			# 维修等效果：目标包含自身与周围1格内的机甲。
+			# 范围读机师牌 repair_boost（通用机制）：坎得 pilot_023 等维修增强机师 range=4。
 			var source_mech_id: StringName = binding.get_source_mech_id()
 			var target_id: StringName = payload.get("target_id", payload.get("target_mech_id", &""))
 			if target_id == &"":
@@ -102,6 +116,11 @@ static func check_single(binding, payload: Dictionary, rule: Dictionary) -> bool
 			# 自身直接通过
 			if target_id == source_mech_id:
 				return true
+			# 琳 RE 维修窗口：窗口激活且来源是琳、目标是请求方时，无距离限制直接通过
+			# （请求方可在琳4格外的任意位置，窗口维修锁定目标不弹目标选择）。
+			if binding != null and binding.context != null and binding.context.game_state != null:
+				if _ActionPilotEffects.pilot_024_window_requester_for(binding.context.game_state, source_mech_id) == target_id:
+					return true
 			# 相邻判断：优先用 payload 里的 pos，缺失时经 binding.context 查机甲位置
 			var source_pos: Dictionary = payload.get("source_pos", {})
 			var target_pos: Dictionary = payload.get("target_pos", {})
@@ -116,7 +135,10 @@ static func check_single(binding, payload: Dictionary, rule: Dictionary) -> bool
 						target_pos = tgt_mech.position
 			if source_pos.is_empty() or target_pos.is_empty():
 				return false
-			return _HexGrid.distance(source_pos, target_pos) <= 1
+			var tadj_range: int = 1
+			if binding != null and binding.context != null:
+				tadj_range = _ActionPilotEffects.get_repair_range(binding.context.game_state, source_mech_id)
+			return _HexGrid.distance(source_pos, target_pos) <= tadj_range
 
 		&"TARGET_HAS_EQUIPMENT":
 			var equipment_id: StringName = rule.get("equipment_id", &"")
@@ -236,6 +258,38 @@ static func check_single(binding, payload: Dictionary, rule: Dictionary) -> bool
 			if acamt_targets.is_empty():
 				return false
 			payload["selected_targets"] = _targets_to_selected(acamt_targets)
+			return true
+
+		&"COUNTER_POWER_DRAIN_TARGET":
+			# 疾风 pilot_076 effect_01 消耗动力对象：按 binding(self) 在本次迎击响应中的角色
+			# 返回被消耗方 mech_id。配合条件 ATTACK_SOURCE_ACTION_CARD_TYPE_IS(迎击) 已保证是实体迎击牌。
+			# 分支A（self=被响应攻击的攻击方）：消耗迎击打出方 payload.source_mech_id
+			# 分支B（self=迎击打出方）：消耗被响应攻击的攻击方（attack_action_id 查 attack.attacker_id）
+			# self 非参与方 -> 返回空（不消耗）
+			var cpdt_ctx = binding.context if binding != null else null
+			if cpdt_ctx == null:
+				return false
+			var cpdt_bind_ctx: Dictionary = payload.get("binding_context", {}) if payload != null else {}
+			var cpdt_self_mech: StringName = cpdt_bind_ctx.get("mech_id", &"") if not cpdt_bind_ctx.is_empty() else &""
+			if cpdt_self_mech == &"" and binding != null:
+				cpdt_self_mech = binding.get_source_mech_id()
+			if cpdt_self_mech == &"":
+				return false
+			var cpdt_responder: StringName = payload.get("source_mech_id", payload.get("mech_id", &""))
+			var cpdt_aaid: StringName = payload.get("attack_action_id", &"")
+			var cpdt_attacker: StringName = &""
+			if cpdt_aaid != &"" and cpdt_ctx.get("action_registry") != null:
+				var cpdt_atk = cpdt_ctx.action_registry.get_action(cpdt_aaid)
+				if cpdt_atk != null:
+					cpdt_attacker = cpdt_atk.record.get("attacker_id", &"")
+			var cpdt_target: StringName = &""
+			if cpdt_self_mech == cpdt_attacker and cpdt_responder != &"":
+				cpdt_target = cpdt_responder  # 分支A：self 是攻击方，消耗响应方
+			elif cpdt_self_mech == cpdt_responder and cpdt_attacker != &"":
+				cpdt_target = cpdt_attacker  # 分支B：self 是响应方，消耗攻击方
+			if cpdt_target == &"":
+				return false
+			payload["selected_targets"] = _targets_to_selected([cpdt_target])
 			return true
 
 		&"ALL_HIT_TARGETS_FROM_ACTION_RECORD_FLAG":

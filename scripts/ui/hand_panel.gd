@@ -91,7 +91,19 @@ func _refresh() -> void:
 		var btn = Button.new()
 		# 里昂狩猎标签：抽到的攻击牌若有有效 hunting 标签，显示"牌名(狩)"后缀
 		var _hunting_suffix := "(狩)" if _ActionPilotEffects.pilot_006_card_has_active_hunting_tag(card) else ""
-		btn.text = "%s%s[%s]" % [card.def.display_name, _hunting_suffix, _action_type_short(card.def)]
+		# pilot_021 塔莉娅：禁/策标签后缀（效果1赐予牌禁本回合使用；策=交出去的牌）
+		var _p021_suffix := ""
+		if _ActionPilotEffects.pilot_021_card_has_any_jin(card):
+			_p021_suffix += "(禁)"
+		if _ActionPilotEffects.pilot_021_card_has_any_ce(card):
+			_p021_suffix += "(策)"
+		# pilot_087 塔妮拉：交标签后缀（效果1交出去的牌，他人使用后双方各抽1）
+		var _p087_suffix := "(交)" if _ActionPilotEffects.pilot_087_card_has_any_jiao(card) else ""
+		# 烈火"燃"标签后缀（攻击命中抽3：本回合不占行动牌上限）
+		var _ran_suffix := "(燃)" if _ActionPilotEffects.card_has_ran_tag(card) else ""
+		# 温斯顿"联"标签后缀（效果1当作联合时，交出的牌上打"联"标签；其他机甲使用后触发联合获金等）
+		var _p082_suffix := "(联)" if _ActionPilotEffects.pilot_082_card_has_any_lian(card) else ""
+		btn.text = "%s%s%s%s%s%s[%s]" % [card.def.display_name, _hunting_suffix, _p021_suffix, _p087_suffix, _ran_suffix, _p082_suffix, _action_type_short(card.def)]
 		btn.custom_minimum_size = Vector2(120, 44)
 		btn.tooltip_text = card.def.effect_text
 		# 攻击牌用绿色，辅助牌用蓝色

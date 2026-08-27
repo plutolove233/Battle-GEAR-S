@@ -165,6 +165,68 @@ func modify_player_limits(player_id: StringName, attack_limit: int = -1, action_
 	return {"ok": true, "message": "player_limits_modified"}
 
 
+## dev 设置事件牌：创建指定 def 的实例，走完整 set_event_card 动作链
+## （顶掉旧牌完整弃置 + 注册效果 + 状态/派生 + instant 结算）。返回 {ok, message}。
+func set_event_card(player_id: StringName, event_def_id: StringName) -> Dictionary:
+	var gs = context.game_state
+	if gs == null:
+		return {"ok": false, "message": "game_state 未初始化"}
+	var mech = gs.get_mech_for_player(player_id)
+	if mech == null:
+		return {"ok": false, "message": "机甲不存在"}
+	var card_def = context.card_database.get_card(event_def_id) if context.card_database != null else null
+	if card_def == null or String(card_def.card_kind) != "event":
+		return {"ok": false, "message": "事件牌定义不存在: %s" % String(event_def_id)}
+	var instance_id: StringName = gs.next_id(&"dev_event")
+	var card = CardInstance.new(instance_id, card_def)
+	card.owner_player_id = player_id
+	gs.cards[instance_id] = card
+	if context.action_service == null:
+		return {"ok": false, "message": "action_service 不可用"}
+	context.action_service.execute(&"set_event_card", {
+		"mech_id": mech.mech_id,
+		"event_card_id": instance_id,
+		"source": {"mech_id": mech.mech_id},
+	})
+	return {"ok": true, "message": "event_card_set: %s" % String(card_def.display_name)}
+
+
+## dev 弃置当前事件牌：清槽后走完整 discard_card 动作（事件分支永久离场，
+## 监听器/状态/派生随弃置注销）。返回 {ok, message}。
+func discard_event_card(player_id: StringName) -> Dictionary:
+	var gs = context.game_state
+	if gs == null:
+		return {"ok": false, "message": "game_state 未初始化"}
+	var mech = gs.get_mech_for_player(player_id)
+	if mech == null:
+		return {"ok": false, "message": "机甲不存在"}
+	var slot = mech.slots.get(&"event")
+	if slot == null:
+		return {"ok": false, "message": "机甲无事件区域"}
+	if slot.equipped_card == null:
+		return {"ok": false, "message": "当前无事件牌"}
+	var card = slot.equipped_card
+	slot.equipped_card = null
+	context.deck_service.discard_card(card.instance_id, &"dev_event_discard")
+	return {"ok": true, "message": "event_card_discarded: %s" % String(card.def.display_name if card.def != null else card.instance_id)}
+
+
+## dev 修改当前事件牌计时数：直接改数值（不触发到期结算，到期仍按正常时点走）。
+## 返回 {ok, message}。
+func set_event_timer(player_id: StringName, value: int) -> Dictionary:
+	var gs = context.game_state
+	if gs == null:
+		return {"ok": false, "message": "game_state 未初始化"}
+	var mech = gs.get_mech_for_player(player_id)
+	if mech == null:
+		return {"ok": false, "message": "机甲不存在"}
+	var slot = mech.slots.get(&"event")
+	if slot == null or slot.equipped_card == null:
+		return {"ok": false, "message": "当前无事件牌"}
+	slot.equipped_card.timer = clampi(value, 0, 99)
+	return {"ok": true, "message": "event_timer_set: %d" % slot.equipped_card.timer}
+
+
 ## 获取所有机甲框架ID
 func get_mech_frame_ids() -> Array[StringName]:
 	return _mech_frame_ids.duplicate()

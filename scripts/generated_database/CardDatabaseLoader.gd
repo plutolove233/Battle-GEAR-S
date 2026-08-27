@@ -157,6 +157,9 @@ func _load_event_card(data: Dictionary) -> EventCardDef:
 	def.delay = int(data.get("delay", 0))
 	def.tone = String(data.get("tone", ""))
 	def.timing = String(data.get("timing", ""))
+	# 计时方式/计时数（新字段；delay 为旧别名，未给 timer_count 时回退 delay）
+	def.timer_mode = StringName(data.get("timer_mode", "instant"))
+	def.timer_count = int(data.get("timer_count", def.delay))
 	# 记录效果 ID
 	_record_effect_ids(def.card_id, data)
 	return def
@@ -214,6 +217,9 @@ func _load_pilot_card(data: Dictionary) -> PilotCardDef:
 	def.action_card_limit = int(data.get("action_card_limit", 5))
 	def.faction = String(data.get("faction", ""))
 	def.cost = int(data.get("cost", 0))
+	def.repair_boost = data.get("repair_boost", {})
+	# 远程武器范围加成（通用机制，如克劳德 pilot_029 =1）
+	def.passive_weapon_range_bonus = int(data.get("passive_weapon_range_bonus", 0))
 	# 记录效果 ID
 	_record_effect_ids(def.card_id, data)
 	return def

@@ -22,6 +22,10 @@ var attack_limit_spin: SpinBox
 var action_limit_spin: SpinBox
 var gold_spin: SpinBox
 
+var event_dropdown: OptionButton
+var event_info_label: Label
+var event_timer_spin: SpinBox
+
 var action_cards_label: Label
 var equipment_label: Label
 var mech_info_label: Label
@@ -90,10 +94,11 @@ func _setup_ui() -> void:
 	main_vbox.add_child(scroll)
 	_scroll = scroll  # 存引用，供刷新内容后强制重算滚动范围
 
-	# 外部 MarginContainer 限制宽度
+	# 外部 MarginContainer 限制宽度（底部留白：滚到最下方时最后一段不贴底）
 	var margin := MarginContainer.new()
 	margin.add_theme_constant_override("margin_left", 32)
 	margin.add_theme_constant_override("margin_right", 32)
+	margin.add_theme_constant_override("margin_bottom", 24)
 	scroll.add_child(margin)
 
 	# 内容区
@@ -367,6 +372,46 @@ func _setup_ui() -> void:
 	limits_btn.pressed.connect(_on_apply_limits)
 	limits_hbox.add_child(limits_btn)
 
+	# ── 事件牌管理区（设置/弃置当前事件牌 + 改计时数）──
+	var event_section := _create_section("事件牌管理", Color(0.75, 0.55, 0.85))
+	content.add_child(event_section)
+
+	# 设置事件牌：下拉选 event def -> set_event_card 动作（顶掉旧牌+注册效果+派生+instant结算）
+	var event_hbox := HBoxContainer.new()
+	event_section.add_child(event_hbox)
+	event_hbox.add_child(_make_label("设置事件: "))
+	event_dropdown = OptionButton.new()
+	event_dropdown.custom_minimum_size = Vector2(220, 30)
+	event_hbox.add_child(event_dropdown)
+	var event_set_btn := Button.new()
+	event_set_btn.text = "设置"
+	event_set_btn.pressed.connect(_on_set_event_card)
+	event_hbox.add_child(event_set_btn)
+	# 当前事件牌信息（名称+计时模式+计时数）
+	event_info_label = Label.new()
+	event_info_label.add_theme_font_size_override("font_size", 12)
+	event_info_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.9))
+	event_section.add_child(event_info_label)
+
+	# 计时数修改 + 弃置当前事件牌
+	var event_ctrl_hbox := HBoxContainer.new()
+	event_section.add_child(event_ctrl_hbox)
+	event_ctrl_hbox.add_child(_make_label("计时数: "))
+	event_timer_spin = SpinBox.new()
+	event_timer_spin.min_value = 0
+	event_timer_spin.max_value = 99
+	event_timer_spin.value = 0
+	event_timer_spin.custom_minimum_size = Vector2(60, 30)
+	event_ctrl_hbox.add_child(event_timer_spin)
+	var event_timer_btn := Button.new()
+	event_timer_btn.text = "应用计时"
+	event_timer_btn.pressed.connect(_on_apply_event_timer)
+	event_ctrl_hbox.add_child(event_timer_btn)
+	var event_discard_btn := Button.new()
+	event_discard_btn.text = "弃置事件牌"
+	event_discard_btn.pressed.connect(_on_discard_event_card)
+	event_ctrl_hbox.add_child(event_discard_btn)
+
 
 func _make_label(text: String) -> Label:
 	var lbl := Label.new()
@@ -433,6 +478,7 @@ func _refresh_all() -> void:
 		_card_lists_built = true
 	_refresh_slot_list()
 	_refresh_pilot_list()
+	_refresh_event_card_list()
 	_update_info_display()
 
 
@@ -595,6 +641,39 @@ func _refresh_pilot_list() -> void:
 		pilot_dropdown.select(select_index)
 
 
+## 事件牌计时模式 -> 下拉显示用的短标签
+func _event_timer_mode_label(mode: StringName) -> String:
+	match mode:
+		&"instant": return "即时"
+		&"every_turn_end": return "每回合末"
+		&"own_turn_end": return "我方回合末"
+		&"next_own_turn_end": return "下我方回合末"
+		&"next_own_turn_start": return "下我方回合初"
+		_: return String(mode)
+
+
+## 刷新事件牌下拉：列出 card_database 所有 event 卡定义（card_def_id 作 metadata）。
+func _refresh_event_card_list() -> void:
+	if event_dropdown == null or context == null or context.card_database == null:
+		return
+	var prev_meta: Variant = _dropdown_selected_meta(event_dropdown)
+	event_dropdown.clear()
+	var index := 0
+	var select_index := 0
+	for card_id: StringName in context.card_database.card_defs:
+		var def = context.card_database.card_defs[card_id]
+		if def == null or def.card_kind != &"event":
+			continue
+		var mode_label := _event_timer_mode_label(def.timer_mode) if "timer_mode" in def else "?"
+		event_dropdown.add_item("%s [%s]" % [def.display_name, mode_label], index)
+		event_dropdown.set_item_metadata(index, card_id)
+		if card_id == prev_meta:
+			select_index = index
+		index += 1
+	if index > 0:
+		event_dropdown.select(select_index)
+
+
 func _update_info_display() -> void:
 	var gs := _gs()
 	var player := _current_player()
@@ -664,10 +743,25 @@ func _update_info_display() -> void:
 				]
 		pilot_info_label.text = pilot_text
 
+	# ── 事件牌信息 ──
+	if event_info_label != null:
+		var event_text := "事件: 无"
+		if mech:
+			var eslot = mech.slots.get(&"event")
+			if eslot != null and eslot.equipped_card != null and eslot.equipped_card.def != null:
+				var ecard = eslot.equipped_card
+				var emode := _event_timer_mode_label(ecard.def.timer_mode) if "timer_mode" in ecard.def else "?"
+				var timer_text := "即时" if emode == "即时" else "计时 %d" % int(ecard.get("timer"))
+				event_text = "事件: %s [%s] %s" % [ecard.def.display_name, emode, timer_text]
+				# 计数 SpinBox 同步当前牌计时数（在此值基础上修改）
+				if event_timer_spin != null and not event_timer_spin.has_focus():
+					event_timer_spin.value = int(ecard.get("timer"))
+		event_info_label.text = event_text
+
 	# autowrap 长文本 label（装备/行动牌/机甲信息）内容变化后实际高度可能变，
 	# ScrollContainer 的滚动范围未必同步刷新 -> 滚不到底。deferred 强制重算。
 	if _scroll != null and is_instance_valid(_scroll):
-		_scroll.update_minimum_size()
+		_scroll.call_deferred(&"update_minimum_size")
 
 
 # ═══════════════════════════════════════════
@@ -1129,6 +1223,77 @@ func _on_apply_limits() -> void:
 	var dev := DevModeService.new()
 	dev.context = context
 	dev.modify_player_limits(current_player_id, atk, alim, gold)
+	_update_info_display()
+	edit_applied.emit()
+
+
+## 设置事件牌：下拉选 event_def_id -> set_event_card 动作链（顶掉旧牌+注册效果+派生+instant结算）。
+func _on_set_event_card() -> void:
+	var event_def_id: Variant = _dropdown_selected_meta(event_dropdown)
+	if event_def_id == null or current_player_id == &"":
+		return
+	if network_mode:
+		dev_edit_requested.emit(&"set_event_card", {"target": current_player_id, "event_def_id": event_def_id})
+		return
+	var gs := _gs()
+	if gs == null:
+		return
+	if _current_mech() == null:
+		return
+	var dev := DevModeService.new()
+	dev.context = context
+	var result: Dictionary = dev.set_event_card(current_player_id, StringName(event_def_id))
+	if not result.get("ok", false):
+		if gs.log is Array:
+			gs.log.append({"message": "dev 设置事件牌失败: %s" % String(result.get("message", "")), "details": {}})
+		return
+	_update_info_display()
+	edit_applied.emit()
+
+
+## 弃置当前事件牌：完整 discard_card 动作（事件分支永久离场，监听器/状态/派生随弃置注销）。
+func _on_discard_event_card() -> void:
+	if current_player_id == &"":
+		return
+	if network_mode:
+		dev_edit_requested.emit(&"discard_event_card", {"target": current_player_id})
+		return
+	var gs := _gs()
+	if gs == null:
+		return
+	if _current_mech() == null:
+		return
+	var dev := DevModeService.new()
+	dev.context = context
+	var result: Dictionary = dev.discard_event_card(current_player_id)
+	if not result.get("ok", false):
+		if gs.log is Array:
+			gs.log.append({"message": "dev 弃置事件牌失败: %s" % String(result.get("message", "")), "details": {}})
+		return
+	_update_info_display()
+	edit_applied.emit()
+
+
+## 应用计时数：直接改当前事件牌 timer 数值（不触发到期结算）。
+func _on_apply_event_timer() -> void:
+	if current_player_id == &"":
+		return
+	var value := int(event_timer_spin.value) if event_timer_spin != null else 0
+	if network_mode:
+		dev_edit_requested.emit(&"set_event_timer", {"target": current_player_id, "value": value})
+		return
+	var gs := _gs()
+	if gs == null:
+		return
+	if _current_mech() == null:
+		return
+	var dev := DevModeService.new()
+	dev.context = context
+	var result: Dictionary = dev.set_event_timer(current_player_id, value)
+	if not result.get("ok", false):
+		if gs.log is Array:
+			gs.log.append({"message": "dev 改计时失败: %s" % String(result.get("message", "")), "details": {}})
+		return
 	_update_info_display()
 	edit_applied.emit()
 

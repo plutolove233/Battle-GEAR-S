@@ -26,6 +26,15 @@ const TURN_BEFORE_END       := &"TURN_BEFORE_END"         ## 回合结束前
 const TURN_END              := &"TURN_END"                ## 回合结束时
 const TURN_AFTER_END        := &"TURN_AFTER_END"          ## 回合结束后
 
+## ── 金币 ──
+const GAIN_GOLD_AFTER       := &"GAIN_GOLD_AFTER"           ## 获得金币后（payload: gainer_player_id/gainer_mech_id/amount/from_player_id/reason）
+const GIVE_GOLD_AFTER       := &"GIVE_GOLD_AFTER"           ## 给予其他玩家金币后（payload: giver_player_id/gainer_player_id/amount）
+
+## ── 商店购买（虚拟时点，非动作步骤时点）──
+## 购买成功后发出（ShopService 三条购买路径统一 fire），供"购买后触发"类效果（莉卡尔 pilot_054 等）监听。
+## payload: player_id（购买者）/buyer_mech_id/card_id/is_advanced（是否高级装备=SR/SSR稀有度）/price
+const SHOP_BUY_AFTER        := &"SHOP_BUY_AFTER"            ## 商店购买装备牌后
+
 ## ── 攻击动作 ──
 const ATTACK_BEFORE         := &"ATTACK_BEFORE"           ## 攻击前（选择武器后）
 const ATTACK_PRE            := &"ATTACK_PRE"              ## 攻击时前（选择目标后）
@@ -50,6 +59,11 @@ const BASIC_MOVE_AT         := &"BASIC_MOVE_AT"           ## 基础移动时
 const BASIC_MOVE_AFTER      := &"BASIC_MOVE_AFTER"        ## 基础移动后
 const BASIC_MOVE_SETTLE     := &"BASIC_MOVE_SETTLE"       ## 基础移动结算
 const SINGLE_MOVE_SETTLE    := &"SINGLE_MOVE_SETTLE"      ## 单次移动结算
+
+## ── 动力消耗事件（虚拟时点，非动作步骤时点）──
+## GameActions.spend_power 对全部动力消耗路径统一通知（reason=BASIC_MOVE 除外：移动消耗由
+## BASIC_MOVE_AT 时点监听避免双计）。动力税类效果（杰西卡 pilot_050 e1 等）LISTEN 此时点。
+const POWER_SPENT           := &"power_spent"             ## 动力消耗（消耗时立即阻塞）
 
 ## ── 设置装备牌动作 ──
 const SET_EQUIP_BEFORE      := &"SET_EQUIP_BEFORE"        ## 设置装备牌前
@@ -96,5 +110,22 @@ const SHOW_CARD_BEFORE      := &"SHOW_CARD_BEFORE"        ## 展示牌前
 const SHOW_CARD_AFTER       := &"SHOW_CARD_AFTER"         ## 展示牌后
 const SHOW_CARD_SETTLE      := &"SHOW_CARD_SETTLE"        ## 展示牌结算
 
+## ── 设置事件牌动作 ──
+## set_event_card 动作步骤时点（事件标记拾取/计时结束抽新牌等路径统一走该动作）
+const EVENT_SET_BEFORE      := &"EVENT_SET_BEFORE"        ## 设置事件牌前
+const EVENT_SET_AT          := &"EVENT_SET_AT"            ## 设置事件牌时（放置到事件区域）
+const EVENT_SET_AFTER       := &"EVENT_SET_AFTER"         ## 设置事件牌后（效果已注册）
+const EVENT_SET_SETTLE      := &"EVENT_SET_SETTLE"        ## 设置事件牌结算
+const EVENT_RESOLVE         := &"EVENT_RESOLVE"           ## 事件牌结算（instant 牌设置后即刻结算）
+const EVENT_TIMER_TICK      := &"EVENT_TIMER_TICK"        ## 事件计时-1（payload: event_card_id/mech_id/timer/before）
+const EVENT_TIMER_EXPIRE    := &"EVENT_TIMER_EXPIRE"      ## 事件计时归零（到期结算，先于弃置；payload: event_card_id/mech_id）
+
 ## ── 胜利条件 ──
 const VICTORY_REACHED       := &"VICTORY_REACHED"         ## 达到胜利条件
+
+## ── 掩护窗口附加选项（虚拟时点，非动作步骤时点）──
+## 不会被 fire_timing 正常触发：仅由掩护多选窗（CHOOSE_MANY_CARDS collect_cover_window_extras）
+## 收集窗口拥有玩家注册在此的监听效果，作为复选框附加选项展示（洛尔恩 pilot_062 转化掩护）。
+## 选中后由确认路径直接 _execute_actions 该效果，此时点只作存储/遍历入口。
+const COVER_WINDOW_EXTRA     := &"COVER_WINDOW_EXTRA"     ## 掩护窗口附加选项（复选框）
+const THRUST_WINDOW_EXTRA    := &"THRUST_WINDOW_EXTRA"    ## 推进窗口附加选项（复选框，温斯顿 pilot_082 转化推进）

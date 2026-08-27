@@ -10,6 +10,9 @@ extends Action
 class_name DiscardCardAction
 
 const _TimingConst = preload("res://scripts/action_core/TimingConst.gd")
+const _ActionPilotEffects = preload("res://scripts/generated_database/ActionPilotEffects.gd")
+const _GeneratedEventEffects = preload("res://scripts/generated_database/GeneratedEventEffects.gd")
+const SLog = preload("res://scripts/services/slog.gd")
 
 
 func _init() -> void:
@@ -39,6 +42,9 @@ func get_display_name() -> String:
 func _step_determine_cards(action: Action) -> Dictionary:
 	var card_ids: Array = action.record.get("card_ids", [])
 	var count: int = action.record.get("count", 1)
+	# count<=0：无牌可弃，直接弃0张完成、不弹窗（索伦 pilot_044 X=0 时抽1弃0；对后续所有效果通用）。
+	if count <= 0:
+		return {"determined_card_ids": []}
 	var executor: StringName = action.record.get("executor", &"")
 
 	# from_target=true：从攻击目标玩家手牌弃牌（预判 effect2）。
@@ -123,6 +129,17 @@ func _step_determine_cards(action: Action) -> Dictionary:
 	if action.record.get("cancelled", false):
 		return {"determined_card_ids": []}
 
+	# 弃全部手牌行动牌（德伦迪 pilot_042 弃所有）：不弹窗，直接取该玩家全部行动手牌弃置。
+	# player_id 由 _extract_discard_params 从 binding_context 补全；缺省退回 source.player_id。
+	if action.record.get("discard_all_action_hand", false):
+		var _da_pid: StringName = action.record.get("player_id", action.source.get("player_id", &"") if action.source is Dictionary else &"")
+		var _da_player = context.game_state.players.get(_da_pid) if (_da_pid != &"" and context != null and context.game_state != null) else null
+		var _da_ids: Array = []
+		if _da_player != null:
+			_da_ids = _da_player.action_hand.duplicate()
+		_snapshot_discard_sources(action, _da_ids)
+		return {"determined_card_ids": _da_ids}
+
 	# 如果已指定具体牌，无需选择
 	if not card_ids.is_empty():
 		_snapshot_discard_sources(action, card_ids)
@@ -147,6 +164,13 @@ func _step_determine_cards(action: Action) -> Dictionary:
 		# 实际可弃数 = min(指定数, 手牌数)。扭转钢鞭 effect_100 count=2 但目标可能仅1张行动牌：
 		# 按拆解歧义1「有几张弃几张」，UI 强制精确 count 张，若不减会 confirm disabled 卡死。
 		var _eff_count: int = min(count, _hand_owner.action_hand.size())
+		# 布彻尔 pilot_063「未响应弃目标2张」：目标行动牌总数≤count 时不弹窗直接全部弃置
+		# （有几张弃几张，含0张提前返回）。手牌>count 仍需弹窗选 count 张。
+		# 通用参数 auto_discard_all_if_covered，任何弃牌效果可复用。
+		if bool(action.record.get("auto_discard_all_if_covered", false)) and _hand_owner.action_hand.size() <= count:
+			var _auto_all_ids: Array = _hand_owner.action_hand.duplicate()
+			_snapshot_discard_sources(action, _auto_all_ids)
+			return {"determined_card_ids": _auto_all_ids}
 		return {
 			"need_input": true,
 			"input_type": &"select_discard_cards",
@@ -201,11 +225,20 @@ func _snapshot_discard_sources(action: Action, card_ids: Array) -> void:
 			"reason": reason,
 		}
 		if card != null:
-			snap["from_mech_id"] = card.mech_id
+			# 归属回退：手牌装备牌 mech_id 历史上为空（抽牌/商店购买路径只设 owner_player_id），
+			# 逐点补设 mech_id 后仍可能有旧存档/特殊入口的牌为空，此处按 owner_player_id 反查
+			# 持有者机甲兜底，保证 from_mech_id 归属判定（霍克 pilot_055 卖出翻倍等弃牌归属条件）不落空。
+			var snap_mech_id: StringName = card.mech_id
+			if snap_mech_id == &"" and card.owner_player_id != &"" and context != null and context.game_state != null:
+				var snap_owner_mech = context.game_state.get_mech_for_player(card.owner_player_id)
+				snap_mech_id = snap_owner_mech.mech_id if snap_owner_mech != null else &""
+			snap["from_mech_id"] = snap_mech_id
 			snap["from_slot_id"] = card.slot_id
 			snap["from_zone"] = card.zone
 			snap["def_id"] = card.def.card_id if card.def != null else &""
 			snap["card_kind"] = card.def.card_kind if card.def != null else &""
+			# 背面朝上（备用区白板）标记：供弃装获金类效果（pilot_085 莽克）判断「正面设置」排除备用区
+			snap["face_down"] = card.get("face_down") == true
 		snapshots.append(snap)
 	action.record["discard_snapshots"] = snapshots
 
@@ -256,18 +289,49 @@ func _step_transfer_to_pile(action: Action) -> Dictionary:
 		if card == null:
 			continue
 
-		var owner_player_id: StringName = card.owner_player_id
+		# pilot_021 塔莉娅"策"标签：带"策"标签的行动牌从临时区进弃牌堆（通用"使用"判定，
+		# 含迪恩转化代价牌）时，塔莉娅抽2；标签入弃牌堆即消失（无论使用/直接弃置）。
+		# 用快照 from_zone 而非 card.zone 判定：move_to_tmp 已把 card.zone 置 temp_zone，
+		# 直接弃置（action_hand，未经过使用）也会命中 card.zone，故看 discard 动作开始时的 zone。
+		# 使用中的牌（use_action_card _step_card_to_temp_zone）from_zone=temp_zone 计入；
+		# 手牌直接弃置 from_zone=action_hand 不计入（回合超限/预判/肯特压制等），仅清标签。
+		var _snap_idx: Dictionary = snapshots[idx] if idx < snapshots.size() else {}
+		if card.def != null and card.def.card_kind == &"action" and _ActionPilotEffects.pilot_021_card_has_any_ce(card):
+			if _snap_idx.get("from_zone", &"") == &"temp_zone":
+				var _p021_ce_drawn: int = _ActionPilotEffects.pilot_021_trigger_ce_draw(context, card)
+				if _p021_ce_drawn > 0:
+					SLog.log_raw("[pilot_021] 策标签牌使用后塔莉娅抽2 x%d card=%s" % [_p021_ce_drawn, String(card_id)])
+			else:
+				_ActionPilotEffects.pilot_021_clear_all_ce(card)
+		# pilot_087 塔妮拉"交"标签：带"交"标签的行动牌从临时区进弃牌堆（通用"使用"判定，
+		# 含迪恩转化代价牌等）时，使用方先抽1 + 塔妮拉后抽1，标签入弃牌堆即消失。
+		# from_zone==temp_zone 计入（使用中），from_zone==action_hand 仅清标签不抽。
+		if card.def != null and card.def.card_kind == &"action" and _ActionPilotEffects.pilot_087_card_has_any_jiao(card):
+			if _snap_idx.get("from_zone", &"") == &"temp_zone":
+				var _p087_jiao_drawn: int = _ActionPilotEffects.pilot_087_trigger_jiao_draw(context, card)
+				if _p087_jiao_drawn > 0:
+					SLog.log_raw("[pilot_087] 交标签牌使用后双方各抽1 x%d card=%s" % [_p087_jiao_drawn, String(card_id)])
+			else:
+				_ActionPilotEffects.pilot_087_clear_all_jiao(card)
+		# 温斯顿 pilot_082"联"标签：联牌离开持有者手牌/临时区进弃牌堆（使用/弃置）即消失。
+		# 使用路径在 USE_ACTION_AT 已触发施加联合状态，入弃牌堆无需再保留标签。
+		if card.def != null and card.def.card_kind == &"action" and _ActionPilotEffects.pilot_082_card_has_any_lian(card):
+			_ActionPilotEffects.pilot_082_clear_all_lian(card)
 		# 设置弃牌区（牌已在 tmp_zone，remove_card_from_all_zones 已在 move_to_tmp 调用）
-		card.zone = &"discard"
+		# 事件牌永久离场：zone=removed 且不入任何弃牌堆。
+		# 事件牌堆只减不回（结算/弃置/顶掉的事件牌永不重洗），removed 使其不再出现在区域查询中。
+		var is_event_discard: bool = card.def != null and card.def.card_kind == &"event"
+		card.zone = &"removed" if is_event_discard else &"discard"
 		card.slot_id = &""
 		card.mech_id = &""
 
-		# 按类型分入弃牌堆
-		var target_pile: Array = context.game_state.deck_state.action_discard_pile
-		if card.def and card.def.card_kind == &"equipment":
-			target_pile = context.game_state.deck_state.equipment_discard_pile
-		if not target_pile.has(card_id):
-			target_pile.append(card_id)
+		# 按类型分入弃牌堆（事件牌不入堆，永久离场）
+		if not is_event_discard:
+			var target_pile: Array = context.game_state.deck_state.action_discard_pile
+			if card.def and card.def.card_kind == &"equipment":
+				target_pile = context.game_state.deck_state.equipment_discard_pile
+			if not target_pile.has(card_id):
+				target_pile.append(card_id)
 
 		# 写日志（消息面板通过 SessionLogger 的 card_discarded 日志显示，不走 legacy hook）
 		context.game_state.write_log(&"card_discarded", {
@@ -282,14 +346,33 @@ func _step_settle(action: Action) -> Dictionary:
 	# DISCARD_AFTER 已 fire（离场诱发效果已触发），此处注销被弃装备牌的 permanent listener，
 	# 使其后续不再在未来时点触发（如已离场的联邦右腿 ATTACK_PRE 不再响应该回合后续攻击）。
 	var settle_card_ids: Array = action.record.get("determined_card_ids", [])
+	# transfer_to_pile 已把 card.mech_id 清空，事件牌清理需按 discard_snapshots 取 from_mech_id
+	var settle_snapshots: Array = action.record.get("discard_snapshots", [])
 	if context != null and context.timing_engine != null:
-		for card_id: StringName in settle_card_ids:
+		for idx in range(settle_card_ids.size()):
+			var card_id: StringName = settle_card_ids[idx]
 			if card_id == &"":
 				continue
 			var s_card = context.game_state.get_card(card_id) if context.game_state != null else null
-			if s_card != null and s_card.def != null and s_card.def.card_kind == &"equipment":
+			if s_card == null or s_card.def == null:
+				continue
+			if s_card.def.card_kind == &"equipment":
 				context.timing_engine.unregister_permanent_listeners_for_card(card_id)
 				# 拘束钩爪 effect_104：武器离场时移除其施加的 LOCKED 状态（此牌弃置则锁定解除）
 				if context.game_actions != null and context.game_actions.has_method("remove_locked_status_by_source_card"):
 					context.game_actions.remove_locked_status_by_source_card(card_id)
+			elif s_card.def.card_kind == &"event":
+				# 事件牌离场：注销监听器 + 撤派生加成 + 清其施加的状态 + 重算动力上限
+				# （与 set_event_card_action._step_activate 的注册路径对称）。
+				context.timing_engine.unregister_permanent_listeners_for_card(card_id)
+				var ev_snap: Dictionary = settle_snapshots[idx] if idx < settle_snapshots.size() else {}
+				var ev_mech_id: StringName = StringName(String(ev_snap.get("from_mech_id", &"")))
+				if ev_mech_id != &"":
+					_GeneratedEventEffects.unregister_derived_bonuses(ev_mech_id)
+					_GeneratedEventEffects.remove_status_by_source_card(context, card_id)
+					var ev_mech = context.game_state.mechs.get(ev_mech_id) if context.game_state != null else null
+					if ev_mech != null:
+						var old_max_power: int = ev_mech.max_power
+						ev_mech.max_power = ev_mech.get_total_power()
+						ev_mech.sync_own_power_after_max_change(old_max_power)
 	return {}

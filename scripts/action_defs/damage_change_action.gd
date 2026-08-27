@@ -139,6 +139,14 @@ func _step_set_damage(action: Action) -> Dictionary:
 			}
 			if dec_exclude != &"":
 				dec_input["exclude_slot_id"] = dec_exclude
+			# allow_cancel/max_mode：最多移除（薇尔 pilot_059）面板可提前结束/取消。
+			# source_label：面板顶部显示效果来源。
+			if bool(action.record.get("allow_cancel", false)):
+				dec_input["allow_cancel"] = true
+			if bool(action.record.get("max_mode", false)):
+				dec_input["max_mode"] = true
+			if String(action.record.get("source_label", "")) != "":
+				dec_input["source_label"] = String(action.record["source_label"])
 			return {
 				"need_input": true,
 				"input_type": &"place_damage_tokens",

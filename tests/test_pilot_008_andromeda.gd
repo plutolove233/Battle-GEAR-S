@@ -458,8 +458,13 @@ func test_effect01b_recover_via_turn_end_overlimit() -> Variant:
 	enemy.action_hand.append(repair.instance_id)
 	repair.zone = &"action_hand"
 	var x_before: int = _ActionPilotEffects.get_pilot_008_x(st.card)
-	# 走真实回合末弃牌流程
+	# 走真实回合末弃牌流程（人类玩家：第5步弹弃超限阻塞窗）
 	battle.context.turn_service.end_turn(&"enemy")
+	var dw: Dictionary = battle.context.action_ui_bridge.get_waiting_action_info()
+	if String(dw.get("input_type", &"")) != &"select_discard_cards":
+		return "回合末超限应弹弃牌阻塞窗，实际: %s" % String(dw.get("input_type", &""))
+	# 选 [维修+1张强袭] -> 批量弃 -> DISCARD_SETTLE -> effect_01b 回收
+	battle.context.turn_service.resume_end_turn_discard(dw.get("action_id", &""), [repair.instance_id, fillers[0]])
 	# 诊断：看维修在哪
 	var rc = gs.get_card(repair.instance_id)
 	var repair_zone: String = String(rc.zone) if rc != null else "null"
@@ -496,6 +501,11 @@ func test_effect01b_recover_via_own_turn_end_overlimit() -> Variant:
 	repair.zone = &"action_hand"
 	var x_before: int = _ActionPilotEffects.get_pilot_008_x(st.card)
 	battle.context.turn_service.end_turn(&"player")
+	var dw2: Dictionary = battle.context.action_ui_bridge.get_waiting_action_info()
+	if String(dw2.get("input_type", &"")) != &"select_discard_cards":
+		return "回合末超限应弹弃牌阻塞窗，实际: %s" % String(dw2.get("input_type", &""))
+	# 选 [强袭+维修] -> 批量弃 -> SETTLE 回收维修回手牌末尾
+	battle.context.turn_service.resume_end_turn_discard(dw2.get("action_id", &""), [fillers[0], repair.instance_id])
 	var rc = gs.get_card(repair.instance_id)
 	var repair_zone: String = String(rc.zone) if rc != null else "null"
 	var in_player_hand: bool = player.action_hand.has(repair.instance_id)

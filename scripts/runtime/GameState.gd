@@ -51,6 +51,46 @@ var current_damage_context_id: StringName = &""
 ## 待处理的自定义效果
 var pending_custom_effects: Array[Dictionary] = []
 
+## 琳 pilot_024 RE 维修窗口（存在即激活）：{"lin_mech_id", "requester_mech_id", "action_id"}
+## 请求方点击 RE 后琳确认即打开；维修完成/取消时关闭并恢复请求方回合。PvP 锁步各端一致。
+var pilot_024_repair_window: Dictionary = {}
+
+## 通用攻击窗口（铠威等「攻击被响应→结算后抽1并立即再攻」效果的通用状态，非空即激活）：
+## {"owner_player_id", "owner_mech_id"}。窗口期间该机甲只允许发动攻击（含攻击牌/攻击类主动效果/投掷式飞弹），
+## 不依赖回合攻击次数；窗口发动的攻击不消耗攻击次数。PvP 锁步各端确定性一致，无需网络同步。
+var attack_window: Dictionary = {}
+
+## 攻击窗口待处理触发队列：已结算完成、等待提示玩家「抽1张并立即再攻」的触发列表，
+## 每项 {"player_id", "mech_id"}。窗口激活时新的触发暂留队列，窗口关闭后逐条处理（双连/递归串行）。
+var attack_window_queue: Array[Dictionary] = []
+
+## 当前待玩家确认的攻击窗口触发（非空即等待确认）：{"player_id", "mech_id"}。
+## 由 app_root 弹「抽1张行动牌并立即发动1次攻击/取消」确认窗；确认后经 attack_window_confirm op 双端执行。
+var attack_window_pending_prompt: Dictionary = {}
+
+## 铠厉「被响应→抽装备→逐张设置/弃置获金」通用链状态（responded_equip_chain_* helpers，不绑机师）：
+## 待处理触发队列（攻击已结算、等待弹确认）：[{player_id, mech_id}]。
+## 链激活期间新触发暂留队列，链结束后逐条弹确认（递归/双连串行）。
+var responded_equip_queue: Array[Dictionary] = []
+
+## 当前待玩家确认的初始确认（非空即等待确认）：{"player_id", "mech_id"}。
+## 由 app_root 弹「是否抽2装备并逐张设置/弃置获金」确认窗；确认后经 responded_equip_confirm op 双端执行。
+var responded_equip_pending_confirm: Dictionary = {}
+
+## 活动链（非空即激活）：{"owner_player_id", "owner_mech_id", "card_ids": [...], "index": int}。
+## 抽到的装备牌按 index 逐张处理：选槽=set_equipment 标准设置；弃置获金=discard_card + gain_gold(cost)。
+var responded_equip_chain: Dictionary = {}
+
+## 铠德「被响应→三选一」通用队列状态（pilot_060_* helpers，不绑机师）：
+## 待处理触发队列（攻击已结算、等待弹三选一）：[{player_id, mech_id}]。
+## 链激活期间新触发暂留队列，处理完当前弹窗后逐条弹（递归/双连串行）。
+var pilot_060_queue: Array[Dictionary] = []
+
+## 当前待玩家选择的三选一触发（非空即等待选择）：{"player_id", "mech_id"}。
+## 由 app_root 弹「抽2张行动牌/回复3动力/获得4金币」（底部「取消」=放弃）；
+## 确认后经 pilot_060_choice op 双端执行 pilot_060_choose。
+var pilot_060_pending_choice: Dictionary = {}
+
 ## 回合数（0 = 尚未开始任何回合；首次 start_turn("player") 递增到 1 = 第一回合）
 var turn_number: int = 0
 
@@ -202,7 +242,7 @@ func has_status(target_id: StringName, status_type: StringName) -> bool:
 
 
 ## 从目标移除指定类型的状态，返回被移除的状态列表
-func remove_status_from_target(target_id: StringName, status_id: StringName = &"", status_type: StringName = &"") -> Array:
+func remove_status_from_target(target_id: StringName, status_id: StringName = &"", status_type: StringName = &"", source_card_id: StringName = &"") -> Array:
 	var removed: Array = []
 	if mechs.has(target_id):
 		var mech = mechs[target_id]
@@ -210,16 +250,28 @@ func remove_status_from_target(target_id: StringName, status_id: StringName = &"
 			removed = mech.statuses.filter(func(s: Dictionary) -> bool: return s.get("status_id", &"") == status_id)
 			mech.statuses = mech.statuses.filter(func(s: Dictionary) -> bool: return s.get("status_id", &"") != status_id)
 		elif status_type != &"":
-			removed = mech.statuses.filter(func(s: Dictionary) -> bool: return s.get("type", &"") == status_type)
-			mech.statuses = mech.statuses.filter(func(s: Dictionary) -> bool: return s.get("type", &"") != status_type)
+			# source_card_id 指定时只移除该来源施加的状态（泰格 pilot_040 弃装解锁：
+			# 不误删目标身上其他来源的 LOCKED，如拘束钩爪/预判/其他机师）。
+			if source_card_id != &"":
+				var src_str: String = String(source_card_id)
+				removed = mech.statuses.filter(func(s: Dictionary) -> bool: return s.get("type", &"") == status_type and String(s.get("source_card_id", &"")) == src_str)
+				mech.statuses = mech.statuses.filter(func(s: Dictionary) -> bool: return not (s.get("type", &"") == status_type and String(s.get("source_card_id", &"")) == src_str))
+			else:
+				removed = mech.statuses.filter(func(s: Dictionary) -> bool: return s.get("type", &"") == status_type)
+				mech.statuses = mech.statuses.filter(func(s: Dictionary) -> bool: return s.get("type", &"") != status_type)
 	elif players.has(target_id):
 		var player = players[target_id]
 		if status_id != &"":
 			removed = player.statuses.filter(func(s: Dictionary) -> bool: return s.get("status_id", &"") == status_id)
 			player.statuses = player.statuses.filter(func(s: Dictionary) -> bool: return s.get("status_id", &"") != status_id)
 		elif status_type != &"":
-			removed = player.statuses.filter(func(s: Dictionary) -> bool: return s.get("type", &"") == status_type)
-			player.statuses = player.statuses.filter(func(s: Dictionary) -> bool: return s.get("type", &"") != status_type)
+			if source_card_id != &"":
+				var src_str2: String = String(source_card_id)
+				removed = player.statuses.filter(func(s: Dictionary) -> bool: return s.get("type", &"") == status_type and String(s.get("source_card_id", &"")) == src_str2)
+				player.statuses = player.statuses.filter(func(s: Dictionary) -> bool: return not (s.get("type", &"") == status_type and String(s.get("source_card_id", &"")) == src_str2))
+			else:
+				removed = player.statuses.filter(func(s: Dictionary) -> bool: return s.get("type", &"") == status_type)
+				player.statuses = player.statuses.filter(func(s: Dictionary) -> bool: return s.get("type", &"") != status_type)
 	return removed
 
 

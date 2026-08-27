@@ -10,6 +10,8 @@ signal equipment_confirmed(card_id: StringName)
 ## 取消选择
 signal cancelled()
 
+const _ActionPilotEffects = preload("res://scripts/generated_database/ActionPilotEffects.gd")
+
 ## 当前 GameContext 引用
 var _context = null  # type: GameContext
 
@@ -119,10 +121,13 @@ func _refresh() -> void:
 		if card and card.def:
 			has_options = true
 			var btn = Button.new()
-			btn.text = "%s (手中)" % card.def.display_name
+			# "禁"标签装备不能主动卖出（法尔科 pilot_073 等）：置灰禁选，后端 CardSetService 双保险。
+			var forbid = _ActionPilotEffects.equip_forbid_tagged(card)
+			btn.text = "%s (手中)%s" % [card.def.display_name, "（禁）" if forbid else ""]
 			btn.custom_minimum_size = Vector2(260, 36)
 			btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 			btn.add_theme_color_override("font_color", Color(0.85, 0.75, 0.3))
+			btn.disabled = forbid
 			# 已选中高亮
 			var cid = card.instance_id
 			if cid == _selected_card_id:
@@ -139,10 +144,13 @@ func _refresh() -> void:
 				has_options = true
 				var reserve_name = "备用1" if rs_id == &"reserve_1" else "备用2"
 				var btn = Button.new()
-				btn.text = "%s: %s" % [reserve_name, card.def.display_name]
+				# "禁"标签装备不能主动卖出（法尔科 pilot_073 等）：置灰禁选，后端 CardSetService 双保险。
+				var forbid = _ActionPilotEffects.equip_forbid_tagged(card)
+				btn.text = "%s: %s%s" % [reserve_name, card.def.display_name, "（禁）" if forbid else ""]
 				btn.custom_minimum_size = Vector2(260, 36)
 				btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 				btn.add_theme_color_override("font_color", Color(0.85, 0.75, 0.3))
+				btn.disabled = forbid
 				# 已选中高亮
 				var cid = card.instance_id
 				if cid == _selected_card_id:

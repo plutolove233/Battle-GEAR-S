@@ -40,3 +40,32 @@ var hand_revealed: bool = false
 var sell_equipment_count_this_turn: int = 0
 ## 付费抽行动牌本回合次数（2金币抽牌，每我方回合1次）
 var paid_draw_count_this_turn: int = 0
+
+
+## 增加「下个我方回合行动牌上限+X」（可叠加，立即生效，不跨到下下回合）。
+## 通用机制：立即 action_card_limit += delta，并累加到 statuses 的
+## next_owner_turn_action_hand_bonus；TurnService.start_turn 在该玩家回合开始
+## 到期清除（action_card_limit -= stacks）。平行于 MechState.next_owner_turn_attack_bonus。
+func add_next_owner_turn_action_hand_bonus(delta: int) -> void:
+	action_card_limit += delta
+	for s: Dictionary in statuses:
+		if s.get("type", &"") == &"next_owner_turn_action_hand_bonus":
+			s["stacks"] = int(s.get("stacks", 0)) + delta
+			return
+	statuses.append({"type": &"next_owner_turn_action_hand_bonus", "stacks": delta})
+
+
+## 当前待到期清除的行动牌上限加成（stacks 总和）
+func get_next_owner_turn_action_hand_bonus() -> int:
+	var total: int = 0
+	for s: Dictionary in statuses:
+		if s.get("type", &"") == &"next_owner_turn_action_hand_bonus":
+			total += int(s.get("stacks", 0))
+	return total
+
+
+## 清除下个我方回合行动牌上限加成（回合开始到期清除后调用）
+func clear_next_owner_turn_action_hand_bonus() -> void:
+	statuses = statuses.filter(func(s: Dictionary) -> bool:
+		return s.get("type", &"") != &"next_owner_turn_action_hand_bonus"
+	)

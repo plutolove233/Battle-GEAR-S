@@ -9,6 +9,7 @@ const BattleState = preload("res://scripts/battle/battle_state.gd")
 const _TimingConst = preload("res://scripts/action_core/TimingConst.gd")
 const _Action = preload("res://scripts/action_core/Action.gd")
 const _GeneratedActionEffects = preload("res://scripts/action_core/GeneratedActionEffects.gd")
+const _CardInstance = preload("res://scripts/runtime/CardInstance.gd")
 
 
 func _new_battle() -> BattleState:
@@ -21,6 +22,25 @@ func _new_battle() -> BattleState:
 	if not start_result.ok:
 		push_error(start_result.message)
 	return battle
+
+
+func _pump_frames(n: int) -> void:
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null:
+		return
+	for i in n:
+		await tree.process_frame
+
+
+func _make_instance(gs, cdb, card_def_id: String, owner_id: StringName):
+	var pdef = cdb.get_card(StringName(card_def_id))
+	if pdef == null:
+		return null
+	var inst_id: StringName = gs.next_id(&"card")
+	var card = _CardInstance.new(inst_id, pdef)
+	card.owner_player_id = owner_id
+	gs.cards[inst_id] = card
+	return card
 
 
 ## 构造一个已注册的 attack 动作（running 态），返回 action
@@ -313,4 +333,59 @@ func test_flash_cancel_no_discard():
 	var hand_after = gs.players.get(&"player").action_hand.size()
 	if hand_after != hand_before:
 		return "取消闪击不应弃牌，前=%d 后=%d" % [hand_before, hand_after]
+	return true
+
+
+## ── 回收/回忆（EXECUTE_GAIN_CARD 从弃牌堆随机获取）：UI 路径回归 ──
+## 修复：ActionService._resolve_atomic_params 遇 parent_action.source 空键（UI 打牌只传
+## player_id 不传 mech_id，source 里建 "mech_id":"" 键），Dictionary.get(key,默认) 返回空串
+## 不落 payload 回退 -> mech_ids 为空 -> 回收/回忆从 UI 打出不把牌发给任何人。
+## 走真实 UI 入口 battle.execute_use_action_card（只传 player_id/card_instance_id）。
+func test_recycle_recall_from_discard_via_ui_path() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	var gs = battle.context.game_state
+	var cdb = battle.context.card_database
+	var player = gs.players.get(&"player")
+	# 装备弃牌堆放 1 张装备
+	var equip = _make_instance(gs, cdb, "part_001_量产装_头部", &"player")
+	if equip == null:
+		return "找不到 part_001_量产装_头部"
+	gs.deck_state.equipment_discard_pile.append(equip.instance_id)
+	equip.zone = &"discard"
+	# 行动弃牌堆放 1 张强袭
+	var atk = _make_instance(gs, cdb, "action_002_强袭", &"player")
+	if atk == null:
+		return "找不到 action_002_强袭"
+	gs.deck_state.action_discard_pile.append(atk.instance_id)
+	atk.zone = &"discard"
+	# 手牌放 回收 + 回忆
+	var recycle = _make_instance(gs, cdb, "action_019_回收", &"player")
+	if recycle == null:
+		return "找不到 action_019_回收"
+	var recall = _make_instance(gs, cdb, "action_020_回忆", &"player")
+	if recall == null:
+		return "找不到 action_020_回忆"
+	player.action_hand.append(recycle.instance_id)
+	recycle.zone = &"action_hand"
+	player.action_hand.append(recall.instance_id)
+	recall.zone = &"action_hand"
+	var eq_before: int = player.equipment_hand.size()
+	# 打回收（UI 路径，不传 mech_id/source）
+	var r1: Dictionary = battle.execute_use_action_card(&"player", recycle.instance_id)
+	if r1.get("state", &"error") == &"error":
+		return "回收执行报错 %s" % str(r1.get("message", ""))
+	await _pump_frames(3)
+	if player.equipment_hand.size() != eq_before + 1:
+		return "回收后装备手牌应+1（弃牌堆有牌） 前%d 后%d" % [eq_before, player.equipment_hand.size()]
+	if not player.equipment_hand.has(equip.instance_id):
+		return "回收应把弃牌堆的装备拿到手牌"
+	# 打回忆（UI 路径）
+	var r2: Dictionary = battle.execute_use_action_card(&"player", recall.instance_id)
+	if r2.get("state", &"error") == &"error":
+		return "回忆执行报错 %s" % str(r2.get("message", ""))
+	await _pump_frames(3)
+	if not player.action_hand.has(atk.instance_id):
+		return "回忆应把行动弃牌堆的强袭拿到手牌"
 	return true

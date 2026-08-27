@@ -24,6 +24,9 @@ const _TimingConst = preload("res://scripts/action_core/TimingConst.gd")
 const _ActionPilotEffects = preload("res://scripts/generated_database/ActionPilotEffects.gd")
 const _Action = preload("res://scripts/action_core/Action.gd")
 const _DevModeService = preload("res://scripts/services/DevModeService.gd")
+const _MechState = preload("res://scripts/runtime/MechState.gd")
+const _MechSlotState = preload("res://scripts/runtime/MechSlotState.gd")
+const _PlayerState = preload("res://scripts/runtime/PlayerState.gd")
 
 
 func _new_battle() -> BattleState:
@@ -140,10 +143,12 @@ func test_pilot_006_effect03_full_chain_auto_fallback() -> Variant:
 	enemy.action_hand.clear()
 	var hp_before: int = enemy_mech.current_hp
 	var attack := _make_attack(battle, player_mech.mech_id, enemy_mech.mech_id, {"distance": 2})
-	# 阻塞式 priority 30：effect_03 在 ATTACK_SETTLE 先于闪击/反击挂起选机甲
+	# 阻塞式 priority 30：effect_03 在 ATTACK_SETTLE 先于闪击/反击挂起
 	battle.context.timing_engine.fire_timing(_TimingConst.ATTACK_SETTLE, attack)
 	if attack.state != &"waiting_timing":
-		return "effect_03 应挂起选机甲 state=%s" % String(attack.state)
+		return "effect_03 应挂起确认弹窗 state=%s" % String(attack.state)
+	# 先确认发动（confirm_before_target 通用机制，里昂可取消）再选机甲
+	battle.context.timing_engine.resume_pending_effect(attack.action_id, {"chosen_option_index": 0})
 	battle.context.timing_engine.resume_pending_effect(attack.action_id, {"target_id": enemy_mech.mech_id})
 	# enemy 无攻击牌 -> CHOOSE_ONE 仅剩"4伤害" -> 自动选 -> HP-4
 	if enemy_mech.current_hp != hp_before - 4:
@@ -181,7 +186,9 @@ func test_pilot_006_effect03_full_chain_choose_4damage() -> Variant:
 	var attack := _make_attack(battle, player_mech.mech_id, enemy_mech.mech_id, {"distance": 2})
 	battle.context.timing_engine.fire_timing(_TimingConst.ATTACK_SETTLE, attack)
 	if attack.state != &"waiting_timing":
-		return "effect_03 应挂起选机甲 state=%s" % String(attack.state)
+		return "effect_03 应挂起确认弹窗 state=%s" % String(attack.state)
+	# 先确认发动（里昂可取消）再选机甲
+	battle.context.timing_engine.resume_pending_effect(attack.action_id, {"chosen_option_index": 0})
 	battle.context.timing_engine.resume_pending_effect(attack.action_id, {"target_id": enemy_mech.mech_id})
 	# enemy 有攻击牌+武器射程覆盖 -> 两 option 可用 -> 挂起二选一
 	if attack.state != &"waiting_timing":
@@ -223,6 +230,8 @@ func test_pilot_006_effect03_choose_attack_card_suspend() -> Variant:
 	enemy.action_hand.append(atk.instance_id)
 	var attack := _make_attack(battle, player_mech.mech_id, enemy_mech.mech_id, {"distance": 2})
 	battle.context.timing_engine.fire_timing(_TimingConst.ATTACK_SETTLE, attack)
+	# 先确认发动（里昂可取消）再选机甲
+	battle.context.timing_engine.resume_pending_effect(attack.action_id, {"chosen_option_index": 0})
 	battle.context.timing_engine.resume_pending_effect(attack.action_id, {"target_id": enemy_mech.mech_id})
 	# 选"立即使用1张攻击牌"（option index 0）
 	battle.context.timing_engine.resume_pending_effect(attack.action_id, {"chosen_option_index": 0})
@@ -265,16 +274,14 @@ func test_pilot_006_effect02_main_and_sub_attack_draw() -> Variant:
 	# ── 主攻击A：ATTACK_PRE 触发 e2 抽1张 ──
 	var attack_a := _make_attack(battle, player_mech.mech_id, enemy_mech.mech_id, {"distance": 2})
 	battle.context.timing_engine.fire_timing(_TimingConst.ATTACK_PRE, attack_a)
-	# effect_02 改 CHOOSE_ONE optional（问题3）：确认发动狩猎追击
-	battle.context.timing_engine.resume_pending_effect(attack_a.action_id, {"chosen_option_index": 0})
+	# effect_02 直接自动抽牌（无确认弹窗）
 	if player.action_hand.size() != hand_before + 1:
 		return "主攻击A的ATTACK_PRE应抽1张 实=%d（before=%d）" % [player.action_hand.size(), hand_before]
 	# ── 额外攻击B（闪击/反击 spawn 的子攻击）：同样ATTACK_PRE应再抽1张 ──
 	var hand_after_a: int = player.action_hand.size()
 	var attack_b := _make_attack(battle, player_mech.mech_id, enemy_mech.mech_id, {"distance": 2})
 	battle.context.timing_engine.fire_timing(_TimingConst.ATTACK_PRE, attack_b)
-	# effect_02 CHOOSE_ONE optional：确认发动
-	battle.context.timing_engine.resume_pending_effect(attack_b.action_id, {"chosen_option_index": 0})
+	# effect_02 直接自动抽牌（无确认弹窗）
 	if player.action_hand.size() != hand_after_a + 1:
 		return "额外攻击B的ATTACK_PRE应再抽1张 实=%d（after_a=%d）" % [player.action_hand.size(), hand_after_a]
 	_clear_all_pilot_static()
@@ -342,6 +349,130 @@ func test_pilot_007_effect02_attack_pre_chain() -> Variant:
 		return "类型破绽应弃3张 实剩=%d" % enemy.action_hand.size()
 	if player.action_hand.size() != p_hand_before + 3:
 		return "类型破绽应抽3 实增=%d" % (player.action_hand.size() - p_hand_before)
+	_clear_all_pilot_static()
+	return true
+
+
+## 创建一台归 owner_id 玩家所有的机甲（6 部件槽，无装备，护甲=0），返回 MechState。
+func _create_owned_mech(battle, mech_id: StringName, owner_id: StringName, pos: Dictionary):
+	var gs = battle.context.game_state
+	var m = _MechState.new()
+	m.mech_id = mech_id
+	m.owner_player_id = owner_id
+	m.max_hp = 25
+	m.current_hp = 25
+	m.max_power = 10
+	m.power = 10
+	m.position = pos
+	for slot_id in [&"头部", &"躯干", &"右臂", &"左臂", &"右腿", &"左腿"]:
+		var s := _MechSlotState.new()
+		s.slot_id = slot_id
+		s.slot_kind = &"PART"
+		m.slots[slot_id] = s
+	gs.mechs[m.mech_id] = m
+	return m
+
+
+## 为指定玩家创建 PlayerState 并登记（player2 多目标测试用）
+func _create_player(battle, player_id: StringName) -> void:
+	var gs = battle.context.game_state
+	if gs.players.has(player_id):
+		return
+	var p := _PlayerState.new()
+	p.player_id = player_id
+	p.is_human = true
+	gs.players[player_id] = p
+
+
+## ── pilot_007 e2 双连多目标：按目标选择顺序逐个执行 ──
+## 珀修斯攻击同时命中2台机甲（目标1=enemy 3张攻击牌 X=2；目标2=player2 攻击+迎击+辅助 X=0）。
+## FOR_EACH_TARGET 串行逐目标：先目标1（弹弃3张窗）→确认→再目标2（弹弃1张窗）→确认→珀修斯抽3+1=4。
+func test_pilot_007_effect02_multi_target_per_target_order() -> Variant:
+	var battle := _new_battle()
+	if battle == null or battle.context == null:
+		return "battle 初始化失败"
+	var gs = battle.context.game_state
+	var cdb = battle.context.card_database
+	var player_mech = gs.get_mech_for_player(&"player")
+	var enemy_mech = gs.get_mech_for_player(&"enemy")
+	if player_mech == null or enemy_mech == null:
+		return "机甲缺失"
+	var card = _make_instance(gs, cdb, "pilot_007_珀修斯", &"player")
+	if card == null:
+		return "找不到 pilot_007_珀修斯"
+	battle.context.game_setup_service.set_pilot(player_mech.mech_id, card)
+	var src_atk = _make_instance(gs, cdb, "action_001_进攻", &"player")
+	if src_atk == null:
+		return "找不到 action_001_进攻"
+	# 第2台目标机甲：归 player2 所有（不同手牌来源，验证逐目标路由）
+	_create_player(battle, &"player2")
+	var target2_mech = _create_owned_mech(battle, &"p007_target2", &"player2", {"q": 2, "r": 3})
+	var player = gs.players.get(&"player")
+	var enemy = gs.players.get(&"enemy")
+	var player2 = gs.players.get(&"player2")
+	# 目标1(enemy)：3张攻击 -> 只有{攻击}1类 -> X=2 -> 弃3抽3
+	enemy.action_hand.clear()
+	for i in 3:
+		var a = _make_instance(gs, cdb, "action_001_进攻", &"enemy")
+		enemy.action_hand.append(a.instance_id)
+	# 目标2(player2)：攻击+迎击+辅助 3类齐 -> X=0 -> 弃1抽1
+	player2.action_hand.clear()
+	for cid_name in [&"action_001_进攻", &"action_010_反击", &"action_022_补给"]:
+		var c = _make_instance(gs, cdb, String(cid_name), &"player2")
+		if c == null:
+			return "找不到 %s" % String(cid_name)
+		player2.action_hand.append(c.instance_id)
+	var p_hand_before: int = player.action_hand.size()
+	# 攻击：目标1在前（选择顺序）
+	var attack := _make_attack(battle, player_mech.mech_id, enemy_mech.mech_id, {
+		"attack_card_id": src_atk.instance_id,
+		"target_ids": [enemy_mech.mech_id, target2_mech.mech_id],
+		"target_count": 2,
+	})
+	battle.context.timing_engine.fire_timing(_TimingConst.ATTACK_PRE, attack)
+	if attack.state != &"waiting_timing":
+		return "effect_02 CHOOSE_ONE 应挂起，state=%s" % String(attack.state)
+	battle.context.timing_engine.resume_pending_effect(attack.action_id, {"chosen_option_index": 0})
+	await _pump_frames(3)
+	# ── 目标1：弹 enemy 弃3张窗 ──
+	var wait1: Dictionary = battle.context.action_ui_bridge.get_waiting_action_info()
+	if String(wait1.get("input_type", &"")) != &"select_discard_cards":
+		return "目标1应弹 select_discard_cards，wait=%s" % str(wait1.get("input_type", &""))
+	var p1: Dictionary = wait1.get("input_params", {})
+	if int(p1.get("count", 0)) != 3:
+		return "目标1 弃牌 count 应=3 实=%d" % int(p1.get("count", 0))
+	if String(p1.get("discard_player_id", &"")) != "enemy":
+		return "目标1 弃牌对象应 enemy 实=%s" % String(p1.get("discard_player_id", &""))
+	if String(p1.get("executor", &"")) != "player":
+		return "目标1 弃牌执行者应 player(珀修斯) 实=%s" % String(p1.get("executor", &""))
+	if not bool(p1.get("face_up", false)):
+		return "目标1 应明牌选弃 face_up=true"
+	if not bool(p1.get("no_cancel", false)):
+		return "目标1 应 no_cancel=true"
+	# 确认目标1弃 enemy 3张（全弃）
+	var discard1: Array = enemy.action_hand.slice(0, 3)
+	battle.context.action_ui_bridge.on_ui_confirmed({"determined_card_ids": discard1})
+	await _pump_frames(8)
+	if not enemy.action_hand.is_empty():
+		return "目标1 应弃3张（enemy 手牌应空）实剩=%d" % enemy.action_hand.size()
+	# ── 目标2：再弹 player2 弃1张窗（逐目标串行，确认目标1后才轮到目标2）──
+	var wait2: Dictionary = battle.context.action_ui_bridge.get_waiting_action_info()
+	if String(wait2.get("input_type", &"")) != &"select_discard_cards":
+		return "目标1确认后应轮到目标2弹窗，wait=%s" % str(wait2.get("input_type", &""))
+	var p2: Dictionary = wait2.get("input_params", {})
+	if int(p2.get("count", 0)) != 1:
+		return "目标2 弃牌 count 应=1(X=0) 实=%d" % int(p2.get("count", 0))
+	if String(p2.get("discard_player_id", &"")) != "player2":
+		return "目标2 弃牌对象应 player2 实=%s" % String(p2.get("discard_player_id", &""))
+	var discard2_cid: StringName = player2.action_hand[0]
+	battle.context.action_ui_bridge.on_ui_confirmed({"determined_card_ids": [discard2_cid]})
+	await _pump_frames(12)
+	# 目标2弃1：player2 手牌 3->2
+	if player2.action_hand.size() != 2:
+		return "目标2 应弃1张（player2 手牌应剩2）实=%d" % player2.action_hand.size()
+	# 珀修斯共抽 3+1=4
+	if player.action_hand.size() != p_hand_before + 4:
+		return "双连逐目标应共抽4(3+1) 前=%d 后=%d" % [p_hand_before, player.action_hand.size()]
 	_clear_all_pilot_static()
 	return true
 

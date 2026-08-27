@@ -179,19 +179,22 @@ func test_gold_marker_trigger_payout_and_removal():
 	return true
 
 
-## 事件标记触发：仅文本占位（效果待实装），标记被移除，无HP变化
-func test_event_marker_text_only():
+## 事件标记触发：发起 set_event_card 动作，事件牌堆顶牌设置到机甲事件区域（标记移除）
+func test_event_marker_sets_event_card():
 	var battle := _new_battle(false)
 	var gs = battle.context.game_state
 	var player_mech = gs.get_mech_for_player(&"player")
 	var target := _HexGrid.neighbors(player_mech.position)[0]
 	gs.map_state.add_marker(gs.next_id(&"marker"), int(target.q), int(target.r), &"EVENT")
-	var hp_before: int = player_mech.current_hp
 	battle.context.map_service._check_map_markers(player_mech, target)
 	if not gs.map_state.get_markers_at(int(target.q), int(target.r)).is_empty():
 		return "事件标记触发后应被移除"
-	if player_mech.current_hp != hp_before:
-		return "事件效果待实装，不应造成HP变化"
+	# set_event_card 动作应已执行（教学战斗事件牌堆非空 -> 事件槽有牌）
+	var slot = player_mech.slots.get(&"event")
+	if slot == null or slot.equipped_card == null:
+		return "事件标记触发应设置事件牌到事件区域"
+	if slot.equipped_card.def == null or String(slot.equipped_card.def.card_kind) != "event":
+		return "事件区域应是事件牌"
 	return true
 
 

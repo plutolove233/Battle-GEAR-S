@@ -14,6 +14,7 @@ const _TimingConst = preload("res://scripts/action_core/TimingConst.gd")
 const _ActionEffect = preload("res://scripts/action_core/ActionEffect.gd")
 const _HexGrid = preload("res://scripts/battle/hex_grid.gd")
 const _GameConfig = preload("res://scripts/config/GameConfig.gd")
+const _ActionPilotEffects = preload("res://scripts/generated_database/ActionPilotEffects.gd")
 
 
 func _init() -> void:
@@ -86,6 +87,12 @@ func _step_compute_blast(action: Action) -> Dictionary:
 					mech_dmg[m_id] = {"hp": 0, "tokens": 0}
 				mech_dmg[m_id]["hp"] += _GameConfig.TRAP_BLAST_DAMAGE
 				mech_dmg[m_id]["tokens"] += _GameConfig.TRAP_BLAST_TOKENS
+
+	# pilot_026 伊万 效果3「陷阱不设损伤」：陷阱对我方仅造成伤害，不设损伤 → 清零 tokens。
+	# 按 effect_id 判定（绑定效果而非机师）：受波及机甲自身 pilot 槽带 pilot_026_effect_03 即生效。
+	for m_id in mech_dmg:
+		if _ActionPilotEffects.mech_has_pilot_effect(context, m_id, &"pilot_026_effect_03"):
+			mech_dmg[m_id]["tokens"] = 0
 
 	gs.write_log(&"marker_trap_exploded", {
 		"trigger_q": trigger_q, "trigger_r": trigger_r,

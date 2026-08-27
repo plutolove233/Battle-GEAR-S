@@ -46,6 +46,15 @@ func _diag_trace(max_frames: int) -> String:
 ## 依赖注入：GameContext 容器
 var context = null
 
+## 当前正在执行步骤的动作（_execute_step 入口压栈/出口恢复，嵌套子动作天然成栈）。
+## 供深层代码（GameActions.spend_power -> TimingEngine.fire_power_spent_event 等）反查
+## "当前宿主动作"，以便把阻塞式效果动作（动力税弹窗等）正确挂到其下等待。
+var current_step_action = null
+
+## 取当前正在执行步骤的最内层动作（无进行中的步骤时为 null）。
+func get_current_action():
+	return current_step_action
+
 ## ── 信号 ──
 signal action_started(action_id: StringName, action_type: StringName)
 signal action_step_executed(action_id: StringName, step_name: StringName, step_index: int)
@@ -316,6 +325,15 @@ func _run_step_loop(action: Action, start_index: int) -> Dictionary:
 ## 返回 &"ok" 正常推进；&"skip" negated 跳步（仅 attack，跳到 settle 步）
 ## 暂停时设 action.state（waiting_input/waiting_timing/waiting_sub_action），由 _run_step_loop 检测
 func _execute_step(action: Action, i: int) -> StringName:
+	# 压栈：记录当前执行步骤的动作；出口恢复上一层（嵌套子动作 handler 内同步执行时天然成栈）
+	var _prev_step_action: Variant = current_step_action
+	current_step_action = action
+	var _step_sig: StringName = _execute_step_inner(action, i)
+	current_step_action = _prev_step_action
+	return _step_sig
+
+
+func _execute_step_inner(action: Action, i: int) -> StringName:
 	var step: Dictionary = action.steps[i]
 	action.current_step_index = i
 	# result 仅在阶段1 handler 跑完后有值；恢复重入时 result 为空，阶段2 sub_action 检查因 result.is_empty() 跳过
@@ -407,9 +425,9 @@ func _execute_step(action: Action, i: int) -> StringName:
 			# pilot_011 挡攻转移回退后：跳过 ATTACK_AT 重 fire。迪恩已用转化效果响应过此攻击，
 			# 重 fire 会弹第2次响应窗口并卡死；首次 ATTACK_AT 的 fire + regular listeners 已跑过，
 			# 重跑会导致强袭 effect2 等 LISTEN 效果双重结算。直接跳到 timing_done 推进 check_hit。
-			var _p011_skip_at: bool = timing_point == _TimingConst.ATTACK_AT and bool(action.record.get("_p011_skip_at_fire", false))
+			var _p011_skip_at: bool = timing_point == _TimingConst.ATTACK_AT and bool(action.record.get("_skip_at_fire", false))
 			if _p011_skip_at:
-				action.record.erase("_p011_skip_at_fire")
+				action.record.erase("_skip_at_fire")
 			else:
 				if not action._step_timing_fired:
 					action._step_timing_fired = true
@@ -448,15 +466,15 @@ func _execute_step(action: Action, i: int) -> StringName:
 		# select_target handler（目标已由 REDIRECT 设定），重 fire PRE 后推进到 ATTACK_AT 步。
 		# 迪恩已用转化效果响应过此攻击（responded=true），重 fire ATTACK_AT 会再次收集 AVAILABILITY
 		# 监听器弹第2次响应窗口（迪恩自身成为目标后 effect_01 也可选），导致攻击流程卡死在 ATTACK_AT。
-		# 故设 _p011_skip_at_fire：重 fire PRE 后到 ATTACK_AT 步时直接跳过 fire（见阶段3）。
-		if action.action_type == &"attack" and action.record.get("_p011_redirect_rewind", false):
-			action.record.erase("_p011_redirect_rewind")
+		# 故设 _skip_at_fire：重 fire PRE 后到 ATTACK_AT 步时直接跳过 fire（见阶段3）。
+		if action.action_type == &"attack" and action.record.get("_redirect_rewind", false):
+			action.record.erase("_redirect_rewind")
 			var _rewind_idx := _find_step_by_timing(action, _TimingConst.ATTACK_PRE)
 			if _rewind_idx >= 0 and action.current_step_index > _rewind_idx:
 				action.current_step_index = _rewind_idx
 				action.current_step_phase = &"timing_firing"  # 跳过 handler，直接重 fire PRE
 				action._step_timing_fired = false  # 让 PRE 重新 fire
-				action.record["_p011_skip_at_fire"] = true  # 重 fire PRE 后跳过 ATTACK_AT 重 fire
+				action.record["_skip_at_fire"] = true  # 重 fire PRE 后跳过 ATTACK_AT 重 fire
 				return &"rewind"
 		# 清空 phase，准备下一步
 		action.current_step_phase = &""
@@ -542,9 +560,32 @@ func _after_sub_action_finished(parent_action) -> void:
 		return  # 还有其它子动作未结束
 	if parent_action.state != &"waiting_effect_action":
 		return  # 父动作不在等待态（可能已推进/取消）
+	# 守卫：父动作正被 TimingEngine 时序效果弹窗挂起（_pending_effect 有记录，如泰格④弃装解锁）。
+	# 子动作（如②弃牌 discard_card）完成触发本函数时，若父动作已切到新的时序弹窗挂起，
+	# 不可恢复 step loop——否则攻击会跳过弹窗推进到 ATTACK_AFTER，把刚施加的锁定状态清掉。
+	if context != null and context.timing_engine != null and context.timing_engine._pending_effect.has(parent_action.action_id):
+		return
 	# 串行续跑：若有效果子动作待创建（_seq），创建下一个；创建成功则父动作继续等待
 	if context != null and context.timing_engine != null and context.timing_engine.has_method(&"_continue_seq_effect_actions"):
 		if context.timing_engine._continue_seq_effect_actions(parent_action):
+			return
+	# pilot_021 塔莉娅 effect_01：抽牌 EXECUTE_GAIN_CARD 子动作（可能异步挂起）完成后续跑打标签+进循环。
+	if parent_action.record.has("_pilot_021_draw_pending") and context != null and context.timing_engine != null and context.timing_engine.has_method(&"_continue_pilot_021_draw"):
+		if context.timing_engine._continue_pilot_021_draw(parent_action):
+			return
+	# pilot_019 缴械冲击 弃牌链：EXECUTE_DISCARD 子动作（含 DISCARD_SETTLE 监听者挂起）完成后续跑链式阶段机。
+	if parent_action.record.has("_pilot_019_chain") and context != null and context.timing_engine != null and context.timing_engine.has_method(&"_continue_pilot_019_chain"):
+		if context.timing_engine._continue_pilot_019_chain(parent_action):
+			return
+	# pilot_020 肯德 弃任意行动牌：EXECUTE_DISCARD 子动作完成后手动 mark once_per_turn + 恢复。
+	if parent_action.record.has("_pilot_020_active_pending") and context != null and context.timing_engine != null and context.timing_engine.has_method(&"_continue_pilot_020_active"):
+		if context.timing_engine._continue_pilot_020_active(parent_action):
+			return
+	# 窗口附加选项串行续跑（洛尔恩 pilot_062 转化掩护 / 温斯顿 pilot_082 转化推进等）：真实牌
+	# 批量挂起-恢复完成，或转化流程完成（选牌 use_action_card 子动作结束）后，若还有 pending extra
+	# 未启动则续跑。无 pending 时本函数返回 false，继续往下恢复父动作。
+	if context != null and context.timing_engine != null and context.timing_engine.has_method(&"_run_next_window_extra_if_pending"):
+		if context.timing_engine._run_next_window_extra_if_pending(parent_action):
 			return
 	# 多目标攻击 fork 续跑：上一个复制攻击完成后，派生下一个或整体结束主攻击。
 	# 主攻击不发 ATTACK_AT/AFTER/SETTLE（避免 continue_action 恢复后 fire 主攻击 ATTACK_AT）。

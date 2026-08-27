@@ -6,8 +6,9 @@
 extends PanelContainer
 class_name ThrustSelectPanel
 
-## 选择完成时发射（玩家点确认后，可能为空数组=不打出）
-signal selection_completed(selected_card_ids: Array[StringName])
+## 选择完成时发射（玩家点确认后，可能为空数组=不打出）。
+## selected_extra_ids：掩护窗口附加复选框选项选中的 effect_id（洛尔恩 pilot_062 转化掩护等）。
+signal selection_completed(selected_card_ids: Array[StringName], selected_extra_ids: Array[StringName])
 ## 取消
 signal selection_cancelled()
 
@@ -15,10 +16,15 @@ var _context = null  # type: GameContext
 var _card_ids: Array = []  # 待选 card_instance_id 列表
 var _selected: Array[StringName] = []
 var _max_count: int = 0  # 0 = 不限
+var _min_count: int = 0  # 0 = 不限（不足不可确认，如乌尔需交牌必须选满2张）
 var _label: String = "选择要一起打出的牌"
 var _per_card_suffix: String = ""
 var _confirm_verb: String = "打出"
 var _cancel_label: String = "不打出"
+var _no_cancel: bool = false  # true=隐藏取消按钮（如莱特选牌不可取消，必须至少选1张确认）
+var _hide_card_info: bool = false  # true=牌背显示（别人的牌不可见：只显示"行动牌·背面"，无 tooltip；杰西卡 pilot_050 弃目标机甲牌用）
+var _extra_options: Array = []  # 掩护窗口附加复选框选项：[{effect_id: StringName, label: String}]
+var _selected_extras: Array[StringName] = []
 
 var _vbox: VBoxContainer
 var _scroll: ScrollContainer
@@ -27,7 +33,7 @@ var _cancel_btn: Button
 var _count_label: Label
 
 
-func configure(game_context, card_ids: Array, label: String = "选择要一起打出的牌", per_card_suffix: String = "", confirm_verb: String = "打出", cancel_label: String = "不打出", max_count: int = 0) -> void:
+func configure(game_context, card_ids: Array, label: String = "选择要一起打出的牌", per_card_suffix: String = "", confirm_verb: String = "打出", cancel_label: String = "不打出", max_count: int = 0, min_count: int = 0, no_cancel: bool = false, hide_card_info: bool = false, extra_options: Array = []) -> void:
 	_context = game_context
 	_card_ids = card_ids
 	_label = label
@@ -35,7 +41,12 @@ func configure(game_context, card_ids: Array, label: String = "选择要一起�
 	_confirm_verb = confirm_verb
 	_cancel_label = cancel_label
 	_max_count = max_count
+	_min_count = min_count
+	_no_cancel = no_cancel
+	_hide_card_info = hide_card_info
+	_extra_options = extra_options
 	_selected.clear()
+	_selected_extras.clear()
 	_ensure_layout()
 	_refresh()
 
@@ -87,10 +98,13 @@ func _refresh() -> void:
 		return
 	_count_label.text = "── %s ──" % _label
 	_confirm_btn.text = "确认%s (%d)" % [_confirm_verb, _selected.size()]
-	_confirm_btn.disabled = false
-	_confirm_btn.add_theme_color_override("font_color", Color(0.3, 0.9, 0.4))
+	# min_count>0：不足所选张数时确认禁用（乌尔需交牌必须选满2张才能交）
+	var _confirm_ok: bool = _min_count <= 0 or _selected.size() >= _min_count
+	_confirm_btn.disabled = not _confirm_ok
+	_confirm_btn.add_theme_color_override("font_color", Color(0.3, 0.9, 0.4) if _confirm_ok else Color(0.5, 0.5, 0.5))
 	if _cancel_btn:
 		_cancel_btn.text = _cancel_label
+		_cancel_btn.visible = not _no_cancel  # no_cancel=true 时隐藏取消按钮（必须选牌确认）
 
 	var scroll_content = _scroll.get_meta("content") if _scroll.has_meta("content") else null
 	if not scroll_content:
@@ -105,8 +119,13 @@ func _refresh() -> void:
 		if card == null or card.def == null:
 			continue
 		var btn = Button.new()
-		btn.text = "%s%s" % [card.def.display_name, _per_card_suffix]
-		btn.tooltip_text = card.def.effect_text
+		if _hide_card_info:
+			# 牌背：别人的牌不可见（信息隐藏），仅位置可辨
+			btn.text = "行动牌·背面%s" % _per_card_suffix
+			btn.tooltip_text = ""
+		else:
+			btn.text = "%s%s" % [card.def.display_name, _per_card_suffix]
+			btn.tooltip_text = card.def.effect_text
 		btn.custom_minimum_size = Vector2(260, 36)
 		btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		btn.add_theme_color_override("font_color", Color(0.3, 0.85, 0.5))
@@ -116,6 +135,23 @@ func _refresh() -> void:
 			btn.modulate = Color(1.2, 1.2, 0.8)
 		btn.pressed.connect(func(): _on_card_toggle(cid))
 		scroll_content.add_child(btn)
+	# 附加复选框选项（洛尔恩 pilot_062 转化掩护等）：独立 toggle，与卡牌多选互不影响。
+	for opt in _extra_options:
+		var eid: StringName = StringName(opt.get("effect_id", &""))
+		if eid == &"":
+			continue
+		var ebtn = Button.new()
+		ebtn.text = "☐ %s" % String(opt.get("label", "附加效果"))
+		ebtn.toggle_mode = true
+		ebtn.button_pressed = eid in _selected_extras
+		ebtn.custom_minimum_size = Vector2(260, 36)
+		ebtn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		ebtn.add_theme_color_override("font_color", Color(0.55, 0.75, 0.9))
+		if eid in _selected_extras:
+			ebtn.add_theme_color_override("font_color", Color(1.0, 0.85, 0.2))
+			ebtn.modulate = Color(1.2, 1.2, 0.8)
+		ebtn.pressed.connect(func(): _on_extra_toggle(eid))
+		scroll_content.add_child(ebtn)
 
 
 func _on_card_toggle(card_id: StringName) -> void:
@@ -128,5 +164,13 @@ func _on_card_toggle(card_id: StringName) -> void:
 	_refresh()
 
 
+func _on_extra_toggle(effect_id: StringName) -> void:
+	if effect_id in _selected_extras:
+		_selected_extras.erase(effect_id)
+	else:
+		_selected_extras.append(effect_id)
+	_refresh()
+
+
 func _on_confirm() -> void:
-	selection_completed.emit(_selected.duplicate())
+	selection_completed.emit(_selected.duplicate(), _selected_extras.duplicate())

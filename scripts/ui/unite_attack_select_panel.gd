@@ -26,6 +26,7 @@ var _cancel_btn: Button
 var _disabled_card_ids: Dictionary = {} # card_id -> true（灰显不可选，用于美杜莎操控列出处于判定管线中的牌）
 var _disabled_suffix: String = "" # 禁用牌后缀（如"·处理中"），空则用 _card_suffix
 var _click_to_confirm: bool = false # 点牌即确认模式（美杜莎操控：点牌直接emit，复用 app_root 的"确定使用?"确认框，和手牌一致）
+var _no_cancel: bool = false # 隐藏取消按钮（不可取消，如里欧娜 pilot_047 强制使用攻击牌）
 
 
 ## 通用单选面板：列出手牌供单选+取消，确认/取消信号由 app_root 路由。
@@ -33,7 +34,8 @@ var _click_to_confirm: bool = false # 点牌即确认模式（美杜莎操控：
 ## disabled_card_ids：需显示但不可选的牌（灰显，如瑟尔基尔判定管线中的牌）；disabled_suffix 其后缀。
 ## click_to_confirm=true：点牌即 emit selection_completed（隐藏"确认"按钮），由 app_root 弹"确定使用?"确认框；
 ##   美杜莎操控用此模式使交互与手牌点击一致。默认 false（联合攻击/pilot_003 走 选中+确认按钮）。
-func configure(game_context, card_ids: Array, label: String = "联合攻击：选择1张攻击牌使用", card_suffix: String = "[攻击牌]", confirm_verb: String = "确认使用", cancel_label: String = "取消（不联合攻击）", disabled_card_ids: Array = [], disabled_suffix: String = "", click_to_confirm: bool = false) -> void:
+## no_cancel=true：隐藏取消按钮（强制必须选，如里欧娜 pilot_047 战后威逼交牌）。
+func configure(game_context, card_ids: Array, label: String = "联合攻击：选择1张攻击牌使用", card_suffix: String = "[攻击牌]", confirm_verb: String = "确认使用", cancel_label: String = "取消（不联合攻击）", disabled_card_ids: Array = [], disabled_suffix: String = "", click_to_confirm: bool = false, no_cancel: bool = false) -> void:
 	_context = game_context
 	_card_ids = card_ids
 	_label = label
@@ -45,6 +47,7 @@ func configure(game_context, card_ids: Array, label: String = "联合攻击：�
 		_disabled_card_ids[d] = true
 	_disabled_suffix = disabled_suffix
 	_click_to_confirm = click_to_confirm
+	_no_cancel = no_cancel
 	_selected = &""
 	_ensure_layout()
 	_refresh()
@@ -105,6 +108,7 @@ func _refresh() -> void:
 	_confirm_btn.visible = not _click_to_confirm
 	_confirm_btn.add_theme_color_override("font_color", Color(0.3, 0.9, 0.4))
 	_cancel_btn.text = _cancel_label
+	_cancel_btn.visible = not _no_cancel
 
 	var scroll_content = _scroll.get_meta("content") if _scroll.has_meta("content") else null
 	if not scroll_content:

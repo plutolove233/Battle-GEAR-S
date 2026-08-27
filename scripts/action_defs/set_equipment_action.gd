@@ -296,6 +296,11 @@ func _step_activate_equip(action: Action) -> Dictionary:
 		var old_max_power: int = mech.max_power
 		mech.max_power = mech.get_total_power()
 		mech.sync_own_power_after_max_change(old_max_power)
+	# 即时使用：攻击进行中且新设装备有 LISTEN ATTACK_PRE 效果（该时点已 fire）-> 补触发。
+	# 生成 immediate_use 子动作并挂起本动作；调用方返回 effect_action_created 让父动作等待。
+	if context.action_service.has_method(&"try_equipment_immediate_use"):
+		if context.action_service.try_equipment_immediate_use(action, card, mech_id, action.record.get("slot_id", &"")):
+			return {"effect_action_created": true}
 	return {}
 
 

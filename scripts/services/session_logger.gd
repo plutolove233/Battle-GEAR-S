@@ -186,7 +186,10 @@ func _open_session_file() -> void:
 		dt.get("year", 0), dt.get("month", 0), dt.get("day", 0),
 		dt.get("hour", 0), dt.get("minute", 0), dt.get("second", 0),
 	]
-	_file_path = "res://battle_logs/session_log_%s.txt" % stamp
+	# 带进程号后缀：PvP3 同秒启动多个客户端时，仅秒级时间戳的文件名会碰撞，
+	# 两个进程以 WRITE_READ 打开同一文件互相覆写/交错（0827 实机日志取证被此干扰，
+	# 相邻双写行即铁证）。PID 保证每进程独立文件；单机单进程场景不受影响。
+	_file_path = "res://battle_logs/session_log_%s_p%d.txt" % [stamp, OS.get_process_id()]
 	_file = FileAccess.open(_file_path, FileAccess.WRITE_READ)
 	if _file == null:
 		push_warning("SessionLogger: 无法创建会话日志文件: %s" % _file_path)

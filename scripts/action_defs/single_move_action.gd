@@ -56,6 +56,10 @@ func _step_select_target(action: Action) -> Dictionary:
 	if mech == null:
 		return {"error": "机甲不存在"}
 
+	# 陷落等 cannot_move 状态：主动/被动单次移动一律不可发起（疾行等效果驱动同样被拦截）
+	if mech.has_status(&"cannot_move"):
+		return {"cancelled": true, "cancel_reason": "mech_cannot_move"}
+
 	# 首次进入：初始化剩余动力
 	if not _power_initialized:
 		var max_cells: int = int(action.record.get("max_cells", 0))
@@ -112,11 +116,15 @@ func _step_select_target(action: Action) -> Dictionary:
 		}
 	# 记录本步起点，供下一步 need_input 防回访（B1 振荡修复）
 	_prev_pos = mech.position
+	# 通用移动消耗参数（效果元数据驱动）：绿格耗 green_cost（光环持有者玩家折扣），
+	# 光环转化绿格对所有人视为绿格。与 find_optimal_path/可达性高亮同源，防"高亮1格耗、实扣2"。
+	var _mcp: Dictionary = context.map_service.resolve_move_cost_params(mech.owner_player_id)
 	var insert_at: int = action.current_step_index + 1
 	for cell: Dictionary in path:
 		var cell_key: StringName = StringName("%d,%d" % [int(cell.q), int(cell.r)])
 		var terrain_cell = context.game_state.map_state.get_cell(cell)
-		var cost: int = 2 if terrain_cell != null and terrain_cell.terrain == &"GREEN" else 1
+		var _is_green: bool = (terrain_cell != null and terrain_cell.terrain == &"GREEN") or _mcp["aura_cells"].has(cell_key)
+		var cost: int = int(_mcp["green_cost"]) if _is_green else 1
 		action.steps.insert(insert_at, {
 			step_name = &"execute_basic_move",
 			timing_point = &"",

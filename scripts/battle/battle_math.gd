@@ -12,11 +12,15 @@ static func calculate_attack(attack_power: int, target_armor: int) -> Dictionary
 ## 检查目标是否在武器射程内（BFS动力可达）
 ## 简化版：只有origin, target, weapon_range时使用hex距离作为回退
 ## 完整版：传入map_cells使用BFS动力可达
-static func is_in_range(origin: Dictionary, target: Dictionary, weapon_range: int, map_cells: Dictionary = {}) -> bool:
+## aura_green_cells：光环转化的绿格集合（{cell_key: true}），来自 MapService.get_attack_aura_cells()；
+##   光环格视为绿格、耗2射程预算（默认 {} 无光环时行为不变）。
+## blocked_keys：攻击路径障碍格集合（{cell_key: true}），来自 MapService.get_attack_blocked_keys()；
+##   机甲格可作终点不可穿过（默认 {} 行为不变）。
+static func is_in_range(origin: Dictionary, target: Dictionary, weapon_range: int, map_cells: Dictionary = {}, aura_green_cells: Dictionary = {}, blocked_keys: Dictionary = {}) -> bool:
 	if map_cells.is_empty():
 		# 回退：简单hex距离（无地形信息时）
 		return _HexGrid.distance(origin, target) <= weapon_range
-	return _RangeCalculator.is_in_weapon_range(origin, target, weapon_range, map_cells)
+	return _RangeCalculator.is_in_weapon_range(origin, target, weapon_range, map_cells, aura_green_cells, blocked_keys)
 
 ## 检查目标是否在技能范围内（hex距离圆）
 static func is_in_skill_range(origin: Dictionary, target: Dictionary, skill_range: int) -> bool:

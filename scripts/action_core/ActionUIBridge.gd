@@ -24,6 +24,26 @@ var _current_input_type: StringName = &""
 ## 当前输入参数
 var _current_input_params: Dictionary = {}
 
+## 多效果并发等待输入的排队表（{action_id: {input_type, input_params}}）。
+## 场景：联合连携攻击C（独立顶层）与攻击A 的闪击弃牌/再攻击D 并行时，
+## 两者的 need_input 请求竞争同一个共享槽 _waiting_action_id。旧语义"后到覆盖先到"：
+## 先到请求（联合攻击C 的选武器）被覆盖后永久丢失，后到者完成时槽清空，
+## 先到动作滞留 waiting_input 无弹窗 -> UI 卡死 / 双端发散（联合不同步根因）。
+## 新语义"后到排队"：槽被占时新请求入队；槽释放（确认/取消/动作完成）时按
+## 插入序 refire 队首（重新 emit 弹窗+占槽）。玩家按队列顺序处理，不插队不丢失。
+var _queued_waiting_inputs: Dictionary = {}
+
+## 非模态展示浮窗（不占共享槽、不排队）：纯展示可随时关闭，与任何输入窗互斥无意义；
+## 若入队会阻塞后续真实输入请求（浮窗永不"确认"释放槽）。
+## input_type -> popup_type 映射，_on_action_needs_input 开头拦截直接 emit。
+const NONMODAL_DISPLAY_POPUPS: Dictionary = {
+	&"pilot_009_show_display": &"pilot_009_card_display",
+	&"pilot_028_show_declared": &"pilot_028_declared_display",
+	&"pilot_058_show_display": &"pilot_058_card_display",
+	&"view_random_other_hand_show_display": &"pilot_066_card_display",
+	&"pilot_088_conquer_display": &"pilot_088_conquer_display",
+}
+
 ## ── 信号 ──
 signal request_ui_popup(popup_type: StringName, params: Dictionary)
 signal action_input_resolved(action_id: StringName, input_data: Dictionary)
@@ -41,10 +61,45 @@ func setup() -> void:
 		context.action_engine.action_cancelled.connect(_on_action_cancelled)
 	if context != null and context.timing_engine != null:
 		context.timing_engine.action_needs_input.connect(_on_action_needs_input)
+		# 响应窗口关闭（确认响应/pass/全pass）= 该输入请求已解决：清共享槽并恢复排队请求。
+		# 否则槽残留指向攻击动作，后续并发请求（反击打出后的移动选格、攻击推进后的
+		# 损伤放置等）被误判"槽被占"而排队不弹 -> 卡死。旧覆盖语义下槽被新请求抢走可
+		# 自愈，排队语义必须显式清。
+		context.timing_engine.response_window_closed.connect(_on_response_window_closed)
+
+
+## 响应窗口已关闭（TimingEngine.handle_response_selection 各路径 emit）：
+## 清理共享槽（若仍指向该攻击动作）+ 恢复队首排队请求。
+func _on_response_window_closed(action_id: StringName, _selected_effects: Array) -> void:
+	if _waiting_action_id == action_id:
+		_waiting_action_id = &""
+		_current_input_type = &""
+		_current_input_params = {}
+	_refire_first_queued_waiting()
 
 
 ## ActionEngine 需要玩家输入时的回调
 func _on_action_needs_input(action_id: StringName, input_type: StringName, input_params: Dictionary) -> void:
+	# 早到输入信箱（主汇入点）：该动作若有早到的恢复输入（网络/点击先于挂起到达），
+	# 此刻挂起已注册 -> 取出 deferred 补投并直接返回（不弹窗不占槽，本次等待由补投恢复）。
+	# 挂起后引擎可能静默（无后续时点），故除 fire_timing 兜底外必须在汇入点排空。
+	if context != null and context.timing_engine != null \
+			and context.timing_engine.drain_effect_input_for(action_id):
+		return
+	# 非模态展示浮窗：不占槽不排队，直接弹（与任何输入窗可并存）
+	if NONMODAL_DISPLAY_POPUPS.has(input_type):
+		request_ui_popup.emit(NONMODAL_DISPLAY_POPUPS.get(input_type), input_params)
+		return
+	# 多效果并发等待输入：槽已被其他动作占用时排队（不覆盖、不弹窗），
+	# 槽释放时 _refire_first_queued_waiting 按插入序恢复（弹窗+占槽）。
+	# 同一动作的重复请求（选武器->选目标等链式推进）直接更新槽，不排队。
+	if _waiting_action_id != &"" and _waiting_action_id != action_id:
+		_queued_waiting_inputs[action_id] = {
+			"input_type": input_type,
+			"input_params": input_params.duplicate(true),
+		}
+		return
+	_queued_waiting_inputs.erase(action_id)
 	_waiting_action_id = action_id
 	_current_input_type = input_type
 	_current_input_params = input_params
@@ -95,6 +150,9 @@ func _on_action_needs_input(action_id: StringName, input_type: StringName, input
 				_auto_place_damage_tokens(input_params)
 				return
 			request_ui_popup.emit(&"damage_token_placement", input_params)
+		&"damage_adjust":
+			# 损伤调整面板（薇尔 pilot_059 回合开始：每槽位 +1/-1+取消，仅1次机会）
+			request_ui_popup.emit(&"damage_adjust", input_params)
 		&"show_cards":
 			request_ui_popup.emit(&"card_show", input_params)
 		&"choose_one":
@@ -140,6 +198,10 @@ func _on_action_needs_input(action_id: StringName, input_type: StringName, input
 				_auto_repair_choose_one(action_id, input_params)
 				return
 			request_ui_popup.emit(&"effect_choice", input_params)
+		&"pilot_083_options":
+			# 瓦恩武器修改 phase2：三横排互斥选项面板（weapon_modify_options_panel）。
+			# 弹窗已由 TimingEngine 按持有者玩家 player_id 路由；AI 不点主动/RE 按钮不会走到。
+			request_ui_popup.emit(&"pilot_083_options", input_params)
 		&"choose_integer":
 			# 金币换动力整数选择（effect_040/041）。AI 已在 TimingEngine 自动选 min，此处仅玩家路径。
 			request_ui_popup.emit(&"integer_select", input_params)
@@ -157,6 +219,25 @@ func _on_action_needs_input(action_id: StringName, input_type: StringName, input
 			# 推进 effect2 多选：持有者使用迎击牌时弹窗选若干推进一起打出。
 			# AI 已在 TimingEngine._execute_actions 的 CHOOSE_MANY_CARDS 分支跳过，此处仅玩家路径。
 			request_ui_popup.emit(&"thrust_select", input_params)
+		&"thrust_select":
+			# pilot_019 缴械冲击支付 / pilot_020 肯德弃任意行动牌等：多选行动牌弹窗。
+			# 复用 thrust_select 面板；confirm/cancel 由 app_root _on_thrust_selection_completed/_cancelled
+			# 发 resume_effect {selected_card_ids}/{cancelled} 闭环。AI 不点 DIRECT 按钮不会走到，
+			# 与 select_thrust_cards 同款无需 AI 兜底。
+			request_ui_popup.emit(&"thrust_select", input_params)
+		&"mech_multi_select":
+			# 通用多选机甲（CHOOSE_MANY_MECHS，奥黛尔 pilot_038「选最多2台4格内机甲含我方」）：
+			# 地图点选多台机甲（复用攻击多选交互）。AI 已在 TimingEngine._prompt_choose_many_mechs
+			# 跳过，此处仅人类玩家路径。
+			request_ui_popup.emit(&"mech_multi_select", input_params)
+		&"hidden_card_view":
+			# 霍恩 pilot_046 等「查看隐藏装备」：打开 hidden_card_view_panel（阻塞，可关闭）。
+			# AI 已在 TimingEngine._handle_hidden_view_and_acquire 跳过，此处仅人类玩家路径。
+			request_ui_popup.emit(&"hidden_card_view_select", input_params)
+		&"hidden_reserve_slot":
+			# 霍恩 pilot_046 等「隐藏装备获取」选目标备用区（allow_cancel=false，全部玩家 RESERVE 槽）。
+			# AI 已被 hidden_card_view 分支拦截，此处仅人类玩家路径。
+			request_ui_popup.emit(&"hidden_reserve_slot_select", input_params)
 		&"select_unite_attack_card":
 			# 联合状态效果1：unite机甲攻击结算后，弹窗让 Target 选1张攻击牌联合攻击。
 			# AI Target 已在 TimingEngine._execute_actions 的 UNITE_ATTACK_OFFER 分支跳过。
@@ -167,6 +248,19 @@ func _on_action_needs_input(action_id: StringName, input_type: StringName, input
 			# 复用 unite_attack_select 面板（同为"选1张攻击牌"单选+取消），input_params 携带
 			# card_ids/label/action_id/player_id（被选机甲玩家），_popup_owner 据此路由到对应玩家窗口。
 			request_ui_popup.emit(&"unite_attack_select", input_params)
+		&"pilot_018_select_equipment":
+			# pilot_018 苔丝 effect_01b：选1张损伤≥2装备牌弃置（攻击方装备牌，明牌列出）。
+			# 复用 choice_panel（通用单选），选项 effect_id=装备牌 instance_id。
+			# AI 苔丝已在 TimingEngine 跳过，此处仅玩家路径。
+			request_ui_popup.emit(&"pilot_018_equipment_select", input_params)
+		&"pilot_025_reserve_select":
+			# pilot_025 约书亚 1b：选1张备用区装备牌设置（复用 choice_panel 单选）。
+			# AI 约书亚已在 TimingEngine 跳过，此处仅玩家路径。
+			request_ui_popup.emit(&"pilot_025_reserve_select", input_params)
+		&"pilot_025_slot_select":
+			# pilot_025 约书亚 1b：选目标区域设置该备用装备（复用 immediate_set_equipment 面板）。
+			# AI 约书亚已在 TimingEngine 跳过，此处仅玩家路径。
+			request_ui_popup.emit(&"immediate_set_equipment", input_params)
 		&"select_pilot_003_skip_players":
 			# pilot_003 e3 复选框：瑟尔基尔玩家勾选「抽牌跳过正面牌」的玩家。
 			# AI 不支持复选框，跳过（不修改设置）。弹窗由 _popup_owner 按 player_id 路由。
@@ -204,6 +298,16 @@ func _on_action_needs_input(action_id: StringName, input_type: StringName, input
 			# pilot_009 非阻塞展示浮窗：列出目标行动牌（只弹给美杜莎，可拖拽/可关闭）。
 			# 不捕获 _waiting_action_id（非模态），不阻塞弃牌选1窗。
 			request_ui_popup.emit(&"pilot_009_card_display", input_params)
+		&"pilot_028_show_declared":
+			# pilot_028 乌尔宣言展示浮窗（非阻塞，所有玩家可见，含乌尔自己）。可拖拽/可关闭。
+			request_ui_popup.emit(&"pilot_028_declared_display", input_params)
+		&"pilot_058_show_display":
+			# pilot_058 卡米拉展示浮窗（非阻塞，只弹给其他玩家——自己不看自己的牌）。可拖拽/可关闭。
+			request_ui_popup.emit(&"pilot_058_card_display", input_params)
+		&"view_random_other_hand_show_display":
+			# 通用「随机查看其他机甲行动牌」展示浮窗（骇客 pilot_066）：非阻塞，只弹给查看方玩家本人
+			# （app_root 按 owner_player_id==local 过滤；PvP 双端都触发，非所有者端静默）。可拖拽/可关闭。
+			request_ui_popup.emit(&"pilot_066_card_display", input_params)
 		&"select_awaken_card_type":
 			# 觉醒：弃牌堆无预判/识破时，弹框让玩家选1种行动牌（列种类+数量）。
 			# AI 自动选第一项（最小可用，避免挂死）；人类弹 awaken_select 窗。
@@ -219,6 +323,74 @@ func _on_action_needs_input(action_id: StringName, input_type: StringName, input
 		&"immediate_set_equipment":
 			# effect_005 立即设置装备：AI 已在 TimingEngine._execute_actions 自动选首槽，此处仅玩家路径。
 			request_ui_popup.emit(&"immediate_set_equipment", input_params)
+		&"pilot_014_target_select":
+			# pilot_014 亚伦选机师牌：弹列表选框(每项机师名+行动牌上限)，复用 choice_panel。
+			# AI 兜底自动选第一项（AI 不点机师按钮，但避免挂死）；人类走 pilot_014_target_select 弹窗。
+			if _is_ai_source(input_params):
+				var p014_ai_opts: Array = input_params.get("options", [])
+				if not p014_ai_opts.is_empty():
+					var p014_ai_o: Dictionary = p014_ai_opts[0] if p014_ai_opts[0] is Dictionary else {}
+					on_ui_confirmed({
+						"pilot_014_target_pilot": p014_ai_o.get("pilot_instance", &""),
+						"pilot_014_player_id": p014_ai_o.get("player_id", &""),
+						"pilot_014_mech_id": p014_ai_o.get("mech_id", &""),
+					})
+					return
+				on_ui_cancelled()
+				return
+			request_ui_popup.emit(&"pilot_014_target_select", input_params)
+		&"pilot_088_type_select":
+			# 征服宣言三选一（攻击/迎击/辅助，不可取消）：复用 choice_panel 单选。
+			# AI 兜底自动选第一项（AI 不点主动按钮，避免挂死）；人类走 pilot_088_type_select 弹窗。
+			if _is_ai_source(input_params):
+				var p088_ai_opts: Array = input_params.get("options", [])
+				if not p088_ai_opts.is_empty():
+					var p088_ai_o: Dictionary = p088_ai_opts[0] if p088_ai_opts[0] is Dictionary else {}
+					on_ui_confirmed({"pilot_088_declared_type": String(p088_ai_o.get("declared_type", "攻击"))})
+					return
+				on_ui_cancelled()
+				return
+			request_ui_popup.emit(&"pilot_088_type_select", input_params)
+		&"pilot_088_conquer_display":
+			# 征服宣言+随机展示浮窗（非阻塞，所有玩家端显示；不捕获 _waiting_action_id）。
+			request_ui_popup.emit(&"pilot_088_conquer_display", input_params)
+		&"pilot_032_pay_select":
+			# pilot_032 弹窗① 支付：爱瑞娅弃1张自己行动牌（可取消=中止，不计次数）。
+			# 复用 discard_card_select 面板；mode 非 need_input -> optional 路径，confirm/cancel 走 resume_effect。
+			# AI 爱瑞娅：自动弃首张行动牌（最小可用，避免挂死）。
+			if _is_ai_source(input_params):
+				var p032_pay_pid: StringName = input_params.get("discard_player_id", input_params.get("player_id", &""))
+				if p032_pay_pid != &"" and context != null and context.game_state != null:
+					var p032_pay_player = context.game_state.players.get(p032_pay_pid)
+					if p032_pay_player != null and not p032_pay_player.action_hand.is_empty():
+						var p032_first_action := &""
+						for p032_pcid: StringName in p032_pay_player.action_hand:
+							var p032_pc = context.game_state.get_card(p032_pcid)
+							if p032_pc != null and p032_pc.def != null and p032_pc.def.card_kind == &"action":
+								p032_first_action = p032_pcid
+								break
+						if p032_first_action != &"":
+							on_ui_confirmed({"selected_action_card_ids": [p032_first_action]})
+							return
+				on_ui_cancelled()
+				return
+			request_ui_popup.emit(&"discard_card_select", input_params)
+		&"pilot_032_target_select":
+			# pilot_032 弹窗② 选机师牌：弹列表选框(每项机师名+行动牌上限)，复用 choice_panel。
+			# AI 兜底自动选第一项（AI 不点机师按钮，但避免挂死）；人类走 pilot_032_target_select 弹窗。
+			if _is_ai_source(input_params):
+				var p032_ai_opts: Array = input_params.get("options", [])
+				if not p032_ai_opts.is_empty():
+					var p032_ai_o: Dictionary = p032_ai_opts[0] if p032_ai_opts[0] is Dictionary else {}
+					on_ui_confirmed({
+						"pilot_032_target_pilot": p032_ai_o.get("pilot_instance", &""),
+						"pilot_032_player_id": p032_ai_o.get("player_id", &""),
+						"pilot_032_mech_id": p032_ai_o.get("mech_id", &""),
+					})
+					return
+				on_ui_cancelled()
+				return
+			request_ui_popup.emit(&"pilot_032_target_select", input_params)
 		_:
 			push_warning("ActionUIBridge: 未知输入类型: %s" % String(input_type))
 			request_ui_popup.emit(&"generic_input", input_params)
@@ -362,6 +534,9 @@ func _auto_select_attack_target(_action_id: StringName, input_params: Dictionary
 		return
 	var weapon_range: int = int(input_params.get("weapon_range", 1))
 	var map_cells: Dictionary = context.game_state.map_state.cells if context.game_state.map_state else {}
+	var _attack_aura: Dictionary = context.map_service.get_attack_aura_cells()
+	# 机甲格为攻击路径障碍 + 陷落"不能被选为目标"排除（AI 同样遵守攻击规则）
+	var _attack_blocked: Dictionary = context.map_service.get_attack_blocked_keys(attacker_id)
 	# 射程内第一个存活敌方（非自身、非同阵营）
 	for mid: StringName in context.game_state.mechs:
 		var m = context.game_state.mechs[mid]
@@ -371,7 +546,9 @@ func _auto_select_attack_target(_action_id: StringName, input_params: Dictionary
 			continue
 		if m.owner_player_id == attacker.owner_player_id:
 			continue
-		if _RangeCalculator.is_in_weapon_range(attacker.position, m.position, weapon_range, map_cells):
+		if m.has_status(&"cannot_be_targeted"):
+			continue
+		if _RangeCalculator.is_in_weapon_range(attacker.position, m.position, weapon_range, map_cells, _attack_aura, _attack_blocked):
 			on_ui_confirmed({"target_id": mid})
 			return
 	# 射程内无敌方：取消（避免 AI 攻击卡死）
@@ -509,24 +686,31 @@ func _auto_move_target(action_id: StringName, input_params: Dictionary) -> void:
 
 	var map_cells: Dictionary = context.game_state.map_state.cells if context.game_state.map_state else {}
 
+	# 攻击射程光环（光环格视为绿格、耗2射程预算）--用于逃跑判定/评分，与攻击范围高亮一致。
+	var _attack_aura: Dictionary = context.map_service.get_attack_aura_cells()
+	# 通用移动消耗参数（效果元数据驱动）：按移动方玩家算折扣（持有者玩家绿格耗1）+ 光环转化绿格。
+	var _mc_ui := {"green_cost": 2, "aura_cells": {}}
+	var _mover_mech = context.game_state.mechs.get(mech_id) if context.game_state.mechs != null else null
+	if _mover_mech != null:
+		_mc_ui = context.map_service.resolve_move_cost_params(_mover_mech.owner_player_id)
 	# 相邻可达格（剩余动力足够）
-	var neighbors: Array[Dictionary] = _RangeCalculator.get_move_reachable_hexes(pos, max(1, available_power), map_cells)
+	var neighbors: Array[Dictionary] = _RangeCalculator.get_move_reachable_hexes(pos, max(1, available_power), map_cells, int(_mc_ui["green_cost"]), _mc_ui["aura_cells"])
 	if neighbors.is_empty():
 		_resolve_action_cancel(action_id)
 		return
 
 	# 迎击移动：若当前格已逃出攻击范围，停止移动（逃脱达成，避免 0 动力原地循环致栈溢出）
 	if not mover_is_attacker and not attacker_pos.is_empty():
-		if not _RangeCalculator.is_in_weapon_range(attacker_pos, pos, weapon_range, map_cells):
+		if not _RangeCalculator.is_in_weapon_range(attacker_pos, pos, weapon_range, map_cells, _attack_aura):
 			_resolve_action_cancel(action_id)
 			return
 
 	var best: Dictionary = {}
 	if mover_is_attacker and not target_pos.is_empty():
-		best = _score_assault_move(neighbors, target_pos, weapon_range, map_cells, target_counter_range)
+		best = _score_assault_move(neighbors, target_pos, weapon_range, map_cells, target_counter_range, _attack_aura)
 	else:
 		var prev_pos: Dictionary = input_params.get("previous_position", {})
-		best = _score_evade_move(neighbors, attacker_pos, weapon_range, map_cells, prev_pos)
+		best = _score_evade_move(neighbors, attacker_pos, weapon_range, map_cells, prev_pos, _attack_aura)
 
 	if best.is_empty():
 		_resolve_action_cancel(action_id)
@@ -543,16 +727,16 @@ func _auto_move_target(action_id: StringName, input_params: Dictionary) -> void:
 
 ## 强袭追击评分：优先保持在目标射程内（保命中 +2000），其次躲开目标反击射程（+500，
 ## 仅在不破坏命中的前提下；若我方武器射程<目标反击射程才能兼顾），其次靠近目标（距离越小越好）。
-func _score_assault_move(neighbors: Array, target_pos: Dictionary, weapon_range: int, map_cells: Dictionary, target_counter_range: int) -> Dictionary:
+func _score_assault_move(neighbors: Array, target_pos: Dictionary, weapon_range: int, map_cells: Dictionary, target_counter_range: int, aura_green_cells: Dictionary = {}) -> Dictionary:
 	var best: Dictionary = {}
 	var best_score: float = -1e9
 	for hex in neighbors:
-		var in_range: bool = _RangeCalculator.is_in_weapon_range(target_pos, hex, weapon_range, map_cells)
+		var in_range: bool = _RangeCalculator.is_in_weapon_range(target_pos, hex, weapon_range, map_cells, aura_green_cells)
 		var dist: int = _HexGrid.distance(target_pos, hex)
 		var score: float = (2000.0 if in_range else 0.0) + (-dist * 10.0)
 		# 躲反击：该格不在目标武器射程内（命中优先级 2000 >> 500，不会为躲反击而放弃命中）
 		if target_counter_range > 0:
-			var in_counter: bool = _RangeCalculator.is_in_weapon_range(target_pos, hex, target_counter_range, map_cells)
+			var in_counter: bool = _RangeCalculator.is_in_weapon_range(target_pos, hex, target_counter_range, map_cells, aura_green_cells)
 			if not in_counter:
 				score += 500.0
 		if score > best_score:
@@ -563,13 +747,13 @@ func _score_assault_move(neighbors: Array, target_pos: Dictionary, weapon_range:
 
 ## 迎击移动评分：优先逃出攻击范围（+1000），其次离攻击方更远。
 ## previous_pos：上一步起点，施加大惩罚防回访振荡（B1 修复）。
-func _score_evade_move(neighbors: Array, attacker_pos: Dictionary, weapon_range: int, map_cells: Dictionary, previous_pos: Dictionary = {}) -> Dictionary:
+func _score_evade_move(neighbors: Array, attacker_pos: Dictionary, weapon_range: int, map_cells: Dictionary, previous_pos: Dictionary = {}, aura_green_cells: Dictionary = {}) -> Dictionary:
 	var best: Dictionary = {}
 	var best_score: float = -1e9
 	for hex in neighbors:
 		var in_range: bool = false
 		if not attacker_pos.is_empty():
-			in_range = _RangeCalculator.is_in_weapon_range(attacker_pos, hex, weapon_range, map_cells)
+			in_range = _RangeCalculator.is_in_weapon_range(attacker_pos, hex, weapon_range, map_cells, aura_green_cells)
 		var dist: int = 0
 		if not attacker_pos.is_empty():
 			dist = _HexGrid.distance(attacker_pos, hex)
@@ -700,6 +884,9 @@ func on_ui_confirmed(input_data: Dictionary) -> void:
 	_current_input_params = {}
 
 	_apply_action_input(action_id, input_data)
+	# 确认后同步链可能发起新 need_input（选武器->选目标）已占槽；
+	# 槽仍空闲时按插入序恢复排队的并发等待请求（联合攻击C 选武器等）
+	_refire_first_queued_waiting()
 
 
 ## UI组件取消时的回调
@@ -713,6 +900,59 @@ func on_ui_cancelled() -> void:
 	_current_input_params = {}
 
 	_apply_action_cancel(action_id)
+	_refire_first_queued_waiting()
+
+
+## 槽空闲时按插入序恢复队首的并发等待请求（重新走 _on_action_needs_input 占槽+弹窗）。
+## 跳过已不在等待态的动作登记（输入已被其他路径解决/动作已完成的残留条目）。
+func _refire_first_queued_waiting() -> void:
+	if _waiting_action_id != &"":
+		return
+	while not _queued_waiting_inputs.is_empty():
+		var q_aid: StringName = _queued_waiting_inputs.keys()[0]
+		var entry: Dictionary = _queued_waiting_inputs.get(q_aid, {})
+		_queued_waiting_inputs.erase(q_aid)
+		var q_action = null
+		if context != null and context.action_registry != null:
+			q_action = context.action_registry.get_action(q_aid)
+		if q_action == null or (String(q_action.state) != &"waiting_input" and String(q_action.state) != &"waiting_timing"):
+			continue
+		_on_action_needs_input(q_aid, entry.get("input_type", &""), entry.get("input_params", {}))
+		return
+
+
+## 供 TimingEngine.resume_pending_effect 消费挂起输入时调用：该动作的旧输入请求已被
+## resume 消费，槽中残留等待过时，释放之（仅当槽仍指向该动作）。
+## 旧"后到覆盖"语义下槽被新请求抢走可自愈；排队语义下残留会阻塞后续不同动作的新输入
+## （效果续跑弹新窗被判"槽被占"而排队不弹 -> UI 无窗可弹/卡死）。
+## 不做 refire：resume 续跑可能同步弹出新窗占槽，队首恢复由后续槽事件（新窗完成/
+## 动作完成/响应窗关闭）触发。bridge.resolve_effect_input 调用前已自行清槽，此处幂等。
+func release_waiting_slot_if_owner(action_id: StringName) -> void:
+	if _waiting_action_id == action_id:
+		_waiting_action_id = &""
+		_current_input_type = &""
+		_current_input_params = {}
+
+
+## 远端玩家的等待窗（弹窗按 owner 路由到对方端显示，本机不弹）：释放共享槽并恢复
+## 队首排队请求。不 resolve 该动作（交互决策在对方端，输入经 resume_effect 网络op
+## 回填后由 resolve_effect_input 按动作 id 精确处理）；本机玩家的排队窗口不被远端
+## 不可见窗口阻塞（TURN_BEFORE_END 拾荒/宝藏/修悟多玩家并行等待场景，app_root 的
+## PvP 弹窗 owner 门控处调用）。
+func skip_remote_waiting(action_id: StringName) -> void:
+	if action_id == &"":
+		return
+	if _waiting_action_id == action_id:
+		_waiting_action_id = &""
+		_current_input_type = &""
+		_current_input_params = {}
+		_refire_first_queued_waiting()
+
+
+## 当前排队中的并发等待动作 id 列表（插入序）。供测试/调试断言排队语义
+## （并发等待不丢失，槽释放后按序恢复）。
+func get_queued_waiting_action_ids() -> Array:
+	return _queued_waiting_inputs.keys()
 
 
 ## 损伤放置/移除完成：按记录的 damage_change 动作 ID 精确恢复。
@@ -740,6 +980,7 @@ func _resolve_action_input(action_id: StringName, input_data: Dictionary) -> voi
 		_current_input_type = &""
 		_current_input_params = {}
 	_apply_action_input(action_id, input_data)
+	_refire_first_queued_waiting()
 
 
 ## 按 action_id 精确取消（供 call_deferred 的 AI 自动决策使用，理由同 _resolve_action_input）。
@@ -749,6 +990,22 @@ func _resolve_action_cancel(action_id: StringName) -> void:
 		_current_input_type = &""
 		_current_input_params = {}
 	_apply_action_cancel(action_id)
+	_refire_first_queued_waiting()
+
+
+## 效果弹窗确认（resume_effect op）：恢复 TimingEngine 挂起的效果，同时清除共享等待锁。
+## 与 on_ui_confirmed 对齐——效果弹窗（pilot_025 选备用/选区域、pilot_003、pilot_018、
+## choose_one_effect 等）走 _net_exec("resume_effect") 直连 resume_pending_effect，绕过
+## on_ui_confirmed，导致 _waiting_action_id 残留 -> 主动效果按钮全部置灰 + 地图点击被拦截
+## （"发动后动不了"）。此处仅当锁仍指向被恢复的动作时清锁，否则保留并发弹窗的等待槽。
+func resolve_effect_input(action_id: StringName, input_data: Dictionary) -> void:
+	if _waiting_action_id == action_id:
+		_waiting_action_id = &""
+		_current_input_type = &""
+		_current_input_params = {}
+	if context != null and context.timing_engine != null:
+		context.timing_engine.resume_pending_effect(action_id, input_data)
+	_refire_first_queued_waiting()
 
 
 ## 实际回填输入到指定动作：优先恢复 TimingEngine 挂起的效果，否则 continue_action。
@@ -778,12 +1035,22 @@ func _apply_action_cancel(action_id: StringName) -> void:
 func _on_action_completed(action_id: StringName, _action_type: StringName, _record: Dictionary) -> void:
 	if _waiting_action_id == action_id:
 		_waiting_action_id = &""
+		_current_input_type = &""
+		_current_input_params = {}
+	# 并发排队中的动作登记清理 + 槽空闲时恢复队首（动作链全部结算后，
+	# 残留的排队请求如联合攻击C 选武器必须重新弹出，否则永久滞留）
+	_queued_waiting_inputs.erase(action_id)
+	_refire_first_queued_waiting()
 
 
 ## 动作取消时的回调
 func _on_action_cancelled(action_id: StringName, _action_type: StringName) -> void:
 	if _waiting_action_id == action_id:
 		_waiting_action_id = &""
+		_current_input_type = &""
+		_current_input_params = {}
+	_queued_waiting_inputs.erase(action_id)
+	_refire_first_queued_waiting()
 
 
 ## 获取当前等待输入的动作信息

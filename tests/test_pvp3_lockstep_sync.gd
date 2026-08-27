@@ -187,7 +187,25 @@ func test_pvp3_lockstep_end_turn_sync() -> Variant:
 	if host == null or client1 == null or client2 == null:
 		await _free3(host, client1, client2)
 		return "建局失败"
-	await _exec3(host, client1, client2, "end_turn", {"player_id": &"player", "discarded_card_ids": []}, 4)
+	await _exec3(host, client1, client2, "end_turn", {"player_id": &"player"}, 4)
+	# 手牌超限时流程第5步弹弃牌阻塞窗：选前 N 张（排除保护牌）广播续跑后流程才完成流转
+	var dw: Dictionary = host.battle.context.action_ui_bridge.get_waiting_action_info()
+	if String(dw.get("input_type", &"")) == &"select_discard_cards":
+		var dw_p: int = int(dw.get("input_params", {}).get("count", 0))
+		var dw_excl: Array = dw.get("input_params", {}).get("exclude_card_ids", [])
+		var dw_hand: Array = host.battle.context.game_state.players.get(&"player").action_hand
+		var pick: Array = []
+		for cid in dw_hand:
+			if pick.size() >= dw_p:
+				break
+			if dw_excl.has(cid):
+				continue
+			pick.append(String(cid))
+		await _exec3(host, client1, client2, "resume_turn_discard", {
+			"action_id": String(dw.get("action_id", &"")),
+			"card_ids": pick,
+		}, 4)
+		await _pump(4)
 	var hg2 = host.battle.context.game_state
 	var cg1_2 = client1.battle.context.game_state
 	var cg2_2 = client2.battle.context.game_state
@@ -231,8 +249,19 @@ func test_pvp3_lockstep_end_turn_discard_repair_recover() -> Variant:
 	for ar in [host, client1, client2]:
 		ar._apply_dev_edit(&"modify_player_limits", {"target": &"player", "action_card_limit": 0})
 	await _pump(2)
-	# end_turn 弃 [维修, 强袭] -> _net_end_turn -> deck_service.discard_cards 发 DISCARD_SETTLE -> effect_01b 回收维修
-	await _exec3(host, client1, client2, "end_turn", {"player_id": &"player", "discarded_card_ids": [String(repair_id), String(assault_id)]}, 4)
+	# end_turn（无预选）-> 流程第5步超限弹弃牌阻塞窗 -> resume_turn_discard op 弃 [维修, 强袭]
+	# -> deck_service.discard_cards 发 DISCARD_SETTLE -> effect_01b 回收维修 -> 续跑流转下家
+	await _exec3(host, client1, client2, "end_turn", {"player_id": &"player"}, 4)
+	# host 读等待窗动作 id（3端锁步一致），广播选牌续跑
+	var dw: Dictionary = host.battle.context.action_ui_bridge.get_waiting_action_info()
+	if String(dw.get("input_type", &"")) != &"select_discard_cards":
+		await _free3(host, client1, client2)
+		return "回合末超限应弹弃牌阻塞窗，实际: %s" % String(dw.get("input_type", &""))
+	await _exec3(host, client1, client2, "resume_turn_discard", {
+		"action_id": String(dw.get("action_id", &"")),
+		"card_ids": [String(repair_id), String(assault_id)],
+	}, 4)
+	await _pump(6)
 	# 3端安德洛美达(player)手牌都应含维修 + X=1
 	for ar_name in [["host", host], ["client1", client1], ["client2", client2]]:
 		var ar_obj = ar_name[1]

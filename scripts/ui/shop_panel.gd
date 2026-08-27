@@ -183,8 +183,10 @@ func _refresh() -> void:
 	_hidden_slot_button.custom_minimum_size = Vector2(300, 40)
 
 	if shop.hidden_advanced_slot != &"":
-		if shop.hidden_revealed:
-			# 已查看，显示内容
+		# 每玩家独立得知：本窗口玩家已得知该牌（公开揭示 或 known_to 含本地玩家，如霍恩查看过）
+		# → 显示真名+1.5x买价；否则 ★★★ 隐藏卡 ★★★ + 2金查看。
+		if _context != null and _context.shop_service != null and _context.shop_service.is_hidden_advanced_known_to(local_player_id):
+			# 已得知，显示内容
 			var card = gs.get_card(shop.hidden_advanced_slot)
 			if card and card.def:
 				var price: int = _get_buy_price(card)

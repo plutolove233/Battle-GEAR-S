@@ -91,6 +91,7 @@ static func get_effects_for_status(status_type: StringName) -> Array[StringName]
 		&"UNITE": [&"unite_status_attack", &"unite_status_clear"],
 		&"DISCOUNT": [&"discount_clear_on_turn_end"],
 		&"SET_TRAP": [&"set_trap_clear_on_turn_end"],
+		&"PILOT_022_POWER_BONUS": [&"pilot_022_power_bonus_apply", &"pilot_022_power_bonus_tick"],
 	}
 	var result: Array[StringName] = []
 	for eid: StringName in _status_effect_map.get(status_type, []):
@@ -409,12 +410,13 @@ static func build_all_effects() -> Dictionary:
 	counter_e2.effect_id = &"counter_effect2"
 	counter_e2.display_name = "反击·反击攻击"
 	counter_e2.mode = _TC.MODE_LISTEN
-	# 优先级20：反击的反击攻击须先于闪击 effect2（再攻）等同监听 ATTACK_SETTLE 的效果执行。
+	# 优先级30：ATTACK_SETTLE 上「结算后再攻击」类效果统一优先级对齐：反击额外攻击=30、
+	# 联合连携攻击=20、闪击再次攻击=10（30>20>10 串行，先到先完全结算再跑下一个）。
 	# 原优先级10与闪击 effect2 相同，按注册序闪击 effect2 先触发，其 optional 弃牌弹窗
 	# 会把 attack 置 waiting_timing 并在 fire_timing 首次循环 return，丢弃排在后面的
-	# counter_effect2（反击2永不执行）。提至20后 counter_effect2 走 waiting_effect_action
-	# 路径（创建反击攻击子动作并正确暂存剩余监听器），反击攻击结算后续跑闪击 effect2。
-	counter_e2.priority = 20
+	# counter_effect2（反击2永不执行）。提至30后 counter_effect2 走 waiting_effect_action
+	# 路径（创建反击攻击子动作并正确暂存剩余监听器），反击攻击结算后续跑其余监听器。
+	counter_e2.priority = 30
 	counter_e2.listen_timing = _TC.ATTACK_SETTLE
 	counter_e2.listen_action_type = &"attack"
 	counter_e2.requires_effect = &"counter_effect1"
@@ -572,6 +574,9 @@ static func build_all_effects() -> Dictionary:
 			"confirm_verb": "打出",
 			"cancel_label": "不打出推进",
 			"as_use_action_card": true,
+			# 推进窗口附加选项（温斯顿 pilot_082 转化推进等）：TimingEngine 扫描窗口拥有玩家
+			# 注册在 THRUST_WINDOW_EXTRA 时点的监听效果，条件满足时作为复选框选项展示。
+			"collect_thrust_window_extras": true,
 		},
 	}])
 	thrust_e2.description = "持有者使用迎击牌时弹多选窗，选任意数量推进批量use_action_card打出(各+4,阿克罗姆可双重生效)，再执行迎击牌。"
@@ -627,6 +632,9 @@ static func build_all_effects() -> Dictionary:
 			"confirm_verb": "使用",
 			"cancel_label": "不使用掩护",
 			"as_use_action_card": true,
+			# 掩护窗口附加选项（洛尔恩 pilot_062 转化掩护等）：TimingEngine 扫描窗口拥有玩家
+			# 注册在 COVER_WINDOW_EXTRA 时点的监听效果，条件满足时作为复选框选项展示。
+			"collect_cover_window_extras": true,
 		},
 	}])
 	cover_e1.description = "监听ATTACK_PRE：holder自身或其范围内机甲被攻击时弹多选窗，选X张掩护批量use_action_card打出(各-5,阿克罗姆可双重生效)。非响应,不受锁定影响。"
@@ -669,7 +677,10 @@ static func build_all_effects() -> Dictionary:
 	unite_status_e1.effect_id = &"unite_status_attack"
 	unite_status_e1.display_name = "联合·联合攻击"
 	unite_status_e1.mode = _TC.MODE_LISTEN
-	unite_status_e1.priority = 10
+	# 优先级20：ATTACK_SETTLE 上「结算后再攻击」类效果统一优先级对齐：反击额外攻击=30、
+	# 联合连携攻击=20、闪击再次攻击=10（30>20>10 串行，先到先完全结算再跑下一个）。
+	# 行动牌联合 / 莎菲雅 p084 / 温斯顿 p082 的联合均经此同一定义，优先级自动一致。
+	unite_status_e1.priority = 20
 	unite_status_e1.listen_timing = _TC.ATTACK_SETTLE
 	unite_status_e1.set_conditions([{"op": &"UNITE_ATTACKER_IS_UNITE_MECH"}])
 	unite_status_e1.set_target_rules([{"rule": &"NO_TARGET"}])
@@ -869,6 +880,62 @@ static func build_all_effects() -> Dictionary:
 	}])
 	lock_status_e3.description = "回合结束后持续时间-1，为0则去除。"
 	effects[lock_status_e3.effect_id] = lock_status_e3
+
+	# ═══════════════════════════════════════════
+	# 提比里安 pilot_022 effect_01 弃甲铸威 · 威力加成状态
+	# ═══════════════════════════════════════════
+	# 状态施加在提比里安玩家所属机甲上（target_id=机师所属机甲，stacks=威力加成点数，
+	# duration=1）。效果1的 LISTEN 监听器从 binding_context.target_id(=机甲) 读 stacks。
+	#   应用监听：我方机甲发起攻击时（ATTACK_PRE）将 stacks 点数注入该攻击 extra_might，
+	#     随后移除状态（用完即清）。
+	#   持续监听：回合结束 DECREMENT_STATUS_DURATION 兜底清除（回合结束清）。
+	# 状态由 PILOT_022_APPLY_POWER_BONUS 原子动作施加/累加（弃甲铸威），被弃武器装备牌
+	# 威力每5点→+3（stacks += floor(might/5)*3）。
+
+	# 应用监听：我方机甲攻击时 +stacks 威力并移除状态
+	var p022_power_apply := ActionEffect.new()
+	p022_power_apply.effect_id = &"pilot_022_power_bonus_apply"
+	p022_power_apply.display_name = "弃甲铸威·下次攻击威力+N"
+	p022_power_apply.mode = _TC.MODE_LISTEN
+	p022_power_apply.priority = 10
+	p022_power_apply.listen_timing = _TC.ATTACK_PRE
+	p022_power_apply.listen_action_type = &"attack"
+	p022_power_apply.set_conditions([{"op": &"STATUS_OWNER_IS_ATTACKER"}])
+	p022_power_apply.set_target_rules([{"rule": &"NO_TARGET"}])
+	p022_power_apply.set_costs([])
+	p022_power_apply.set_actions([
+		# 将状态 stacks 注入本次攻击 extra_might（value_multiplier=1 → value=1×stacks）
+		{"type": &"EXECUTE_STAT_MODIFY", "params": {
+			"stat_type": &"might",
+			"value_multiplier": 1,
+			"value_multiplier_by_stacks": &"PILOT_022_POWER_BONUS",
+			"target_id": "$binding_context.target_id",
+		}},
+		# 用完即清：移除本状态（binding_context.status_id 精确定位）
+		{"type": &"REMOVE_STATUS", "params": {
+			"status_id": "$binding_context.status_id",
+			"target_id": "$binding_context.target_id",
+		}},
+	])
+	p022_power_apply.description = "持有此状态的我方机甲发动攻击时，攻击威力+stacks并移除本状态。"
+	effects[p022_power_apply.effect_id] = p022_power_apply
+
+	# 持续监听：回合结束 -1 清除（兜底，正常用完即清后该状态已移除，此监听不触发）
+	var p022_power_tick := ActionEffect.new()
+	p022_power_tick.effect_id = &"pilot_022_power_bonus_tick"
+	p022_power_tick.display_name = "弃甲铸威·回合结束清除"
+	p022_power_tick.mode = _TC.MODE_LISTEN
+	p022_power_tick.priority = 10
+	p022_power_tick.listen_timing = _TC.TURN_AFTER_END
+	p022_power_tick.set_conditions([{"op": &"ALWAYS"}])
+	p022_power_tick.set_target_rules([{"rule": &"NO_TARGET"}])
+	p022_power_tick.set_costs([])
+	p022_power_tick.set_actions([{
+		"type": &"DECREMENT_STATUS_DURATION",
+		"params": {"status_type": &"PILOT_022_POWER_BONUS", "remove_if_zero": true},
+	}])
+	p022_power_tick.description = "回合结束后本状态持续-1，为0则去除。"
+	effects[p022_power_tick.effect_id] = p022_power_tick
 
 	# ═══════════════════════════════════════════
 	# 21、预判

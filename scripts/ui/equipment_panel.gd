@@ -8,7 +8,9 @@ class_name EquipmentPanel
 const _MechState = preload("res://scripts/runtime/MechState.gd")
 const _MechSlotState = preload("res://scripts/runtime/MechSlotState.gd")
 const _EquipmentCardDef = preload("res://scripts/card_defs/EquipmentCardDef.gd")
+const _EventCardDef = preload("res://scripts/card_defs/EventCardDef.gd")
 const _GenEquipEffects = preload("res://scripts/generated_database/GeneratedEquipmentEffects.gd")
+const _GenEventEffects = preload("res://scripts/generated_database/GeneratedEventEffects.gd")
 const _ActionPilotEffects = preload("res://scripts/generated_database/ActionPilotEffects.gd")
 const _TC = preload("res://scripts/action_core/TimingConst.gd")
 
@@ -135,7 +137,9 @@ func _refresh() -> void:
 				# pilot_005_granted_* 帝国压制 LISTEN 也进 EX 按钮区，置灰展示）。
 				# 莱比尔自身也获 EX（去自身排除），按 effect_id 前缀判定而非来源牌 mech_id。
 				# 防御(AVAILABILITY)/被动(LISTEN) 虽不能主动点，仍渲染置灰 EX 按钮供悬停看描述。
-				var _is_granted: bool = String(eff.effect_id).begins_with("pilot_002_granted_") or String(eff.effect_id).begins_with("pilot_005_granted_")
+				# 通用化：新授予机制（泰特 pilot_074 等）在 binding 打 granted=true 标记，优先据此判定；
+				# pilot_002/005 旧前缀保留兼容。
+				var _is_granted: bool = bool(bind_ctx.get("granted", false)) or String(eff.effect_id).begins_with("pilot_002_granted_") or String(eff.effect_id).begins_with("pilot_005_granted_")
 				if _is_granted:
 					if String(bind_ctx.get("mech_id", &"")) != String(_mech.mech_id):
 						continue
@@ -193,6 +197,19 @@ func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}, g
 				equip_label.text += " [甲%d 动%d]" % [eq_def.armor, eq_def.power]
 			elif eq_def.equipment_kind == &"WEAPON":
 				equip_label.text += " [威%d 射%d]" % [eq_def.might, eq_def.range_value]
+		elif slot.equipped_card.def is _EventCardDef:
+			# 事件牌：显示计时方式与剩余计时数（instant 即时结算，其余显示剩余数）
+			var ev_def = slot.equipped_card.def
+			if ev_def.timer_mode == _GenEventEffects.TIMER_MODE_INSTANT:
+				equip_label.text += " [即时]"
+			else:
+				equip_label.text += " [计时%d]" % int(slot.equipped_card.get("timer"))
+			# 任务进度（通用 progress_display 元数据：遍历牌 effect_ids 取效果声明的进度）：
+			# 行内直接显示 "进度X/Y"，已领取（claimed_counter_key>=1）追加"已领"。
+			var ev_prog := _event_progress_text(slot.equipped_card)
+			if ev_prog != "":
+				equip_label.text += " " + ev_prog
+			equip_label.add_theme_color_override("font_color", Color(0.75, 0.55, 0.85))
 	elif slot_id == &"weapon_1" or slot_id == &"weapon_2":
 		# 武器槽位为空时显示基础武器信息
 		var slot_index: int = 0 if slot_id == &"weapon_1" else 1
@@ -216,7 +233,13 @@ func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}, g
 			else:
 				# 我方：显示"备用 XXX"
 				equip_label.text = "备用 %s" % slot.equipped_card.def.display_name
-				equip_label.add_theme_color_override("font_color", Color(0.85, 0.75, 0.3))
+				# "禁"标签（法尔科 pilot_073 弃2抽高级装备置备用区等）：打标签玩家下个回合开始前
+				# 不能主动设置，备用标签追加"(禁)"并置灰提示。
+				if _ActionPilotEffects.equip_forbid_tagged(slot.equipped_card):
+					equip_label.text += "（禁）"
+					equip_label.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+				else:
+					equip_label.add_theme_color_override("font_color", Color(0.85, 0.75, 0.3))
 		else:
 			equip_label.text = "（空）"
 	else:
@@ -270,6 +293,8 @@ func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}, g
 			var set_btn = Button.new()
 			set_btn.text = "设置"
 			set_btn.custom_minimum_size = Vector2(40, 20)
+			# "禁"标签装备不能主动设置（法尔科 pilot_073 等）：按钮置灰，后端 CardSetService 双保险。
+			set_btn.disabled = _ActionPilotEffects.equip_forbid_tagged(slot.equipped_card)
 			var captured_slot_id = slot_id
 			set_btn.pressed.connect(func(): reserve_set_clicked.emit(captured_slot_id))
 			hbox.add_child(set_btn)
@@ -286,60 +311,23 @@ func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}, g
 			var all_eids: Array = _ActionPilotEffects.get_effects_for_pilot(pilot_def_id, _context)
 			var active_items: Array = active_by_card.get(inst_id, [])
 			all_eids.sort_custom(func(a, b): return String(a) < String(b))  # effect_01<02<03 保证 1/2/3 稳定
-			var _eff_index: int = 0
-			# pilot_003 瑟尔基尔：effect_02 离堆强制使用是纯自动触发被动，不建按钮，描述合并到 effect_01 hover
-			# 其他机师（莱比尔等）的 LISTEN 被动按钮仍保留（置灰+悬停说明）
-			var _is_p003: bool = String(pilot_def_id) == "pilot_003_瑟尔基尔"
-			var _is_p004: bool = String(pilot_def_id) == "pilot_004_玛沙"
-			var _is_p006: bool = String(pilot_def_id) == "pilot_006_里昂"
-			var _is_p008: bool = String(pilot_def_id) == "pilot_008_安德洛美达"
-			var _is_p012: bool = String(pilot_def_id) == "pilot_012_玛丽尔"
-			var _listen_eff: Variant = null
-			if _is_p003:
-				for _eid_pre in all_eids:
-					var _eff_pre = _ActionPilotEffects.build_pilot_effects().get(StringName(_eid_pre))
-					if _eff_pre != null and _eff_pre.mode == _TC.MODE_LISTEN:
-						_listen_eff = _eff_pre
-						break
-			elif _is_p004:
-				# pilot_004：effect_01b 护甲恢复隐藏被动，描述合并到按钮1(01a) hover
-				_listen_eff = _ActionPilotEffects.build_pilot_effects().get(&"pilot_004_effect_01b")
-			elif _is_p006:
-				# pilot_006：effect_02 狩猎追击隐藏被动（ATTACK_PRE 抽牌打标签），描述合并到按钮1(01) hover
-				_listen_eff = _ActionPilotEffects.build_pilot_effects().get(&"pilot_006_effect_02")
-			elif _is_p008:
-				# pilot_008：effect_01b 回收维修(弃置)隐藏被动，描述合并到按钮1(01a) hover（01a/01b 共享 once_per_turn）
-				_listen_eff = _ActionPilotEffects.build_pilot_effects().get(&"pilot_008_effect_01b")
-			elif _is_p012:
-				# pilot_012：effect_02 命中奖励隐藏被动（ATTACK_AFTER），与 effect_01(ATTACK_PRE 偷牌减动力)是顺序过程，
-				# 融合为1个按钮：effect_01 建按钮1（被动置灰，hover 看介绍+本回合可发动次数），effect_02 描述合并进 hover。
-				_listen_eff = _ActionPilotEffects.build_pilot_effects().get(&"pilot_012_effect_02")
+			# 通用按钮机制（绑定效果条目而非机师ID）：hide_button 效果不建按钮，
+			# merge_desc_into_index>0 时其描述合并到对应可见按钮的 hover（数组形式传入 hover handler）。
+			var _build_effs: Dictionary = _ActionPilotEffects.build_pilot_effects()
+			var _visible_effs: Array = []   # [{eff, eid, bind_ctx, is_registered}]
+			var _hidden_merge: Dictionary = {}  # {按钮序号(int) -> Array[ActionEffect]}
 			for eid_raw in all_eids:
 				var eid: StringName = StringName(eid_raw)
-				# pilot_001 双重生效：01a(确认入口)+01b(自动重跑) 合并为1个按钮（01a 代表），跳过 01b。
-				if String(eid) == "pilot_001_effect_01b":
-					continue
-				# pilot_004：effect_01b 护甲恢复隐藏被动（不建按钮，描述合并到按钮1）
-				if String(eid) == "pilot_004_effect_01b":
-					continue
-				# pilot_006：effect_02 狩猎追击隐藏被动（ATTACK_PRE 抽牌打标签，描述合并到按钮1）
-				if _is_p006 and String(eid) == "pilot_006_effect_02":
-					continue
-				# pilot_008：effect_01b 回收维修(弃置)隐藏被动（描述合并到按钮1），3按钮=01a/02/03
-				if _is_p008 and String(eid) == "pilot_008_effect_01b":
-					continue
-				# pilot_012：effect_02 命中奖励隐藏被动（ATTACK_AFTER，描述合并到按钮1），1按钮=01
-				if _is_p012 and String(eid) == "pilot_012_effect_02":
-					continue
-				var eff = _ActionPilotEffects.build_pilot_effects().get(eid)
+				var eff = _build_effs.get(eid)
 				if eff == null:
 					continue
-				# pilot_003：被动效果（effect_02 离堆）不建按钮，描述合并到首个主动按钮 hover
-				if _is_p003 and eff.mode == _TC.MODE_LISTEN:
+				if bool(eff.hide_button):
+					var _m_idx: int = int(eff.merge_desc_into_index)
+					if _m_idx > 0:
+						var _m_arr: Array = _hidden_merge.get(_m_idx, [])
+						_m_arr.append(eff)
+						_hidden_merge[_m_idx] = _m_arr
 					continue
-				_eff_index += 1
-				# 首个主动按钮（effect_01）hover 时附带 LISTEN 被动效果描述
-				var _hover_extra: Variant = _listen_eff if (_eff_index == 1 and _listen_eff != null) else null
 				# 查是否注册了 listener（主动效果）；未注册的（effect_01 光环/effect_02 派生）被动置灰
 				var bind_ctx: Dictionary = {}
 				var is_registered: bool = false
@@ -350,6 +338,16 @@ func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}, g
 						break
 				if not is_registered:
 					bind_ctx = {"card_instance_id": inst_id, "mech_id": _mech.mech_id, "player_id": _mech.owner_player_id, "slot_id": &"pilot", "card_def_id": pilot_def_id}
+				_visible_effs.append({"eff": eff, "eid": eid, "bind_ctx": bind_ctx, "is_registered": is_registered})
+			var _eff_index: int = 0
+			for _vi in _visible_effs:
+				var eff = _vi.eff
+				var eid: StringName = _vi.eid
+				var bind_ctx: Dictionary = _vi.bind_ctx
+				var is_registered: bool = _vi.is_registered
+				_eff_index += 1
+				# 该按钮序号上需合并的隐藏效果描述（数组，可为空）——hover handler 同时支持单效果与数组
+				var _hover_extra: Variant = _hidden_merge.get(_eff_index, null)
 				var is_passive: bool = eff.mode == _TC.MODE_LISTEN or not is_registered
 				var btn = Button.new()
 				btn.text = str(_eff_index)
@@ -436,7 +434,17 @@ func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}, g
 		if _g_main != null:
 			var _g_mid: StringName = _g_main_bind.get("mech_id", &"")
 			# 取消加成 -> EX 按钮消失（不渲染）
-			if _ActionPilotEffects.is_aura_active_for_mech(_gs, _g_mid):
+			# 悬停附加描述：除主效果外其余 granted 效果（pilot_002 防御 AVAILABILITY /
+			# 泰特授予的隐藏 LISTEN apply/consume/turnend），数组形式传入 hover handler 合并展示。
+			var _g_extra: Array = []
+			for g_item2 in granted_effects:
+				var g_eff2 = g_item2.get("effect")
+				if g_eff2 == null or g_eff2 == _g_main:
+					continue
+				_g_extra.append(g_eff2)
+			# 取消加成 -> EX 按钮消失（不渲染）。仅 pilot_002/005 光环授予（bind 无 granted 标记）
+			# 受光环开关控制；泰特 pilot_074 等新授予（bind.granted=true）无光环开关，直接渲染。
+			if bool(_g_main_bind.get("granted", false)) or _ActionPilotEffects.is_aura_active_for_mech(_gs, _g_mid):
 				var g_btn = Button.new()
 				g_btn.text = "EX"
 				g_btn.custom_minimum_size = Vector2(26, 26)
@@ -468,9 +476,189 @@ func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}, g
 				if g_is_direct:
 					g_btn.pressed.connect(func(): granted_effect_clicked.emit(g_cid, g_eid, _g_mid))
 				# 悬停：显示进攻+防御合并描述（防御描述作补充）
-				g_btn.mouse_entered.connect(func(): _on_pilot_effect_button_hover_entered(_g_main, _g_main_bind, _g_defense))
+				g_btn.mouse_entered.connect(func(): _on_pilot_effect_button_hover_entered(_g_main, _g_main_bind, _g_extra))
 				g_btn.mouse_exited.connect(Callable(self, "_on_equipment_hover_exited"))
 				hbox.add_child(g_btn)
+
+	# pilot_024 琳 RE 请求维修按钮：场上琳（非本机甲）在4格内时，本机师槽行渲染"RE"圆形按钮。
+	# 请求方自己回合1次，点击即消耗本回合 RE 次数（琳拒绝也不刷新）；满状态不可点。
+	# 点击 emit granted_effect_clicked(琳 pilot 牌 instance_id, "pilot_024_re_request", 本机甲 mech_id)，
+	# app_root 走 effect_fire → RE 请求流程（给琳弹确认窗）。
+	if String(slot_id) == "pilot" and not _is_enemy and _context != null and _context.get("game_state") != null:
+		var _gs24 = _context.game_state
+		var _lin24_mid: StringName = _ActionPilotEffects.pilot_024_find_lin_mech(_gs24)
+		# 本机甲非琳（不能请求自己）；琳在场存活
+		if _lin24_mid != &"" and _lin24_mid != _mech.mech_id:
+			var _lin24_m = _gs24.mechs.get(_lin24_mid)
+			if _lin24_m != null and not _lin24_m.destroyed and _lin24_m.current_hp > 0:
+				# 4格内才显示（离开4格外按钮消失）
+				if _ActionPilotEffects.pilot_024_requester_in_range(_gs24, _mech.mech_id, _lin24_mid, 4):
+					var _re24_eff = _ActionPilotEffects.build_pilot_effects().get(&"pilot_024_re_request")
+					if _re24_eff != null:
+						var _re24_can: bool = String(_gs24.active_player_id) == String(_mech.owner_player_id) \
+							and _ActionPilotEffects.pilot_024_mech_repairable(_gs24, _mech.mech_id) \
+							and not _ActionPilotEffects.pilot_024_re_used_this_round(_gs24, _mech.mech_id)
+						var _re24_btn = Button.new()
+						_re24_btn.text = "RE"
+						_re24_btn.custom_minimum_size = Vector2(26, 26)
+						_re24_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+						_re24_btn.add_theme_font_override("font", _ensure_bold_font())
+						_re24_btn.add_theme_font_size_override("font_size", 12)
+						_re24_btn.add_theme_constant_override("outline_size", 4)
+						_re24_btn.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.7))
+						var _re24_circle := StyleBoxFlat.new()
+						_re24_circle.bg_color = Color(0.18, 0.12, 0.28, 0.95)
+						_re24_circle.border_color = Color(0.9, 0.6, 0.9, 0.9)
+						_re24_circle.set_border_width_all(1)
+						_re24_circle.set_corner_radius_all(13)
+						_re24_circle.set_content_margin_all(0)
+						_re24_btn.add_theme_stylebox_override("normal", _re24_circle)
+						var _re24_hover := _re24_circle.duplicate()
+						_re24_hover.bg_color = Color(0.28, 0.2, 0.42, 1.0)
+						_re24_btn.add_theme_stylebox_override("hover", _re24_hover)
+						var _re24_dis := _re24_circle.duplicate()
+						_re24_dis.bg_color = Color(0.1, 0.08, 0.14, 0.9)
+						_re24_btn.add_theme_stylebox_override("disabled", _re24_dis)
+						_re24_btn.disabled = not _re24_can
+						_re24_btn.add_theme_color_override("font_color", Color(0.95, 0.8, 0.95) if _re24_can else Color(0.5, 0.5, 0.5))
+						var _lin24_pilot_card = _ActionPilotEffects.pilot_024_lin_pilot_card(_gs24)
+						var _re24_cid: StringName = _lin24_pilot_card.instance_id if _lin24_pilot_card != null else &""
+						var _re24_mid_emit: StringName = _mech.mech_id
+						_re24_btn.pressed.connect(func(): granted_effect_clicked.emit(_re24_cid, &"pilot_024_re_request", _re24_mid_emit))
+						# 悬停说明（RE 按钮的 effect 定义）
+						var _re24_bind: Dictionary = {
+							"card_instance_id": _re24_cid,
+							"mech_id": _mech.mech_id,
+							"player_id": _mech.owner_player_id,
+							"slot_id": &"pilot",
+							"card_def_id": &"pilot_024_琳",
+						}
+						_re24_btn.mouse_entered.connect(func(): _on_pilot_effect_button_hover_entered(_re24_eff, _re24_bind))
+						_re24_btn.mouse_exited.connect(Callable(self, "_on_equipment_hover_exited"))
+						hbox.add_child(_re24_btn)
+
+	# pilot_081 汀兰 RE 请求回复按钮：本机甲在光环格上（有覆盖的存活汀兰持有者，含自身）时，
+	# 机师槽行逐持有者渲染"RE"按钮。请求方自己回合1次，点击即消耗本回合次数（持有者拒绝也不刷新）。
+	# 不卡满血（金币收益始终有效）。点击 emit granted_effect_clicked(持有者 pilot 牌 instance_id,
+	# "pilot_081_re_request", 本机甲 mech_id)，app_root 走 effect_fire -> RE 请求流程（给持有者弹确认窗）。
+	if String(slot_id) == "pilot" and not _is_enemy and _context != null and _context.get("game_state") != null:
+		var _gs81 = _context.game_state
+		var _cov81_holders: Array = _ActionPilotEffects.pilot_081_find_covering_holders(_gs81, _mech.mech_id)
+		if not _cov81_holders.is_empty():
+			var _re81_eff = _ActionPilotEffects.build_pilot_effects().get(&"pilot_081_re_request")
+			if _re81_eff != null:
+				# 资格判定为请求方作用域（所有持有者按钮同状态）：己方回合 + 本回合未用过
+				var _re81_can: bool = String(_gs81.active_player_id) == String(_mech.owner_player_id) \
+					and not _ActionPilotEffects.pilot_081_re_used_this_turn(_gs81, _mech.mech_id)
+				for _h81_mid: StringName in _cov81_holders:
+					var _h81_m = _gs81.mechs.get(_h81_mid)
+					if _h81_m == null or _h81_m.destroyed:
+						continue
+					var _h81_slot = _h81_m.slots.get(&"pilot") if _h81_m.slots != null else null
+					if _h81_slot == null or _h81_slot.equipped_card == null or _h81_slot.equipped_card.def == null:
+						continue
+					if String(_h81_slot.equipped_card.def.card_id) != "pilot_081_汀兰":
+						continue
+					var _re81_cid: StringName = StringName(_h81_slot.equipped_card.instance_id)
+					var _re81_btn = Button.new()
+					_re81_btn.text = "RE"
+					_re81_btn.custom_minimum_size = Vector2(26, 26)
+					_re81_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+					_re81_btn.add_theme_font_override("font", _ensure_bold_font())
+					_re81_btn.add_theme_font_size_override("font_size", 12)
+					_re81_btn.add_theme_constant_override("outline_size", 4)
+					_re81_btn.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.7))
+					var _re81_circle := StyleBoxFlat.new()
+					_re81_circle.bg_color = Color(0.10, 0.30, 0.16, 0.95)
+					_re81_circle.border_color = Color(0.30, 0.85, 0.40, 0.9)
+					_re81_circle.set_border_width_all(1)
+					_re81_circle.set_corner_radius_all(13)
+					_re81_circle.set_content_margin_all(0)
+					_re81_btn.add_theme_stylebox_override("normal", _re81_circle)
+					var _re81_hover := _re81_circle.duplicate()
+					_re81_hover.bg_color = Color(0.16, 0.42, 0.22, 1.0)
+					_re81_btn.add_theme_stylebox_override("hover", _re81_hover)
+					var _re81_dis := _re81_circle.duplicate()
+					_re81_dis.bg_color = Color(0.08, 0.14, 0.10, 0.9)
+					_re81_btn.add_theme_stylebox_override("disabled", _re81_dis)
+					_re81_btn.disabled = not _re81_can
+					_re81_btn.add_theme_color_override("font_color", Color(0.85, 0.95, 0.85) if _re81_can else Color(0.5, 0.5, 0.5))
+					var _re81_mid_emit: StringName = _mech.mech_id
+					_re81_btn.pressed.connect(func(): granted_effect_clicked.emit(_re81_cid, &"pilot_081_re_request", _re81_mid_emit))
+					# 悬停说明（RE 按钮的 effect 定义；持有者 pilot 牌实例注入 binding）
+					var _re81_bind: Dictionary = {
+						"card_instance_id": _re81_cid,
+						"mech_id": _mech.mech_id,
+						"player_id": _mech.owner_player_id,
+						"slot_id": &"pilot",
+						"card_def_id": &"pilot_081_汀兰",
+					}
+					_re81_btn.mouse_entered.connect(func(): _on_pilot_effect_button_hover_entered(_re81_eff, _re81_bind))
+					_re81_btn.mouse_exited.connect(Callable(self, "_on_equipment_hover_exited"))
+					hbox.add_child(_re81_btn)
+
+	# pilot_083 瓦恩 RE 请求武器修改按钮：本机甲3格内有覆盖的存活瓦恩持有者（排除自身--
+	# 瓦恩持有者不能自己请求自己）时，机师槽行逐持有者渲染"RE"按钮。请求方自己回合1次，
+	# 点击即消耗本回合次数（持有者拒绝也不刷新）。
+	# 需持有≥1把武器（含虚拟，按钮资格与效果一致）。点击 emit granted_effect_clicked(持有者 pilot 牌
+	# instance_id, "pilot_083_re_request", 本机甲 mech_id)，app_root 走 effect_fire -> RE 请求流程
+	# （给瓦恩持有者选请求方武器 -> 三横排选项 -> 施加）。
+	if String(slot_id) == "pilot" and not _is_enemy and _context != null and _context.get("game_state") != null:
+		var _gs83 = _context.game_state
+		var _cov83_holders: Array = _ActionPilotEffects.pilot_083_find_covering_holders(_gs83, _mech.mech_id)
+		if not _cov83_holders.is_empty() \
+				and not _ActionPilotEffects.pilot_083_list_weapon_options(_gs83, _mech.mech_id).is_empty():
+			var _re83_eff = _ActionPilotEffects.build_pilot_effects().get(&"pilot_083_re_request")
+			if _re83_eff != null:
+				# 资格判定为请求方作用域（所有持有者按钮同状态）：己方回合 + 本回合未用过
+				var _re83_can: bool = String(_gs83.active_player_id) == String(_mech.owner_player_id) \
+					and not _ActionPilotEffects.pilot_083_re_used_this_turn(_gs83, _mech.mech_id)
+				for _h83_mid: StringName in _cov83_holders:
+					var _h83_m = _gs83.mechs.get(_h83_mid)
+					if _h83_m == null or _h83_m.destroyed:
+						continue
+					var _h83_slot = _h83_m.slots.get(&"pilot") if _h83_m.slots != null else null
+					if _h83_slot == null or _h83_slot.equipped_card == null or _h83_slot.equipped_card.def == null:
+						continue
+					if String(_h83_slot.equipped_card.def.card_id) != "pilot_083_瓦恩":
+						continue
+					var _re83_cid: StringName = StringName(_h83_slot.equipped_card.instance_id)
+					var _re83_btn = Button.new()
+					_re83_btn.text = "RE"
+					_re83_btn.custom_minimum_size = Vector2(26, 26)
+					_re83_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+					_re83_btn.add_theme_font_override("font", _ensure_bold_font())
+					_re83_btn.add_theme_font_size_override("font_size", 12)
+					_re83_btn.add_theme_constant_override("outline_size", 4)
+					_re83_btn.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.7))
+					var _re83_circle := StyleBoxFlat.new()
+					_re83_circle.bg_color = Color(0.22, 0.14, 0.30, 0.95)
+					_re83_circle.border_color = Color(0.95, 0.75, 0.30, 0.9)
+					_re83_circle.set_border_width_all(1)
+					_re83_circle.set_corner_radius_all(13)
+					_re83_circle.set_content_margin_all(0)
+					_re83_btn.add_theme_stylebox_override("normal", _re83_circle)
+					var _re83_hover := _re83_circle.duplicate()
+					_re83_hover.bg_color = Color(0.32, 0.22, 0.42, 1.0)
+					_re83_btn.add_theme_stylebox_override("hover", _re83_hover)
+					var _re83_dis := _re83_circle.duplicate()
+					_re83_dis.bg_color = Color(0.10, 0.08, 0.14, 0.9)
+					_re83_btn.add_theme_stylebox_override("disabled", _re83_dis)
+					_re83_btn.disabled = not _re83_can
+					_re83_btn.add_theme_color_override("font_color", Color(0.95, 0.85, 0.75) if _re83_can else Color(0.5, 0.5, 0.5))
+					var _re83_mid_emit: StringName = _mech.mech_id
+					_re83_btn.pressed.connect(func(): granted_effect_clicked.emit(_re83_cid, &"pilot_083_re_request", _re83_mid_emit))
+					# 悬停说明（RE 按钮的 effect 定义；持有者 pilot 牌实例注入 binding）
+					var _re83_bind: Dictionary = {
+						"card_instance_id": _re83_cid,
+						"mech_id": _mech.mech_id,
+						"player_id": _mech.owner_player_id,
+						"slot_id": &"pilot",
+						"card_def_id": &"pilot_083_瓦恩",
+					}
+					_re83_btn.mouse_entered.connect(func(): _on_pilot_effect_button_hover_entered(_re83_eff, _re83_bind))
+					_re83_btn.mouse_exited.connect(Callable(self, "_on_equipment_hover_exited"))
+					hbox.add_child(_re83_btn)
 
 	# 悬停效果浮框：有装备牌且非「敌方备用区（隐藏信息）」时，整行可悬停查看效果
 	if slot.equipped_card != null and not (_is_enemy and slot.slot_kind == &"RESERVE"):
@@ -507,6 +695,28 @@ func _on_equipment_hover_exited() -> void:
 	_hide_tooltip()
 
 
+## 事件牌任务进度文本（通用 progress_display 元数据驱动，不绑卡牌）：
+## 遍历牌 def.effect_ids 查 GeneratedEventEffects 效果的 progress_display，
+## 返回 "进度X/Y[已领]"；无进度声明返回 ""。
+func _event_progress_text(card) -> String:
+	if card == null or card.def == null:
+		return ""
+	var eid_list: Array = card.def.get("effect_ids") if card.def.get("effect_ids") != null else []
+	var counters: Dictionary = card.counters if card.counters != null else {}
+	for eid_raw in eid_list:
+		var eff = _GenEventEffects.get_effect_by_id(StringName(String(eid_raw)))
+		if eff == null or eff.progress_display.is_empty():
+			continue
+		var pd: Dictionary = eff.progress_display
+		var prog: int = int(counters.get("var_%s" % String(pd.get("counter_key", &"")), 0))
+		var text := "进度%d/%d" % [prog, int(pd.get("threshold", 0))]
+		var claimed_key = pd.get("claimed_counter_key", &"")
+		if claimed_key != &"" and int(counters.get("var_%s" % String(claimed_key), 0)) >= 1:
+			text += "[已领]"
+		return text
+	return ""
+
+
 func _hide_tooltip() -> void:
 	_hovered_card_cid = &""
 	if _tooltip_popup != null and is_instance_valid(_tooltip_popup):
@@ -516,7 +726,8 @@ func _hide_tooltip() -> void:
 
 ## 机师效果按钮悬停浮框：显示该效果的描述、当前可发动次数、发动条件。
 ## 独立于整行浮框（按钮粒度），复用 _tooltip_popup 定位/样式。
-## extra_eff：合并展示的附加效果（pilot_002 EX 按钮合并进攻+防御描述）。
+## extra_eff：合并展示的附加效果（pilot_002 EX 按钮合并进攻+防御描述；
+## pilot_020 按钮2 合并的隐藏被动 effect_03/04 传 Array）。
 func _on_pilot_effect_button_hover_entered(eff, bind_ctx: Dictionary, extra_eff = null) -> void:
 	if eff == null:
 		return
@@ -528,14 +739,62 @@ func _on_pilot_effect_button_hover_entered(eff, bind_ctx: Dictionary, extra_eff 
 	# 描述
 	if String(eff.description).strip_edges() != "":
 		lines.append("[color=#ccc]%s[/color]" % String(eff.description))
-	# 附加效果描述（EX 按钮合并的防御效果，作补充说明）
-	if extra_eff != null and String(extra_eff.description).strip_edges() != "":
-		lines.append("[color=#fc9][b]%s[/b][/color]" % String(extra_eff.display_name))
-		lines.append("[color=#ccc]%s[/color]" % String(extra_eff.description))
-	# 当前可发动次数（once_per_turn）
+	# 附加效果描述（EX 按钮合并的防御效果 / pilot_020 按钮2 合并的隐藏被动，作补充说明）
+	var _extra_effs: Array = []
+	if extra_eff is Array:
+		_extra_effs = extra_eff
+	elif extra_eff != null:
+		_extra_effs.append(extra_eff)
+	for _xe in _extra_effs:
+		if _xe != null and String(_xe.description).strip_edges() != "":
+			lines.append("[color=#fc9][b]%s[/b][/color]" % String(_xe.display_name))
+			lines.append("[color=#ccc]%s[/color]" % String(_xe.description))
+	# pilot_020 肯德 按钮2(弃置计数)：附加当前回合已弃置 X 张行动牌
 	var te = _context.get("timing_engine") if _context != null else null
+	if String(eff.effect_id) == "pilot_020_effect_02" and te != null and te.has_method(&"_current_turn_number"):
+		var p020_turn: int = te._current_turn_number()
+		var p020_cid: StringName = bind_ctx.get("card_instance_id", &"")
+		var p020_gs = _context.get("game_state") if _context != null else null
+		if p020_gs != null and p020_gs.cards != null and p020_cid != &"":
+			var p020_card = p020_gs.cards.get(p020_cid)
+			if p020_card != null:
+				var p020_x: int = _ActionPilotEffects.get_pilot_020_x(p020_card, p020_turn)
+				lines.append("[color=#9cf]本回合已弃置：%d 张行动牌[/color]" % p020_x)
+	# pilot_028 乌尔 三个按钮（宣言/需交牌/X+1）：附加本轮宣言类型 + 当前 X（范围4+X）
+	if String(eff.effect_id).begins_with("pilot_028_"):
+		var p028_cid: StringName = bind_ctx.get("card_instance_id", &"")
+		var p028_gs = _context.get("game_state") if _context != null else null
+		if p028_gs != null and p028_gs.cards != null and p028_cid != &"":
+			var p028_card = p028_gs.cards.get(p028_cid)
+			if p028_card != null:
+				var p028_decl: String = _ActionPilotEffects.get_pilot_028_declared(p028_card)
+				if p028_decl == "":
+					p028_decl = "未宣言"
+				var p028_xv: int = _ActionPilotEffects.get_pilot_028_x(p028_card)
+				lines.append("[color=#ffa]本轮宣言：%s[/color]" % p028_decl)
+				lines.append("[color=#9cf]当前X：%d（范围4+X=%d）[/color]" % [p028_xv, 4 + p028_xv])
+	# 通用进度显示（progress_display 元数据）：任务牌计数/奖励效果悬停显示当前进度与领取状态
+	if not eff.progress_display.is_empty():
+		var pd_main: Dictionary = eff.progress_display
+		var pd_cid: StringName = bind_ctx.get("card_instance_id", &"")
+		var pd_gs = _context.get("game_state") if _context != null else null
+		if pd_gs != null and pd_gs.cards != null and pd_cid != &"":
+			var pd_card = pd_gs.cards.get(pd_cid)
+			if pd_card != null:
+				var pd_prog: int = int(pd_card.counters.get("var_%s" % String(pd_main.get("counter_key", &"")), 0)) if pd_card.counters != null else 0
+				var pd_line: String = "当前进度：%d/%d" % [pd_prog, int(pd_main.get("threshold", 0))]
+				var pd_claim_key = pd_main.get("claimed_counter_key", &"")
+				if pd_claim_key != &"":
+					var pd_claimed: bool = pd_card.counters != null and int(pd_card.counters.get("var_%s" % String(pd_claim_key), 0)) >= 1
+					pd_line += "（已领取）" if pd_claimed else "（未领取）"
+				var pd_color := "#9c9" if pd_prog >= int(pd_main.get("threshold", 0)) else "#9cf"
+				lines.append("[color=%s]%s[/color]" % [pd_color, pd_line])
+	# 当前可发动次数（once_per_turn）
 	if te != null and te.has_method(&"_current_turn_number") and eff.once_per_turn_key != &"":
 		var cid: StringName = bind_ctx.get("card_instance_id", &"")
+		# 授予效果（EX 按钮）：各目标独立计数，与 TimingEngine 计数键一致（泰特 pilot_074 等）。
+		if te.has_method(&"once_per_turn_scope_cid"):
+			cid = te.once_per_turn_scope_cid(bind_ctx, cid)
 		var turn_id: int = te._current_turn_number()
 		var key: String = "%s:%s" % [String(cid), String(eff.once_per_turn_key)]
 		var turn_map: Dictionary = te._once_per_turn_used.get(key, {})
@@ -788,6 +1047,8 @@ func _build_pilot_status_bbcode(slot, cid: StringName) -> String:
 	# 1. once_per_turn 使用次数（遍历该牌所有绑定 effect，显示 已用/上限）
 	if te != null and te.has_method(&"_is_once_per_turn_used_up"):
 		var turn_id: int = te._current_turn_number()
+		# 去重：同一 effect（多监听共享额度，如亚林设置+弃置）只显示一次
+		var _seen_keys: Dictionary = {}
 		for timing: StringName in te.permanent_listeners:
 			for entry in te.permanent_listeners[timing]:
 				if entry == null or not (entry is Dictionary):
@@ -796,14 +1057,33 @@ func _build_pilot_status_bbcode(slot, cid: StringName) -> String:
 				if String(bc.get("card_instance_id", &"")) != String(cid):
 					continue
 				var eff = entry.get("effect")
-				if eff == null or eff.once_per_turn_key == &"":
+				if eff == null:
 					continue
-				var key: String = "%s:%s" % [String(cid), String(eff.once_per_turn_key)]
+				# 通用显示增强：effect 级无 once_per_turn_key 时，扫描 conditions 里
+				# EFFECT_ONCE_PER_TURN_AVAILABLE 的 once_per_turn_key/once_per_turn_max
+				# （显式 MARK_EFFECT_ONCE_PER_TURN_USED 计次模式，亚林 pilot_053 等）。
+				var ot_key: StringName = eff.once_per_turn_key
+				var ot_max: int = int(eff.once_per_turn_max)
+				if ot_key == &"" and eff.conditions != null:
+					for c: Dictionary in eff.conditions:
+						if String(c.get("op", &"")) != "EFFECT_ONCE_PER_TURN_AVAILABLE":
+							continue
+						var c_params: Dictionary = c.get("params", {})
+						if c_params.get("once_per_turn_key", &"") == &"":
+							continue
+						ot_key = c_params.get("once_per_turn_key", &"")
+						ot_max = int(c_params.get("once_per_turn_max", 1))
+						break
+				if ot_key == &"":
+					continue
+				var key: String = "%s:%s" % [String(cid), String(ot_key)]
+				if _seen_keys.has(key):
+					continue
+				_seen_keys[key] = true
 				var turn_map: Dictionary = te._once_per_turn_used.get(key, {})
 				var used: int = int(turn_map.get(turn_id, 0))
-				var maxu: int = int(eff.once_per_turn_max)
-				var color := "#9a9" if used < maxu else "#c66"
-				lines.append("• [color=%s]%s：%d/%d[/color]" % [color, String(eff.display_name), used, maxu])
+				var color := "#9a9" if used < ot_max else "#c66"
+				lines.append("• [color=%s]%s：%d/%d[/color]" % [color, String(eff.display_name), used, ot_max])
 	# 2. pilot_008 X 变量
 	if _mech != null and _mech.slots.get(&"pilot") != null and _mech.slots[&"pilot"].equipped_card != null:
 		var pc: String = String(_mech.slots[&"pilot"].equipped_card.instance_id)

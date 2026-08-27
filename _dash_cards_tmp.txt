@@ -1,0 +1,24 @@
+{
+ "id": "action_010_反击",
+ "name": "反击",
+ "type": "迎击",
+ "rarity": "R",
+ "count": 6,
+ "effect_text": "响应攻击，可以用当前一半的动力（向下取整）进行移动；该攻击结算后，可以选择1把武器对1台攻击范围内的机甲发动攻击。",
+ "effect_ids": [
+  "evade_half_power",
+  "counterattack_after_resolution"
+ ]
+}
+
+{
+ "id": "action_011_疾行",
+ "name": "疾行",
+ "type": "迎击",
+ "rarity": "R",
+ "count": 6,
+ "effect_text": "响应对我方的攻击，可以用当前的动力进行移动。",
+ "effect_ids": [
+  "evade_full_power"
+ ]
+}

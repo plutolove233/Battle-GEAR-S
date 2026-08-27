@@ -396,10 +396,28 @@ func test_lockstep_end_turn_sync() -> Variant:
 	var hg = host.battle.context.game_state
 	hg.active_player_id = &"player"
 	client.battle.context.game_state.active_player_id = &"player"
-	host._net_exec("end_turn", {"player_id": &"player", "discarded_card_ids": []})
+	host._net_exec("end_turn", {"player_id": &"player"})
 	await _pump(4)
-	client._apply_remote_input("end_turn", {"player_id": &"player", "discarded_card_ids": []})
+	client._apply_remote_input("end_turn", {"player_id": &"player"})
 	await _pump(4)
+	# 手牌超限时流程第5步弹弃牌阻塞窗：host 读等待窗（双端锁步同 id），选前 N 张双端续跑
+	var dw: Dictionary = host.battle.context.action_ui_bridge.get_waiting_action_info()
+	if String(dw.get("input_type", &"")) == &"select_discard_cards":
+		var dw_p: int = int(dw.get("input_params", {}).get("count", 0))
+		var dw_excl: Array = dw.get("input_params", {}).get("exclude_card_ids", [])
+		var dw_hand: Array = host.battle.context.game_state.players.get(&"player").action_hand
+		var pick: Array = []
+		for cid in dw_hand:
+			if pick.size() >= dw_p:
+				break
+			if dw_excl.has(cid):
+				continue
+			pick.append(String(cid))
+		var rt_op := {"action_id": String(dw.get("action_id", &"")), "card_ids": pick}
+		host._net_exec("resume_turn_discard", rt_op)
+		await _pump(4)
+		client._apply_remote_input("resume_turn_discard", rt_op)
+		await _pump(4)
 	var hg2 = host.battle.context.game_state
 	var cg2 = client.battle.context.game_state
 	if hg2.active_player_id != cg2.active_player_id:

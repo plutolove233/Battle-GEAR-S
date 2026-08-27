@@ -13,6 +13,7 @@ const HexGrid = preload("res://scripts/battle/hex_grid.gd")
 const BattleMath = preload("res://scripts/battle/battle_math.gd")
 const _EffectConst = preload("res://scripts/effect_core/EffectConst.gd")
 const _MapCellState = preload("res://scripts/runtime/MapCellState.gd")
+const _ActionPilotEffects = preload("res://scripts/generated_database/ActionPilotEffects.gd")
 
 
 ## 移动机甲到目标六角格
@@ -116,6 +117,13 @@ func find_optimal_path(mech_id: StringName, target: Dictionary, power_budget: in
 	if start_key == target_key:
 		return []
 
+	# 通用移动消耗参数（效果元数据 move_cost_mod 驱动）：持有者玩家绿格耗1（含光环转化绿格），
+	# 敌方仍耗2；光环格（各持有者+6邻居，红格除外）视为绿格。按需派生（不存状态）。
+	var mover_player: StringName = mech.owner_player_id
+	var _mcp: Dictionary = resolve_move_cost_params(mover_player)
+	var green_cost: int = int(_mcp["green_cost"])
+	var aura_cells: Dictionary = _mcp["aura_cells"]
+
 	var blocked: Dictionary = {}
 	for other_id: StringName in gs.mechs:
 		var other: MechState = gs.mechs[other_id]
@@ -141,7 +149,7 @@ func find_optimal_path(mech_id: StringName, target: Dictionary, power_budget: in
 			if sterrain == &"RED" or sterrain == &"blocked":
 				straight_ok = false
 				break
-			total_cost += 2 if sterrain == &"GREEN" or sterrain == &"rough" else 1
+			total_cost += green_cost if sterrain == &"GREEN" or sterrain == &"rough" or aura_cells.has(ck) else 1
 			if total_cost > power_budget:
 				straight_ok = false
 				break
@@ -171,7 +179,7 @@ func find_optimal_path(mech_id: StringName, target: Dictionary, power_budget: in
 			var terrain: StringName = _get_cell_terrain(cell)
 			if terrain == &"RED" or terrain == &"blocked":
 				continue
-			var step_cost: int = 2 if terrain == &"GREEN" or terrain == &"rough" else 1
+			var step_cost: int = green_cost if terrain == &"GREEN" or terrain == &"rough" or aura_cells.has(neighbor_key) else 1
 			var next_cost: int = current_cost + step_cost
 			if next_cost > power_budget or next_cost >= int(costs.get(neighbor_key, 1 << 30)):
 				continue
@@ -191,6 +199,109 @@ func find_optimal_path(mech_id: StringName, target: Dictionary, power_budget: in
 		cursor = previous[cursor]
 	reversed_path.reverse()
 	return reversed_path
+
+
+## ── 通用移动消耗参数（效果元数据 move_cost_mod 驱动，不绑机师ID） ──
+## 返回 {"green_cost": int, "aura_cells": {cell_key: true}}：
+##   green_cost -- mover 玩家的绿格移动消耗（默认 2；场上该玩家效果声明 "green_cost" 时取最小）
+##   aura_cells -- 场上所有效果的光环格并集（"aura_shape"="adjacent_6"=持有者所在格+6邻居，
+##                 红格除外）；光环格对【所有】玩家视为绿格（光环全局、折扣玩家作用域）
+## 扫描场上所有机甲的【全部槽位】牌（机师/装备）聚合效果定义 move_cost_mod 元数据：
+## 牌在场上机甲槽位=效果活跃，卸牌/机甲死亡后槽位清空自然失效，无需监听/清理。
+## 任何牌的效果声明 move_cost_mod（ActionEffect 字段）即自动生效，复用时复制效果定义改元数据即可。
+## 调用点：find_optimal_path / basic_move / single_move 动力扣除 / RangeCalculator 可达性 / 光环渲染。
+func resolve_move_cost_params(mover_player_id) -> Dictionary:
+	var result: Dictionary = {"green_cost": 2, "aura_cells": {}}
+	var gs: GameState = context.game_state
+	if gs == null or gs.mechs == null:
+		return result
+	var mod_index: Dictionary = _ActionPilotEffects.get_pilot_move_mod_index(context)
+	if mod_index.is_empty():
+		return result
+	var mover_pid: String = String(mover_player_id) if mover_player_id != null else ""
+	var ms = gs.map_state
+	var green_cost: int = 2
+	var aura_cells: Dictionary = {}
+	for mid: StringName in gs.mechs:
+		var m = gs.mechs[mid]
+		if m == null or m.destroyed or m.slots == null:
+			continue
+		var holder_is_mover: bool = String(m.owner_player_id) == mover_pid
+		for slot_id: StringName in m.slots:
+			var slot = m.slots[slot_id]
+			if slot == null:
+				continue
+			var card = slot.equipped_card
+			if card == null or card.def == null:
+				continue
+			var mods: Array = mod_index.get(card.def.card_id, [])
+			if mods.is_empty():
+				continue
+			for mod: Dictionary in mods:
+				if mod.is_empty():
+					continue
+				# 绿格折扣：仅效果持有者玩家的机甲移动时生效（多效果取最小）
+				if holder_is_mover and mod.has("green_cost"):
+					green_cost = min(green_cost, int(mod["green_cost"]))
+				# 光环格：按形状计算，全场并集（红格除外）
+				if StringName(mod.get("aura_shape", &"")) == &"adjacent_6":
+					_add_aura_cell(aura_cells, ms, m.position)
+					for n: Dictionary in HexGrid.neighbors(m.position):
+						_add_aura_cell(aura_cells, ms, n)
+	result["green_cost"] = green_cost
+	result["aura_cells"] = aura_cells
+	return result
+
+
+## 攻击/武器射程用的光环绿格集合（全局：场上所有 move_cost_mod 效果的 aura 并集，红格除外）。
+## 攻击路径调用 RangeCalculator.is_in_weapon_range / get_weapon_reachable_hexes 时传入此集合，
+## 使光环格在武器射程 BFS 中视为绿格（耗 2 射程预算，全场无折扣、含光环持有者自己的攻击；
+## 天然绿格本就耗 2 不变；红格照旧阻挡）。与移动不同：移动的 green_cost 折扣仅对效果持有者生效，
+## 攻击恒为 2。传 null mover 表示「不取任何玩家折扣」，仅要全局 aura。
+func get_attack_aura_cells() -> Dictionary:
+	return resolve_move_cost_params(null)["aura_cells"]
+
+
+## 攻击路径障碍格集合：场上所有其他存活机甲所在格（{cell_key: true}）。
+## 机甲（含陷落"不能被选为目标"的机甲--如同消失但依然作为障碍）阻挡攻击 BFS 穿过：
+## 其所在格可作终点（可被指向/命中），但路径不可经其继续向外扩展，打后面的目标须绕路。
+## exclude_mech_id：攻击方自身（其格为 BFS origin，无需排除；传空则全部机甲格都算）。
+## 调用方传给 RangeCalculator.is_in_weapon_range / get_weapon_reachable_hexes 的 blocked_keys。
+## 攻击路径障碍格集合：**陷落（cannot_be_targeted）机甲**所在格 {key: true}。
+## 规则书未规定普通机甲阻挡攻击路径（普通机甲可被指向/命中，BFS 照常穿过）；
+## 仅"机甲如同消失、不能被指定为目标"的陷落机甲依然作为障碍（打后面的须绕开，
+## 参考格雷厄姆 p057 移陷 BFS 语义）。exclude_mech_id 排除攻击方自身。
+func get_attack_blocked_keys(exclude_mech_id: StringName = &"") -> Dictionary:
+	var blocked: Dictionary = {}
+	var gs: GameState = context.game_state
+	if gs == null or gs.mechs == null:
+		return blocked
+	for mid: StringName in gs.mechs:
+		if String(mid) == String(exclude_mech_id):
+			continue
+		var m = gs.mechs[mid]
+		if m == null or m.destroyed or m.current_hp <= 0:
+			continue
+		if not m.has_status(&"cannot_be_targeted"):
+			continue
+		var pos: Dictionary = m.position
+		if pos == null or pos.is_empty():
+			continue
+		blocked[HexGrid.key(pos)] = true
+	return blocked
+
+
+## 光环格并入集合（格不存在/红格除外；key 与 HexGrid.key 一致 "q,r"）
+func _add_aura_cell(aura_cells: Dictionary, ms, hex: Dictionary) -> void:
+	if ms == null:
+		return
+	var key: String = HexGrid.key(hex)
+	var cell = ms.cells.get(key)
+	if cell == null:
+		return
+	if _get_cell_terrain(cell) == &"RED":
+		return  # 红格除外
+	aura_cells[key] = true
 
 
 ## 基础移动的“更新位置”阶段调用：这里只提交位置，不再次扣动力。

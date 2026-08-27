@@ -704,6 +704,12 @@ func _translate_log_entry(entry: Dictionary) -> String:
 			var roll: int = int(entry.get("roll", 0))
 			var gold: int = int(entry.get("gold_gained", 0))
 			return "[color=gold]◆ %s 触发金币标记，投骰 %d，获得 %d 金币[/color]" % [mech_name, roll, gold]
+		"gold_split":
+			# 维罗妮卡获金分半：X 的分半金币被转走
+			var split_name := _player_name(String(entry.get("player_id", "")))
+			var gainer_name := _player_name(String(entry.get("gainer_player_id", "")))
+			var split_amt: int = int(entry.get("amount", 0))
+			return "  [color=gold]└ %s 分走 %s 的 %d 金币（获金分半）[/color]" % [split_name, gainer_name, split_amt]
 		"marker_event":
 			var mech_name := _mech_display_name(String(entry.get("mech_id", "")))
 			return "[color=#7c6]✦ %s 触发事件标记（效果待实装，无事发生）[/color]" % mech_name

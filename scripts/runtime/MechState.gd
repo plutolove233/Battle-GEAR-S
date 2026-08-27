@@ -10,6 +10,7 @@ const _CardInstance = preload("res://scripts/runtime/CardInstance.gd")
 const _MechFrameDef = preload("res://scripts/card_defs/MechFrameDef.gd")
 const _GenEquipEffects = preload("res://scripts/generated_database/GeneratedEquipmentEffects.gd")
 const _ActionPilotEffects = preload("res://scripts/generated_database/ActionPilotEffects.gd")
+const _GenEventEffects = preload("res://scripts/generated_database/GeneratedEventEffects.gd")
 
 ## 机甲唯一 ID
 var mech_id: StringName = &""
@@ -24,6 +25,11 @@ var frame_def = null
 ## 结构: Array[Dictionary]，索引0对应weapon_1，索引1对应weapon_2
 ## 结构: {name: String, might: int, range_value: int, weapon_kind: StringName}
 var base_weapons: Array[Dictionary] = []
+
+## 瓦恩 pilot_083 基础武器修改应用（基础武器无卡牌实例，施加存机甲上，避免污染共享框架定义）。
+## 结构: {slot_index_str: Array[Dictionary]}，app 与卡牌版 counters["pilot_083_apps"] 同构
+## {owner_pid, applied_turn, name_suffix, type_override, might, range}。
+var pilot_083_base_apps: Dictionary = {}
 
 ## 当前生命值
 var current_hp: int = 25
@@ -49,6 +55,10 @@ var statuses: Array[Dictionary] = []
 ## 本回合已攻击次数
 var attack_count_this_turn: int = 0
 
+## 本回合是否发动过攻击动作（影刹 pilot_069 判定用。任何攻击 action 启动即置位，
+## 含铠威攻击窗口/联合攻击/迎击等不计攻击次数的攻击）
+var has_attacked_this_turn: bool = false
+
 ## 本回合累计消耗动力（effect_044/045 帝国赤枭腿用）
 var power_spent_this_turn: int = 0
 
@@ -68,6 +78,9 @@ var cells_moved_this_turn: int = 0
 
 ## 每回合最大攻击次数（由机师牌决定）
 var max_attacks_per_turn: int = 1
+
+## 本回合已应用的下个我方回合攻击数加成（回合开始时 max_attacks_per_turn 加此数，下次回合开始还原）
+var applied_next_turn_attack_bonus: int = 0
 
 ## 是否已被摧毁
 var destroyed: bool = false
@@ -105,6 +118,8 @@ func get_armor() -> int:
 	total += am_bonus
 	# pilot_002 莱比尔 联邦光环护甲+4（实时重算，每有效来源+4）
 	total += _ActionPilotEffects.get_pilot_002_federation_armor_bonus(self)
+	# 事件牌派生护甲（e013 强化：总护甲+5 等，set_event_card 注册/弃置注销，实时查询）
+	total += _GenEventEffects.get_armor_bonus(mech_id)
 	return total
 
 
@@ -126,6 +141,8 @@ func get_total_power() -> int:
 			total += int(st.get("delta", 0))
 	# pilot_005 肯特 帝国光环动力+4（实时重算，每有效来源+4）
 	total += _ActionPilotEffects.get_pilot_005_empire_power_bonus(self)
+	# 事件牌派生动力上限（e014 强化：动力上限+4 等，set_event_card 注册/弃置注销，实时查询）
+	total += _GenEventEffects.get_power_bonus(mech_id)
 	return total
 
 
@@ -286,6 +303,10 @@ func get_armor_breakdown(context = null) -> Array:
 	var p002_aura := _ActionPilotEffects.get_pilot_002_federation_armor_bonus(self)
 	if p002_aura != 0:
 		result.append({"label": "机师·莱比尔联邦光环", "amount": p002_aura, "temporary": false})
+	# 事件牌派生护甲（e013 强化等）
+	var ev_armor := _GenEventEffects.get_armor_bonus(mech_id)
+	if ev_armor != 0:
+		result.append({"label": "事件·强化", "amount": ev_armor, "temporary": false})
 	return result
 
 
@@ -332,6 +353,10 @@ func get_power_breakdown(_context = null) -> Array:
 			var conv_amt: int = int(st.get("delta", 0))
 			if conv_amt != 0:
 				result.append({"label": "机师·玛沙装甲转能", "amount": conv_amt, "temporary": true})
+	# 事件牌派生动力上限（e014 强化等）
+	var ev_power := _GenEventEffects.get_power_bonus(mech_id)
+	if ev_power != 0:
+		result.append({"label": "事件·强化", "amount": ev_power, "temporary": false})
 	return result
 
 
@@ -429,7 +454,36 @@ func can_attack() -> bool:
 		return false
 	if has_status(&"cannot_attack"):
 		return false
+	# 注意：下个我方回合攻击数加成（next_owner_turn_attack_bonus）不在此动态计入，
+	# 它由 TurnService.start_turn 在该机甲归属玩家回合开始时并入 max_attacks_per_turn（并清除），
+	# 避免转化发生在自己回合时被当回合与下回合双重计数。
 	return attack_count_this_turn < max_attacks_per_turn
+
+
+## 增加下个我方回合攻击数加成（可叠加）。delta 累加到 statuses 的 next_owner_turn_attack_bonus。
+## owner_player_id 匹配自身归属玩家（仅该玩家回合内生效），回合开始时由 TurnService 应用并清除。
+func add_next_owner_turn_attack_bonus(delta: int) -> void:
+	for s: Dictionary in statuses:
+		if s.get("type", &"") == &"next_owner_turn_attack_bonus" and String(s.get("owner_player_id", &"")) == String(owner_player_id):
+			s["stacks"] = int(s.get("stacks", 0)) + delta
+			return
+	statuses.append({"type": &"next_owner_turn_attack_bonus", "stacks": delta, "owner_player_id": owner_player_id})
+
+
+## 当前待结算的下个我方回合攻击数加成（stacks 总和）
+func get_next_owner_turn_attack_bonus() -> int:
+	var total: int = 0
+	for s: Dictionary in statuses:
+		if s.get("type", &"") == &"next_owner_turn_attack_bonus" and String(s.get("owner_player_id", &"")) == String(owner_player_id):
+			total += int(s.get("stacks", 0))
+	return total
+
+
+## 清除下个我方回合攻击数加成（回合开始应用后调用）
+func clear_next_owner_turn_attack_bonus() -> void:
+	statuses = statuses.filter(func(s: Dictionary) -> bool:
+		return s.get("type", &"") != &"next_owner_turn_attack_bonus" or String(s.get("owner_player_id", &"")) != String(owner_player_id)
+	)
 
 
 ## 本回合是否还能移动

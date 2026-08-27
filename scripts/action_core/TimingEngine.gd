@@ -63,6 +63,12 @@ var _handled_response_actions: Dictionary = {}
 ## 弹窗让玩家选「弃牌再攻 / 取消」，resume_pending_effect 续跑 _pay_costs + _execute_actions。
 var _pending_effect: Dictionary = {}
 
+## 早到输入信箱（通用件）：恢复输入先于目标动作挂起到达时暂存，挂起注册后补投。
+## 见 EffectInputMailbox.gd 头注释。排空钩子：fire_timing 顶部（兜底）+
+## ActionUIBridge._on_action_needs_input 顶部（主汇入点，挂起后引擎静默也能补投）。
+const EffectInputMailboxScript = preload("res://scripts/action_core/EffectInputMailbox.gd")
+var _effect_input_mailbox = EffectInputMailboxScript.new()
+
 ## 每回合1次使用记录：{ "{card_instance_id}:{once_per_turn_key}": { turn_number: used_count } }
 ## effect.once_per_turn_key 非空时，_execute_effect 成功执行后在此 +1；
 ## 触发前检查本回合 used_count >= once_per_turn_max 则跳过。
@@ -88,6 +94,37 @@ signal request_target_selection(action_id: StringName, effect: ActionEffect, inp
 ## 参数：card_name 牌名 / effect_id / description 效果描述 / source_mech_id 来源机甲
 signal equipment_effect_fired(card_name: String, effect_id: StringName, description: String, source_mech_id: StringName)
 
+## 琳 pilot_024 RE 维修窗口开/关通知（app_root 显示取消维修按钮/锁定琳手牌维修牌）。
+signal pilot_024_repair_window_changed(opened: bool, requester_mech_id: StringName)
+
+
+## 排空早到信箱中「已挂起」动作的暂存输入（deferred 补投，待当前执行链 unwind 后生效）。
+## 兜底钩子：fire_timing 顶部调用（信箱空时零开销）。主钩子在
+## ActionUIBridge._on_action_needs_input 顶部（挂起后引擎静默无后续时点时仍能补投）。
+func _drain_effect_input_mailbox_ready() -> void:
+	if _effect_input_mailbox.is_empty():
+		return
+	for aid in _effect_input_mailbox.collect_ready(_pending_effect):
+		for stashed_input in _effect_input_mailbox.drain(aid):
+			SLog.log_raw("[MAILBOX] 补投早到恢复输入 action=%s（挂起已注册）" % String(aid))
+			resume_pending_effect.call_deferred(aid, stashed_input)
+
+
+## 供 ActionUIBridge._on_action_needs_input 汇入点调用：信箱里若有该动作的早到输入，
+## 取出并 deferred 补投。返回 true 表示本次挂起等待由补投接管（调用方应直接 return，
+## 不弹窗不占槽）。动作挂起注册先于 action_needs_input.emit（见各 _handle_*），
+## 故此处补投时 _pending_effect 必已含该动作。
+func drain_effect_input_for(action_id: StringName) -> bool:
+	if _effect_input_mailbox.is_empty():
+		return false
+	var stashed_inputs: Array = _effect_input_mailbox.drain(action_id)
+	if stashed_inputs.is_empty():
+		return false
+	for input_data in stashed_inputs:
+		SLog.log_raw("[MAILBOX] 补投早到恢复输入 action=%s（挂起汇入点）" % String(action_id))
+		resume_pending_effect.call_deferred(action_id, input_data)
+	return true
+
 
 ## 发出时点
 ## 1. 收集所有匹配的监听器（永久+临时）
@@ -96,6 +133,8 @@ signal equipment_effect_fired(card_name: String, effect_id: StringName, descript
 ## 4. 如果有响应窗口，暂停动作等待玩家选择
 ## 5. 按优先级排序执行所有监听效果
 func fire_timing(timing: StringName, action) -> void:
+	# 早到输入信箱兜底排空（须在 waiting 早退之前：挂起动作自身不再 fire，靠其它时点驱动）。
+	_drain_effect_input_mailbox_ready()
 	# 如果动作已经被标记为等待状态，跳过执行监听器
 	if action.state == &"waiting_timing" or action.state == &"waiting_input":
 		return
@@ -111,6 +150,23 @@ func fire_timing(timing: StringName, action) -> void:
 	var payload: Dictionary = action.record.duplicate()
 	payload["action_id"] = action.action_id
 	payload["action_type"] = action.action_type
+
+	# 通用：把发起动作的 source 信息并入 payload，供时点监听器解析伤害/效果来源。
+	# source 由 _create_action 注入（_build_source_from_params/_build_source_from_payload），含：
+	#   source_action_id（父攻击动作 id：攻击伤害 HP_CHANGE_AFTER 经此回退 attack.attacker_id）、
+	#   mech_id（显式效果伤害来源，如肯耳忒缴械冲击 EXECUTE_HP_CHANGE 的 source_mech_id）、
+	#   card_instance_id / player_id。
+	# 塞万提斯 pilot_034 effect_02 记录「对我方造成过伤害的机甲」依赖此：此前 HP_CHANGE_AFTER
+	# 的 payload 只有 record（source 不在 record_keys），来源恒空导致记录集永不填充、复仇反击
+	# 条件 ATTACK_TARGET_IN_PILOT_034_RECORDED 恒 false（完全没触发）。
+	# 仅当 payload 无 source 且含非空链接字段时注入（避免覆盖显式写入；无字段的裸 source 不注入）。
+	# 攻击时点注入的 attack.source 无 mech_id/card_instance_id（params 只带 player_id），
+	# 不污染 _effect_source_mech_id/_effect_card_instance_id 的绑定优先解析（防御监听器安全）。
+	if not payload.has("source") and action.source is Dictionary \
+			and (String(action.source.get("source_action_id", &"")) != "" \
+				or String(action.source.get("mech_id", &"")) != "" \
+				or String(action.source.get("card_instance_id", &"")) != ""):
+		payload["source"] = action.source
 
 	# 记录时点触发 — 增强payload包含timing名
 	var log_payload := payload.duplicate()
@@ -191,14 +247,17 @@ func fire_timing(timing: StringName, action) -> void:
 	# 翻转后补跑机制：开窗口前把 regular_listeners 暂存到 action，窗口关闭后由
 	# ActionEngine._execute_step 阶段3 调 _run_pending_regular_listeners 补跑（含强袭 effect2：
 	# 响应窗口关闭后 responded 已写入，effect2 此时执行能读到）。
-	if not availability_listeners.is_empty():
-		if _handle_response_window(timing, action, availability_listeners):
-			# 暂存待补跑的 regular listeners（仅当非空）
-			if not regular_listeners.is_empty():
-				action._pending_regular_listeners = regular_listeners
-				action._pending_timing = timing
-				action._pending_timing_payload = payload
-			return
+	# 洛尔恩效果2「掩护后该攻击不能被响应」：SET_ATTACK_NO_RESPONSE 写入 attack record["no_response"]，
+	# 此时点 fire（含 ATTACK_AT 响应窗口）直接跳过——任何响应（迎击/识破）都不弹窗。
+	if not bool(action.record.get("no_response", false)):
+		if not availability_listeners.is_empty():
+			if _handle_response_window(timing, action, availability_listeners):
+				# 暂存待补跑的 regular listeners（仅当非空）
+				if not regular_listeners.is_empty():
+					action._pending_regular_listeners = regular_listeners
+					action._pending_timing = timing
+					action._pending_timing_payload = payload
+				return
 
 	# 按优先级排序执行常规监听器（数值越大越先执行）。
 	# 同优先级 tiebreak（设计文档 各动作的生命周期与时点.txt 第10行）：
@@ -232,6 +291,17 @@ func fire_timing(timing: StringName, action) -> void:
 		if not _listener_card_still_active(entry, effect):
 			SLog.log_raw("[TIMING] %s 跳过 %s：来源行动牌已离开手牌" % [String(action.action_id), String(effect.effect_id)])
 			continue
+		# pilot_015 诺拉 effect_01a/01b：攻击牌额外效果剥离。
+		# flag 设置后（ATTACK_PRE 的 01a 或 ATTACK_AT 的 01b 写入），跳过 attack_card_id 对应攻击牌的
+		# 额外效果 listener（强袭2/猛击2/破甲2/预判2/预判3 等 bind_to_sub 的 card_instance_id==attack_card_id）。
+		# 已在 flag 设置前 fire 的额外效果（如猛击2 在 ATTACK_BEFORE）保留生效，但威力由 _step_calculate_damage 还原。
+		var _p015_flags: Dictionary = action.record.get("_effect_flags", {}) if action.record != null else {}
+		if _p015_flags.has(&"pilot_015_force_pure_assault"):
+			var _p015_atk_card: StringName = payload.get("attack_card_id", &"")
+			var _p015_entry_card: StringName = entry.get("card_instance_id", &"")
+			if _p015_atk_card != &"" and _p015_entry_card == _p015_atk_card:
+				SLog.log_raw("[TIMING] %s 跳过 %s：pilot_015 强制纯进攻剥离攻击牌额外效果" % [String(action.action_id), String(effect.effect_id)])
+				continue
 		var bind_ctx: Dictionary = entry.get("binding_context", {})
 		var effect_payload: Dictionary = payload
 		if not bind_ctx.is_empty():
@@ -269,6 +339,112 @@ func fire_timing(timing: StringName, action) -> void:
 				action._pending_timing = timing
 				action._pending_timing_payload = payload
 			return
+
+
+## 收集时点的常规监听器（按 fire_timing 同规则排序后返回），并完成时点公告
+## （SLog 日志 + timing_fired 信号，各一次）。返回的每个条目结构与 fire_timing 内部一致：
+## {effect, card_instance_id, source_type, binding_context, seq, tier, seat, ...}。
+## 供 TurnService 对 TURN_BEFORE_END 做「按归属玩家并行分发」（拾荒/宝藏/修悟多玩家并行）：
+## fire_timing 顺序执行下，首个挂起的监听器会把剩余暂存到虚拟动作 _pending_regular_listeners，
+## 而 turn 虚拟动作无 steps，恢复路径（_execute_step 阶段3 的补跑）不会执行 ->
+## 多玩家各设拾荒类事件牌时只有第一个设置的玩家生效。并行分发把每个归属玩家的监听器
+## 组交给独立虚拟动作执行/挂起，天然全覆盖。
+## 限制：不处理 AVAILABILITY 监听器（响应窗口路径，TURN_BEFORE_END 无此类效果）；
+## 临时监听器仅收集无 action 绑定的（绑定特定动作的随宿主动作 fire_timing 执行）。
+## payload 由调用方构造（player_id/turn_number 等时点字段），公告与监听器执行共用。
+func collect_regular_listeners(timing: StringName, payload: Dictionary) -> Array:
+	# 时点公告（与 fire_timing 一致，只公告一次；无宿主动作，action 公共字段用占位值）
+	var log_payload := payload.duplicate()
+	log_payload["timing_name"] = String(timing)
+	SLog.log_timing(timing, &"", &"turn", log_payload)
+	timing_fired.emit(timing, payload)
+
+	# 收集所有匹配的监听器（永久+临时；过滤规则与 fire_timing 相同）
+	var listeners: Array = []
+	var perm: Array = permanent_listeners.get(timing, [])
+	for entry: Dictionary in perm:
+		var effect: ActionEffect = entry.get("effect")
+		if effect == null:
+			continue
+		# 检查 action_type 过滤（本路径无宿主动作，仅收对 turn 类型开放的）
+		if effect.listen_action_type != &"" and effect.listen_action_type != &"turn":
+			continue
+		if _is_effect_suppressed(timing, effect):
+			continue
+		listeners.append({"effect": effect, "card_instance_id": entry.get("binding_context", {}).get("card_instance_id", &""), "source_type": &"permanent", "binding_context": entry.get("binding_context", {}), "seq": entry.get("seq", 0)})
+	var temp: Array = temporary_listeners.get(timing, [])
+	for entry: Dictionary in temp:
+		# 绑定特定 action_id 的临时监听器不在本路径执行（无宿主动作可匹配）
+		if entry.get("action_id", &"") != &"":
+			continue
+		var bound_type: StringName = entry.get("action_type", &"")
+		if bound_type != &"" and bound_type != &"turn":
+			continue
+		var effect: ActionEffect = entry.get("effect")
+		if effect == null:
+			continue
+		if _is_effect_suppressed(timing, effect):
+			continue
+		listeners.append({"effect": effect, "card_instance_id": entry.get("card_instance_id", &""), "source_type": &"temporary", "binding_context": entry.get("binding_context", {}), "seq": entry.get("seq", 0)})
+	if listeners.is_empty():
+		return []
+
+	# 标注 tier/seat（同优先级排序用）
+	for entry: Dictionary in listeners:
+		_annotate_listener_meta(entry)
+
+	# 分离常规监听器（AVAILABILITY 走响应窗口路径，本路径不处理）
+	var regular: Array = []
+	for entry: Dictionary in listeners:
+		if entry["effect"].mode != _TimingConst.MODE_AVAILABILITY:
+			regular.append(entry)
+	if regular.is_empty():
+		return []
+
+	# 与 fire_timing 同规则排序（优先级降序 -> tier -> 装备牌 seat -> 注册序号；
+	# 本路径无宿主动作，_effective_priority 传 null，仅 pilot_005/004 特例受影响，不监听本时点）
+	regular.sort_custom(func(a, b) -> bool:
+		var pa: int = _effective_priority(a, null)
+		var pb: int = _effective_priority(b, null)
+		if pa != pb:
+			return pa > pb
+		var ta: int = a.get("tier", 0)
+		var tb: int = b.get("tier", 0)
+		if ta != tb:
+			return ta < tb
+		if ta == 1:
+			var sa: int = a.get("seat", 0)
+			var sb: int = b.get("seat", 0)
+			if sa != sb:
+				return sa < sb
+		return a.get("seq", 0) < b.get("seq", 0)
+	)
+	return regular
+
+
+## 「动力消耗事件」通用虚拟时点（&"power_spent"，杰西卡 pilot_050 等动力税效果监听）。
+## 由 GameActions.spend_power 对全部消耗路径统一通知（reason=BASIC_MOVE 除外：移动消耗由
+## BASIC_MOVE_AT 时点监听真正逐格阻塞，此处不重复通知以免双计）。玛丽尔/巴托洛夫等"减动力"
+## 走 modify_mech_power 不经 spend_power，天然不计入消耗。
+## 把事件写到当前正在执行步骤的宿主动作 record（fire_timing 会拷贝进 payload），监听器
+## （POWER_SPEND_TAX 等）读 payload._power_spent_event 获得消耗方与数值；消耗时立即阻塞：
+## 监听器可设 waiting_timing / waiting_effect_action 暂停宿主动作。
+## 无宿主动作（消耗发生在动作步骤之外）时跳过：无处阻塞，动力税不触发。
+func fire_power_spent_event(event: Dictionary) -> void:
+	if not permanent_listeners.has(&"power_spent"):
+		return
+	if context == null or context.action_engine == null:
+		return
+	var host = context.action_engine.get_current_action()
+	if host == null:
+		return
+	var _prev_evt: Variant = host.record.get("_power_spent_event", null)
+	host.record["_power_spent_event"] = event
+	fire_timing(&"power_spent", host)
+	if _prev_evt == null:
+		host.record.erase("_power_spent_event")
+	else:
+		host.record["_power_spent_event"] = _prev_evt
 
 
 ## 补跑响应窗口关闭后暂存的 regular listeners（翻转后补跑机制）
@@ -337,6 +513,17 @@ func _run_pending_regular_listeners(action) -> void:
 		if not _listener_card_still_active(entry, effect):
 			SLog.log_raw("[TIMING] %s 跳过 %s：来源行动牌已离开手牌" % [String(action.action_id), String(effect.effect_id)])
 			continue
+		# pilot_015 诺拉 effect_01a/01b：攻击牌额外效果剥离。
+		# flag 设置后（ATTACK_PRE 的 01a 或 ATTACK_AT 的 01b 写入），跳过 attack_card_id 对应攻击牌的
+		# 额外效果 listener（强袭2/猛击2/破甲2/预判2/预判3 等 bind_to_sub 的 card_instance_id==attack_card_id）。
+		# 已在 flag 设置前 fire 的额外效果（如猛击2 在 ATTACK_BEFORE）保留生效，但威力由 _step_calculate_damage 还原。
+		var _p015_flags: Dictionary = action.record.get("_effect_flags", {}) if action.record != null else {}
+		if _p015_flags.has(&"pilot_015_force_pure_assault"):
+			var _p015_atk_card: StringName = payload.get("attack_card_id", &"")
+			var _p015_entry_card: StringName = entry.get("card_instance_id", &"")
+			if _p015_atk_card != &"" and _p015_entry_card == _p015_atk_card:
+				SLog.log_raw("[TIMING] %s 跳过 %s：pilot_015 强制纯进攻剥离攻击牌额外效果" % [String(action.action_id), String(effect.effect_id)])
+				continue
 		var bind_ctx: Dictionary = entry.get("binding_context", {})
 		var effect_payload: Dictionary = payload
 		if not bind_ctx.is_empty():
@@ -582,9 +769,9 @@ func handle_response_selection(action_id: StringName, selected_cards: Array[Dict
 	if StringName(responder_mech_id) != &"" and _atk_first_target != &"" \
 			and StringName(responder_mech_id) != _atk_first_target \
 			and _is_dean_ally_respond_eligible(responder_mech_id, card, attack_action):
-		# 单目标：替换 target_id 为迪恩；多目标 target_ids 中匹配项同步替换（被保护目标）。
-		if not attack_action.record.has("_p011_redirect_from"):
-			attack_action.record["_p011_redirect_from"] = String(_atk_first_target)
+		# 单目标：替换 target_id 为响应方；多目标 target_ids 中匹配项同步替换（被保护目标）。
+		if not attack_action.record.has("_redirect_from"):
+			attack_action.record["_redirect_from"] = String(_atk_first_target)
 		attack_action.record["target_id"] = responder_mech_id
 		var _rd_ids: Array = attack_action.record.get("target_ids", [])
 		for _ri in range(_rd_ids.size()):
@@ -592,7 +779,7 @@ func handle_response_selection(action_id: StringName, selected_cards: Array[Dict
 				_rd_ids[_ri] = responder_mech_id
 		if not _rd_ids.is_empty():
 			attack_action.record["target_ids"] = _rd_ids
-		attack_action.record["_p011_redirect_rewind"] = true
+		attack_action.record["_redirect_rewind"] = true
 		SLog.log_raw("[ACTION] %s 迪恩(%s) 替 %s 响应，攻击目标转移为迪恩" % [String(action_id), String(responder_mech_id), String(_atk_first_target)])
 
 	# 选中即写 responded（规则：被任何效果响应都算--迎击牌/装备牌/机师牌响应均算被响应）。
@@ -749,6 +936,34 @@ func handle_response_selection(action_id: StringName, selected_cards: Array[Dict
 	return true
 
 
+## 效果动作 resume 阶段顶层 execute(use_action_card) 后手动建立父子链接
+## （与上方响应窗口模板同款模式，通用件--pilot_027/006/047 强制使用行动牌共用）：
+## 若派生的 use_action_card 未同步完成（挂起在选牌/选目标/攻击时序），链接为效果动作的
+## 子动作并让效果动作等待。否则效果动作立即完成 -> 被监听的攻击（双连 fork）继续推进、
+## 派生 fork2 -> fork2 攻击时响应窗口的 needs_input 覆盖共享等待槽，把本 use_action_card
+## 的输入弹窗孤儿化 -> 输入无处回填、死锁在攻击时点（bug2）。
+## 返回 true=已链接（调用方走等待分支）；false=无需等待（同步完成/执行失败，照旧继续）。
+func _link_spawned_use_action_as_child(spawn_result, effect_action) -> bool:
+	if effect_action == null or spawn_result == null or not (spawn_result is Dictionary):
+		return false
+	var uc_id: StringName = StringName((spawn_result as Dictionary).get("action_id", &""))
+	if uc_id == &"" or context == null or context.action_registry == null:
+		return false
+	var uc_action = context.action_registry.get_action(uc_id)
+	if uc_action == null or uc_action.state == &"completed" or uc_action.state == &"cancelled":
+		# 同步完成/取消/失败：不链接（已完成动作不会再发父通知，父等待会永久卡死）
+		return false
+	# 未同步完成：建立父子关系，效果动作等 use_action_card 完成后由 notify_effect_action_completed
+	# 恢复。（uc_action 尚未完成，parent_action_id 在此设置可被其 _complete_action 的延迟父通知
+	# 正确捕获。）
+	uc_action.parent_action_id = effect_action.action_id
+	if not effect_action.pending_effect_action_ids.has(uc_id):
+		effect_action.pending_effect_action_ids.append(uc_id)
+	effect_action.state = &"waiting_effect_action"
+	SLog.log_raw("[TIMING] 强制使用行动牌 %s 链接为效果动作 %s 的子动作（父等待完成）" % [String(uc_id), String(effect_action.action_id)])
+	return true
+
+
 ## 注册永久监听器（场上持续效果）
 ## 永久监听器统一存为字典结构 {"effect": ActionEffect, "seq": int, "binding_context": {}}
 ## seq 为注册序号，用于同优先级时按"先来后到"稳定排序
@@ -774,6 +989,24 @@ func unregister_permanent_listeners_for_card(card_instance_id: StringName) -> vo
 		var filtered: Array = list.filter(func(entry: Dictionary) -> bool:
 			var ctx: Dictionary = entry.get("binding_context", {})
 			return ctx.get("card_instance_id", &"") != card_instance_id
+		)
+		if filtered.is_empty():
+			permanent_listeners.erase(timing)
+		else:
+			permanent_listeners[timing] = filtered
+
+
+## 按来源牌实例 + 机甲定向注销永久监听器（泰特 pilot_074 授予到期/换机师等）。
+## 只移除 binding_context.card_instance_id==card_instance_id 且 mech_id==mech_id 的条目，
+## 保留该来源牌在其他机甲（含其自身）上的监听器——泰特自己的按钮/监听不受他机授予到期影响。
+func unregister_permanent_listeners_for_card_and_mech(card_instance_id: StringName, mech_id: StringName) -> void:
+	if card_instance_id == &"" or mech_id == &"":
+		return
+	for timing: StringName in permanent_listeners.keys():
+		var list: Array = permanent_listeners[timing]
+		var filtered: Array = list.filter(func(entry: Dictionary) -> bool:
+			var ctx: Dictionary = entry.get("binding_context", {})
+			return not (ctx.get("card_instance_id", &"") == card_instance_id and ctx.get("mech_id", &"") == mech_id)
 		)
 		if filtered.is_empty():
 			permanent_listeners.erase(timing)
@@ -1219,7 +1452,11 @@ func _execute_effect(effect: ActionEffect, payload: Dictionary, action) -> void:
 			return
 
 	# 条件检查
-	if not _check_conditions(effect, payload, action):
+	# resume 重跑豁免：效果挂起（等待玩家输入/时点）前条件已通过；挂起期间回合可能已切换
+	# （TURN_AFTER_END 挂起后 _net_end_turn 立即 start_turn 下家），重检 IS_OWNER_TURN 等
+	# 依赖 active_player_id 的条件会误判"不再满足"致效果被 skip（弥雅 pilot_071 选完目标无反应）。
+	# 各 resume 分支确认时设 _effect_conditions_prechecked=true，重跑跳过条件重检，仅续跑后续 actions。
+	if not payload.get("_effect_conditions_prechecked", false) and not _check_conditions(effect, payload, action):
 		SLog.log_effect(effect.effect_id, action.source, action.action_id, String(action.action_type), {"status": "skipped", "reason": "conditions_not_met"})
 		return
 
@@ -1241,6 +1478,18 @@ func _execute_effect(effect: ActionEffect, payload: Dictionary, action) -> void:
 	if not bool(payload.get("_effect_target_selected", false)) and _effect_has_force_select(effect):
 		payload["_attack_target_id_backup"] = payload.get("target_id", &"")
 		payload["target_id"] = &""
+
+	# 琳 RE 维修窗口：窗口激活且维修来源是琳时，锁定目标为请求方（无视距离，跳过目标选择）。
+	# 目标注入本效果 payload（record 副本），CHOOSE_ONE 分支 mech_ids 自动取请求方。
+	# _pilot_024_window_locked 标志随 payload 存 _seq，分支挂起续跑完成后据此关闭窗口。
+	if effect.effect_id == &"repair_direct" and context != null and context.game_state != null:
+		var p24_lock_bind = _make_binding_from_effect(effect, action, payload)
+		var p24_lock_mid: StringName = p24_lock_bind.get_source_mech_id() if p24_lock_bind != null else &""
+		if p24_lock_mid != &"":
+			var p24_lock_req: StringName = _ActionPilotEffects.pilot_024_window_requester_for(context.game_state, p24_lock_mid)
+			if p24_lock_req != &"":
+				payload["target_id"] = p24_lock_req
+				payload["_pilot_024_window_locked"] = true
 
 	# 目标检查：需要玩家选择目标时，弹出UI而不是静默跳过
 	if not _check_targets(effect, payload, action):
@@ -1365,6 +1614,17 @@ func _effect_has_force_select(effect: ActionEffect) -> bool:
 
 ## 请求玩家选择目标
 func _request_target_selection(effect: ActionEffect, payload: Dictionary, action) -> void:
+	# 选目标前确认：confirm_before_target 效果（如里昂战后逼迫）先弹"是否发动"确认窗，
+	# 确认（或 AI 自动确认）后才进入目标选择。确认标记写 payload._effect_confirmed。
+	if effect.confirm_before_target and not bool(payload.get("_effect_confirmed", false)):
+		var cbt_bind: Dictionary = payload.get("binding_context", {}) if payload != null else {}
+		var cbt_pid: StringName = cbt_bind.get("player_id", &"")
+		var cbt_mid: StringName = cbt_bind.get("mech_id", &"")
+		if _is_ai_owner(cbt_pid, cbt_mid):
+			payload["_effect_confirmed"] = true
+		else:
+			_prompt_confirm_before_target(effect, payload, action)
+			return
 	var rule_name: String = ""
 	for rule in effect.target_rules:
 		var rn: String = String(rule.get("rule", ""))
@@ -1407,16 +1667,108 @@ func _request_target_selection(effect: ActionEffect, payload: Dictionary, action
 	var src_mech_id: StringName = _src_bind_ctx.get("mech_id", payload.get("source_mech_id", payload.get("mech_id", &"")))
 	if src_mech_id == &"" and action.source is Dictionary:
 		src_mech_id = action.source.get("mech_id", action.source.get("source_mech_id", &""))
+	# 通用目标选择合法候选计算（塔妮拉 p087 等带范围/阵营过滤的效果）：之前只发 mech_id，
+	# app_root 无 valid_mech_ids 时高亮全部非自身机甲，范围限制失效（3格外也能点，点了被
+	# TargetChecker 拒后反复重弹）。按 target_rules 组合算出合法集合；算不出（变量范围取不到）
+	# 返回空数组，UI 回退当前"高亮全部非自身"行为，不误伤合法目标。
+	var valid_mech_ids: Array = []
+	if rule_name == "mech_target_select":
+		valid_mech_ids = _compute_mech_target_valid_ids(effect, payload, src_mech_id)
 	action.state = &"waiting_timing"
 	action_needs_input.emit(action.action_id, bridge_input_type, {
 		"action_id": action.action_id,
 		"effect_id": effect.effect_id,
 		"rule": rule_name,
 		"mech_id": src_mech_id,
+		"valid_mech_ids": valid_mech_ids,
 		"card_instance_id": payload.get("card_instance_id", &""),
 		"player_id": _effect_popup_owner_pid(effect, payload, action),
 	})
-	SLog.log_raw("[TIMING] %s 挂起目标选择 effect=%s rule=%s" % [String(action.action_id), String(effect.effect_id), rule_name])
+	SLog.log_raw("[TIMING] %s 挂起目标选择 effect=%s rule=%s valid=%d" % [String(action.action_id), String(effect.effect_id), rule_name, valid_mech_ids.size()])
+
+
+## 按 target_rules 计算合法目标机甲集合（通用，塔妮拉 p087 等带范围/阵营过滤的效果）。
+## 组合规则：CHOOSE_OTHER_MECH（排除自身）/ CHOOSE_ENEMY_MECH（同阵营排除）/
+## TARGET_IN_RANGE（range 上限）/ CHOOSE_ENEMY_MECH_IN_RANGE / CHOOSE_MECH_IN_VARIABLE_RANGE。
+## 无法精确计算的约束（变量范围取不到 payload 变量）跳过该约束而不是排除，保证合法目标不被误删。
+## 返回空数组 = UI 回退"高亮全部非自身"（当前行为，无回归）。
+func _compute_mech_target_valid_ids(effect, payload: Dictionary, src_mech_id: StringName) -> Array:
+	var result: Array = []
+	if context == null or context.game_state == null or effect == null or src_mech_id == &"":
+		return result
+	var gs = context.game_state
+	var src_mech = gs.mechs.get(src_mech_id)
+	if src_mech == null or src_mech.destroyed:
+		return result
+	var owner_pid: StringName = src_mech.owner_player_id
+	var need_enemy: bool = false
+	var has_range: bool = false
+	var max_range: int = 0
+	var range_unsafe: bool = false  # 变量范围读不到 -> 跳过范围约束
+	for rule in effect.target_rules:
+		if not (rule is Dictionary):
+			continue
+		var rn: String = String(rule.get("rule", &""))
+		if rn == &"CHOOSE_OTHER_MECH":
+			pass
+		elif rn == &"CHOOSE_ENEMY_MECH":
+			need_enemy = true
+		elif rn == &"CHOOSE_ENEMY_MECH_IN_RANGE":
+			need_enemy = true
+			has_range = true
+			max_range = max(max_range, int(rule.get("range", 5)))
+		elif rn == &"TARGET_IN_RANGE":
+			var rp: Dictionary = rule.get("params", rule)
+			has_range = true
+			max_range = max(max_range, int(rp.get("range", rule.get("range", 1))))
+		elif rn == &"CHOOSE_MECH_IN_VARIABLE_RANGE":
+			has_range = true
+			var v_base: int = int(rule.get("base_range", 4))
+			var v_name: StringName = rule.get("variable_name", &"")
+			if v_name != &"":
+				var v_key: String = "%s_%s_%s" % [String(owner_pid), String(src_mech_id), String(v_name)]
+				if payload.has("variable_%s" % v_key):
+					max_range = max(max_range, v_base + int(payload.get("variable_%s" % v_key, 0)))
+				else:
+					range_unsafe = true
+			else:
+				max_range = max(max_range, v_base)
+	if range_unsafe:
+		has_range = false  # 变量范围无法精确计算：只按阵营/自身过滤，不过滤范围
+	for mid: StringName in gs.mechs:
+		if mid == src_mech_id:
+			continue
+		var m = gs.mechs.get(mid)
+		if m == null or m.destroyed:
+			continue
+		if need_enemy and String(m.owner_player_id) == String(owner_pid):
+			continue
+		if has_range and int(_HexGrid.distance(src_mech.position, m.position)) > max_range:
+			continue
+		result.append(mid)
+	return result
+
+
+## 弹"是否发动"确认窗（choose_one_effect 弹窗），确认后进入目标选择；取消=效果不发动。
+## 通用 confirm_before_target 机制：显示效果说明，单选项"发动"+取消。
+func _prompt_confirm_before_target(effect: ActionEffect, payload: Dictionary, action) -> void:
+	var cbt_label: String = effect.confirm_label
+	if cbt_label == "":
+		cbt_label = "发动%s" % String(effect.display_name)
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"confirm_before_target"}
+	action.record["_waiting_for_confirm_before_target"] = true
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"choose_one_effect", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"options": [
+			{"label": cbt_label, "effect_id": &"option_0", "option_index": 0},
+		],
+		"optional": true,
+		"player_id": _effect_popup_owner_pid(effect, payload, action),
+		"source_label": String(effect.description),
+	})
+	SLog.log_raw("[TIMING] %s 挂起选目标前确认 effect=%s" % [String(action.action_id), String(effect.effect_id)])
 
 
 ## 效果是否含 optional 的 DISCARD_ACTION_CARD 费用（闪击用）
@@ -1473,19 +1825,900 @@ func _effect_popup_owner_pid(effect: ActionEffect, payload: Dictionary, action) 
 	return _owner_player_id_for_effect(effect, payload, action)
 
 
-## 解析机甲ID表达式（$payload.xxx / $binding_context.xxx / 字面值）。
-## 供 CHOOSE_ONE chooser_mech_id 等 param 表达式解析用（pilot_006 e3 被选机甲作选择者）。
+## 解析机甲ID表达式（$payload.xxx / $binding_context.xxx / $current_target.xxx / 字面值）。
+## 供 CHOOSE_ONE chooser_mech_id 等 param 表达式解析用（pilot_006 e3 被选机甲作选择者；
+## pilot_040 泰格 FOR_EACH_TARGET 逐目标时取 current_target.mech_id 作弃装解锁选择者）。
 func _resolve_mech_id_expr(expr: String, payload: Dictionary) -> StringName:
 	if expr.begins_with("$payload."):
 		return payload.get(expr.substr(9), &"")
 	if expr.begins_with("$binding_context."):
 		var _bc: Dictionary = payload.get("binding_context", {})
 		return _bc.get(expr.substr(17), &"")
+	if expr.begins_with("$current_target."):
+		var _ct: Dictionary = payload.get("current_target", {})
+		return _ct.get(expr.substr(16), &"")
 	return StringName(expr)
+
+
+## pilot_016 默多克展示转化（CHOOSE_ONE 确认后分支内执行）。返回 true=已挂起弹窗。
+## 阶段1：展示牌A给其他玩家（复用美杜莎 pilot_009_show_display 非阻塞浮窗；
+##   target_id=默多克机甲=牌A持有者，除其拥有者外全显示）。
+## 阶段2：选2张B/C（排除牌A）选牌窗（阻塞，phase=pilot_016_choose_two）。
+## 候选不足2张 -> 返回 false（不转化，回父正常用牌A）。
+## resume(phase=pilot_016_choose_two)：B/C 都移入临时区（B 由父 card_to_temp_zone 移入并当牌A
+##   virtual_transform，C 写 record.temp_zone_card_ids 由父 settle 弃置）+
+##   改造父record(B当牌A virtual_transform) + 清空剩余 listener（避免旧 payload 误触发阿克罗姆01a 等）+
+##   mark once_per_turn。
+## 牌A保留手牌；父 execute_effects 执行牌A的 DIRECT 效果（"调用执行A的效果"）；父 settle 弃B和C。
+func _handle_pilot_016_show_and_convert(act: Dictionary, effect: ActionEffect, payload: Dictionary, action) -> bool:
+	# 重跑幂等：已转化则跳过（resume 推进父动作后不再触发）
+	if payload.has("pilot_016_converted"):
+		return false
+	var bind: Dictionary = payload.get("binding_context", {})
+	var p016_pid: StringName = bind.get("player_id", payload.get("player_id", &""))
+	var p016_mech_id: StringName = bind.get("mech_id", payload.get("source_mech_id", payload.get("mech_id", &"")))
+	var p016_card_a_id: StringName = payload.get("card_instance_id", &"")  # 牌A（当前要用的实体牌）
+	var p016_card_a_def: StringName = payload.get("card_def_id", &"")  # 牌A def_id
+	# fallback：validate_card 未写 card_def_id 时从牌实例查 def_id
+	if p016_card_a_def == &"" and p016_card_a_id != &"" and context.game_state != null:
+		var p016_ca_def_card = context.game_state.get_card(p016_card_a_id)
+		if p016_ca_def_card != null and p016_ca_def_card.def != null:
+			p016_card_a_def = p016_ca_def_card.def.card_id
+	if context == null or context.game_state == null or p016_pid == &"":
+		return false
+	# 收集候选 B/C（手牌行动牌，排除牌A）
+	var p016_candidates: Array = []
+	var p016_player = context.game_state.players.get(p016_pid)
+	if p016_player == null:
+		return false
+	for p016_cid: StringName in p016_player.action_hand:
+		if p016_cid == p016_card_a_id:
+			continue  # 排除牌A
+		var p016_c = context.game_state.get_card(p016_cid)
+		if p016_c != null and p016_c.def != null and p016_c.def.card_kind == &"action":
+			p016_candidates.append(p016_cid)
+	if p016_candidates.size() < 2:
+		SLog.log_raw("[TIMING] %s pilot_016 候选牌不足2张，中止转化 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+		return false  # 不转化，回父正常用牌A
+	# 阶段1：展示牌A给其他玩家（非阻塞浮窗，复用美杜莎展示框）
+	var p016_display_cards: Array = []
+	if p016_card_a_id != &"":
+		var p016_ca = context.game_state.get_card(p016_card_a_id)
+		if p016_ca != null and p016_ca.def != null:
+			p016_display_cards.append({"card_id": p016_card_a_id, "name": String(p016_ca.def.display_name), "type": String(p016_ca.def.action_type)})
+	action_needs_input.emit(action.action_id, &"pilot_009_show_display", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"target_id": p016_mech_id,
+		"display_cards": p016_display_cards,
+		"player_id": p016_pid,
+		"source_label": "默多克·展示转化：展示的行动牌",
+	})
+	# 阶段2：选2张B/C（阻塞，候选已排除牌A；exclude_card_ids 让面板再保险排除牌A）
+	_pending_effect[action.action_id] = {
+		"action": action, "effect": effect, "payload": payload,
+		"phase": &"pilot_016_choose_two",
+		"card_a_id": p016_card_a_id, "card_a_def": p016_card_a_def,
+		"mech_id": p016_mech_id, "player_id": p016_pid,
+	}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"select_discard_cards", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"executor": p016_pid,
+		"discard_player_id": p016_pid,
+		"count": 2,
+		"face_up": true,
+		"action_verb": &"select",
+		"no_cancel": true,
+		"player_id": p016_pid,
+		"exclude_card_ids": [p016_card_a_id],
+		"source_label": "默多克·展示转化：选择2张行动牌当作展示牌使用",
+	})
+	SLog.log_raw("[TIMING] %s 挂起 pilot_016 选2张转化牌 effect=%s 候选=%d" % [String(action.action_id), String(effect.effect_id), p016_candidates.size()])
+	return true
 
 
 ## pilot_006 e3 战后逼迫：被选机甲选1张攻击牌 use_action_card（passive，不计攻击数）。
 ## 选牌取消/无牌可打 -> 回落4伤害。返回 true=已挂起弹窗。
+# ════════════════════════════════════════════════════════════
+# pilot_027 维罗妮卡
+# ════════════════════════════════════════════════════════════
+## 效果1（获金分半·被动）：4+X格内其他机甲获得非我方给予金币时，我方获一半（向下取整，剩留给目标）。
+## 直接增减双方玩家金币字段（不走 gain_gold，避免维罗妮卡获金再 fire 时点 -> 递归再分半）。
+## 全部判定（gainer≠自己 / from≠自己 / 距离≤4+X / amount>0 / split>0）在此做，不满足静默跳过。
+## 返回 false（同步完成），_execute_effect 末尾自动 mark once_per_turn（效果1无 key 无影响）。
+func _handle_pilot_027_split_gold(_act: Dictionary, _effect: ActionEffect, payload: Dictionary, _action) -> bool:
+	if context == null or context.game_state == null:
+		return false
+	var p27_gainer_pid: StringName = payload.get("gainer_player_id", &"")
+	var p27_gainer_mid: StringName = payload.get("gainer_mech_id", &"")
+	var p27_amount: int = int(payload.get("amount", 0))
+	var p27_from_pid: StringName = payload.get("from_player_id", &"")
+	if p27_gainer_pid == &"" or p27_amount <= 0:
+		return false
+	var p27_bind: Dictionary = payload.get("binding_context", {})
+	var p27_v_mid: StringName = p27_bind.get("mech_id", &"")
+	var p27_v_pid: StringName = p27_bind.get("player_id", &"")
+	if p27_v_mid == &"":
+		return false
+	# 其他机甲获金 + 非我方给予
+	if p27_gainer_mid == p27_v_mid or p27_from_pid == p27_v_pid:
+		return false
+	var p27_v_mech = context.game_state.mechs.get(p27_v_mid)
+	var p27_g_mech = context.game_state.mechs.get(p27_gainer_mid)
+	if p27_v_mech == null or p27_g_mech == null or p27_g_mech.destroyed:
+		return false
+	# 距离 ≤ 4+X
+	var p27_x: int = _ActionPilotEffects.get_pilot_027_x(_ActionPilotEffects.pilot_027_pilot_card(context.game_state))
+	if int(_HexGrid.distance(p27_g_mech.position, p27_v_mech.position)) > 4 + p27_x:
+		return false
+	var p27_split: int = int(floor(p27_amount / 2.0))
+	if p27_split <= 0:
+		return false
+	var p27_g_player = context.game_state.players.get(p27_gainer_pid)
+	var p27_v_player = context.game_state.players.get(p27_v_pid)
+	if p27_g_player == null or p27_v_player == null:
+		return false
+	p27_g_player.gold = maxi(0, p27_g_player.gold - p27_split)
+	p27_v_player.gold = p27_v_player.gold + p27_split
+	# 专用日志类型 gold_split（battle_message_log 友好渲染），避免 gold_gained 缺 current_gold 显示0 + 英文 reason
+	context.game_state.write_log(&"gold_split", {
+		"player_id": String(p27_v_pid),
+		"gainer_player_id": String(p27_gainer_pid),
+		"amount": p27_split,
+		"total": p27_amount,
+	})
+	SLog.log_raw("[TIMING] pilot_027 获金分半：%s 获%d金，维罗妮卡分走%d（剩%d）" % [String(p27_gainer_mid), p27_amount, p27_split, p27_g_player.gold])
+	return false
+
+
+## 效果2（给予金币X+1·被动）：我方给予其他机甲金币时 X+1（每回合1次由 once_per_turn_key 管理）。
+## 条件 giver==自己 在此判定；X 写维罗妮卡机师牌实例 counters（换机师不转移）。
+## 返回 false（同步），_execute_effect 末尾自动 mark once_per_turn。
+func _handle_pilot_027_x_inc(_act: Dictionary, _effect: ActionEffect, payload: Dictionary, _action) -> bool:
+	if context == null or context.game_state == null:
+		return false
+	var p27_giver_pid: StringName = payload.get("giver_player_id", payload.get("from_player_id", &""))
+	var p27_bind: Dictionary = payload.get("binding_context", {})
+	var p27_v_mid: StringName = p27_bind.get("mech_id", &"")
+	var p27_v_pid: StringName = p27_bind.get("player_id", &"")
+	if p27_giver_pid == &"" or p27_giver_pid != p27_v_pid or p27_v_mid == &"":
+		return false
+	var p27_card = _ActionPilotEffects.pilot_027_pilot_card(context.game_state)
+	if p27_card == null:
+		return false
+	_ActionPilotEffects.set_pilot_027_x(p27_card, _ActionPilotEffects.get_pilot_027_x(p27_card) + 1)
+	SLog.log_raw("[TIMING] pilot_027 给予金币X+1：%s 给予后 X=%d" % [String(p27_v_mid), _ActionPilotEffects.get_pilot_027_x(p27_card)])
+	return false
+
+
+## 效果3（给予金币并使用行动牌·主动，每回合2次）多阶段状态机：
+##   阶段① select_mech_target 选 4+X 范围内其他机甲（取消=中止，不消耗次数）
+##   阶段② choose_integer stepper 输给金金额（2~当前金币，步长5，可取消=中止，不消耗次数）
+##   阶段③ 给金：spend_gold(自己)+gain_gold(目标, from=自己) -> 触发 GIVE_GOLD_AFTER 效果2 X+1。
+##          给金完成即 mark once_per_turn（每回合2次用掉1次）；②取消不消耗。
+##   阶段④ 目标有可用行动牌（攻击+辅助，排除迎击）才弹 choose_one 询问是否立即使用（可取消=结束）
+##   阶段⑤ 是：select_pilot_006_attack_card 目标选1张（确认即 use_action_card 被动使用；取消兜底=结束）
+## 返回 true=已挂起（等输入），false=无需处理（无目标/AI/已结束）交由调用方继续。
+func _handle_pilot_027_gift_and_use(_act: Dictionary, effect: ActionEffect, payload: Dictionary, action) -> bool:
+	if context == null or context.game_state == null:
+		return false
+	var p27_bind: Dictionary = payload.get("binding_context", {})
+	var p27_v_pid: StringName = p27_bind.get("player_id", &"")
+	var p27_v_mid: StringName = p27_bind.get("mech_id", &"")
+	if p27_v_mid == &"":
+		return false
+	# AI：暂跳过（先 PvP 人类）
+	if _is_ai_owner(p27_v_pid, p27_v_mid):
+		SLog.log_raw("[TIMING] pilot_027 效果3：维罗妮卡为 AI，跳过 effect=%s" % String(effect.effect_id))
+		return false
+	# 收集 4+X 范围内其他存活机甲
+	var p27_src = context.game_state.mechs.get(p27_v_mid)
+	if p27_src == null or p27_src.destroyed:
+		return false
+	var p27_x: int = _ActionPilotEffects.get_pilot_027_x(_ActionPilotEffects.pilot_027_pilot_card(context.game_state))
+	var p27_range: int = 4 + p27_x
+	var p27_candidates: Array[StringName] = []
+	for p27_mid in context.game_state.mechs:
+		if p27_mid == p27_v_mid:
+			continue
+		var p27_m = context.game_state.mechs.get(p27_mid)
+		if p27_m == null or p27_m.destroyed:
+			continue
+		if int(_HexGrid.distance(p27_m.position, p27_src.position)) <= p27_range:
+			p27_candidates.append(p27_mid)
+	if p27_candidates.is_empty():
+		return false
+	# 阶段① 选目标
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload,
+		"phase": &"pilot_027_target_select", "pilot_027_owner_mid": p27_v_mid, "pilot_027_owner_pid": p27_v_pid}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"select_mech_target", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"mech_id": p27_v_mid,
+		"player_id": p27_v_pid,
+		"valid_mech_ids": p27_candidates,
+		"label": "维罗妮卡：选择给予金币的机甲（%d格内）" % p27_range,
+	})
+	SLog.log_raw("[TIMING] %s pilot_027 效果3选目标 candidates=%d" % [String(action.action_id), p27_candidates.size()])
+	return true
+
+
+## 效果3 给金动作：维罗妮卡扣 amount，目标获 amount（from_player_id 传递触发 GIVE_GOLD_AFTER 效果2 X+1）。
+## 目标获金触发 GAIN_GOLD_AFTER 但 from==自己 -> 效果1「非我方给予」条件不满足跳过（天然互斥）。
+func _pilot_027_give_gold(v_pid: StringName, target_mech: StringName, amount: int) -> void:
+	if context == null or context.game_actions == null or context.game_state == null:
+		return
+	if amount <= 0:
+		return
+	var p27_target_player = context.game_state.get_player_for_mech(target_mech)
+	if p27_target_player == null:
+		return
+	# 先扣自己（stepper max=当前金币，必然够）
+	context.game_actions.spend_gold({"player_id": v_pid, "amount": amount, "reason": &"PILOT_027_GIFT"})
+	context.game_actions.gain_gold({"player_id": p27_target_player.player_id, "amount": amount,
+		"from_player_id": v_pid, "reason": &"PILOT_027_GIFT"})
+
+
+## 目标机甲可用行动牌（攻击+辅助，排除迎击）。
+## 攻击牌：该机甲武器射程内存在其他存活机甲（被动攻击可打，不预判目标选择）。取最大武器射程。
+## 辅助牌：目标手牌 action_type=辅助 均列入（宽松；实际使用由 use_action_card 校验条件/目标）。
+func _pilot_027_usable_action_cards(target_mech: StringName) -> Array:
+	if context == null or context.game_state == null:
+		return []
+	var p27_player = context.game_state.get_player_for_mech(target_mech)
+	if p27_player == null:
+		return []
+	var p27_mech = context.game_state.mechs.get(target_mech)
+	var p27_has_attack_target: bool = false
+	if p27_mech != null and not p27_mech.destroyed:
+		var p27_range: int = _pilot_027_mech_attack_range(p27_mech)
+		p27_has_attack_target = p27_range > 0 and _pilot_027_mech_has_target_in_range(p27_mech, p27_range)
+	var p27_result: Array = []
+	for p27_cid in p27_player.action_hand:
+		var p27_card = context.game_state.get_card(p27_cid)
+		if p27_card == null or p27_card.def == null:
+			continue
+		var p27_at: StringName = p27_card.def.action_type
+		if p27_at == &"攻击":
+			if p27_has_attack_target:
+				p27_result.append(p27_cid)
+		elif p27_at == &"辅助":
+			p27_result.append(p27_cid)
+		# 迎击（counter）排除
+	return p27_result
+
+
+## 机甲最大武器射程（装备武器 range_value + 基础武器 range_value）。无武器返回0。
+func _pilot_027_mech_attack_range(mech) -> int:
+	var max_range: int = 0
+	if mech == null or mech.slots == null:
+		return 0
+	for sid in mech.slots:
+		var slot = mech.slots[sid]
+		if slot == null or slot.equipped_card == null or slot.equipped_card.def == null:
+			continue
+		var def = slot.equipped_card.def
+		# 守卫：机师槽的 PilotCardDef 无 equipment_kind 字段（跨文件 extends 子类手动复制字段），
+		# 直接访问会运行期报错中断 resume（维罗妮卡027 给金后冻结根因）。只统计装备武器牌。
+		if "equipment_kind" in def and def.equipment_kind == &"WEAPON":
+			max_range = maxi(max_range, int(def.range_value))
+	if mech.base_weapons != null:
+		for bw in mech.base_weapons:
+			if bw is Dictionary:
+				max_range = maxi(max_range, int(bw.get("range_value", 0)))
+	return max_range
+
+
+## 机甲在射程内是否有其他存活目标（攻击牌可用预判；被动攻击可打任意存活机甲）。
+func _pilot_027_mech_has_target_in_range(mech, range: int) -> bool:
+	if context == null or context.game_state == null or mech == null:
+		return false
+	for p27_mid in context.game_state.mechs:
+		var p27_other = context.game_state.mechs.get(p27_mid)
+		if p27_other == null or p27_other.destroyed:
+			continue
+		if p27_other == mech:
+			continue
+		if int(_HexGrid.distance(p27_other.position, mech.position)) <= range:
+			return true
+	return false
+
+
+## 目标是否仍在维罗妮卡 4+X 范围内（resume 时复查，防止目标移动/摧毁）。
+func _pilot_027_target_in_range(owner_mid: StringName, target_mid: StringName) -> bool:
+	if context == null or context.game_state == null:
+		return false
+	var p27_owner = context.game_state.mechs.get(owner_mid)
+	var p27_target = context.game_state.mechs.get(target_mid)
+	if p27_owner == null or p27_target == null or p27_target.destroyed:
+		return false
+	var p27_x: int = _ActionPilotEffects.get_pilot_027_x(_ActionPilotEffects.pilot_027_pilot_card(context.game_state))
+	return int(_HexGrid.distance(p27_target.position, p27_owner.position)) <= 4 + p27_x
+
+
+# ════════════════════════════════════════════════════════════
+# pilot_028 乌尔：宣言 / 需交牌 / X+1
+# ════════════════════════════════════════════════════════════
+## 弹乌尔宣言展示浮窗（非阻塞，给所有玩家，含乌尔自己）。宣言类型从机师牌实例读。
+func _show_pilot_028_declared(p28_card, action, owner_pid: StringName) -> void:
+	if p28_card == null or action == null:
+		return
+	var declared: String = _ActionPilotEffects.get_pilot_028_declared(p28_card)
+	action_needs_input.emit(action.action_id, &"pilot_028_show_declared", {
+		"action_id": action.action_id,
+		"declared_type": declared,
+		"player_id": owner_pid,
+		"source_label": "乌尔宣言",
+	})
+
+
+## PILOT_028_DECLARE：乌尔效果1 宣言。每轮 ROUND_START 触发。
+## 首次：重置本轮宣言（清类型 + X=0），弹三选一（攻击/迎击/辅助，可取消=本轮无宣言）。
+## AI 拥有者自动宣言"攻击"（暂不做 AI 决策）。返回 true=已挂起等输入；false=已同步处理/重入。
+func _handle_pilot_028_declare(_act: Dictionary, effect: ActionEffect, payload: Dictionary, action) -> bool:
+	if context == null or context.game_state == null:
+		return false
+	# 重入守卫：声明流程已挂起过，不二次弹窗
+	if action.record.get("_p028_declare_shown", false):
+		return false
+	var p28_card = _ActionPilotEffects.pilot_028_pilot_card(context.game_state)
+	if p28_card == null:
+		return false
+	var p28_bind: Dictionary = payload.get("binding_context", {})
+	var p28_owner_pid: StringName = p28_bind.get("player_id", &"")
+	var p28_owner_mid: StringName = p28_bind.get("mech_id", &"")
+	if p28_owner_pid == &"":
+		return false
+	# 新轮开始：重置本轮宣言（无论是否宣言，旧类型/旧X作废）
+	_ActionPilotEffects.set_pilot_028_declared(p28_card, "")
+	_ActionPilotEffects.set_pilot_028_x(p28_card, 0)
+	if _is_ai_owner(p28_owner_pid, p28_owner_mid):
+		_ActionPilotEffects.set_pilot_028_declared(p28_card, "攻击")
+		_show_pilot_028_declared(p28_card, action, p28_owner_pid)
+		SLog.log_raw("[TIMING] %s pilot_028 AI 拥有者自动宣言=攻击 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+		return false
+	action.record["_p028_declare_shown"] = true
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"pilot_028_declare"}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"choose_one_effect", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"options": [
+			{"label": "攻击", "effect_id": &"option_0", "option_index": 0, "declared_type": &"攻击"},
+			{"label": "迎击", "effect_id": &"option_1", "option_index": 1, "declared_type": &"迎击"},
+			{"label": "辅助", "effect_id": &"option_2", "option_index": 2, "declared_type": &"辅助"},
+		],
+		"optional": true,
+		"player_id": p28_owner_pid,
+		"source_label": "乌尔：宣言本轮行动牌类型（取消=本轮无宣言，效果2/3失效）",
+	})
+	SLog.log_raw("[TIMING] %s 挂起乌尔宣言 effect=%s 拥有者=%s" % [String(action.action_id), String(effect.effect_id), String(p28_owner_pid)])
+	return true
+
+
+## PILOT_028_X_INC：乌尔效果3 X+1。USE_ACTION_AT 触发，每回合1次（机师牌实例计数器手动管理）。
+## 条件：已宣言 + 乌尔自己使用 + 实体牌 + 宣言类型牌。满足才 X+1 并标记本回合已用。
+## 返回 false（同步）。
+func _handle_pilot_028_x_inc(_act: Dictionary, _effect: ActionEffect, payload: Dictionary, _action) -> bool:
+	if context == null or context.game_state == null:
+		return false
+	var p28_card = _ActionPilotEffects.pilot_028_pilot_card(context.game_state)
+	if p28_card == null:
+		return false
+	var declared: String = _ActionPilotEffects.get_pilot_028_declared(p28_card)
+	if declared == "":
+		return false
+	var turn_id: int = _current_turn_number()
+	if _ActionPilotEffects.pilot_028_xinc_used_this_turn(p28_card, turn_id):
+		return false
+	# 乌尔自己使用
+	var p28_w_mid: StringName = _ActionPilotEffects.pilot_028_find_w_mech(context.game_state)
+	var use_mech: StringName = payload.get("mech_id", payload.get("source_mech_id", &""))
+	if use_mech == &"" or use_mech != p28_w_mid:
+		return false
+	# 实体牌（转化虚拟不算）
+	if bool(payload.get("virtual_transform", false)):
+		return false
+	# 宣言类型牌
+	var card_id: StringName = payload.get("card_instance_id", &"")
+	var card = context.game_state.get_card(card_id) if card_id != &"" else null
+	if card == null or card.def == null:
+		return false
+	var card_type: String = String(card.def.action_type) if "action_type" in card.def else ""
+	if card_type != declared:
+		return false
+	_ActionPilotEffects.set_pilot_028_x(p28_card, _ActionPilotEffects.get_pilot_028_x(p28_card) + 1)
+	_ActionPilotEffects.pilot_028_mark_xinc_used(p28_card, turn_id)
+	SLog.log_raw("[TIMING] pilot_028 X+1：%s 使用宣言[%s]牌后 X=%d" % [String(p28_w_mid), declared, _ActionPilotEffects.get_pilot_028_x(p28_card)])
+	return false
+
+
+## PILOT_058_SHOW_COUNT_BONUS：卡米拉效果1 展示牌型加成（同步结算，不挂起）。
+## 由效果动作链在 ATTACK_PRE 确认后调用。流程：
+##   ① 收集 binding_context 所属玩家 action_hand 所有行动牌；
+##   ② 统计不同 action_type（攻击/迎击/辅助）的类型数（1~3）；
+##   ③ 给其他玩家弹非阻塞展示浮窗（自己不看自己的牌——参考美杜莎 p009 显示对象）；
+##   ④ 本次攻击威力 += 类型数×might_per_type（写父动作 record extra_might）；
+##   ⑤ 若类型数 >= required_type_count，本次攻击范围 += range_bonus（写 extra_range）。
+## 通用可复用：数值/文案由 params 决定，效果绑定 effect 而非机师，复用=复制定义+改 params。
+## 返回 false（同步）。
+func _handle_pilot_058_show_count_bonus(act: Dictionary, effect, payload: Dictionary, action) -> bool:
+	if context == null or context.game_state == null or action == null:
+		return false
+	var p58_params: Dictionary = act.get("params", {})
+	var p58_might_per_type: int = int(p58_params.get("might_per_type", 2))
+	var p58_range_bonus: int = int(p58_params.get("range_bonus", 2))
+	var p58_required_types: int = int(p58_params.get("required_type_count", 3))
+	var p58_label: String = String(p58_params.get("source_label", "展示行动牌"))
+	var p58_bind: Dictionary = payload.get("binding_context", {})
+	var p58_owner_pid: StringName = p58_bind.get("player_id", &"")
+	var p58_owner_mid: StringName = p58_bind.get("mech_id", &"")
+	if p58_owner_pid == &"" or p58_owner_mid == &"":
+		return false
+	if not context.game_state.players.has(p58_owner_pid):
+		return false
+	var p58_player = context.game_state.players[p58_owner_pid]
+	if p58_player == null:
+		return false
+	# ① 收集所有行动牌 + ② 统计类型数
+	var p58_cards: Array = []
+	var p58_types := {}
+	for p58_cid: StringName in p58_player.action_hand:
+		var p58_c = context.game_state.get_card(p58_cid)
+		if p58_c == null or p58_c.def == null:
+			continue
+		var p58_type: String = String(p58_c.def.action_type) if "action_type" in p58_c.def else ""
+		if p58_type != "":
+			p58_types[p58_type] = true
+		p58_cards.append({"name": String(p58_c.def.display_name), "type": p58_type})
+	var p58_type_count: int = p58_types.size()
+	# ③ 展示浮窗：只给其他玩家（自己不看自己的牌），非阻塞
+	action_needs_input.emit(action.action_id, &"pilot_058_show_display", {
+		"action_id": action.action_id,
+		"owner_mech_id": p58_owner_mid,
+		"display_cards": p58_cards,
+		"player_id": p58_owner_pid,
+		"source_label": p58_label,
+	})
+	# ④⑤ 加成：威力 += 类型数×might_per_type；类型数达标则范围 += range_bonus
+	action.record["extra_might"] = int(action.record.get("extra_might", 0)) + p58_type_count * p58_might_per_type
+	var p58_range_added: int = 0
+	if p58_type_count >= p58_required_types:
+		action.record["extra_range"] = int(action.record.get("extra_range", 0)) + p58_range_bonus
+		p58_range_added = p58_range_bonus
+	SLog.log_raw("[TIMING] %s pilot_058 展示牌型：类型数=%d 威力+%d 范围+%d 展示牌=%d effect=%s" % [String(action.action_id), p58_type_count, p58_type_count * p58_might_per_type, p58_range_added, p58_cards.size(), String(effect.effect_id)])
+	return false
+
+
+## ═══════════════════════════════════════════
+## 通用「随机查看其他机甲行动牌+类型加成」模块（VIEW_RANDOM_OTHER_HAND_CARDS，骇客 pilot_066）。
+## ═══════════════════════════════════════════
+## LISTEN 监听 BASIC_MOVE_AFTER 等时点触发：我方回合内我方机甲基础移动后，若范围内存在持行动牌
+## 的其他机甲（条件 OTHER_MECH_WITH_ACTION_CARD_IN_HEX_RANGE 已 gating），直接弹目标选择
+## （常规目标UI + valid_mech_ids 高亮，仅可选范围内持牌机甲；取消不消耗次数）。
+## 选定后（resume 注入 target 重跑本 effect）：随机查看目标 player 的 view_count 张行动牌
+## （context.synced_shuffle 保证 PvP 双端同步；不足 view_count 看全部，0 张也弹空窗并结算加成）
+## → 非阻塞浮窗只给骇客玩家本人看 → 类型加成（各计一次可叠加）：含"攻击" -> MODIFY_ATTACK_COUNT
+## 本回合+attack_bonus；含"迎击" -> MODIFY_ACTION_HAND_LIMIT 本回合+action_hand_bonus；含"辅助"
+## -> RESTORE_POWER +support_power。确认选目标才 MARK_EFFECT_ONCE_PER_TURN_USED（取消不计次）。
+## params: range / view_count / attack_bonus / action_hand_bonus / support_power /
+##         once_per_turn_key / store_target_key / source_label。复用=整段复制改参数即可。
+func _handle_view_random_other_hand(act: Dictionary, effect, payload: Dictionary, action) -> bool:
+	if context == null or context.game_state == null or action == null:
+		return false
+	var v_params: Dictionary = act.get("params", {})
+	var v_bind: Dictionary = payload.get("binding_context", {})
+	var v_owner_mid: StringName = v_bind.get("mech_id", &"")
+	var v_owner_pid: StringName = v_bind.get("player_id", &"")
+	if v_owner_mid == &"":
+		return false
+	var v_store_key: String = String(v_params.get("store_target_key", &"pilot_066_target_id"))
+	# 重跑幂等：目标已选定（resume 注入）-> 直接执行查看+加成，不再弹目标选择
+	if payload.get(v_store_key, &"") != &"":
+		_apply_view_random_other_hand_bonuses(act, effect, payload, action)
+		return false
+	# AI 持有者：暂不支持（PvP/PvP3 人类玩家优先）
+	if _is_ai_owner(v_owner_pid, v_owner_mid):
+		return false
+	# 计算候选：范围内其他存活机甲 + 其玩家 action_hand 非空
+	var v_range: int = int(v_params.get("range", 3))
+	var v_mech = context.game_state.mechs.get(v_owner_mid)
+	if v_mech == null or v_mech.destroyed:
+		return false
+	var v_candidates: Array = []
+	for v_mid: StringName in context.game_state.mechs:
+		if v_mid == v_owner_mid:
+			continue
+		var v_m = context.game_state.mechs[v_mid]
+		if v_m == null or v_m.destroyed:
+			continue
+		if _HexGrid.distance(v_mech.position, v_m.position) > v_range:
+			continue
+		var v_owner: StringName = v_m.owner_player_id
+		var v_player = context.game_state.players.get(v_owner) if v_owner != &"" else null
+		if v_player != null and not v_player.action_hand.is_empty():
+			v_candidates.append(v_mid)
+	if v_candidates.is_empty():
+		return false  # 无候选（条件已 gating，防御）
+	# 挂起目标选择（常规目标UI，valid_mech_ids 高亮；chooser=骇客玩家本人）
+	action.record["_waiting_for_target"] = true
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"view_random_other_hand_target", "view_params": v_params}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"select_mech_target", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"rule": &"mech_target_select",
+		"mech_id": v_owner_mid,
+		"valid_mech_ids": v_candidates,
+		"player_id": v_owner_pid,
+		"source_label": String(v_params.get("source_label", "选择1台%d格内持有行动牌的其他机甲" % v_range)),
+	})
+	SLog.log_raw("[TIMING] %s 挂起骇客窥牌选目标（候选%d台 范围%d）effect=%s" % [String(action.action_id), v_candidates.size(), v_range, String(effect.effect_id)])
+	return true
+
+
+## 骇客窥牌选定目标后：随机查看目标行动牌 + 展示浮窗 + 类型加成（确认才 MARK 计次）。
+## 所有随机经 context.synced_shuffle（PvP 锁步双端同种子同步）。
+func _apply_view_random_other_hand_bonuses(act: Dictionary, effect, payload: Dictionary, action) -> void:
+	if context == null or context.game_state == null:
+		return
+	var v_params: Dictionary = act.get("params", {})
+	var v_bind: Dictionary = payload.get("binding_context", {})
+	var v_owner_mid: StringName = v_bind.get("mech_id", &"")
+	var v_owner_pid: StringName = v_bind.get("player_id", &"")
+	if v_owner_mid == &"":
+		return
+	var v_store_key: String = String(v_params.get("store_target_key", &"pilot_066_target_id"))
+	var v_target_mid: StringName = payload.get(v_store_key, &"")
+	if v_target_mid == &"":
+		return
+	var v_target_player = context.game_state.get_player_for_mech(v_target_mid)
+	var v_view_count: int = int(v_params.get("view_count", 2))
+	# ① 随机抽取目标玩家 view_count 张行动牌（synced_shuffle 就地洗牌）
+	var v_hand: Array = []
+	if v_target_player != null:
+		v_hand = v_target_player.action_hand.duplicate()
+	context.synced_shuffle(v_hand)
+	var v_picked: Array = v_hand.slice(0, mini(v_view_count, v_hand.size()))
+	# ② 构建展示牌 + 收集类型（各计一次）
+	var v_display: Array = []
+	var v_seen_types := {}
+	for v_cid: StringName in v_picked:
+		var v_card = context.game_state.get_card(v_cid)
+		if v_card == null or v_card.def == null:
+			continue
+		var v_type: String = String(v_card.def.action_type) if "action_type" in v_card.def else ""
+		if v_type != "":
+			v_seen_types[v_type] = true
+		v_display.append({"name": String(v_card.def.display_name), "type": v_type})
+	# ③ 展示浮窗：只给骇客玩家本人（非阻塞；PvP 双端都触发，app_root 按 owner==local 过滤）
+	action_needs_input.emit(action.action_id, &"view_random_other_hand_show_display", {
+		"action_id": action.action_id,
+		"owner_mech_id": v_owner_mid,
+		"owner_player_id": v_owner_pid,
+		"target_mech_id": v_target_mid,
+		"display_cards": v_display,
+		"source_label": String(v_params.get("source_label", "骇客：查看目标行动牌")),
+	})
+	# ④ 类型加成链（各计一次可叠加；确认才 MARK 计数）
+	var v_remaining: Array = []
+	var v_mark_key: StringName = v_params.get("once_per_turn_key", &"")
+	if v_mark_key != &"":
+		v_remaining.append({"type": &"MARK_EFFECT_ONCE_PER_TURN_USED", "params": {"once_per_turn_key": v_mark_key}})
+	if v_seen_types.has("攻击") and int(v_params.get("attack_bonus", 0)) > 0:
+		v_remaining.append({"type": &"MODIFY_ATTACK_COUNT", "params": {"mech_id": v_owner_mid, "delta": int(v_params.get("attack_bonus", 0)), "duration": &"THIS_TURN"}})
+	if v_seen_types.has("迎击") and int(v_params.get("action_hand_bonus", 0)) > 0:
+		v_remaining.append({"type": &"MODIFY_ACTION_HAND_LIMIT", "params": {"player_id": v_owner_pid, "delta": int(v_params.get("action_hand_bonus", 0)), "duration": &"THIS_TURN"}})
+	if v_seen_types.has("辅助") and int(v_params.get("support_power", 0)) > 0:
+		v_remaining.append({"type": &"RESTORE_POWER", "params": {"mech_id": v_owner_mid, "amount": int(v_params.get("support_power", 0))}})
+	if not v_remaining.is_empty():
+		action.record["_seq_effect_actions"] = {"payload": payload, "remaining": v_remaining, "effect": effect}
+		if _continue_seq_effect_actions(action):
+			action.state = &"waiting_effect_action"
+	var v_a: int = int(v_params.get("attack_bonus", 0)) if v_seen_types.has("攻击") else 0
+	var v_h: int = int(v_params.get("action_hand_bonus", 0)) if v_seen_types.has("迎击") else 0
+	var v_p: int = int(v_params.get("support_power", 0)) if v_seen_types.has("辅助") else 0
+	SLog.log_raw("[TIMING] %s 骇客窥牌：目标=%s 看%d张 类型=%s 加成[攻+%d 迎+%d 辅+%d] effect=%s" % [String(action.action_id), String(v_target_mid), v_display.size(), str(v_seen_types.keys()), v_a, v_h, v_p, String(effect.effect_id)])
+
+
+## PILOT_088_CONQUER：征服宣言弃置——首次弹选目标（3格内持有行动牌的其他机甲）。
+## 幂等守卫：payload 已选目标则跳过（resume 直接走 _pilot_088_show_type_select/finish）。
+## valid_mech_ids 过滤（同骇客 p066），取消=不计次不消耗。返回 true=已挂起等输入。
+func _handle_pilot_088_conquer(act: Dictionary, effect, payload: Dictionary, action) -> bool:
+	if context == null or context.game_state == null or action == null:
+		return false
+	if payload.has("pilot_088_target_id"):
+		return false
+	var p088_bind: Dictionary = payload.get("binding_context", {})
+	var p088_pid: StringName = p088_bind.get("player_id", payload.get("player_id", &""))
+	var p088_mid: StringName = p088_bind.get("mech_id", payload.get("source_mech_id", payload.get("mech_id", &"")))
+	if p088_pid == &"" or p088_mid == &"":
+		return false
+	var p088_mech = context.game_state.mechs.get(p088_mid)
+	if p088_mech == null or p088_mech.destroyed:
+		return false
+	var p088_candidates: Array = []
+	for p088_omid: StringName in context.game_state.mechs:
+		if p088_omid == p088_mid:
+			continue
+		var p088_om = context.game_state.mechs[p088_omid]
+		if p088_om == null or p088_om.destroyed:
+			continue
+		if _HexGrid.distance(p088_mech.position, p088_om.position) > 3:
+			continue
+		var p088_owner: StringName = p088_om.owner_player_id
+		var p088_player = context.game_state.players.get(p088_owner) if p088_owner != &"" else null
+		if p088_player != null and not p088_player.action_hand.is_empty():
+			p088_candidates.append(p088_omid)
+	if p088_candidates.is_empty():
+		return false  # 无候选（条件 OTHER_MECH_WITH_ACTION_CARD_IN_HEX_RANGE 已 gating，防御）
+	action.record["_waiting_for_target"] = true
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"pilot_088_target"}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"select_mech_target", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"rule": &"mech_target_select",
+		"mech_id": p088_mid,
+		"valid_mech_ids": p088_candidates,
+		"player_id": p088_pid,
+		"source_label": "征服：选择3格范围内持有行动牌的1台其他机甲（取消=不计次数）",
+	})
+	SLog.log_raw("[TIMING] %s 挂起征服选目标（候选%d台）effect=%s" % [String(action.action_id), p088_candidates.size(), String(effect.effect_id)])
+	return true
+
+
+## 征服宣言：弹三选一类型（攻击/迎击/辅助），不可取消（choice_panel allow_cancel=false）。
+## 选定目标后由 resume(phase=pilot_088_target) 调用；返回 true=已挂起等输入。
+func _pilot_088_show_type_select(effect, payload: Dictionary, action) -> bool:
+	if context == null or action == null:
+		return false
+	var p088_bind: Dictionary = payload.get("binding_context", {})
+	var p088_pid: StringName = p088_bind.get("player_id", payload.get("player_id", &""))
+	if p088_pid == &"":
+		return false
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"pilot_088_type"}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"pilot_088_type_select", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"player_id": p088_pid,
+		"options": [
+			{"label": "攻击", "effect_id": &"type_攻击", "declared_type": "攻击"},
+			{"label": "迎击", "effect_id": &"type_迎击", "declared_type": "迎击"},
+			{"label": "辅助", "effect_id": &"type_辅助", "declared_type": "辅助"},
+		],
+		"source_label": "征服：宣言1种行动牌类型（选定目标后本回合次数已消耗，不能取消）",
+	})
+	SLog.log_raw("[TIMING] %s 挂起征服选类型 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+	return true
+
+
+## 征服收尾：随机取目标1张行动牌 → 非阻塞浮窗（所有玩家端显示宣言类型+展示牌）→
+## 类型匹配弃置：相同→弃目标除展示牌外全部行动牌；不同→弃展示牌（EXECUTE_DISCARD card_ids 显式，
+## 走 _seq_effect_actions 串行，无 UI 直接弃）。若弃置子动作挂起则置 action waiting_effect_action。
+func _pilot_088_finish_conquer(effect, payload: Dictionary, action) -> void:
+	if context == null or context.game_state == null or action == null:
+		return
+	var p088_target_id: StringName = payload.get("pilot_088_target_id", &"")
+	var p088_declared: String = String(payload.get("pilot_088_declared_type", ""))
+	if p088_target_id == &"" or p088_declared == "":
+		return
+	var p088_target_player = context.game_state.get_player_for_mech(p088_target_id)
+	if p088_target_player == null:
+		return
+	var p088_hand: Array = p088_target_player.action_hand.duplicate()
+	if p088_hand.is_empty():
+		SLog.log_raw("[TIMING] %s 征服目标无行动牌（异常），中止 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+		return
+	# 随机取1张：确定性 hash 派生（瑟尔基尔 pilot_003 同款修复模式）。
+	# 种子 = 施法者机师牌实例id + 回合数*97，双端一致且不依赖 context.rng 消耗序列--
+	# synced_shuffle 在 PvP/PvP3 中一旦各端 rng 序列分叉（此前实机 3 端展示牌不一致的根因）
+	# 即永久分叉；hash 派生各端独立计算结果恒同。同回合同施法者多次发动也能取到不同牌
+	# （回合数/实例id 变化 -> 种子变化；同种子重入场景展示同一张，可接受--效果本身幂等展示）。
+	var p088_bc: Dictionary = payload.get("binding_context", {})
+	var p088_seed: int = abs(int(String(p088_bc.get("card_instance_id", "")).hash()) + int(context.game_state.turn_number) * 97)
+	var p088_shown_id: StringName = p088_hand[p088_seed % p088_hand.size()]
+	var p088_shown_type: String = ""
+	var p088_shown_name: String = "?"
+	var p088_shown_card = context.game_state.get_card(p088_shown_id)
+	if p088_shown_card != null and p088_shown_card.def != null:
+		p088_shown_type = String(p088_shown_card.def.action_type) if "action_type" in p088_shown_card.def else ""
+		p088_shown_name = String(p088_shown_card.def.display_name)
+	# 非阻塞浮窗：所有玩家端显示「宣言类型 + 随机展示的牌」（app_root 全部显示，不过滤持有者）
+	var p088_holder_name: String = String(p088_target_id)
+	var p088_tm = context.game_state.mechs.get(p088_target_id)
+	if p088_tm != null and p088_tm.frame_def != null and String(p088_tm.frame_def.display_name) != "":
+		p088_holder_name = String(p088_tm.frame_def.display_name)
+	action_needs_input.emit(action.action_id, &"pilot_088_conquer_display", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"owner_mech_id": p088_target_id,
+		"display_cards": [
+			{"name": "宣言类型", "type": p088_declared},
+			{"name": "随机展示：%s" % p088_shown_name, "type": p088_shown_type},
+		],
+		"source_label": "征服：宣言与目标随机展示（目标：%s）" % p088_holder_name,
+	})
+	# 类型匹配决定弃置
+	var p088_discard_ids: Array = []
+	if p088_shown_type == p088_declared:
+		# 相同：弃目标除展示牌外全部行动牌
+		for p088_cid: StringName in p088_target_player.action_hand:
+			if p088_cid != p088_shown_id:
+				p088_discard_ids.append(p088_cid)
+	else:
+		# 不同：弃展示牌
+		p088_discard_ids = [p088_shown_id]
+	SLog.log_raw("[TIMING] %s 征服结算：目标=%s 宣言=%s 展示=%s(类型%s) 弃%d张 effect=%s" % [String(action.action_id), String(p088_target_id), p088_declared, String(p088_shown_id), p088_shown_type, p088_discard_ids.size(), String(effect.effect_id)])
+	if p088_discard_ids.is_empty():
+		return
+	action.record["_seq_effect_actions"] = {
+		"payload": payload,
+		"remaining": [
+			{"type": &"EXECUTE_DISCARD", "params": {
+				"card_ids": p088_discard_ids,
+				"player_id": p088_target_player.player_id,
+				"reason": &"pilot_088_conquer",
+			}},
+		],
+		"effect": effect,
+	}
+	if _continue_seq_effect_actions(action):
+		action.state = &"waiting_effect_action"
+
+
+## PILOT_059_TURN_START_FLOW：薇尔效果1 回合开始损伤调整+分支（多阶段挂起）。
+## 被动 LISTEN TURN_START，首次进入弹损伤调整面板（damage_adjust：每槽位 +1/-1+取消，
+## 仅1次机会，也可取消不调整），挂起等待 resume_pending_effect phase=pilot_059_adjust。
+## resume 阶段：应用调整（set 放1损+查装备损坏 / remove 移1损 / cancel 不动）→ 用
+## PILOT_044_COMPUTE_DAMAGE 统计调整后损伤数 N → 三分支（<threshold 获金 / ==threshold
+## 视为补给抽2行动+1装备 / >threshold 移除最多 max_remove）经 _seq_effect_actions 串行执行。
+## 通用可复用：threshold/gold_amount/max_remove/store_key/source_label 全由 params 决定，
+## 效果绑定 effect 而非机师。返回 true=已挂起等输入。
+func _handle_pilot_059_turn_start_flow(act: Dictionary, effect, payload: Dictionary, action) -> bool:
+	if context == null or context.game_state == null or action == null:
+		return false
+	# 已进入后续阶段（resume 后不再重进顶层 _execute_actions）
+	if payload.has("pilot_059_phase"):
+		return false
+	var p59_params: Dictionary = act.get("params", {})
+	var p59_bind: Dictionary = payload.get("binding_context", {})
+	var p59_owner_pid: StringName = p59_bind.get("player_id", &"")
+	var p59_owner_mid: StringName = p59_bind.get("mech_id", &"")
+	if p59_owner_pid == &"" or p59_owner_mid == &"":
+		return false
+	if not context.game_state.mechs.has(p59_owner_mid):
+		return false
+	# 首次：存阶段标志+params，弹损伤调整面板并挂起
+	payload["pilot_059_phase"] = &"adjust"
+	payload["pilot_059_params"] = p59_params
+	var p59_label: String = String(p59_params.get("source_label", "薇尔·损伤调整"))
+	_pending_effect[action.action_id] = {
+		"action": action, "effect": effect, "payload": payload, "phase": &"pilot_059_adjust",
+	}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"damage_adjust", {
+		"action_id": action.action_id,
+		"mech_id": p59_owner_mid,
+		"player_id": p59_owner_pid,
+		"source_label": p59_label,
+	})
+	SLog.log_raw("[TIMING] %s pilot_059 回合开始弹损伤调整面板 mech=%s effect=%s" % [String(action.action_id), String(p59_owner_mid), String(effect.effect_id)])
+	return true
+
+
+## PILOT_028_FORCE_TRIBUTE：乌尔效果2 需交牌。USE_ACTION_AT 触发。
+## 条件：已宣言 + 其他机甲使用 + 实体牌 + 宣言类型牌 + 距离≤4+X + 用牌玩家手牌≥2。
+## 满足且玩家非 AI：弹交给牌窗（thrust_select，min_count=2）给用牌玩家，挂起等待。
+## 手牌<2 -> 不弹窗直接设跳过标志（行动牌不生效）；AI 用牌玩家自动交出前2张。
+## 返回 true=已挂起等输入；false=已同步处理/跳过。
+func _handle_pilot_028_force_tribute(_act: Dictionary, effect: ActionEffect, payload: Dictionary, action) -> bool:
+	if context == null or context.game_state == null:
+		return false
+	var p28_card = _ActionPilotEffects.pilot_028_pilot_card(context.game_state)
+	if p28_card == null:
+		return false
+	var declared: String = _ActionPilotEffects.get_pilot_028_declared(p28_card)
+	if declared == "":
+		return false
+	var p28_w_mid: StringName = _ActionPilotEffects.pilot_028_find_w_mech(context.game_state)
+	if p28_w_mid == &"":
+		return false
+	var p28_w_mech = context.game_state.mechs.get(p28_w_mid)
+	if p28_w_mech == null:
+		return false
+	var use_mech_id: StringName = payload.get("mech_id", payload.get("source_mech_id", &""))
+	if use_mech_id == &"" or use_mech_id == p28_w_mid:
+		return false  # 其他机甲使用才触发
+	var use_mech = context.game_state.mechs.get(use_mech_id)
+	if use_mech == null or use_mech.destroyed:
+		return false
+	# 实体牌（转化虚拟不算）
+	if bool(payload.get("virtual_transform", false)):
+		return false
+	# 宣言类型牌
+	var card_id: StringName = payload.get("card_instance_id", &"")
+	var card = context.game_state.get_card(card_id) if card_id != &"" else null
+	if card == null or card.def == null:
+		return false
+	var card_type: String = String(card.def.action_type) if "action_type" in card.def else ""
+	if card_type != declared:
+		return false
+	# 距离 ≤ 4+X
+	var p28_x: int = _ActionPilotEffects.get_pilot_028_x(p28_card)
+	if int(_HexGrid.distance(use_mech.position, p28_w_mech.position)) > 4 + p28_x:
+		return false
+	# 用牌玩家
+	var use_pid: StringName = payload.get("player_id", &"")
+	if use_pid == &"":
+		var use_player_0 = context.game_state.get_player_for_mech(use_mech_id)
+		if use_player_0 != null:
+			use_pid = use_player_0.player_id
+	if use_pid == &"":
+		return false
+	var use_player = context.game_state.players.get(use_pid)
+	if use_player == null:
+		return false
+	# 交给牌候选 = 用牌玩家行动手牌（正在使用的牌已在临时区，不在此列）
+	var tribute_candidates: Array = use_player.action_hand.duplicate()
+	if tribute_candidates.size() < 2:
+		# 牌不够2张 -> 不弹窗，行动牌不生效（跳过效果阶段）
+		action.record["_pilot_028_skip_effects"] = true
+		SLog.log_raw("[TIMING] %s pilot_028 需交牌：%s 手牌<2，%s 使用宣言[%s]不生效" % [String(action.action_id), String(use_pid), String(card.def.display_name), declared])
+		return false
+	# 去重守卫：同一动作只弹一次（多个 USE_ACTION_AT 监听器/重跑场景）
+	if action.record.get("_p028_tribute_shown", false):
+		return false
+	action.record["_p028_tribute_shown"] = true
+	if _is_ai_owner(use_pid, use_mech_id):
+		_pilot_028_do_tribute(action, tribute_candidates.slice(0, 2))
+		SLog.log_raw("[TIMING] %s pilot_028 需交牌：AI %s 自动交出2张，%s 使用宣言[%s]生效" % [String(action.action_id), String(use_mech_id), String(card.def.display_name), declared])
+		return false
+	# 人类用牌玩家：弹交给牌窗（max_count=2 只选恰好2张，min_count=2 不足不可确认）
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"pilot_028_tribute"}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"select_thrust_cards", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"card_ids": tribute_candidates,
+		"player_id": use_pid,
+		"label": "乌尔「需交牌」：使用宣言[%s]牌须交给乌尔2张行动牌才能生效" % declared,
+		"confirm_verb": "交出",
+		"cancel_label": "不交牌（行动牌不生效）",
+		"max_count": 2,
+		"min_count": 2,
+	})
+	SLog.log_raw("[TIMING] %s 挂起乌尔需交牌 effect=%s 用牌=%s 手牌=%d" % [String(action.action_id), String(effect.effect_id), String(use_mech_id), tribute_candidates.size()])
+	return true
+
+
+## 执行交给牌：把用牌玩家（action.record.player_id）的 card_ids（至多2张）转移给乌尔玩家。
+## 交给牌成功（交足）后行动牌正常生效；调用方在交不够/取消时已设跳过标志。
+func _pilot_028_do_tribute(action, card_ids: Array) -> void:
+	if context == null or context.game_state == null or action == null:
+		return
+	var p28_w_mid: StringName = _ActionPilotEffects.pilot_028_find_w_mech(context.game_state)
+	if p28_w_mid == &"":
+		return
+	var p28_w_player = context.game_state.get_player_for_mech(p28_w_mid)
+	var from_pid: StringName = action.record.get("player_id", &"") if action.record != null else &""
+	if p28_w_player == null or from_pid == &"":
+		return
+	var xfer: Array = card_ids.slice(0, 2)
+	if xfer.is_empty() or from_pid == StringName(p28_w_player.player_id):
+		return
+	context.game_actions.transfer_action_cards({
+		"from_player_id": from_pid,
+		"to_player_id": p28_w_player.player_id,
+		"card_ids": xfer,
+	})
+	SLog.log_raw("[TIMING] %s pilot_028 交给牌：%s 交 %d 张给 %s" % [String(action.action_id), String(from_pid), xfer.size(), String(p28_w_player.player_id)])
+
+
 func _handle_pilot_006_force_use_attack(act: Dictionary, effect: ActionEffect, payload: Dictionary, action) -> bool:
 	var p06_params: Dictionary = act.get("params", {})
 	var p06_target_mech: StringName = _resolve_mech_id_expr(String(p06_params.get("target_mech_id", &"")), payload)
@@ -1495,8 +2728,7 @@ func _handle_pilot_006_force_use_attack(act: Dictionary, effect: ActionEffect, p
 		return false
 	var p06_player = context.game_state.get_player_for_mech(p06_target_mech)
 	if p06_player == null:
-		_pilot_006_fallback_damage(p06_target_mech, action)
-		return false
+		return _pilot_006_fallback_damage(p06_target_mech, action, payload)
 	# AI 被选机甲：暂跳过（pilot_006 e3 先 PvP 人类）
 	if _is_ai_owner(p06_player.player_id, p06_target_mech):
 		SLog.log_raw("[TIMING] %s pilot_006 战后逼迫：被选机甲为 AI，跳过 effect=%s" % [String(action.action_id), String(effect.effect_id)])
@@ -1508,8 +2740,7 @@ func _handle_pilot_006_force_use_attack(act: Dictionary, effect: ActionEffect, p
 			p06_card_ids.append(hand_cid)
 	# 无攻击牌：回落4伤害（二选一选了攻击但无牌可打）
 	if p06_card_ids.is_empty():
-		_pilot_006_fallback_damage(p06_target_mech, action)
-		return false
+		return _pilot_006_fallback_damage(p06_target_mech, action, payload)
 	# 去重守卫
 	if action.record.get("_pilot_006_force_shown", false):
 		return false
@@ -1528,13 +2759,1202 @@ func _handle_pilot_006_force_use_attack(act: Dictionary, effect: ActionEffect, p
 	return true
 
 
-## pilot_006 e3 战后逼迫回落：对被选机甲造成4伤害（选牌取消/无牌可打时）。
-## 直接减 HP（不走 DEAL_DAMAGE atomic 的 fire_hook，避免在 ATTACK_SETTLE 挂起链中
-## 嵌套 legacy hook 触发内存问题；裁定：回落4伤害是直接伤害）。
-func _pilot_006_fallback_damage(target_mech: StringName, _action) -> void:
-	if target_mech == &"" or context == null or context.game_actions == null:
+## 铠威 pilot_039 调度：被响应攻击结算时登记「攻击动作完成后」钩子（非阻塞，不弹窗）。
+## ATTACK_SETTLE（priority 30，条件 SELF_MECH_IS_ATTACKER + responded）触发后：
+## 取攻击方机甲/玩家，run_after_action_completed 挂到本次攻击 action 上；攻击动作完全
+## 清理完成（含 _step_cleanup 关闭攻击窗口之后）由 ActionService 派发
+## _ActionPilotEffects.pilot_039_after_attack_completed（入队+弹确认）。去重守卫防重跑。
+func _handle_pilot_039_schedule_after_attack(effect: ActionEffect, payload: Dictionary, action) -> void:
+	if context == null or context.game_state == null or context.action_service == null:
 		return
-	context.game_actions.pilot_006_deal_4_damage({"mech_id": target_mech})
+	# 去重守卫：同一攻击动作只登记一次（LISTEN effect 在 ATTACK_SETTLE 每攻击仅 fire 一次，保险起见）
+	if action.record.get("_pilot_039_scheduled", false):
+		return
+	action.record["_pilot_039_scheduled"] = true
+	var bind = _make_binding_from_effect(effect, action, payload)
+	var mech_id: StringName = bind.get_source_mech_id() if bind != null else &""
+	if mech_id == &"":
+		mech_id = payload.get("attacker_id", &"")
+	if mech_id == &"":
+		return
+	var player = context.game_state.get_player_for_mech(mech_id)
+	if player == null:
+		return
+	# 关键：钩子挂到「攻击」动作而非本效果动作——fire_timing_point(ATTACK_SETTLE) 时
+	# payload["action_id"] 即攻击动作 id。效果动作在 ATTACK_SETTLE 内同步完成（过早），
+	# 而攻击动作完成才是「此攻击结算后」的时点（伤害已结算、_step_cleanup 已关窗）。
+	var attack_action_id: StringName = payload.get("action_id", &"")
+	if attack_action_id == &"":
+		return
+	var pid: StringName = player.player_id
+	var cb := Callable(func() -> void:
+		_ActionPilotEffects.pilot_039_after_attack_completed(context, pid, mech_id))
+	context.action_service.run_after_action_completed(attack_action_id, cb)
+	SLog.log_raw("[TIMING] %s 铠威登记攻击完成钩子 attacker=%s effect=%s" % [String(attack_action_id), String(mech_id), String(effect.effect_id)])
+
+
+## 铠厉 pilot_056 通用调度：被响应攻击结算时登记「攻击动作完成后」钩子（非阻塞，不弹窗）。
+## 与铠威 pilot_039 同构：ATTACK_SETTLE（priority 30，条件 SELF_MECH_IS_ATTACKER + responded）触发后，
+## run_after_action_completed 挂到本次攻击 action 上；攻击动作完全清理完成后由 ActionService 派发
+## _ActionPilotEffects.responded_equip_after_attack_completed（入队触发+弹确认+逐张设置/弃置获金链）。
+## 去重守卫防重跑（同一攻击只登记一次）。通用模块 responded_equip_chain_* 不绑机师，任意
+## 含 RESPONDED_EQUIP_SCHEDULE_AFTER_ATTACK 动作的效果复用。
+func _handle_responded_equip_schedule_after_attack(effect: ActionEffect, payload: Dictionary, action) -> void:
+	if context == null or context.game_state == null or context.action_service == null:
+		return
+	# 去重守卫：同一攻击动作只登记一次
+	if action.record.get("_responded_equip_scheduled", false):
+		return
+	action.record["_responded_equip_scheduled"] = true
+	var bind = _make_binding_from_effect(effect, action, payload)
+	var mech_id: StringName = bind.get_source_mech_id() if bind != null else &""
+	if mech_id == &"":
+		mech_id = payload.get("attacker_id", &"")
+	if mech_id == &"":
+		return
+	var player = context.game_state.get_player_for_mech(mech_id)
+	if player == null:
+		return
+	# 钩子挂到「攻击」动作而非本效果动作——fire_timing_point(ATTACK_SETTLE) 时
+	# payload["action_id"] 即攻击动作 id；攻击动作完成才是「此攻击结算后」的时点。
+	var attack_action_id: StringName = payload.get("action_id", &"")
+	if attack_action_id == &"":
+		return
+	var pid: StringName = player.player_id
+	var cb := Callable(func() -> void:
+		_ActionPilotEffects.responded_equip_after_attack_completed(context, pid, mech_id))
+	context.action_service.run_after_action_completed(attack_action_id, cb)
+	SLog.log_raw("[TIMING] %s 铠厉登记被响应抽装链钩子 attacker=%s effect=%s" % [String(attack_action_id), String(mech_id), String(effect.effect_id)])
+
+
+## 铠德 pilot_060 通用调度：被响应攻击结算时登记「攻击动作完成后」钩子（非阻塞，不弹窗）。
+## 与铠威/铠厉同构：ATTACK_SETTLE（priority 30，条件 SELF_MECH_IS_ATTACKER + responded）触发后，
+## run_after_action_completed 挂到本次攻击 action 上；攻击动作完全清理完成后由 ActionService 派发
+## _ActionPilotEffects.pilot_060_after_attack_completed（入队触发+弹三选一）。去重守卫防重跑。
+## 通用模块 pilot_060_* 不绑机师，任意含 PILOT_060_SCHEDULE_AFTER_ATTACK 动作的效果复用。
+func _handle_pilot_060_schedule_after_attack(effect: ActionEffect, payload: Dictionary, action) -> void:
+	if context == null or context.game_state == null or context.action_service == null:
+		return
+	# 去重守卫：同一攻击动作只登记一次
+	if action.record.get("_pilot_060_scheduled", false):
+		return
+	action.record["_pilot_060_scheduled"] = true
+	var bind = _make_binding_from_effect(effect, action, payload)
+	var mech_id: StringName = bind.get_source_mech_id() if bind != null else &""
+	if mech_id == &"":
+		mech_id = payload.get("attacker_id", &"")
+	if mech_id == &"":
+		return
+	var player = context.game_state.get_player_for_mech(mech_id)
+	if player == null:
+		return
+	# 钩子挂到「攻击」动作而非本效果动作——fire_timing_point(ATTACK_SETTLE) 时
+	# payload["action_id"] 即攻击动作 id；攻击动作完成才是「此攻击结算后」的时点。
+	var attack_action_id: StringName = payload.get("action_id", &"")
+	if attack_action_id == &"":
+		return
+	var pid: StringName = player.player_id
+	var cb := Callable(func() -> void:
+		_ActionPilotEffects.pilot_060_after_attack_completed(context, pid, mech_id))
+	context.action_service.run_after_action_completed(attack_action_id, cb)
+	SLog.log_raw("[TIMING] %s 铠德登记被响应三选一钩子 attacker=%s effect=%s" % [String(attack_action_id), String(mech_id), String(effect.effect_id)])
+
+
+## 效果来源机甲是否处于攻击窗口中（铠威窗口攻击数豁免判定共用）。
+## binding 来源机甲 == 窗口 owner_mech_id 时返回 true；窗口未激活/无来源机甲返回 false。
+func _attack_window_active_for_binding(binding) -> bool:
+	if binding == null or context == null or context.game_state == null:
+		return false
+	var mid: StringName = binding.get_source_mech_id()
+	return _ActionPilotEffects.attack_window_active_for_mech(context.game_state, mid)
+
+
+## 通用直接生命变动：原先直接改 current_hp 的效果伤害（pilot_006 战后逼迫回落 / pilot_047
+## 交牌差额 / pilot_019 弃牌清空4伤害）统一转走 EXECUTE_HP_CHANGE 子动作，使
+## HP_CHANGE_BEFORE/AFTER/SETTLE 时点正常触发（杰狞 pilot_049 差额转移等监听器可拦截）。
+## 复用：直接伤害类效果按此模式调本 helper（仿 pilot_019 弃牌链的子动作挂起处理）。
+## 返回 true = 子动作挂起（调用方停止推进，等 _after_sub_action_finished 通知续跑），
+## false = 同步完成 / 前置不满足跳过（未创建子动作）。
+func _deal_direct_hp_change_sub(action, payload: Dictionary, target_mech: StringName, amount: int, source_mech_id: StringName, reason: StringName) -> bool:
+	if action == null or context == null or context.action_service == null or context.game_state == null:
+		return false
+	if target_mech == &"" or amount <= 0:
+		return false
+	var dmg_target = context.game_state.mechs.get(target_mech)
+	if dmg_target == null or dmg_target.destroyed:
+		return false
+	context.action_service.execute_sub_action({
+		"type": &"EXECUTE_HP_CHANGE",
+		"params": {
+			"mech_ids": [target_mech],
+			"value": amount,
+			"method": &"decrease",
+			"source_mech_id": source_mech_id,
+			"reason": reason,
+		},
+	}, payload, action)
+	if _last_created_sub_action_paused(action):
+		action.state = &"waiting_effect_action"
+		SLog.log_raw("[TIMING] %s 直接伤害转 hp_change 子动作挂起 目标=%s 数值=%d 来源=%s 原因=%s" % [String(action.action_id), String(target_mech), amount, String(source_mech_id), String(reason)])
+		return true
+	return false
+
+
+## pilot_006 e3 战后逼迫回落：对被选机甲造成4伤害（选牌取消/无牌可打时）。
+## 转 EXECUTE_HP_CHANGE 子动作（HP_CHANGE_BEFORE 时点可被杰狞 pilot_049 转移等拦截）。
+## 返回 true = 伤害子动作挂起。
+func _pilot_006_fallback_damage(target_mech: StringName, action, payload: Dictionary) -> bool:
+	if target_mech == &"" or context == null or context.game_state == null:
+		return false
+	var p06_bind: Dictionary = payload.get("binding_context", {})
+	var p06_src: StringName = p06_bind.get("mech_id", payload.get("source_mech_id", payload.get("mech_id", &"")))
+	return _deal_direct_hp_change_sub(action, payload, target_mech, 4, p06_src, &"pilot_006_refused_attack")
+
+
+## pilot_047 里欧娜 e1 分支①「立即使用1张攻击牌」：被选机甲选1张攻击牌被动使用。
+## 复制自 pilot_006 e3 的 PILOT_006_FORCE_USE_ATTACK，差异：选牌窗 no_cancel 不可取消；
+## 无攻击牌/取消（防御路径）转交牌流程（PILOT_047_FORCE_HANDOVER）。AI 被选机甲暂跳过。
+## 返回 true=已挂起等输入；false=已同步处理/跳过。
+func _handle_pilot_047_force_use_attack(act: Dictionary, effect: ActionEffect, payload: Dictionary, action) -> bool:
+	var p47_params: Dictionary = act.get("params", {})
+	var p47_target: StringName = _resolve_mech_id_expr(String(p47_params.get("target_mech_id", &"")), payload)
+	if p47_target == &"":
+		p47_target = payload.get("target_id", payload.get("target_mech_id", &""))
+	if p47_target == &"" or context == null or context.game_state == null:
+		return false
+	var p47_to_mech: StringName = _resolve_mech_id_expr(String(p47_params.get("to_mech_id", &"")), payload)
+	if p47_to_mech == &"":
+		var p47_bind: Dictionary = payload.get("binding_context", {})
+		p47_to_mech = p47_bind.get("mech_id", &"")
+	var p47_count: int = int(p47_params.get("count", 3))
+	var p47_dpm: int = int(p47_params.get("damage_per_missing", 2))
+	var p47_player = context.game_state.get_player_for_mech(p47_target)
+	if p47_player == null:
+		# 防御：无玩家转交牌（空手牌全交 + 满差额伤害）
+		return _pilot_047_do_handover(p47_target, p47_to_mech, [], p47_count, p47_dpm, action, payload)
+	# AI 被选机甲：暂跳过（pilot_047 先 PvP 人类，同 pilot_006 e3）
+	if _is_ai_owner(p47_player.player_id, p47_target):
+		SLog.log_raw("[TIMING] %s pilot_047 战后威逼：被选机甲为 AI，跳过 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+		return false
+	var p47_card_ids: Array = []
+	for hand_cid in p47_player.action_hand:
+		var hand_card = context.game_state.get_card(hand_cid)
+		if hand_card != null and hand_card.def != null and String(hand_card.def.action_type) == "攻击":
+			p47_card_ids.append(hand_cid)
+	# 无攻击牌：转交牌流程（空手牌全交 + 满差额伤害；正常 MECH_HAS_USABLE_ATTACK_CARD 置灰不会走到）
+	if p47_card_ids.is_empty():
+		return _handle_pilot_047_force_handover(act, effect, payload, action)
+	# 去重守卫
+	if action.record.get("_pilot_047_force_shown", false):
+		return false
+	action.record["_pilot_047_force_shown"] = true
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload,
+		"phase": &"pilot_047_force_use_attack", "pilot_047_target_mech": p47_target,
+		"pilot_047_to_mech": p47_to_mech, "pilot_047_count": p47_count, "pilot_047_dpm": p47_dpm}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"select_pilot_006_attack_card", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"card_ids": p47_card_ids,
+		"target_mech_id": p47_target,
+		"player_id": p47_player.player_id,
+		"no_cancel": true,
+		"label": "里欧娜：被选机甲立即使用1张攻击牌",
+	})
+	SLog.log_raw("[TIMING] %s pilot_047 战后威逼选攻击牌 effect=%s 候选=%d" % [String(action.action_id), String(effect.effect_id), p47_card_ids.size()])
+	return true
+
+
+## pilot_047 里欧娜 e1 分支②「交给我方3张行动牌」：目标手牌>count 弹交给牌窗（目标玩家选
+## count 张，min=max=count no_cancel）；手牌≤count 不弹窗直接全部交出；差额
+## count - 实交数 每张 damage_per_missing 直接扣 HP（同 pilot_006 直接伤害先例）。
+## AI 被选机甲自动交出（够则前 count 张，不够全交）+ 差额伤害。
+## 返回 true=已挂起等输入；false=已同步处理/跳过。
+func _handle_pilot_047_force_handover(act: Dictionary, effect: ActionEffect, payload: Dictionary, action) -> bool:
+	if context == null or context.game_state == null:
+		return false
+	var p47_params: Dictionary = act.get("params", {})
+	var p47_target: StringName = _resolve_mech_id_expr(String(p47_params.get("target_mech_id", &"")), payload)
+	if p47_target == &"":
+		p47_target = payload.get("target_id", payload.get("target_mech_id", &""))
+	if p47_target == &"":
+		return false
+	var p47_to_mech: StringName = _resolve_mech_id_expr(String(p47_params.get("to_mech_id", &"")), payload)
+	if p47_to_mech == &"":
+		var p47_bind: Dictionary = payload.get("binding_context", {})
+		p47_to_mech = p47_bind.get("mech_id", &"")
+	var p47_count: int = int(p47_params.get("count", 3))
+	var p47_dpm: int = int(p47_params.get("damage_per_missing", 2))
+	var p47_player = context.game_state.get_player_for_mech(p47_target)
+	var p47_owner = context.game_state.get_player_for_mech(p47_to_mech)
+	if p47_player == null or p47_owner == null:
+		return false
+	var p47_hand: Array = p47_player.action_hand.duplicate()
+	# AI 被选机甲：自动交出（够则前 count 张，不够全交）+ 差额伤害
+	if _is_ai_owner(p47_player.player_id, p47_target):
+		var p47_ai_paused: bool = _pilot_047_do_handover(p47_target, p47_to_mech, p47_hand.slice(0, p47_count), p47_count, p47_dpm, action, payload)
+		SLog.log_raw("[TIMING] %s pilot_047 交牌：AI %s 自动交出 %d 张" % [String(action.action_id), String(p47_target), mini(p47_hand.size(), p47_count)])
+		return p47_ai_paused
+	# 手牌≤count：不弹窗，全部交出 + 差额伤害
+	if p47_hand.size() <= p47_count:
+		return _pilot_047_do_handover(p47_target, p47_to_mech, p47_hand, p47_count, p47_dpm, action, payload)
+	# 去重守卫
+	if action.record.get("_pilot_047_handover_shown", false):
+		return false
+	action.record["_pilot_047_handover_shown"] = true
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload,
+		"phase": &"pilot_047_force_handover", "pilot_047_target_mech": p47_target,
+		"pilot_047_to_mech": p47_to_mech, "pilot_047_count": p47_count, "pilot_047_dpm": p47_dpm}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"select_thrust_cards", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"card_ids": p47_hand,
+		"player_id": p47_player.player_id,
+		"label": "里欧娜「战后威逼交牌」：必须交给我方%d张行动牌（少交每张受%d伤害）" % [p47_count, p47_dpm],
+		"confirm_verb": "交出",
+		"cancel_label": "取消",
+		"max_count": p47_count,
+		"min_count": p47_count,
+		"no_cancel": true,
+	})
+	SLog.log_raw("[TIMING] %s 挂起 pilot_047 交给牌窗 effect=%s 目标=%s 手牌=%d" % [String(action.action_id), String(effect.effect_id), String(p47_target), p47_hand.size()])
+	return true
+
+
+## 执行交给牌：把 target_mech 的 card_ids（至多 count 张）转移给 to_mech 的玩家，
+## 差额 count - 实交数 每张 damage_per_missing 转 EXECUTE_HP_CHANGE 子动作扣 target_mech HP
+## （HP_CHANGE_BEFORE 时点可被杰狞 pilot_049 转移等拦截）。返回 true = 伤害子动作挂起。
+func _pilot_047_do_handover(target_mech: StringName, to_mech: StringName, card_ids: Array, count: int, dpm: int, action, payload: Dictionary = {}) -> bool:
+	if context == null or context.game_state == null or context.game_actions == null:
+		return false
+	if target_mech == &"" or to_mech == &"":
+		return false
+	var from_player = context.game_state.get_player_for_mech(target_mech)
+	var to_player = context.game_state.get_player_for_mech(to_mech)
+	if from_player == null or to_player == null:
+		return false
+	var xfer: Array = card_ids.slice(0, count)
+	var shortfall: int = maxi(0, count - xfer.size())
+	if not xfer.is_empty() and StringName(from_player.player_id) != StringName(to_player.player_id):
+		context.game_actions.transfer_action_cards({
+			"from_player_id": from_player.player_id,
+			"to_player_id": to_player.player_id,
+			"card_ids": xfer,
+		})
+	var paused: bool = false
+	if shortfall > 0:
+		# 来源 = to_mech（里欧娜持有者机甲，效果来源）
+		paused = _deal_direct_hp_change_sub(action, payload, target_mech, dpm * shortfall, to_mech, &"pilot_047_handover_shortfall")
+	SLog.log_raw("[TIMING] %s pilot_047 交给牌：%s 交 %d 张给 %s，差额 %d，伤害 %d，挂起=%s" % [String(action.action_id), String(target_mech), xfer.size(), String(to_mech), shortfall, dpm * shortfall, str(paused)])
+	return paused
+
+
+## ═══════════════════════════════════════════
+## 通用「动力税」机制（POWER_SPEND_TAX，杰西卡 pilot_050 e1/e1b；复用=复制定义改参数）
+## ═══════════════════════════════════════════
+## 监听其他机甲动力消耗：范围内（base_range + 绑定卡 counter_key 计数 X）其他机甲每累计
+## 消耗 threshold 点动力 -> 弹确认窗询问效果持有者是否使该机甲与我方各受 damage 伤害。
+## 确认 -> 两次独立 hp_change 子动作（先该机甲后我方，顺序结算：双方同濒死该机甲先死），
+## 来源均为我方机甲。确认/拒绝都清掉这 threshold 点累计（拒绝清零），余数留累计继续记。
+## 范围判定在消耗时快照（先消耗再移动：BASIC_MOVE_AT 在移位前触发，范围外消耗后移入不计、
+## 范围内消耗后移出仍计入）。一次消耗 N 点 -> floor(N/threshold) 次询问串行执行（一次消耗10
+## 按5次触发）。触发时机=消耗时立即阻塞（弹窗挂起宿主动作，移动逐格中断）。
+## 消耗方/数值来源：power_spent 虚拟时点（非移动消耗）读 payload._power_spent_event；
+## BASIC_MOVE_AT 路径读 payload.mech_id + power_cost（免费移动 free_move 未实际消耗不计）。
+## 返回 true=已挂起（弹窗/伤害链），false=无事发生（不在范围/未达阈值/AI 持有者）。
+func _handle_power_spend_tax(act: Dictionary, effect: ActionEffect, payload: Dictionary, action) -> bool:
+	if context == null or context.game_state == null:
+		return false
+	var pt_params: Dictionary = act.get("params", {})
+	var pt_base_range: int = int(pt_params.get("base_range", 4))
+	var pt_counter_key: StringName = pt_params.get("counter_key", &"")
+	var pt_damage: int = int(pt_params.get("damage", 2))
+	var pt_threshold: int = int(pt_params.get("threshold", 2))
+	var pt_accum_prefix: String = String(pt_params.get("accum_prefix", "power_tax_accum_"))
+	var pt_bind: Dictionary = payload.get("binding_context", {})
+	var pt_owner_mech: StringName = pt_bind.get("mech_id", &"")
+	var pt_owner_pid: StringName = pt_bind.get("player_id", &"")
+	var pt_cid: StringName = pt_bind.get("card_instance_id", &"")
+	if pt_owner_mech == &"" or pt_cid == &"":
+		return false
+	var pt_card = context.game_state.get_card(pt_cid)
+	var pt_owner_src = context.game_state.mechs.get(pt_owner_mech)
+	if pt_card == null or pt_owner_src == null or pt_owner_src.destroyed:
+		return false
+	# 消耗方与数值
+	var pt_spender: StringName = &""
+	var pt_amount: int = 0
+	var pt_evt: Dictionary = payload.get("_power_spent_event", {})
+	if pt_evt is Dictionary and not pt_evt.is_empty():
+		pt_spender = pt_evt.get("mech_id", &"")
+		pt_amount = int(pt_evt.get("amount", 0))
+	else:
+		pt_spender = payload.get("mech_id", payload.get("source_mech_id", &""))
+		pt_amount = int(payload.get("power_cost", 0))
+		if bool(payload.get("free_move", false)):
+			pt_amount = 0  # 免费移动未实际消耗动力
+	if pt_amount <= 0 or pt_spender == &"" or String(pt_spender) == String(pt_owner_mech):
+		return false
+	var pt_spender_mech = context.game_state.mechs.get(pt_spender)
+	if pt_spender_mech == null or pt_spender_mech.destroyed:
+		return false
+	# 范围判定（消耗时快照，hex 距离 <= base_range + X）
+	var pt_counters0: Dictionary = pt_card.counters if pt_card.counters != null else {}
+	var pt_x: int = int(pt_counters0.get("var_%s" % String(pt_counter_key), 0)) if pt_counter_key != &"" else 0
+	if _HexGrid.distance(pt_owner_src.position, pt_spender_mech.position) > pt_base_range + pt_x:
+		return false
+	# 累计（存本卡实例 counters，按消耗方机甲分键；只可能是 0..threshold-1 的余数）
+	var pt_accum_key: String = "%s%s" % [pt_accum_prefix, String(pt_spender)]
+	var pt_accum: int = int(pt_counters0.get(pt_accum_key, 0)) + pt_amount
+	var pt_triggers: int = 0
+	if pt_threshold > 0 and pt_accum >= pt_threshold:
+		pt_triggers = int(pt_accum / pt_threshold)
+		pt_accum = pt_accum % pt_threshold
+	if pt_card.counters == null:
+		pt_card.counters = {}
+	pt_card.counters[pt_accum_key] = pt_accum
+	if pt_triggers <= 0:
+		return false
+	SLog.log_raw("[TIMING] %s 动力税：%s 消耗 %d 触发 %d 次（余 %d）effect=%s" % [String(action.action_id), String(pt_spender), pt_amount, pt_triggers, pt_accum, String(effect.effect_id)])
+	# AI 持有者：暂不支持（自动不发动；累计已在触发时扣除）
+	if _is_ai_owner(pt_owner_pid, pt_owner_mech):
+		return false
+	action.record["_power_tax_ctx"] = {
+		"owner_mech_id": pt_owner_mech,
+		"owner_player_id": pt_owner_pid,
+		"target_mech_id": pt_spender,
+		"damage": pt_damage,
+		"threshold": pt_threshold,
+		"prompts_left": pt_triggers,
+		"trigger_total": pt_triggers,
+	}
+	_power_tax_prompt_confirm(action, payload, effect)
+	return true
+
+
+## 动力税确认弹窗（第 N/total 次询问，可选发动）。挂起 phase=power_tax_confirm。
+func _power_tax_prompt_confirm(action, payload: Dictionary, effect) -> void:
+	var pt_ctx: Dictionary = action.record.get("_power_tax_ctx", {})
+	if int(pt_ctx.get("prompts_left", 0)) <= 0:
+		action.record.erase("_power_tax_ctx")
+		return
+	var pt_total: int = int(pt_ctx.get("trigger_total", 1))
+	var pt_done: int = pt_total - int(pt_ctx.get("prompts_left", 1)) + 1
+	var pt_target: StringName = pt_ctx.get("target_mech_id", &"")
+	var pt_tname: String = String(pt_target)
+	if context != null and context.game_state != null:
+		var pt_tm = context.game_state.mechs.get(pt_target)
+		if pt_tm != null:
+			pt_tname = pt_tm.get_display_name() if pt_tm.has_method("get_display_name") else String(pt_target)
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"power_tax_confirm"}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"choose_one_effect", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"options": [
+			{"label": "发动：%s 与我方各受到%d伤害（第%d/%d次）" % [pt_tname, int(pt_ctx.get("damage", 2)), pt_done, pt_total], "effect_id": &"option_0", "option_index": 0},
+		],
+		"optional": true,
+		"player_id": pt_ctx.get("owner_player_id", &""),
+		"source_label": "动力税：%s 已累计消耗%d点动力（可发动使其与我方各受%d伤害）" % [pt_tname, int(pt_ctx.get("threshold", 2)), int(pt_ctx.get("damage", 2))],
+	})
+	SLog.log_raw("[TIMING] %s 挂起动力税确认（%d/%d）effect=%s" % [String(action.action_id), pt_done, pt_total, String(effect.effect_id)])
+
+
+## 动力税/动力税贡赋收尾：效果链全部结束后恢复宿主动作（与各 resume 阶段守卫一致）。
+func _power_tax_resume_host(action, action_id: StringName) -> void:
+	if action.state == &"waiting_timing" and _pending_effect.has(action.action_id):
+		return
+	if not action.pending_effect_action_ids.is_empty():
+		action.state = &"waiting_effect_action"
+		return
+	if context != null and context.action_engine != null:
+		action.state = &"waiting_input"
+		context.action_engine.continue_action(action_id, {})
+
+
+## ═══════════════════════════════════════════
+## 通用「受伤 X+1 + 弃双方行动牌」状态机（POWER_TAX_TRIBUTE，杰西卡 pilot_050 e2；复用=复制改参数）
+## ═══════════════════════════════════════════
+## 监听我方受伤（HP_CHANGE_SETTLE 实际掉血）：
+##   ① 确认弹窗（取消=不发动，不消耗每回合1次次数）；
+##   ② 确认 -> mark once_per_turn + 绑定卡 counter_key X+1（先于范围计算，按新X取范围）；
+##   ③ 选 base_range+新X 范围内 1 台其他机甲（常规目标UI valid_mech_ids 高亮；
+##      无候选 -> 仅 X+1，弃牌整段跳过；选目标后取消 -> X+1 已生效，跳过弃牌）；
+##   ④ 连续两次独立弃置（先我方后目标机甲，chooser 均为我方）：
+##      我方牌信息可见；目标牌背面不可见（hide_card_info）。手牌 <= discard_count 直接全选
+##      不弹窗（0 张不弃）。弃置走 EXECUTE_DISCARD 子动作链（POWER_TAX_TRIBUTE_DISCARD_SIDE 哨兵）。
+func _handle_power_tax_tribute(act: Dictionary, effect: ActionEffect, payload: Dictionary, action) -> bool:
+	if context == null or context.game_state == null:
+		return false
+	var tt_params: Dictionary = act.get("params", {})
+	var tt_bind: Dictionary = payload.get("binding_context", {})
+	var tt_owner_mech: StringName = tt_bind.get("mech_id", &"")
+	var tt_owner_pid: StringName = tt_bind.get("player_id", &"")
+	var tt_cid: StringName = tt_bind.get("card_instance_id", &"")
+	if tt_owner_mech == &"" or tt_cid == &"":
+		return false
+	# AI 持有者：暂不支持
+	if _is_ai_owner(tt_owner_pid, tt_owner_mech):
+		return false
+	action.record["_power_tax_tribute"] = {
+		"card_instance_id": tt_cid,
+		"owner_mech_id": tt_owner_mech,
+		"owner_player_id": tt_owner_pid,
+		"params": {
+			"base_range": int(tt_params.get("base_range", 4)),
+			"counter_key": tt_params.get("counter_key", &""),
+			"discard_count": int(tt_params.get("discard_count", 2)),
+			"once_per_turn_key": tt_params.get("once_per_turn_key", effect.once_per_turn_key),
+		},
+	}
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"power_tax_tribute_confirm"}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"choose_one_effect", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"options": [
+			{"label": "发动：X+1 并弃置双方行动牌", "effect_id": &"option_0", "option_index": 0},
+		],
+		"optional": true,
+		"player_id": tt_owner_pid,
+		"source_label": String(tt_params.get("confirm_text", effect.description)),
+	})
+	SLog.log_raw("[TIMING] %s 挂起动力税贡赋确认 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+	return true
+
+
+## ═══════════════════════════════════════════
+## 通用「范围内受伤→确认→回复生命+抽行动牌」状态机（INJURY_HEAL_DRAW，芮贝卡 pilot_078 等；复用=复制改参数）
+## ═══════════════════════════════════════════
+## 监听 HP_CHANGE_SETTLE（实际掉血：decrease 且 value>0；目标=绑定机甲 base_range 格内【含自身】，
+##   由通用条件 HP_CHANGE_TARGET_WITHIN_RANGE_INCLUDING_SELF 校验）：
+##   ① 确认弹窗给持有者玩家（取消=不发动，不消耗次数）；
+##   ② 确认 -> mark once_per_turn（消耗1次，once_per_turn 每玩家回合自动重置）-> 串行
+##      [EXECUTE_HP_CHANGE(受伤机甲回复 heal_amount 生命，来源=持有者机甲),
+##       EXECUTE_GAIN_CARD(受伤机甲所属玩家抽 draw_count 张行动牌)]。
+func _handle_injury_heal_draw(act: Dictionary, effect: ActionEffect, payload: Dictionary, action) -> bool:
+	if context == null or context.game_state == null:
+		return false
+	var ihd_params: Dictionary = act.get("params", {})
+	var ihd_bind: Dictionary = payload.get("binding_context", {})
+	var ihd_owner_mech: StringName = ihd_bind.get("mech_id", &"")
+	var ihd_owner_pid: StringName = ihd_bind.get("player_id", &"")
+	var ihd_cid: StringName = ihd_bind.get("card_instance_id", &"")
+	if ihd_owner_mech == &"" or ihd_cid == &"":
+		return false
+	# AI 持有者：暂不支持（用户：先不管 AI 逻辑）
+	if _is_ai_owner(ihd_owner_pid, ihd_owner_mech):
+		return false
+	# 受伤机甲 = 被监听 hp_change 动作的目标（条件已校验：decrease>0 且 base_range 内含自身）
+	var ihd_target: StringName = &""
+	var ihd_mids: Array = payload.get("mech_ids", [])
+	if not ihd_mids.is_empty():
+		ihd_target = StringName(ihd_mids[0])
+	else:
+		ihd_target = StringName(payload.get("target_id", payload.get("target_mech_id", &"")))
+	if ihd_target == &"":
+		return false
+	# 受伤机甲所属玩家（抽牌接收者）
+	var ihd_target_pid: StringName = &""
+	if context.game_state.has_method(&"get_player_for_mech"):
+		var ihd_tplayer = context.game_state.get_player_for_mech(ihd_target)
+		if ihd_tplayer != null:
+			ihd_target_pid = ihd_tplayer.player_id
+	if ihd_target_pid == &"":
+		var ihd_tmech = context.game_state.mechs.get(ihd_target)
+		if ihd_tmech != null:
+			ihd_target_pid = ihd_tmech.owner_player_id
+	if ihd_target_pid == &"":
+		return false
+	# 剩余可发动次数（确认弹窗展示用）
+	var ihd_key0: StringName = ihd_params.get("once_per_turn_key", effect.once_per_turn_key)
+	var ihd_used: int = 0
+	if ihd_key0 != &"":
+		var ihd_ckey0: String = "%s:%s" % [String(ihd_cid), String(ihd_key0)]
+		var ihd_turn0: int = _current_turn_number()
+		var ihd_tmap0: Dictionary = _once_per_turn_used.get(ihd_ckey0, {})
+		ihd_used = int(ihd_tmap0.get(ihd_turn0, 0))
+	var ihd_remain: int = maxi(0, int(effect.once_per_turn_max) - ihd_used)
+	var ihd_heal: int = int(ihd_params.get("heal_amount", 2))
+	var ihd_draw: int = int(ihd_params.get("draw_count", 1))
+	# 受伤机甲显示名
+	var ihd_tname: String = String(ihd_target)
+	var ihd_tm2 = context.game_state.mechs.get(ihd_target)
+	if ihd_tm2 != null and ihd_tm2.has_method(&"get_display_name"):
+		ihd_tname = ihd_tm2.get_display_name()
+	action.record["_injury_heal_draw"] = {
+		"card_instance_id": ihd_cid,
+		"owner_mech_id": ihd_owner_mech,
+		"owner_player_id": ihd_owner_pid,
+		"target_mech_id": ihd_target,
+		"target_player_id": ihd_target_pid,
+		"params": {
+			"heal_amount": ihd_heal,
+			"draw_count": ihd_draw,
+			"once_per_turn_key": ihd_key0,
+		},
+	}
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"injury_heal_draw_confirm"}
+	action.state = &"waiting_timing"
+	var ihd_label: String = "确认：%s回复%d生命并抽%d张行动牌" % [ihd_tname, ihd_heal, ihd_draw]
+	var ihd_src: String = String(ihd_params.get("confirm_text", ""))
+	if ihd_src.strip_edges() == "":
+		ihd_src = "范围内机甲受到伤害，是否使其回复%d生命并抽%d张行动牌？（本回合可发动%d次）" % [ihd_heal, ihd_draw, ihd_remain]
+	action_needs_input.emit(action.action_id, &"choose_one_effect", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"options": [
+			{"label": ihd_label, "effect_id": &"option_0", "option_index": 0},
+		],
+		"optional": true,
+		"player_id": ihd_owner_pid,
+		"source_label": ihd_src,
+	})
+	SLog.log_raw("[TIMING] %s 挂起受伤回复确认 目标=%s 剩余次数=%d effect=%s" % [String(action.action_id), String(ihd_target), ihd_remain, String(effect.effect_id)])
+	return true
+
+
+## ATTACK_SETTLE_DRAW_REATTACK：范围内攻击结算触发（维奥拉 pilot_077 等）。
+## 触发先抽 draw_count 张行动牌（强制，无次数限制），再每回合1次弹多选窗弃 discard_count 张
+## （可取消不计次数）-> 给攻击方开凯威攻击窗口。仿 INJURY_HEAL_DRAW 状态机。
+func _handle_attack_settle_draw_reattack(act: Dictionary, effect: ActionEffect, payload: Dictionary, action) -> bool:
+	if context == null or context.game_state == null or context.action_service == null:
+		return false
+	var asdr_params: Dictionary = act.get("params", {})
+	var asdr_bind: Dictionary = payload.get("binding_context", {})
+	var asdr_owner_pid: StringName = asdr_bind.get("player_id", &"")
+	var asdr_owner_mech: StringName = asdr_bind.get("mech_id", &"")
+	var asdr_cid: StringName = asdr_bind.get("card_instance_id", &"")
+	if asdr_owner_mech == &"" or asdr_cid == &"":
+		return false
+	# AI 持有者：暂不支持（用户：先不管 AI 逻辑）
+	if _is_ai_owner(asdr_owner_pid, asdr_owner_mech):
+		return false
+	# 攻击方机甲 = 被监听 attack 动作的攻击者（条件已校验：base_range 内含自身）
+	var asdr_attacker: StringName = payload.get("attacker_id", &"")
+	if asdr_attacker == &"":
+		return false
+	var asdr_atk_mech = context.game_state.mechs.get(asdr_attacker)
+	if asdr_atk_mech == null or asdr_atk_mech.destroyed:
+		return false
+	var asdr_atk_pid: StringName = asdr_atk_mech.owner_player_id
+	# AI 攻击方：暂不支持（用户：先不管 AI 逻辑）
+	if _is_ai_owner(asdr_atk_pid, asdr_attacker):
+		return false
+	action.record["_attack_settle_draw_reattack"] = {
+		"card_instance_id": asdr_cid,
+		"owner_mech_id": asdr_owner_mech,
+		"owner_player_id": asdr_owner_pid,
+		"attacker_mech_id": asdr_attacker,
+		"attacker_player_id": asdr_atk_pid,
+		"attack_action_id": payload.get("action_id", &""),
+		"params": {
+			"draw_count": int(asdr_params.get("draw_count", 1)),
+			"discard_count": int(asdr_params.get("discard_count", 2)),
+			"once_per_turn_key": asdr_params.get("once_per_turn_key", effect.once_per_turn_key),
+		},
+	}
+	# 串行链：先强制抽牌，再检查每回合1次+手牌弹弃牌窗
+	action.record["_seq_effect_actions"] = {"payload": payload, "remaining": [
+		{"type": &"EXECUTE_GAIN_CARD", "params": {
+			"from_zone": &"action_deck",
+			"card_kind": &"action",
+			"count": int(asdr_params.get("draw_count", 1)),
+			"player_id": asdr_owner_pid,
+			"reason": &"attack_settle_draw_reattack",
+		}},
+		{"type": &"ATTACK_SETTLE_DRAW_REATTACK_AFTER_DRAW", "params": {}},
+	], "source_check": false, "effect": effect}
+	SLog.log_raw("[TIMING] %s 攻击结算触发 攻击方=%s 抽%d张 effect=%s" % [String(action.action_id), String(asdr_attacker), int(asdr_params.get("draw_count", 1)), String(effect.effect_id)])
+	if not _continue_seq_effect_actions(action):
+		return false
+	return true
+
+
+## 抽牌完成哨兵：每回合1次可用（key 非空时）+ 手牌足够才弹多选窗选 discard_count 张。
+## 取消 -> resume phase 不 mark 不弃直接恢复主机；确认 -> mark 次数 + EXECUTE_DISCARD + 开窗。
+func _asdr_offer_discard(action, payload: Dictionary, effect) -> bool:
+	if context == null or context.game_state == null or context.action_service == null:
+		return false
+	var asdr_ctx: Dictionary = action.record.get("_attack_settle_draw_reattack", {})
+	if asdr_ctx.is_empty():
+		return false
+	var asdr_p: Dictionary = asdr_ctx.get("params", {})
+	var asdr_cid: StringName = asdr_ctx.get("card_instance_id", &"")
+	var asdr_owner_pid: StringName = asdr_ctx.get("owner_player_id", &"")
+	var asdr_discard: int = int(asdr_p.get("discard_count", 2))
+	var asdr_key: StringName = asdr_p.get("once_per_turn_key", &"")
+	if asdr_key != &"" and not is_once_per_turn_key_available(asdr_key, asdr_cid, 1):
+		SLog.log_raw("[TIMING] %s 攻击结算弃牌每回合次数已用，跳过 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+		return false
+	var asdr_player = context.game_state.players.get(asdr_owner_pid)
+	if asdr_player == null:
+		return false
+	var asdr_hand: Array = asdr_player.action_hand.duplicate()
+	if asdr_hand.size() < asdr_discard:
+		return false
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"attack_settle_draw_reattack_discard"}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"thrust_select", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"card_ids": asdr_hand,
+		"player_id": asdr_owner_pid,
+		"label": "弃置%d张行动牌，使攻击方再立即发动1次攻击？" % asdr_discard,
+		"per_card_suffix": "",
+		"confirm_verb": "弃置",
+		"cancel_label": "不发动",
+		"max_count": asdr_discard,
+		"min_count": asdr_discard,
+		"no_cancel": false,
+	})
+	SLog.log_raw("[TIMING] %s 挂起攻击结算弃牌（%d张里选%d）effect=%s" % [String(action.action_id), asdr_hand.size(), asdr_discard, String(effect.effect_id)])
+	return true
+
+
+## 弃牌完成哨兵：给攻击方开凯威攻击窗口（攻击动作完整完成后打开，避免结算中途开窗）。
+func _asdr_open_attack_window(action, payload: Dictionary, effect) -> void:
+	if context == null or context.game_state == null or context.action_service == null:
+		return
+	var asdr_ctx: Dictionary = action.record.get("_attack_settle_draw_reattack", {})
+	if asdr_ctx.is_empty():
+		return
+	var asdr_atk_pid: StringName = asdr_ctx.get("attacker_player_id", &"")
+	var asdr_atk_mid: StringName = asdr_ctx.get("attacker_mech_id", &"")
+	var asdr_atk_action_id: StringName = asdr_ctx.get("attack_action_id", &"")
+	action.record.erase("_attack_settle_draw_reattack")
+	if asdr_atk_pid == &"" or asdr_atk_mid == &"":
+		return
+	if asdr_atk_action_id != &"":
+		context.action_service.run_after_action_completed(asdr_atk_action_id, Callable(self, "_asdr_do_open_window").bind(asdr_atk_pid, asdr_atk_mid))
+	else:
+		_asdr_do_open_window(asdr_atk_pid, asdr_atk_mid)
+
+
+func _asdr_do_open_window(atk_pid: StringName, atk_mid: StringName) -> void:
+	if context == null or context.game_state == null:
+		return
+	_ActionPilotEffects.attack_window_open(context.game_state, atk_pid, atk_mid)
+	SLog.log_raw("[TIMING] 攻击结算弃牌后给 %s/%s 开凯威攻击窗口" % [String(atk_pid), String(atk_mid)])
+
+
+## 弃牌侧处理（POWER_TAX_TRIBUTE_DISCARD_SIDE 哨兵调用，也用于 resume 直接续跑）：
+## side=owner -> 我方行动牌（信息可见）；side=target -> 目标机甲行动牌（牌背 hide_card_info）。
+## 手牌 <= discard_count 直接全选 EXECUTE_DISCARD（0 张不弃）；否则弹多选窗（min=max=count
+## no_cancel 必选，chooser 均为我方玩家）。返回 true=已挂起/子动作未完成。
+func _power_tax_tribute_discard_side(action, payload: Dictionary, effect, side: StringName) -> bool:
+	if context == null or context.game_state == null or context.action_service == null:
+		return false
+	var tt_ctx: Dictionary = action.record.get("_power_tax_tribute", {})
+	var tt_p: Dictionary = tt_ctx.get("params", {})
+	var tt_count: int = int(tt_p.get("discard_count", 2))
+	var tt_owner_pid: StringName = tt_ctx.get("owner_player_id", &"")
+	var tt_side_pid: StringName = tt_owner_pid
+	var tt_side_mech: StringName = tt_ctx.get("owner_mech_id", &"")
+	var tt_hide: bool = false
+	var tt_label: String = "弃置我方%d张行动牌" % tt_count
+	if side == &"target":
+		tt_side_mech = tt_ctx.get("target_mech_id", &"")
+		var tt_side_player = context.game_state.get_player_for_mech(tt_side_mech)
+		if tt_side_player == null:
+			return false
+		tt_side_pid = tt_side_player.player_id
+		tt_hide = true  # 别人的牌不可见：牌背显示，选择权在我方
+		var tt_tname: String = String(tt_side_mech)
+		var tt_tm = context.game_state.mechs.get(tt_side_mech)
+		if tt_tm != null:
+			tt_tname = tt_tm.get_display_name() if tt_tm.has_method("get_display_name") else tt_tname
+		tt_label = "弃置%s的%d张行动牌（牌背）" % [tt_tname, tt_count]
+	var tt_player = context.game_state.players.get(tt_side_pid)
+	if tt_player == null:
+		return false
+	var tt_cards: Array = []
+	for hand_cid: StringName in tt_player.action_hand:
+		tt_cards.append(hand_cid)
+	tt_ctx["discard_side"] = side
+	action.record["_power_tax_tribute"] = tt_ctx
+	# <= discard_count：直接全选弃置（不弹窗；0 张不弃）
+	if tt_cards.size() <= tt_count:
+		if tt_cards.is_empty():
+			SLog.log_raw("[TIMING] %s 动力税贡 tribute %s 侧无行动牌，跳过" % [String(action.action_id), String(side)])
+			return false
+		context.action_service.execute_sub_action({"type": &"EXECUTE_DISCARD", "params": {
+			"card_ids": tt_cards, "reason": &"power_tax_tribute",
+		}}, payload, action)
+		SLog.log_raw("[TIMING] %s 动力税贡 tribute %s 侧手牌≤%d 直接全弃 %d 张" % [String(action.action_id), String(side), tt_count, tt_cards.size()])
+		return _last_created_sub_action_paused(action)
+	# 弹多选窗（必选 count 张，不可取消；chooser=我方玩家）
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"power_tax_tribute_discard"}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"thrust_select", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"card_ids": tt_cards,
+		"player_id": tt_owner_pid,
+		"label": tt_label,
+		"per_card_suffix": "",
+		"confirm_verb": "弃置",
+		"cancel_label": "取消",
+		"max_count": tt_count,
+		"min_count": tt_count,
+		"no_cancel": true,
+		"hide_card_info": tt_hide,
+	})
+	SLog.log_raw("[TIMING] %s 挂起动力税贡 tribute %s 侧选牌（%d张里选%d）hide=%s" % [String(action.action_id), String(side), tt_cards.size(), tt_count, tt_hide])
+	return true
+
+
+## pilot_018 苔丝 effect_01b：迎击后弃攻击方的2张行动牌或1张损伤≥2装备牌。
+## 两阶段：①CHOOSE_ONE 选弃行动牌/装备牌（仅1种可行则自动选，0种可行则跳过）；
+##         ②选行动牌：≥3弹复选选2，=2直接弃，<2直接弃全部；选装备牌：列出损伤≥2装备牌选1（无则结束）。
+## 弃置走 discard_card 动作（card_ids 指定）。弃的是本次攻击武器牌时，attack_action._step_check_hit
+## 检测 _weapon_still_held 失败 -> 未命中立即结算（不造成伤害）。
+## 返回 true=已挂起（等玩家选），false=已完成或无可弃（继续推进 attack）。
+func _handle_pilot_018_respond_discard(_act: Dictionary, effect: ActionEffect, payload: Dictionary, action) -> bool:
+	if context == null or context.game_state == null:
+		return false
+	# 攻击方机甲（attacker_id）-> 反查玩家
+	var p18_attacker: StringName = payload.get("attacker_id", &"")
+	if p18_attacker == &"":
+		return false
+	var p18_attacker_player = context.game_state.get_player_for_mech(p18_attacker)
+	if p18_attacker_player == null:
+		return false
+	var p18_attacker_pid: StringName = p18_attacker_player.player_id
+	# 去重守卫：同一 attack 只处理一次
+	if action.record.get("_pilot_018_discard_done", false):
+		return false
+	# 已选过类型（resume 重跑）-> 走分支处理
+	if payload.has("pilot_018_chosen_type"):
+		return _pilot_018_execute_discard(effect, payload, action, p18_attacker, p18_attacker_pid)
+	# 收集攻击方可弃行动牌 + 损伤≥2装备牌
+	var p18_action_cards: Array = []
+	for hand_cid in p18_attacker_player.action_hand:
+		p18_action_cards.append(hand_cid)
+	var p18_equipment_cards: Array = []  # [{card_id, slot_id, name, kind, damage, durability}]
+	var p18_mech = context.game_state.mechs.get(p18_attacker)
+	if p18_mech != null:
+		for sid in p18_mech.slots:
+			var slot = p18_mech.slots[sid]
+			if slot == null or slot.equipped_card == null:
+				continue
+			var ec = slot.equipped_card
+			if ec.def == null:
+				continue
+			if ec.get("face_down") == true:
+				continue  # 备用区背面装备不弃
+			# 损伤≥2（取装备牌上的 damage_tokens）
+			if int(ec.damage_tokens) >= 2:
+				var _ekind: String = String(ec.def.equipment_kind) if "equipment_kind" in ec.def else ""
+				var _edur: int = int(ec.def.durability) if "durability" in ec.def else 0
+				p18_equipment_cards.append({
+					"card_id": ec.instance_id, "slot_id": sid,
+					"name": String(ec.def.display_name), "kind": _ekind,
+					"damage": int(ec.damage_tokens), "durability": _edur,
+				})
+	# 构造 CHOOSE_ONE options
+	var p18_options: Array = []
+	if not p18_action_cards.is_empty():
+		p18_options.append({"label": "弃置2张行动牌", "value": &"action_cards"})
+	if not p18_equipment_cards.is_empty():
+		p18_options.append({"label": "弃置1张损伤≥2装备牌", "value": &"equipment_card"})
+	# 0 个可选 -> 无事发生
+	if p18_options.is_empty():
+		SLog.log_raw("[TIMING] %s pilot_018 迎击弃牌：攻击方无可弃行动牌/损伤≥2装备牌，跳过 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+		action.record["_pilot_018_discard_done"] = true
+		return false
+	# 仅1个可选 -> 自动选（无需弹窗）
+	if p18_options.size() == 1:
+		payload["pilot_018_chosen_type"] = p18_options[0]["value"]
+		return _pilot_018_execute_discard(effect, payload, action, p18_attacker, p18_attacker_pid)
+	# 苔丝拥有者（弹窗给苔丝玩家选）
+	var p18_bind: Dictionary = payload.get("binding_context", {})
+	var p18_owner_pid: StringName = p18_bind.get("player_id", &"")
+	var p18_mech_id: StringName = p18_bind.get("mech_id", &"")
+	# AI 苔丝：暂不支持决策，跳过（不弃牌）
+	if _is_ai_owner(p18_owner_pid, p18_mech_id):
+		SLog.log_raw("[TIMING] %s pilot_018 迎击弃牌：苔丝为 AI，跳过 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+		action.record["_pilot_018_discard_done"] = true
+		return false
+	# 挂起弹 CHOOSE_ONE（苔丝玩家选弃行动牌/装备牌）
+	action.record["_pilot_018_discard_shown"] = true
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"pilot_018_choose_type"}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"choose_one_effect", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"options": [{
+			"label": String(p18_options[0].get("label", "")), "effect_id": &"option_0", "option_index": 0,
+		}, {
+			"label": String(p18_options[1].get("label", "")), "effect_id": &"option_1", "option_index": 1,
+		}],
+		"optional": false,
+		"player_id": p18_owner_pid,
+		"source_label": "苔丝：我方迎击响应成功，选择弃置攻击方的2张行动牌或1张损伤≥2装备牌（弃攻击武器牌则此攻击失效）",
+	})
+	SLog.log_raw("[TIMING] %s pilot_018 迎击弃牌弹窗 effect=%s 攻击方行动牌=%d 损伤≥2装备=%d" % [String(action.action_id), String(effect.effect_id), p18_action_cards.size(), p18_equipment_cards.size()])
+	return true
+
+
+## pilot_025 约书亚 1b：选1张备用区装备牌设置 + 抽2张行动牌。
+## CHOOSE_ONE 确认后分支内执行：收集备用区装备 -> 弹单选窗 -> 选目标槽 -> 移除备用区设入 +
+## set_equipment 子动作（即时使用 hook 自动生效）-> 抽2张行动牌（_seq 串行）。
+## 返回 true=已挂起弹窗；false=无需处理（无备用装备/AI/已完成）交由调用方继续。
+func _handle_pilot_025_select_reserve_and_set(_act: Dictionary, effect: ActionEffect, payload: Dictionary, action) -> bool:
+	if context == null or context.game_state == null:
+		return false
+	# 去重守卫：同一 effect 只处理一次（resume 重跑 _execute_effect 时跳过）
+	if action.record.get("_pilot_025_done", false):
+		return false
+	var p025_bind: Dictionary = payload.get("binding_context", {})
+	var p025_mech_id: StringName = p025_bind.get("mech_id", &"")
+	var p025_owner_pid: StringName = p025_bind.get("player_id", &"")
+	if p025_mech_id == &"":
+		return false
+	var p025_mech = context.game_state.mechs.get(p025_mech_id)
+	if p025_mech == null:
+		return false
+	# 收集备用区装备牌（reserve_1/reserve_2 的 equipped_card）
+	var p025_candidates: Array = []
+	for p025_sid in [&"reserve_1", &"reserve_2"]:
+		var p025_slot = p025_mech.slots.get(p025_sid)
+		if p025_slot == null or p025_slot.equipped_card == null:
+			continue
+		var p025_ec = p025_slot.equipped_card
+		if p025_ec.def == null:
+			continue
+		var p025_ekind: String = String(p025_ec.def.equipment_kind) if "equipment_kind" in p025_ec.def else "PART"
+		var p025_kind_label: String = "武器" if p025_ekind == &"WEAPON" else ("部件" if p025_ekind == &"PART" else p025_ekind)
+		p025_candidates.append({
+			"card_id": p025_ec.instance_id, "slot_id": p025_sid,
+			"name": String(p025_ec.def.display_name), "kind": p025_ekind, "kind_label": p025_kind_label,
+		})
+	if p025_candidates.is_empty():
+		SLog.log_raw("[TIMING] %s pilot_025 备用区无装备，跳过 1b effect=%s" % [String(action.action_id), String(effect.effect_id)])
+		action.record["_pilot_025_done"] = true
+		return false
+	# AI 约书亚：暂不支持决策，跳过（不设置/抽牌）。避免弹窗挂死。
+	if _is_ai_owner(p025_owner_pid, p025_mech_id):
+		SLog.log_raw("[TIMING] %s pilot_025 约书亚为 AI，跳过 1b effect=%s" % [String(action.action_id), String(effect.effect_id)])
+		action.record["_pilot_025_done"] = true
+		return false
+	# 挂起弹单选窗（约书亚玩家选1张备用区装备）
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"pilot_025_reserve_select"}
+	action.state = &"waiting_timing"
+	var p025_ui_opts: Array[Dictionary] = []
+	for p025_c in p025_candidates:
+		if p025_c is Dictionary:
+			p025_ui_opts.append({
+				"label": "%s [%s]" % [String(p025_c.get("name", "")), String(p025_c.get("kind_label", ""))],
+				"effect_id": p025_c.get("card_id", &""),
+			})
+	action_needs_input.emit(action.action_id, &"pilot_025_reserve_select", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"options": p025_ui_opts,
+		"player_id": p025_owner_pid,
+		"label": "约书亚：选择1张备用区装备牌设置到区域（并抽2张行动牌）",
+	})
+	SLog.log_raw("[TIMING] %s pilot_025 选备用装备弹窗 effect=%s 候选=%d" % [String(action.action_id), String(effect.effect_id), p025_candidates.size()])
+	return true
+
+
+# ════════════════════════════════════════════════════════════
+# 通用「查看隐藏装备+花费金币获取」（霍恩 pilot_046）
+# ════════════════════════════════════════════════════════════
+# 效果文本：我方可以无条件查看商店和其他机甲备用区内的隐藏装备牌（背面朝上）。我方回合1次，
+#   可以消耗隐藏装备牌其上记述的金币获得该牌，之后将其背面朝上置于我方或其他机甲的备用区域上。
+# 通用机制（不绑机师，复用=整段复制改参数）：
+#   - HIDDEN_VIEW_AND_ACQUIRE act_type（_execute_actions 分发到 _handle_hidden_view_and_acquire）：
+#       Phase A 打开 hidden_card_view_panel（阻塞，可关闭=取消效果可反复再点；打开即给商店隐藏牌
+#       known_to 标记本玩家，幂等）。候选 = 商店隐藏高级槽 + 所有其他玩家机甲 RESERVE 槽白板。
+#       Phase B（resume_pending_effect phase=hidden_reserve_slot）选目标 RESERVE 槽（全部玩家，
+#       allow_cancel=false）→ 清来源 + 重置卡归属 + 追加目标手牌 →
+#       _seq[SPEND_GOLD(牌面原价), MARK_EFFECT_ONCE_PER_TURN_USED, EXECUTE_SET_EQUIP(card,mech,slot)]。
+#   - 查看无条件：effect 不设 once_per_turn_key（按钮常亮）；获取每回合1次由内部
+#     is_once_per_turn_key_available(once_per_turn_key, binding.card_instance_id) 校验 + 面板置灰。
+#   - 商店隐藏牌每玩家独立得知：known_to（CardInstance.known_to，已快照）。商店面板/买价按
+#     (shop.hidden_revealed 或 known_to 含查看者) 显示真名+1.5x 价；否则 ★★★ 隐藏卡 ★★★ + 10金盲买。
+
+## HIDDEN_VIEW_AND_ACQUIRE 首次执行：标记商店隐藏牌 known_to + 收集候选 + 打开查看面板（阻塞）。
+func _handle_hidden_view_and_acquire(act: Dictionary, effect: ActionEffect, payload: Dictionary, action) -> bool:
+	if context == null or context.game_state == null:
+		return false
+	# 去重守卫：resume 重跑 _execute_effect 时跳过本动作（面板只开一次）
+	if action.record.get("_pilot_046_panel_shown", false):
+		return false
+	var hva_params: Dictionary = act.get("params", {})
+	var hva_bind: Dictionary = payload.get("binding_context", {})
+	var hva_owner_pid: StringName = hva_bind.get("player_id", &"")
+	var hva_mech_id: StringName = hva_bind.get("mech_id", &"")
+	if hva_owner_pid == &"" or hva_mech_id == &"":
+		return false
+	# AI 跳过（暂不处理 AI 逻辑，避免弹窗挂死）
+	if _is_ai_owner(hva_owner_pid, hva_mech_id):
+		action.record["_pilot_046_panel_shown"] = true
+		return false
+	var gs = context.game_state
+	# 打开面板即给商店隐藏牌标记已知（每玩家独立得知，幂等）
+	var shop = gs.shop_state
+	if shop != null and shop.hidden_advanced_slot != &"":
+		var hva_hidden = gs.get_card(shop.hidden_advanced_slot)
+		if hva_hidden != null and hva_hidden.known_to != null and not hva_hidden.known_to.has(hva_owner_pid):
+			hva_hidden.known_to.append(hva_owner_pid)
+			SLog.log_raw("[TIMING] %s 霍恩查看商店隐藏牌标记已知 %s effect=%s" % [String(action.action_id), String(hva_owner_pid), String(effect.effect_id)])
+	# 收集候选（商店隐藏 + 其他玩家备用区白板）
+	var hva_candidates: Array = _collect_hidden_view_candidates(hva_owner_pid)
+	action.record["_pilot_046_panel_shown"] = true
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"hidden_card_view", "act": act, "owner_pid": hva_owner_pid}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"hidden_card_view", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"player_id": hva_owner_pid,
+		"candidates": hva_candidates,
+		"once_per_turn_key": hva_params.get("once_per_turn_key", &""),
+		"source_card_instance_id": hva_bind.get("card_instance_id", &""),
+	})
+	SLog.log_raw("[TIMING] %s 打开隐藏装备查看面板 effect=%s 候选=%d" % [String(action.action_id), String(effect.effect_id), hva_candidates.size()])
+	return true
+
+
+## 收集隐藏装备候选：商店隐藏高级槽 + 所有其他玩家机甲 RESERVE 槽（白板）。每项含 card_id/name/cost/来源。
+func _collect_hidden_view_candidates(owner_pid: StringName) -> Array:
+	var out: Array = []
+	var gs = context.game_state
+	if gs == null:
+		return out
+	# 商店隐藏高级槽
+	var shop = gs.shop_state
+	if shop != null and shop.hidden_advanced_slot != &"":
+		var sc = gs.get_card(shop.hidden_advanced_slot)
+		if sc != null and sc.def != null:
+			out.append({
+				"card_id": sc.instance_id,
+				"name": String(sc.def.display_name),
+				"rarity": String(sc.def.rarity),
+				"cost": _hidden_card_face_cost(sc),
+				"source_type": &"shop",
+				"source_label": "商店",
+			})
+	# 其他玩家机甲 RESERVE 槽（排除自己）
+	for m in gs.mechs.values():
+		if m == null or String(m.owner_player_id) == String(owner_pid):
+			continue
+		for sid in m.slots:
+			var slot = m.slots[sid]
+			if slot == null or slot.slot_kind != &"RESERVE" or slot.equipped_card == null:
+				continue
+			var ec = slot.equipped_card
+			if ec.def == null:
+				continue
+			var mname: String = String(m.frame_def.display_name) if m.frame_def != null and "display_name" in m.frame_def else String(m.mech_id)
+			out.append({
+				"card_id": ec.instance_id,
+				"name": String(ec.def.display_name),
+				"rarity": String(ec.def.rarity),
+				"cost": _hidden_card_face_cost(ec),
+				"source_type": &"reserve",
+				"source_label": "%s·备用区" % mname,
+				"source_mech_id": m.mech_id,
+				"source_slot_id": sid,
+			})
+	return out
+
+
+## 隐藏装备牌牌面原价（card.def.cost，缺省回退商店 1.5x 买价作为基准）。
+func _hidden_card_face_cost(card) -> int:
+	if card == null or card.def == null:
+		return 0
+	if "cost" in card.def and int(card.def.cost) > 0:
+		return int(card.def.cost)
+	if context != null and context.shop_service != null:
+		return context.shop_service._get_buy_price(card)
+	return 3
+
+
+## 清空隐藏牌来源（商店隐藏槽 / 来源机甲 RESERVE 槽），重置 zone/mech/slot/face_down。
+func _clear_hidden_card_source(card, gs) -> void:
+	if gs == null or card == null:
+		return
+	if gs.shop_state != null and gs.shop_state.hidden_advanced_slot == card.instance_id:
+		gs.shop_state.hidden_advanced_slot = &""
+	for m in gs.mechs.values():
+		if m == null:
+			continue
+		for sid in m.slots:
+			var slot = m.slots[sid]
+			if slot != null and slot.equipped_card != null and slot.equipped_card.instance_id == card.instance_id:
+				slot.equipped_card = null
+	card.zone = &""
+	card.mech_id = &""
+	card.slot_id = &""
+	card.face_down = false
+
+
+## CHOOSE_RESERVE_SLOT_AND_SET_EQUIP（通用「抽到的装备背面置备用区」第2阶段，法尔科 pilot_073 等）：
+## 读取父 record[sink_key] 拿抽到的牌 → 收集全部机甲 RESERVE 槽（仅显示占位不翻牌，强制选择不可取消）
+## → 复用 hidden_reserve_slot 弹窗（phase=choose_reserve_slot_and_set）→ 确认后效果驱动背面设置。
+## params: {sink_key(默认 effect_id_drawn), label}
+func _handle_choose_reserve_slot_and_set(act: Dictionary, effect: ActionEffect, payload: Dictionary, action) -> bool:
+	if context == null or context.game_state == null:
+		return false
+	var rs_params: Dictionary = act.get("params", {})
+	var rs_bind: Dictionary = payload.get("binding_context", {}) if payload != null else {}
+	var rs_owner_pid: StringName = rs_bind.get("player_id", &"")
+	var rs_mech_id: StringName = rs_bind.get("mech_id", &"")
+	if rs_owner_pid == &"":
+		return false
+	# AI 跳过（暂不处理 AI 逻辑，避免弹窗挂死；抽到的牌保留在手牌，下回合开始清标签）
+	if _is_ai_owner(rs_owner_pid, rs_mech_id):
+		return false
+	var rs_sink_key: StringName = rs_params.get("sink_key", &"%s_drawn" % String(effect.effect_id))
+	var rs_drawn: Array = action.record.get(rs_sink_key, [])
+	var rs_card_id: StringName = rs_drawn[0] if not rs_drawn.is_empty() else &""
+	var rs_card = context.game_state.get_card(rs_card_id)
+	if rs_card == null:
+		SLog.log_raw("[TIMING] %s %s 抽到的牌缺失（sink=%s），跳过置备用区 effect=%s" % [String(action.action_id), String(act.get("type", &"")), String(rs_sink_key), String(effect.effect_id)])
+		return false
+	# 收集全部机甲的 RESERVE 槽作为目标候选（含自己；占用仅显示"（有牌）"不翻牌）
+	var rs_target_opts: Array[Dictionary] = []
+	var rs_target_map: Dictionary = {}
+	for rs_m in context.game_state.mechs.values():
+		if rs_m == null:
+			continue
+		for rs_sid in rs_m.slots:
+			var rs_slot = rs_m.slots[rs_sid]
+			if rs_slot == null or rs_slot.slot_kind != &"RESERVE":
+				continue
+			var rs_mname: String = String(rs_m.frame_def.display_name) if rs_m.frame_def != null and "display_name" in rs_m.frame_def else String(rs_m.mech_id)
+			var rs_opt_id: String = "%s:%s" % [String(rs_m.mech_id), String(rs_sid)]
+			rs_target_opts.append({
+				"label": "%s·%s%s" % [rs_mname, String(rs_sid), "（有牌）" if rs_slot.equipped_card != null else "（空）"],
+				"effect_id": StringName(rs_opt_id),
+			})
+			rs_target_map[rs_opt_id] = {"mech_id": rs_m.mech_id, "slot_id": rs_sid}
+	if rs_target_opts.is_empty():
+		SLog.log_raw("[TIMING] %s %s 无目标备用区，跳过 effect=%s" % [String(action.action_id), String(act.get("type", &"")), String(effect.effect_id)])
+		return false
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload,
+		"phase": &"choose_reserve_slot_and_set", "act": act, "owner_pid": rs_owner_pid,
+		"card_id": rs_card_id, "target_map": rs_target_map}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"hidden_reserve_slot", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"player_id": rs_owner_pid,
+		"options": rs_target_opts,
+		"label": rs_params.get("label", "选择放置的备用区域（该牌背面朝上，替换旧牌）"),
+	})
+	SLog.log_raw("[TIMING] %s %s 选目标备用区 effect=%s 牌=%s" % [String(action.action_id), String(act.get("type", &"")), String(effect.effect_id), String(rs_card_id)])
+	return true
+
+
+## pilot_018 弃牌分支执行：按 chosen_type 弃行动牌或装备牌。
+func _pilot_018_execute_discard(effect: ActionEffect, payload: Dictionary, action, attacker_mech: StringName, attacker_pid: StringName) -> bool:
+	var p18_chosen: StringName = payload.get("pilot_018_chosen_type", &"")
+	var p18_bind: Dictionary = payload.get("binding_context", {})
+	var p18_owner_pid: StringName = p18_bind.get("player_id", &"")
+	var p18_mech_id: StringName = p18_bind.get("mech_id", &"")
+	var p18_attacker_player = context.game_state.players.get(attacker_pid) if context.game_state != null else null
+	if p18_chosen == &"action_cards":
+		# 弃2张行动牌：=2直接弃，<2直接弃全部，≥3弹复选选2
+		if p18_attacker_player == null:
+			action.record["_pilot_018_discard_done"] = true
+			return false
+		var p18_hand: Array = []
+		for hand_cid in p18_attacker_player.action_hand:
+			p18_hand.append(hand_cid)
+		if p18_hand.size() <= 2:
+			# 直接弃全部
+			_pilot_018_do_discard(action, p18_hand, attacker_pid)
+			action.record["_pilot_018_discard_done"] = true
+			return false
+		# ≥3张：弹复选选2（苔丝玩家选攻击方哪2张）
+		# AI 苔丝跳过
+		if _is_ai_owner(p18_owner_pid, p18_mech_id):
+			action.record["_pilot_018_discard_done"] = true
+			return false
+		_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"pilot_018_select_action_cards"}
+		action.state = &"waiting_timing"
+		action_needs_input.emit(action.action_id, &"select_discard_cards", {
+			"action_id": action.action_id,
+			"effect_id": effect.effect_id,
+			"card_ids": p18_hand,
+			# 弹窗给苔丝玩家操作（_popup_owner 优先 executor），弃的是攻击方（discard_player_id）的牌
+			"player_id": p18_owner_pid,
+			"executor": p18_owner_pid,
+			"discard_player_id": attacker_pid,
+			# 恰好弃2张：count/max_count=2 允许多选，min_count=2 确认按钮灰置直到选满，no_cancel 强制
+			"count": 2,
+			"max_count": 2,
+			"min_count": 2,
+			# 暗牌：PvP 下苔丝看不到攻击方手牌，只显示"行动牌 #N"
+			"face_up": false,
+			"no_cancel": true,
+			"mode": &"resume_pending",
+			"source_label": "苔丝：选择攻击方要弃置的2张行动牌（暗牌）",
+		})
+		SLog.log_raw("[TIMING] %s pilot_018 弃行动牌复选 effect=%s 候选=%d" % [String(action.action_id), String(effect.effect_id), p18_hand.size()])
+		return true
+	elif p18_chosen == &"equipment_card":
+		# 弃1张损伤≥2装备牌：列出候选弹单选
+		var p18_mech = context.game_state.mechs.get(attacker_mech) if context.game_state != null else null
+		var p18_eq_candidates: Array = []
+		if p18_mech != null:
+			for sid in p18_mech.slots:
+				var slot = p18_mech.slots[sid]
+				if slot == null or slot.equipped_card == null:
+					continue
+				var ec = slot.equipped_card
+				if ec.def == null or ec.get("face_down") == true:
+					continue
+				if int(ec.damage_tokens) >= 2:
+					var _ekind: String = String(ec.def.equipment_kind) if "equipment_kind" in ec.def else ""
+					var _edur: int = int(ec.def.durability) if "durability" in ec.def else 0
+					p18_eq_candidates.append({
+						"card_id": ec.instance_id, "slot_id": sid,
+						"name": String(ec.def.display_name), "kind": _ekind,
+						"damage": int(ec.damage_tokens), "durability": _edur,
+					})
+		if p18_eq_candidates.is_empty():
+			# 无损伤≥2装备牌（CHOOSE_ONE 选了装备但实际无候选）：结束
+			action.record["_pilot_018_discard_done"] = true
+			return false
+		# AI 苔丝跳过
+		if _is_ai_owner(p18_owner_pid, p18_mech_id):
+			action.record["_pilot_018_discard_done"] = true
+			return false
+		# 弹单选窗（苔丝玩家选1张装备牌弃）
+		_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"pilot_018_select_equipment"}
+		action.state = &"waiting_timing"
+		action_needs_input.emit(action.action_id, &"pilot_018_select_equipment", {
+			"action_id": action.action_id,
+			"effect_id": effect.effect_id,
+			"candidates": p18_eq_candidates,
+			"player_id": p18_owner_pid,
+			"label": "苔丝：选择弃置攻击方的1张损伤≥2装备牌",
+		})
+		SLog.log_raw("[TIMING] %s pilot_018 弃装备牌单选 effect=%s 候选=%d" % [String(action.action_id), String(effect.effect_id), p18_eq_candidates.size()])
+		return true
+	# 未知类型：结束
+	action.record["_pilot_018_discard_done"] = true
+	return false
+
+
+## pilot_018 执行弃置：走 discard_card 动作（card_ids 指定，发 DISCARD 时点）。
+## 弃的是本次攻击武器牌时，attack._step_check_hit 检测 _weapon_still_held 失败 -> 未命中。
+func _pilot_018_do_discard(_action, card_ids: Array, attacker_pid: StringName) -> void:
+	if card_ids.is_empty() or context == null or context.action_service == null:
+		return
+	if context.action_service != null:
+		context.action_service.execute(&"discard_card", {
+			"card_ids": card_ids,
+			"player_id": attacker_pid,
+			"reason": &"pilot_018_respond_discard",
+		})
 
 
 ## AI 闪击 optional 弃牌决策：AI 总是选择再攻，弃自己手里第一张行动牌。
@@ -1584,12 +4004,239 @@ func has_pending_effect(action_id: StringName) -> bool:
 	return _pending_effect.has(action_id)
 
 
+## ════════════════════════════════════════════════════════════
+# pilot_021 塔莉娅 effect_01：循环赐予行动牌
+## ════════════════════════════════════════════════════════════
+## 抽3张行动牌打"禁"标签（owner=塔莉娅玩家，本回合塔莉娅无法使用），然后循环：
+##   选机甲（4格内其他存活机甲，取消=结束循环）-> 选剩余禁牌(至少1张，取消=回选机甲)
+##   -> 转移（GameActions.transfer_action_cards 挂钩自动打"策"标签+清"禁"标签）
+## 直到牌给完或选机甲界面取消。循环状态存 action.record["_pilot_021_loop"]；
+## 挂起时 _pending_effect 记 phase=pilot_021_choose_mech / pilot_021_choose_cards。
+## 抽牌统一走 gain_card 子动作（发 GAIN_CARD_BEFORE/AFTER/SETTLE 时点 + 抽取标，库马斯 pilot_035
+## 等 GAIN_CARD_AFTER 监听器可响应"塔莉娅赐予抽3"）；抽取结果经 _draw_result_sink 回写父 record，
+## 子动作完成（含异步挂起，由 _continue_pilot_021_draw 续跑）后 _finish_pilot_021_draw 打"禁"标签。
+## 返回 true=已挂起(应 return)；false=循环结束/无候选(continue)。
+func _handle_pilot_021_loop_deal(act: Dictionary, effect, payload: Dictionary, action) -> bool:
+	if context == null or context.game_state == null:
+		return false
+	var loop: Dictionary = action.record.get("_pilot_021_loop", {})
+	if loop.is_empty():
+		# 抽牌子动作是否进行中/已完成（_continue_pilot_021_draw 消费后清空）
+		var pending: Dictionary = action.record.get("_pilot_021_draw_pending", {})
+		if pending.is_empty():
+			var bind = _make_binding_from_effect(effect, action, payload)
+			var player_id: StringName = bind.get_owner_player_id()
+			var mech_id: StringName = bind.get_source_mech_id()
+			if player_id == &"" or mech_id == &"":
+				return false
+			# 循环开始即 mark 每回合1次：抽牌/赐予循环是"1次效果"，开始消耗就占住额度，
+			# 避免弹窗挂起期间按钮仍可点、重复点击再抽3张。循环结束 _finish_pilot_021_deal 会再 mark 一次
+			# （计数累加>max 无副作用，used_up 判定是 used>=max）。
+			_mark_once_per_turn_used(effect, payload)
+			action.record["_pilot_021_draw_pending"] = {
+				"player_id": player_id, "mech_id": mech_id,
+				"effect_ref": effect, "payload_ref": payload,
+			}
+			if context.action_service != null:
+				context.action_service.execute_sub_action({
+					"type": &"EXECUTE_GAIN_CARD",
+					"params": {
+						"from_zone": &"action_deck", "card_kind": &"action", "count": 3,
+						"player_id": player_id, "reason": &"pilot_021_draw_3",
+						# 抽取结果回写父 record["_pilot_021_draw_drawn"]（子动作完成后读）
+						"_draw_result_sink": {"parent_action_id": action.action_id, "key": &"_pilot_021_draw_drawn"},
+					},
+				}, payload, action)
+				# 子动作异步挂起（库马斯监听 GAIN_CARD_AFTER 触发子动作）-> 父挂起等 _continue_pilot_021_draw
+				if _last_created_sub_action_paused(action):
+					return true
+			# 子动作同步完成：sink 已把 drawn 回写父 record
+			action.record.erase("_pilot_021_draw_pending")
+			var drawn: Array = action.record.get("_pilot_021_draw_drawn", [])
+			action.record.erase("_pilot_021_draw_drawn")
+			_finish_pilot_021_draw(action, effect, payload, player_id, mech_id, drawn)
+			return _pilot_021_choose_mech(effect, payload, action, action.record.get("_pilot_021_loop", {}))
+		# 防御：_continue_pilot_021_draw 已消费 pending，理论不达此处
+		return false
+	# 已有 loop：进入选机甲阶段
+	return _pilot_021_choose_mech(effect, payload, action, loop)
+
+
+## 塔莉娅 effect_01 抽牌完成（同步/异步共用）：打"禁"标签 + 存 loop（剩余牌）+ 日志。
+func _finish_pilot_021_draw(action, effect, payload: Dictionary, player_id: StringName, mech_id: StringName, drawn: Array) -> void:
+	for cid in drawn:
+		var card = context.game_state.get_card(cid)
+		if card != null:
+			_ActionPilotEffects.pilot_021_tag_jin(card, player_id)
+	action.record["_pilot_021_loop"] = {"player_id": player_id, "mech_id": mech_id, "remaining": drawn}
+	SLog.log_raw("[pilot_021] 塔莉娅抽3张行动牌打禁标签 player=%s drawn=%d" % [String(player_id), drawn.size()])
+
+
+## 塔莉娅 effect_01 抽牌子动作（EXECUTE_GAIN_CARD）完成后的续跑：打"禁"标签 + 进选机甲循环。
+## 供 ActionEngine._after_sub_action_finished 调用。返回 true=又挂起（选机甲/选牌），false=处理完毕。
+func _continue_pilot_021_draw(parent_action) -> bool:
+	if parent_action == null or not parent_action.record.has("_pilot_021_draw_pending"):
+		return false
+	if parent_action.record.has("_pilot_021_loop"):
+		# 防御：循环已开始，清 pending 直接继续选机甲
+		var _ploop: Dictionary = parent_action.record["_pilot_021_loop"]
+		parent_action.record.erase("_pilot_021_draw_pending")
+		parent_action.record.erase("_pilot_021_draw_drawn")
+		return _pilot_021_choose_mech(_ploop.get("_effect_ref", null), _ploop.get("_payload_ref", {}), parent_action, _ploop)
+	var pending: Dictionary = parent_action.record["_pilot_021_draw_pending"]
+	var player_id: StringName = pending.get("player_id", &"")
+	var mech_id: StringName = pending.get("mech_id", &"")
+	var effect = pending.get("effect_ref", null)
+	var payload: Dictionary = pending.get("payload_ref", {})
+	var drawn: Array = parent_action.record.get("_pilot_021_draw_drawn", [])
+	parent_action.record.erase("_pilot_021_draw_pending")
+	parent_action.record.erase("_pilot_021_draw_drawn")
+	_finish_pilot_021_draw(parent_action, effect, payload, player_id, mech_id, drawn)
+	return _pilot_021_choose_mech(effect, payload, parent_action, parent_action.record.get("_pilot_021_loop", {}))
+
+
+## 效果1循环-选机甲阶段：收集4格内其他存活机甲；无候选=结束循环；人类挂起弹窗。
+func _pilot_021_choose_mech(effect, payload: Dictionary, action, loop: Dictionary) -> bool:
+	if context == null or context.game_state == null:
+		return false
+	var player_id: StringName = loop.get("player_id", &"")
+	var mech_id: StringName = loop.get("mech_id", &"")
+	var remaining: Array = loop.get("remaining", [])
+	if remaining.is_empty():
+		return false
+	var src_mech = context.game_state.mechs.get(mech_id)
+	if src_mech == null:
+		return false
+	var _HexGrid = _ActionPilotEffects._get_hex_grid()
+	var candidates: Array[StringName] = []
+	for mid: StringName in context.game_state.mechs:
+		if mid == mech_id:
+			continue
+		var m = context.game_state.mechs[mid]
+		if m == null or m.destroyed:
+			continue
+		if _HexGrid.distance(m.position, src_mech.position) <= 4:
+			candidates.append(mid)
+	if candidates.is_empty():
+		SLog.log_raw("[pilot_021] 塔莉娅 4格内无其他机甲，赐予循环结束")
+		return false
+	# AI：直接把剩余全部牌给第一个候选（不弹窗）
+	if _is_ai_owner(player_id, mech_id):
+		_transfer_pilot_021_cards(action, loop, remaining, candidates[0])
+		loop["remaining"] = []
+		action.record["_pilot_021_loop"] = loop
+		return false
+	# 人类：挂起选机甲（复用 select_mech_target 输入类型，valid_mech_ids 供 app_root 高亮/校验）
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"pilot_021_choose_mech"}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"select_mech_target", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"mech_id": mech_id,
+		"player_id": player_id,
+		"valid_mech_ids": candidates,
+		"label": "选择要给予行动牌的机甲（4格内）",
+	})
+	SLog.log_raw("[TIMING] %s pilot_021 挂起选机甲 candidates=%d" % [String(action.action_id), candidates.size()])
+	return true
+
+
+## 效果1循环-选牌阶段：弹 discard_select_panel 列剩余禁牌（至少选1张，取消=回选机甲不结束循环）。
+func _pilot_021_choose_cards(effect, payload: Dictionary, action, loop: Dictionary) -> bool:
+	if context == null or context.game_state == null:
+		return false
+	var player_id: StringName = loop.get("player_id", &"")
+	var mech_id: StringName = loop.get("mech_id", &"")
+	var remaining: Array = loop.get("remaining", [])
+	if remaining.is_empty():
+		return false
+	# AI：给第一张给当前目标
+	if _is_ai_owner(player_id, mech_id):
+		var to_mech_id: StringName = loop.get("target_mech", &"")
+		if to_mech_id == &"":
+			return false
+		var give_one: Array = [remaining[0]]
+		_transfer_pilot_021_cards(action, loop, give_one, to_mech_id)
+		remaining.erase(remaining[0])
+		loop["remaining"] = remaining
+		action.record["_pilot_021_loop"] = loop
+		if remaining.is_empty():
+			return false  # 给完结束循环
+		return _pilot_021_choose_mech(effect, payload, action, loop)  # 继续选机甲
+	# 人类：挂起选牌（discard_select_panel 只列剩余禁牌）
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"pilot_021_choose_cards"}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"select_discard_cards", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"discard_player_id": player_id,
+		"count": remaining.size(),
+		"min_count": 1,
+		"face_up": true,
+		"action_verb": &"give",
+		"source_label": "塔莉娅：选择要给予的行动牌（可取消重选机甲）",
+		"title_override": "选择要给予的行动牌（至少1张）",
+		"allowed_card_ids": remaining,
+		"player_id": player_id,
+	})
+	SLog.log_raw("[TIMING] %s pilot_021 挂起选牌 remaining=%d" % [String(action.action_id), remaining.size()])
+	return true
+
+
+## 转移指定牌给目标机甲（走 transfer_action_cards -> GameActions 挂钩自动打"策"标签+清"禁"标签）。
+func _transfer_pilot_021_cards(action, loop: Dictionary, card_ids: Array, target_mech_id: StringName) -> void:
+	if context == null or context.game_state == null or context.game_actions == null:
+		return
+	var player_id: StringName = loop.get("player_id", &"")
+	var to_player_id: StringName = &""
+	var target_player = context.game_state.get_player_for_mech(target_mech_id)
+	if target_player != null:
+		to_player_id = target_player.player_id
+	if to_player_id == &"" or card_ids.is_empty():
+		return
+	context.game_actions.transfer_action_cards({
+		"from_player_id": player_id,
+		"to_player_id": to_player_id,
+		"card_ids": card_ids,
+	})
+	SLog.log_raw("[pilot_021] 塔莉娅交牌 %d 张 -> mech=%s" % [card_ids.size(), String(target_mech_id)])
+
+
+## 效果1循环结束：清循环状态 + mark once_per_turn（抽牌已发生，取消也消耗次数）+ 恢复父动作。
+## 供 resume_pending_effect 的 pilot_021_choose_mech/pilot_021_choose_cards 分支结束路径调用。
+func _finish_pilot_021_deal(effect, payload: Dictionary, action) -> void:
+	if action == null:
+		return
+	action.record.erase("_pilot_021_loop")
+	_mark_once_per_turn_used(effect, payload)
+	if effect.once_per_game_key != &"":
+		_mark_once_per_game_used(effect, payload)
+	effect_executed.emit(effect.effect_id, action.action_id)
+	_mark_effect_executed(effect.effect_id, action.action_id)
+	SLog.log_raw("[TIMING] %s pilot_021 赐予循环结束 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+	if context != null and context.action_engine != null:
+		action.state = &"waiting_input"
+		context.action_engine.continue_action(action.action_id, {})
+
+
 ## 恢复挂起的效果（闪击弹窗玩家选牌/取消；维修等目标选择/二选一续跑）
 func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> void:
 	if not _pending_effect.has(action_id):
+		# 未命中挂起：先入早到信箱（挂起注册后由排空钩子补投），并留响亮告警。
+		# 此前静默返回，丢失的 resume 在日志里完全不可见，实机排查只能靠数动作 id
+		#（0827 根因⑤）。错 id（发散）输入永远不匹配挂起 -> 信箱有界淘汰兜底，不泄漏。
+		SLog.log_raw("[TIMING][WARN] resume_pending_effect 未命中挂起：action=%s 输入键=%s -> 入早到信箱待补投"
+			% [String(action_id), str(input_data.keys())])
+		_effect_input_mailbox.stash(action_id, input_data)
 		return
 	var pending: Dictionary = _pending_effect[action_id]
 	_pending_effect.erase(action_id)
+	# 挂起输入已被本次调用消费：释放共享等待槽中该动作的残留等待（若槽仍指向它），
+	# 否则排队语义下效果续跑弹出的新窗（不同动作）会被判"槽被占"而排队不弹。
+	# 实机网络路径走 bridge.resolve_effect_input（调用前已清槽，此处幂等）；
+	# 直调本方法的路径（测试、非效果弹窗确认）依赖此清理。
+	if context != null and context.action_ui_bridge != null:
+		context.action_ui_bridge.release_waiting_slot_if_owner(action_id)
 	var effect: ActionEffect = pending.get("effect")
 	var payload: Dictionary = pending.get("payload", {})
 	var phase: StringName = pending.get("phase", &"pre_actions_discard")
@@ -1601,7 +4248,395 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 	var action = pending.get("action", null)
 	if action == null and context.action_registry != null:
 		action = context.action_registry.get_action(action_id)
+	# 条件重检豁免（resume 通用）：效果挂起（等待输入/时点）前条件已通过；挂起期间回合可能已切换
+	# （TURN_AFTER_END 挂起后 _net_end_turn 立即 start_turn 下家，如弥雅 pilot_071 回合后选机甲），
+	# 重检 IS_OWNER_TURN 等依赖 active_player_id 的条件会误判致效果被 skip。所有 resume 分支确认
+	# 后重跑 _execute_effect 统一跳过条件重检，仅续跑后续 actions（取消分支不走重跑，无影响）。
+	payload["_effect_conditions_prechecked"] = true
 	if action == null or effect == null:
+		return
+
+	# ── 选目标前确认阶段：确认才进入目标选择，取消=效果不发动 ──
+	if phase == &"confirm_before_target":
+		action.record.erase("_waiting_for_confirm_before_target")
+		if input_data.get("cancelled", false):
+			SLog.log_raw("[TIMING] %s 选目标前确认被取消，effect=%s 不发动" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		# 确认：标记已确认，重跑 _execute_effect → 进入目标选择（不再弹确认）
+		payload["_effect_confirmed"] = true
+		_execute_effect(effect, payload, action)
+		# 守卫：重跑后再次挂起（目标选择/其他弹窗）则等待，不可推进父动作
+		if action.state == &"waiting_timing" and _pending_effect.has(action.action_id):
+			return
+		if _last_created_sub_action_paused(action):
+			action.state = &"waiting_effect_action"
+			return
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
+		return
+
+	# ── 獠鼠 pilot_086 骰子确认：确认=掷骰分支出 _seq 动作链；取消=不发动（恢复动作推进）──
+	if phase == &"pilot_086_confirm":
+		action.record.erase("_pilot_086_confirm_shown")
+		var p86_cancelled: bool = input_data.get("cancelled", false) or int(input_data.get("chosen_option_index", -1)) != 0
+		if p86_cancelled:
+			SLog.log_raw("[TIMING] %s 獠鼠骰子取消，effect=%s 不发动" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		_pilot_086_confirm_resume(effect, payload, action)
+		return
+
+	# ── 李 pilot_051 e2 拦截事件牌设置：三选一弹窗 resume ──
+	# 取消=不发动不消耗每局1次（原 set_event_card 照常继续，效果正常注册生效）；
+	# 弃置(0)=消耗每局1次 + 中止旗 + 摘牌 + EXECUTE_DISCARD；
+	# 转设我方(1)=消耗每局1次 + 中止旗 + 摘牌 + EXECUTE_SET_EVENT_CARD 设到我方机甲
+	#（完整流程：顶掉我方旧事件牌+注册效果+instant结算；内层 EVENT_SET_BEFORE 重入时
+	#  once_per_game 已标记 -> _execute_effect 1434 行自动跳过，无递归）。
+	if phase == &"pilot_051_intercept":
+		action.record.erase("_pilot_051_intercept_shown")
+		var p051_cancelled: bool = input_data.get("cancelled", false)
+		var p051_choice: int = int(input_data.get("chosen_option_index", -1))
+		if p051_cancelled or p051_choice < 0 or p051_choice > 1:
+			SLog.log_raw("[TIMING] %s 李拦截取消（不消耗次数），原设置继续 effect=%s" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		# 确认：消耗每局1次
+		_mark_once_per_game_used(effect, payload)
+		var p051_card_id: StringName = payload.get("event_card_id", &"")
+		var p051_target_mid: StringName = payload.get("mech_id", &"")
+		var p051_card = context.game_state.get_card(p051_card_id) if p051_card_id != &"" else null
+		var p051_target_mech = context.game_state.mechs.get(p051_target_mid) if p051_target_mid != &"" else null
+		# 摘牌：新牌已入区（EVENT_SET_BEFORE 在放置后 fire）但未注册效果，直接清槽
+		if p051_target_mech != null and p051_card != null:
+			var p051_slot = p051_target_mech.slots.get(&"event")
+			if p051_slot != null and p051_slot.equipped_card == p051_card:
+				p051_slot.equipped_card = null
+		# 中止旗：set_event_card 剩余步骤（③激活/④instant标记/⑥弃置）全部空跑
+		action.record["event_set_cancelled"] = true
+		var p051_remaining: Array = []
+		if p051_choice == 0:
+			p051_remaining.append({"type": &"EXECUTE_DISCARD", "params": {
+				"card_ids": [p051_card_id], "count": 1,
+				"executor": &"system_default", "reason": &"pilot_051_effect_02",
+			}})
+		else:
+			var p051_li_mid: StringName = payload.get("binding_context", {}).get("mech_id", &"")
+			p051_remaining.append({"type": &"EXECUTE_SET_EVENT_CARD", "params": {
+				"mech_id": p051_li_mid, "event_card_id": p051_card_id,
+			}})
+		context.game_state.write_log(&"pilot_051_intercept", {
+			"card_id": String(p051_card_id) if p051_card != null and p051_card.def != null else String(p051_card_id),
+			"target_mech_id": String(p051_target_mid),
+			"branch": "discard" if p051_choice == 0 else "transfer",
+		})
+		action.record["_seq_effect_actions"] = {"payload": payload, "remaining": p051_remaining, "effect": effect}
+		action.state = &"waiting_effect_action"
+		if _continue_seq_effect_actions(action):
+			return
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
+		return
+
+	# ── 墨尘 pilot_080 e1 相邻标记交互：移去/移至 弹窗 resume ──
+	# 取消=不发动（效果无次数限制，直接恢复推进）；
+	# 移去(0)=整格标记全部移除（不触发效果）；
+	# 移至(1)=先摘下整格标记（移动本身不触发）-> 免费基础移动（free_move）-> 标记第1次生效
+	# -> 完全结束后（含instant弹窗/陷阱连锁）-> 第2次生效，两次相互独立。
+	if phase == &"pilot_080_choice":
+		action.record.erase("_pilot_080_choice_shown")
+		var p080_cancelled: bool = input_data.get("cancelled", false)
+		var p080_choice: int = int(input_data.get("chosen_option_index", -1))
+		if p080_cancelled or p080_choice < 0:
+			SLog.log_raw("[TIMING] %s 墨尘标记交互取消，不发动 effect=%s" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		var p080_cell: String = String(pending.get("pilot_080_cell", ""))
+		var p080_mech_id: StringName = pending.get("pilot_080_mech_id", &"")
+		var p080_pid: StringName = pending.get("pilot_080_player_id", &"")
+		var p080_parts := p080_cell.split(",")
+		var p080_q: int = int(p080_parts[0]) if p080_parts.size() >= 1 else 0
+		var p080_r: int = int(p080_parts[1]) if p080_parts.size() >= 2 else 0
+		if p080_choice == 0:
+			# 移去：整格标记全部移除（不触发）
+			var p080_removed: Array = context.game_state.map_state.get_markers_at(p080_q, p080_r)
+			for p080_m: Dictionary in p080_removed.duplicate(true):
+				context.game_state.map_state.remove_marker(p080_m.get("marker_id", &""))
+			context.game_state.write_log(&"pilot_080_marker_removed", {
+				"mech_id": String(p080_mech_id), "cell": p080_cell, "count": p080_removed.size(),
+			})
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		# 移至：摘下整格标记（快照）-> 免费移动 -> 第1次生效 -> 第2次生效
+		var p080_markers: Array = context.game_state.map_state.get_markers_at(p080_q, p080_r).duplicate(true)
+		for p080_m2: Dictionary in p080_markers:
+			context.game_state.map_state.remove_marker(p080_m2.get("marker_id", &""))
+		var p080_remaining: Array = [{
+			"type": &"EXECUTE_BASIC_MOVE", "params": {
+				"mech_id": p080_mech_id, "target_cell": StringName(p080_cell), "free_move": true,
+			},
+		}]
+		for p080_pass in range(2):
+			for p080_mk: Dictionary in p080_markers:
+				var p080_atom: Dictionary = _pilot_080_marker_trigger_atom(p080_mk, p080_mech_id, p080_pid)
+				if not p080_atom.is_empty():
+					p080_remaining.append(p080_atom)
+		context.game_state.write_log(&"pilot_080_marker_move", {
+			"mech_id": String(p080_mech_id), "cell": p080_cell, "markers": p080_markers.size(),
+		})
+		action.record["_seq_effect_actions"] = {"payload": payload, "remaining": p080_remaining, "effect": effect}
+		action.state = &"waiting_effect_action"
+		if _continue_seq_effect_actions(action):
+			return
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
+		return
+
+	# ── PEEK_DECK_TOP_AND_DISCARD 第1阶段（代价选牌）resume（通用窥牌模块，银雪 pilot_065）──
+	# 取消/未选=不发动；确认=串行 [EXECUTE_DISCARD 代价, PEEK_DECK_SHOW 哨兵] 续跑。
+	# 代价弃置走子动作触发弃置时点；完成后 _seq 续跑到 PEEK_DECK_SHOW 弹堆顶多选窗。
+	if phase == &"peek_select_cost":
+		action.record.erase("_peek_cost_shown")
+		var pk_params: Dictionary = pending.get("peek_params", {})
+		if input_data.get("cancelled", false):
+			SLog.log_raw("[TIMING] %s 银雪窥牌-代价取消，不发动 effect=%s" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		var pk_cost_selected: Array = input_data.get("selected_card_ids", [])
+		if pk_cost_selected.is_empty():
+			# 未选代价牌=不发动
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		var pk_remaining: Array = [
+			{"type": &"EXECUTE_DISCARD", "params": {"card_ids": [pk_cost_selected[0]], "reason": &"PILOT_065_PEEK_COST"}},
+			{"type": &"PEEK_DECK_SHOW", "params": pk_params},
+		]
+		action.record["_seq_effect_actions"] = {"payload": payload, "remaining": pk_remaining, "effect": effect}
+		action.state = &"waiting_effect_action"
+		if _continue_seq_effect_actions(action):
+			return
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
+		return
+
+	# ── PEEK_DECK_TOP_AND_DISCARD 第2阶段（堆顶多选弃置）resume ──
+	# 取消/不选=不弃置堆顶牌；确认=串行弃置选中的堆顶牌（每张 EXECUTE_DISCARD 触发弃置时点）。
+	# 完成后恢复宿主动作（gain_card 继续 GAIN_CARD_AFTER 真正抽牌，此时堆顶已被银雪调整）。
+	if phase == &"peek_select_discard":
+		var pd_selected: Array = input_data.get("selected_card_ids", [])
+		if input_data.get("cancelled", false) or pd_selected.is_empty():
+			SLog.log_raw("[TIMING] %s 银雪窥牌-堆顶不弃置 effect=%s" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		var pd_remaining: Array = []
+		for pd_cid in pd_selected:
+			pd_remaining.append({"type": &"EXECUTE_DISCARD", "params": {"card_ids": [pd_cid], "reason": &"PILOT_065_PEEK_DISCARD"}})
+		action.record["_seq_effect_actions"] = {"payload": payload, "remaining": pd_remaining, "effect": effect}
+		action.state = &"waiting_effect_action"
+		if _continue_seq_effect_actions(action):
+			return
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
+		return
+
+	# ── CHOOSE_MAP_CELL 选格阶段（机雷设陷 legacy + 通用 cells 源）──
+	# 取消=效果不发动不消耗次数（恢复动作继续后续步骤）；
+	# 确认=选中格存 payload[store_result_key]（默认 selected_cell_id）：
+	#   · 挂起于 _seq 序列内（如 CHOOSE_MANY_CARDS store 路径剩余链中的第二次选格）：
+	#     继续跑 _seq，不重跑 _execute_effect（避免链上 MARK/EXECUTE_DISCARD 等重复执行）。
+	#   · 顶层挂起：重跑 _execute_effect（幂等守卫：已选格跳过）。
+	if phase == &"map_cell_select":
+		action.record.erase("_waiting_for_map_cell")
+		if input_data.get("cancelled", false):
+			SLog.log_raw("[TIMING] %s 选格被取消，effect=%s 不执行" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		if input_data.has("selected_cell_id"):
+			var mc_key: StringName = pending.get("map_cell_store_key", &"")
+			if mc_key != &"":
+				payload[mc_key] = input_data["selected_cell_id"]
+			else:
+				payload["selected_cell_id"] = input_data["selected_cell_id"]
+		SLog.log_effect(effect.effect_id, action.source, action.action_id, String(action.action_type), {"status": "resuming_after_map_cell", "input": input_data})
+		# 序列内挂起：继续 _seq 剩余链（CHOOSE_MAP_CELL 由 _continue_seq_effect_actions 特判挂起）
+		if action.record.has("_seq_effect_actions"):
+			action.state = &"waiting_effect_action"
+			if _continue_seq_effect_actions(action):
+				return
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		# 顶层挂起：重跑 _execute_effect（已选格跳过；未就绪会再次挂起，幂等）
+		_execute_effect(effect, payload, action)
+		if action.state == &"waiting_timing" and _pending_effect.has(action.action_id):
+			return
+		if _last_created_sub_action_paused(action):
+			action.state = &"waiting_effect_action"
+			return
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
+		return
+
+	# ── pilot_059 薇尔：回合开始损伤调整面板 ──
+	# 应用玩家选择（set 放1损+查装备损坏 / remove 移1损 / cancel 不动）→ 统计调整后损伤数 N
+	# → 三分支（<threshold 获金 / ==threshold 视为补给抽2行动+1装备 / >threshold 移除最多
+	# max_remove）经 _seq_effect_actions 串行执行。分支动作含子动作时挂起等待
+	# （_after_sub_action_finished -> _continue_seq_effect_actions 续跑），全部同步完成则
+	# 直接 continue_action 恢复 turn 动作继续流程。
+	if phase == &"pilot_059_adjust":
+		action.record.erase("_pilot_059_adjust")
+		var p59_p: Dictionary = payload.get("pilot_059_params", {})
+		var p59_threshold: int = int(p59_p.get("threshold", 4))
+		var p59_gold: int = int(p59_p.get("gold_amount", 3))
+		var p59_max_remove: int = int(p59_p.get("max_remove", 2))
+		var p59_store_key: String = String(p59_p.get("store_key", "pilot_059_damage_x"))
+		var p59_label: String = String(p59_p.get("source_label", "薇尔·损伤调整"))
+		var p59_bind2: Dictionary = payload.get("binding_context", {})
+		var p59_owner_pid: StringName = p59_bind2.get("player_id", &"")
+		var p59_owner_mid: StringName = p59_bind2.get("mech_id", &"")
+		# ① 应用调整（set/remove/cancel）
+		var p59_choice: String = String(input_data.get("choice", &"cancel"))
+		var p59_slot: StringName = StringName(input_data.get("slot_id", &""))
+		if p59_choice != &"cancel" and p59_owner_mid != &"" and context.game_state.mechs.has(p59_owner_mid):
+			if p59_choice == &"set" and p59_slot != &"":
+				context.damage_token_service.place_one_damage_token(p59_owner_mid, p59_slot)
+				context.damage_token_service.check_and_handle_equipment_break(p59_owner_mid, p59_slot)
+			elif p59_choice == &"remove" and p59_slot != &"":
+				context.game_actions.remove_damage_tokens({"mech_id": p59_owner_mid, "slot_id": p59_slot, "amount": 1})
+		# ② 统计调整后损伤数 N（复用 PILOT_044_COMPUTE_DAMAGE，store_key 由 params 指定）
+		var p59_n: int = 0
+		if context.game_actions != null and p59_owner_mid != &"" and context.game_state.mechs.has(p59_owner_mid):
+			context.game_actions.pilot_044_compute_damage({"mech_id": p59_owner_mid, "store_key": p59_store_key}, payload)
+			p59_n = int(payload.get(p59_store_key, 0))
+		# ③ 三分支构造动作链
+		var p59_remaining: Array = []
+		if p59_n < p59_threshold:
+			p59_remaining.append({"type": &"GAIN_GOLD", "params": {"amount": p59_gold, "player_id": p59_owner_pid, "reason": &"pilot_059_gold"}})
+		elif p59_n == p59_threshold:
+			# 视为使用1张补给：抽2行动牌 + 1装备牌（纯虚拟，无实体补给牌）
+			p59_remaining.append({"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 2, "player_id": p59_owner_pid, "mech_ids": [p59_owner_mid], "reason": &"pilot_059_supply"}})
+			p59_remaining.append({"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"equipment_deck", "card_kind": &"equipment", "count": 1, "player_id": p59_owner_pid, "mech_ids": [p59_owner_mid], "reason": &"pilot_059_supply"}})
+		else:
+			# 移除最多 max_remove 损伤：damage_change decrease + allow_cancel/max_mode（面板可提前结束/取消）
+			p59_remaining.append({"type": &"EXECUTE_DAMAGE_CHANGE", "params": {"mech_ids": [p59_owner_mid], "value": p59_max_remove, "method": &"decrease", "executor": p59_owner_pid, "reason": &"pilot_059_remove", "allow_cancel": true, "max_mode": true, "source_label": p59_label}})
+		SLog.log_raw("[TIMING] %s pilot_059 调整choice=%s 后损伤数 N=%d 分支=%s" % [String(action.action_id), p59_choice, p59_n, "gold" if p59_n < p59_threshold else ("supply" if p59_n == p59_threshold else "remove")])
+		if p59_remaining.is_empty():
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action.action_id, {})
+			return
+		action.record["_seq_effect_actions"] = {"payload": payload, "remaining": p59_remaining, "source_check": false, "effect": effect}
+		action.state = &"waiting_effect_action"
+		if _continue_seq_effect_actions(action):
+			return
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action.action_id, {})
+		return
+
+	# ── 骇客窥牌选目标阶段（通用 VIEW_RANDOM_OTHER_HAND_CARDS）：──
+	# 取消=效果不发动不消耗次数（恢复动作继续后续步骤）；
+	# 确认=把目标机甲 id 注入 payload[store_target_key]，重跑 _execute_effect
+	# （模块幂等守卫见 payload[store_key] != &"" 跳过选目标，直接查看+加成）。
+	if phase == &"view_random_other_hand_target":
+		action.record.erase("_waiting_for_target")
+		var vr_params: Dictionary = pending.get("view_params", {})
+		var vr_store_key: String = String(vr_params.get("store_target_key", &"pilot_066_target_id"))
+		if input_data.get("cancelled", false):
+			SLog.log_raw("[TIMING] %s 骇客窥牌选目标被取消，effect=%s 不发动不计数" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		var vr_tgt: StringName = input_data.get("target_mech_id", input_data.get("target_id", &""))
+		if vr_tgt == &"":
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		payload[vr_store_key] = vr_tgt
+		SLog.log_effect(effect.effect_id, action.source, action.action_id, String(action.action_type), {"status": "resuming_after_hack_peek_target", "target": vr_tgt, "input": input_data})
+		_execute_effect(effect, payload, action)
+		if action.state == &"waiting_timing" and _pending_effect.has(action.action_id):
+			return
+		if _last_created_sub_action_paused(action):
+			action.state = &"waiting_effect_action"
+			return
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
+		return
+
+	# ── 征服宣言选目标阶段（PILOT_088_CONQUER）：──
+	# 取消=效果不发动不消耗次数（恢复动作继续后续步骤）；确认=选定目标即消耗本回合1次
+	# （_mark_once_per_turn_used，用户决策：选好目标后消耗），随后弹三选一类型（不可取消）。
+	if phase == &"pilot_088_target":
+		action.record.erase("_waiting_for_target")
+		if input_data.get("cancelled", false):
+			SLog.log_raw("[TIMING] %s 征服选目标被取消，effect=%s 不发动不计数" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		var p088_tgt: StringName = input_data.get("target_mech_id", input_data.get("target_id", &""))
+		if p088_tgt == &"":
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		payload["pilot_088_target_id"] = p088_tgt
+		# 选定目标即消耗本回合1次
+		_mark_once_per_turn_used(effect, payload)
+		SLog.log_raw("[TIMING] %s 征服选定目标=%s 消耗本回合1次 effect=%s" % [String(action_id), String(p088_tgt), String(effect.effect_id)])
+		if _pilot_088_show_type_select(effect, payload, action):
+			return
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
+		return
+
+	# ── 征服宣言类型选择阶段（PILOT_088_CONQUER）：──
+	# 三选一（攻击/迎击/辅助）确定后：随机展示目标1张行动牌 + 非阻塞浮窗（所有玩家端显示）+
+	# 类型匹配弃置（相同→弃目标除展示牌外全部；不同→弃展示牌）。
+	if phase == &"pilot_088_type":
+		var p088_declared: String = String(input_data.get("pilot_088_declared_type", ""))
+		if p088_declared == "":
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		payload["pilot_088_declared_type"] = p088_declared
+		_pilot_088_finish_conquer(effect, payload, action)
+		if action.state == &"waiting_effect_action":
+			return
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
 		return
 
 	# ── 目标选择/二选一阶段：注入输入后重跑整个 _execute_effect ──
@@ -1663,6 +4698,7 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 			payload["selected_weapon_id"] = input_data["selected_weapon_id"]
 		# CHOOSE_MAP_CELL 选格（机雷设陷）：注入选中格 id，续跑 _execute_effect 时
 		# CHOOSE_MAP_CELL 见已选则跳过，后续 PLACE_OR_TRIGGER_TRAP 读 $payload.selected_cell_id。
+		# （CHOOSE_MAP_CELL 现挂起于专用 phase=map_cell_select，此分支仅为兼容保留。）
 		if input_data.has("selected_cell_id"):
 			payload["selected_cell_id"] = input_data["selected_cell_id"]
 		# CHOOSE_MANY_MAP_CELLS 多格选格（双子机雷）：注入选中格 id 数组，PLACE_OR_TRIGGER_TRAP(place_each) 读 $payload.selected_cell_ids。
@@ -1692,6 +4728,170 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 		if context.action_engine != null:
 			action.state = &"waiting_input"
 			context.action_engine.continue_action(action_id, {})
+		return
+
+	# ── pilot_024 琳 RE 请求确认：取消=无事发生（RE 已消耗，不刷新）；确认=开维修窗口并保持挂起 ──
+	# 窗口关闭时（维修完成/取消按钮）由 _pilot_024_close_repair_window -> continue_action 恢复。
+	if phase == &"pilot_024_re_confirm":
+		action.record.erase("_waiting_for_p024_re_confirm")
+		if input_data.get("cancelled", false):
+			SLog.log_raw("[TIMING] %s 琳拒绝 RE 维修请求，effect=%s 无事发生（RE 已消耗）" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		# 确认：开维修窗口，动作保持挂起（waiting_timing，无 pending），请求方回合被阻塞。
+		payload["_p024_re_confirm_done"] = true
+		var _p24c_ctx: Dictionary = payload.get("binding_context", {}) if payload != null else {}
+		var _p24c_req: StringName = StringName(_p24c_ctx.get("mech_id", payload.get("mech_id", &"")))
+		var _p24c_lin: StringName = _ActionPilotEffects.pilot_024_find_lin_mech(context.game_state)
+		if _p24c_lin == &"" or _p24c_req == &"":
+			# 琳离场/请求方失效（防御）：直接恢复请求方回合
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		_ActionPilotEffects.pilot_024_open_repair_window(context.game_state, _p24c_lin, _p24c_req, action_id)
+		pilot_024_repair_window_changed.emit(true, _p24c_req)
+		SLog.log_raw("[TIMING] %s 琳确认 RE，维修窗口开启 requester=%s（请求方回合阻塞）" % [String(action_id), String(_p24c_req)])
+		return
+
+	# ── pilot_081 汀兰 RE 请求确认：取消=无事发生（RE 已消耗，不刷新）；
+	# 同意=请求方回2血+获2金，立即恢复请求方回合（不开窗口，不像琳阻塞） ──
+	if phase == &"pilot_081_re_confirm":
+		action.record.erase("_waiting_for_p081_re_confirm")
+		var _p81c_ctx: Dictionary = payload.get("binding_context", {}) if payload != null else {}
+		var _p81c_req: StringName = StringName(_p81c_ctx.get("mech_id", payload.get("mech_id", &"")))
+		if input_data.get("cancelled", false):
+			SLog.log_raw("[TIMING] %s 汀兰拒绝 RE 回复请求，effect=%s 无事发生（RE 已消耗）" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		# 同意：请求方回2血 + 获2金
+		payload["_p081_re_confirm_done"] = true
+		var _p81c_hinst: StringName = StringName(_p81c_ctx.get("card_instance_id", payload.get("card_instance_id", &"")))
+		var _p81c_holder: StringName = _ActionPilotEffects.pilot_081_find_holder_for_pilot_instance(context.game_state, _p81c_hinst)
+		if _p81c_req == &"" or _p81c_holder == &"" or context.game_actions == null:
+			# 持有者离场/请求方失效（防御）：直接恢复请求方回合
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		# 请求方回2血（来源=汀兰持有者）
+		context.game_actions.heal_hp({
+			"mech_id": _p81c_req, "amount": 2,
+			"source_card_id": &"pilot_081_汀兰",
+		})
+		# 请求方所属玩家获2金
+		var _p81c_req_m = context.game_state.mechs.get(_p81c_req)
+		if _p81c_req_m != null:
+			context.game_actions.gain_gold({
+				"player_id": _p81c_req_m.owner_player_id, "amount": 2,
+				"reason": &"pilot_081_re_heal",
+			})
+		SLog.log_raw("[TIMING] %s 汀兰同意 RE，请求方回2血+获2金 requester=%s" % [String(action_id), String(_p81c_req)])
+		# 恢复请求方回合（效果立即结算，不阻塞）
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
+		return
+
+	# ── pilot_083 瓦恩武器修改两阶段：phase1 武器单选 → phase2 三横排选项 → 施加 ──
+	# 取消=不施加（owner 模式不耗每回合1次；re 模式 RE 已在点击时消耗不退）。
+	# 确认=打包状态施加到所选武器（mode=owner 另标记效果1每回合1次已用）。
+	if phase == &"p083_weapon_select":
+		action.record.erase("_waiting_for_p083_weapon_select")
+		if input_data.get("cancelled", false):
+			SLog.log_raw("[TIMING] %s 瓦恩武器修改 phase1 取消，effect=%s 不施加" % [String(action_id), String(effect.effect_id)])
+			_finish_pilot_083_flow(action, payload)
+			return
+		var p83_wk: String = String(input_data.get("chosen_effect_id", input_data.get("selected_card_id", "")))
+		if p83_wk == "":
+			_finish_pilot_083_flow(action, payload)
+			return
+		payload["_p083_weapon_key"] = p83_wk
+		_prompt_pilot_083_options(effect, payload, action)
+		return
+	if phase == &"p083_options":
+		action.record.erase("_waiting_for_p083_options")
+		if input_data.get("cancelled", false):
+			SLog.log_raw("[TIMING] %s 瓦恩武器修改 phase2 取消，effect=%s 不施加" % [String(action_id), String(effect.effect_id)])
+			_finish_pilot_083_flow(action, payload)
+			return
+		var p83_opts: Dictionary = input_data.get("options", {})
+		if not (p83_opts is Dictionary):
+			p83_opts = {}
+		payload["_p083_options"] = p83_opts
+		_apply_pilot_083_flow(effect, payload, action)
+		return
+
+	# ── pilot_021 塔莉娅效果1 循环赐予：选机甲 / 选牌 阶段 ──
+	# 选机甲取消=结束循环（抽牌已发生，mark once_per_turn）；选中机甲转选牌。
+	# 选牌取消=回选机甲（不结束循环）；选牌确定=转移并从剩余移除，牌给完结束循环否则回选机甲。
+	if phase == &"pilot_021_choose_mech":
+		var p21_loop: Dictionary = action.record.get("_pilot_021_loop", {})
+		if p21_loop.is_empty():
+			# 防御：循环状态丢失，直接完成效果
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		if input_data.get("cancelled", false):
+			_finish_pilot_021_deal(effect, payload, action)
+			return
+		var p21_target: StringName = StringName(input_data.get("target_id", input_data.get("target_mech_id", &"")))
+		if p21_target == &"":
+			_finish_pilot_021_deal(effect, payload, action)
+			return
+		p21_loop["target_mech"] = p21_target
+		action.record["_pilot_021_loop"] = p21_loop
+		# 转选牌阶段；未挂起（牌给完/异常）则循环结束
+		if not _pilot_021_choose_cards(effect, payload, action, p21_loop):
+			_finish_pilot_021_deal(effect, payload, action)
+		return
+
+	if phase == &"pilot_021_choose_cards":
+		var p21b_loop: Dictionary = action.record.get("_pilot_021_loop", {})
+		if p21b_loop.is_empty():
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		if input_data.get("cancelled", false):
+			# 选牌取消：回选机甲（不结束循环）
+			p21b_loop.erase("target_mech")
+			action.record["_pilot_021_loop"] = p21b_loop
+			if not _pilot_021_choose_mech(effect, payload, action, p21b_loop):
+				_finish_pilot_021_deal(effect, payload, action)
+			return
+		var p21_sel: Array = input_data.get("selected_action_card_ids", [])
+		if p21_sel.is_empty() and input_data.has("card_ids"):
+			p21_sel = input_data.get("card_ids", [])
+		var p21_tgt2: StringName = StringName(p21b_loop.get("target_mech", &""))
+		if p21_tgt2 == &"":
+			_finish_pilot_021_deal(effect, payload, action)
+			return
+		# 只转移仍属于剩余列表的牌（防御）
+		var p21_rem: Array = p21b_loop.get("remaining", [])
+		var p21_give: Array = []
+		for cid in p21_sel:
+			if cid in p21_rem:
+				p21_give.append(cid)
+		if not p21_give.is_empty():
+			_transfer_pilot_021_cards(action, p21b_loop, p21_give, p21_tgt2)
+			for cid in p21_give:
+				p21_rem.erase(cid)
+			p21b_loop["remaining"] = p21_rem
+			action.record["_pilot_021_loop"] = p21b_loop
+		# 牌给完 -> 结束循环；否则回选机甲继续
+		if p21_rem.is_empty():
+			_finish_pilot_021_deal(effect, payload, action)
+			return
+		p21b_loop.erase("target_mech")
+		action.record["_pilot_021_loop"] = p21b_loop
+		if not _pilot_021_choose_mech(effect, payload, action, p21b_loop):
+			_finish_pilot_021_deal(effect, payload, action)
 		return
 
 	# ── 损伤转移选择阶段：玩家选了转移点数（redirect_plan）或取消 ──
@@ -1758,6 +4958,278 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 			context.action_engine.continue_action(action_id, {})
 		return
 
+	# ── pilot_016 选2张转化牌阶段：玩家选了2张B/C（selected_action_card_ids）──
+	# 新语义：B/C 都移入临时区（C 写 record.temp_zone_card_ids 由父 settle 弃置，同步移牌不发时点，
+	#   与迪恩 temp_zone 弃置一致，避免与父动作推进竞争）+ 改造父 use_action_card.record(B当牌A
+	#   virtual_transform) + 清空剩余 listener + mark once_per_turn。
+	# 牌A保留手牌；B 由父 card_to_temp_zone 移入 temp_zone + 注册牌A效果；父 execute_effects 执行牌A效果；
+	# 父 settle 弃B和C。
+	if phase == &"pilot_016_choose_two":
+		var p016_c_a_id: StringName = pending.get("card_a_id", &"")
+		var p016_c_a_def: StringName = pending.get("card_a_def", &"")
+		var p016_sel: Array = input_data.get("selected_action_card_ids", [])
+		# 取消/不足2张（不应发生，no_cancel）：不转化，回父正常用牌A
+		if input_data.get("cancelled", false) or p016_sel.size() < 2:
+			SLog.log_raw("[TIMING] %s pilot_016 转化选牌取消/不足2张，不转化 effect=%s" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		var p016_b_id: StringName = StringName(String(p016_sel[0]))  # B：当牌A用（虚拟）
+		var p016_c_id: StringName = StringName(String(p016_sel[1]))  # C：弃置消耗
+		# 保险：B/C 不应为牌A（面板已排除，AI 路径可能误选则回退不转化）
+		if p016_b_id == p016_c_a_id or p016_c_id == p016_c_a_id:
+			SLog.log_raw("[TIMING] %s pilot_016 选牌含展示牌A，回退不转化 effect=%s" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		# C 移入临时区（新语义：B/C 都进临时区，链末随父 use_action_card settle 统一入弃牌堆）。
+		# 同步移牌不发时点；写 action.record.temp_zone_card_ids 供父 settle 读取弃置（use_action_card_action 通用支持）。
+		var p016_c_card = context.game_state.get_card(p016_c_id) if context.game_state != null else null
+		if p016_c_card != null:
+			var p016_c_owner: StringName = p016_c_card.owner_player_id
+			if p016_c_owner != &"" and context.game_state.players.has(p016_c_owner):
+				context.game_state.players[p016_c_owner].action_hand.erase(p016_c_id)
+			if context.timing_engine != null:
+				context.timing_engine.unregister_listeners_for_card(p016_c_id)
+			p016_c_card.zone = &"temp_zone"
+			var _p016_tz: Array = action.record.get("temp_zone_card_ids", [])
+			if not _p016_tz.has(p016_c_id):
+				_p016_tz.append(p016_c_id)
+			action.record["temp_zone_card_ids"] = _p016_tz
+			SLog.log_raw("[TIMING] %s pilot_016 C=%s 移入临时区（链末随父 settle 弃）" % [String(action_id), String(p016_c_id)])
+		# 改造父 use_action_card.record：B 当牌A virtual_transform
+		action.record["card_instance_id"] = p016_b_id
+		action.record["as_card_def_id"] = p016_c_a_def
+		action.record["virtual_transform"] = true
+		payload["pilot_016_converted"] = true
+		SLog.log_raw("[TIMING] %s pilot_016 转化完成 B=%s 当 %s，B/C进临时区，牌A=%s 保留手牌 effect=%s" % [String(action_id), String(p016_b_id), String(p016_c_a_def), String(p016_c_a_id), String(effect.effect_id)])
+		# 标记每回合1次（多阶段挂起，_execute_effect 未走到末尾 mark，此处补）
+		_mark_once_per_turn_used(effect, payload)
+		# 清空剩余 USE_ACTION_BEFORE listener：转化后牌A不打（B虚拟牌A打），
+		# 补跑会用旧 payload（牌A实体）误触发阿克罗姆01a 等 listener，故跳过。
+		action._pending_regular_listeners = []
+		# 推进父动作继续（card_to_temp_zone 移B入temp_zone+注册牌A效果 -> execute_effects -> settle 弃B）
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
+		return
+
+	if phase == &"pilot_014_select":
+		if input_data.get("cancelled", false):
+			SLog.log_raw("[TIMING] %s pilot_014 选机师牌取消，effect=%s 不执行" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		var p014_sel_pilot: StringName = input_data.get("pilot_014_target_pilot", &"")
+		var p014_sel_player: StringName = input_data.get("pilot_014_player_id", &"")
+		var p014_sel_mech: StringName = input_data.get("pilot_014_mech_id", &"")
+		var p014_bind2: Dictionary = payload.get("binding_context", {})
+		var p014_src_pilot2: StringName = p014_bind2.get("card_instance_id", &"")
+		var p014_src_pid2: StringName = p014_bind2.get("player_id", &"")
+		if p014_sel_pilot != &"" and context.game_actions != null:
+			context.game_actions.grant_pilot_014_bonus({
+				"target_pilot_instance": p014_sel_pilot,
+				"target_player_id": p014_sel_player,
+				"target_mech_id": p014_sel_mech,
+				"source_pilot_instance": p014_src_pilot2,
+				"duration_owner_id": p014_src_pid2,
+			})
+			payload["pilot_014_granted"] = true
+		# 续跑 _execute_effect：PILOT_014 拦截见 pilot_014_granted 跳过，到 1320 自动 mark once_per_turn。
+		_execute_effect(effect, payload, action)
+		if action.state == &"waiting_timing" and _pending_effect.has(action.action_id):
+			return
+		if _last_created_sub_action_paused(action):
+			action.state = &"waiting_effect_action"
+			return
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
+		return
+
+	# ── pilot_032 阶段① 弃牌支付：玩家选了1张自己行动牌（selected_action_card_ids）或取消 ──
+	# 选定：弃置选定牌 -> 直接续跑到阶段②选机师（不重跑 _execute_effect，避免 HAS_ACTION_CARD_IN_HAND
+	# 因手牌变空在重查条件时误判失败）。取消：中止不计次数（不弃牌、不施加）。
+	if phase == &"pilot_032_pay":
+		if input_data.get("cancelled", false):
+			SLog.log_raw("[TIMING] %s pilot_032 弃牌取消，effect=%s 不执行（不计次数）" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		var p032_sel: Array = input_data.get("selected_action_card_ids", [])
+		if p032_sel.is_empty() and input_data.has("card_id"):
+			p032_sel = [input_data.get("card_id")]
+		if p032_sel.is_empty():
+			SLog.log_raw("[TIMING] %s pilot_032 弃牌空选，effect=%s 中止" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		var p032_discard_pid: StringName = payload.get("binding_context", {}).get("player_id", &"")
+		if context.game_actions != null:
+			for p032_cid in p032_sel:
+				context.game_actions.discard_action_card({
+					"player_id": p032_discard_pid,
+					"card_id": StringName(String(p032_cid)),
+					"reason": &"PILOT_032_DISCARD",
+				})
+		payload["pilot_032_paid"] = true
+		SLog.log_raw("[TIMING] %s pilot_032 弃牌支付完成 effect=%s" % [String(action_id), String(effect.effect_id)])
+		var p032_pay_params: Dictionary = pending.get("params", {})
+		if _pilot_032_show_pilot_select(effect, payload, action, p032_pay_params):
+			return
+		# 场上无机师牌兜底：中止（已弃牌不返还、不计次数）
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
+		return
+
+	# ── pilot_032 阶段② 选机师牌：确认施加行动牌上限+2，取消=中止（已弃牌不返还、不计次数）──
+	# 选定后手动完成（仿 pilot_019_finish：不重跑 _execute_effect，mark once_per_turn + 通知），
+	# 再推进 effect_fire 动作。
+	if phase == &"pilot_032_select":
+		if input_data.get("cancelled", false):
+			SLog.log_raw("[TIMING] %s pilot_032 选机师牌取消，effect=%s 不执行（已弃牌不返还、不计次数）" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		var p032_sel_pilot: StringName = input_data.get("pilot_032_target_pilot", &"")
+		var p032_sel_player: StringName = input_data.get("pilot_032_player_id", &"")
+		var p032_sel_mech: StringName = input_data.get("pilot_032_mech_id", &"")
+		var p032_bind2: Dictionary = payload.get("binding_context", {})
+		var p032_src_pilot2: StringName = p032_bind2.get("card_instance_id", &"")
+		var p032_src_pid2: StringName = p032_bind2.get("player_id", &"")
+		if p032_sel_pilot != &"" and context.game_actions != null:
+			context.game_actions.grant_pilot_014_bonus({
+				"target_pilot_instance": p032_sel_pilot,
+				"target_player_id": p032_sel_player,
+				"target_mech_id": p032_sel_mech,
+				"source_pilot_instance": p032_src_pilot2,
+				"duration_owner_id": p032_src_pid2,
+			})
+		payload["pilot_032_granted"] = true
+		_mark_once_per_turn_used(effect, payload)
+		if effect.once_per_game_key != &"":
+			_mark_once_per_game_used(effect, payload)
+		effect_executed.emit(effect.effect_id, action.action_id)
+		_mark_effect_executed(effect.effect_id, action.action_id)
+		SLog.log_raw("[TIMING] %s pilot_032 完成 effect=%s target_pilot=%s" % [String(action_id), String(effect.effect_id), String(p032_sel_pilot)])
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
+		return
+
+	# ── pilot_019 缴械冲击 阶段机：目标多选（select_attack_target → ui_confirmed target_ids）──
+	# 取消/空选 -> 中止整效果（不消耗 once_per_turn）；选定 -> 记录目标、进入支付选牌（wait_pay）。
+	if phase == &"pilot_019_wait_targets":
+		var p019_tids: Array = input_data.get("target_ids", [])
+		if input_data.get("cancelled", false) or p019_tids.is_empty():
+			SLog.log_raw("[TIMING] %s pilot_019 目标选择取消/空选，effect=%s 中止" % [String(action_id), String(effect.effect_id)])
+			_pilot_019_abort_resume(action_id)
+			return
+		if not action.record.has("_pilot_019_chain"):
+			_pilot_019_abort_resume(action_id)
+			return
+		var p019_chain: Dictionary = action.record["_pilot_019_chain"]
+		var p019_targets: Array = []
+		for p019_t in p019_tids:
+			var p019_mid: StringName = StringName(String(p019_t))
+			if p019_mid != &"":
+				p019_targets.append(p019_mid)
+		p019_chain["targets"] = p019_targets
+		p019_chain["stage"] = &"wait_pay"
+		SLog.log_raw("[TIMING] %s pilot_019 选定目标 %d 台 effect=%s" % [String(action_id), p019_targets.size(), String(effect.effect_id)])
+		_pilot_019_drive(action)
+		return
+
+	# ── pilot_019 支付阶段：玩家选了 N 张自己行动牌（selected_card_ids，ThrustSelectPanel confirm）──
+	# 选空/取消 -> 中止；选定 -> X=N，弃置后进入逐目标暗牌弃牌链。
+	if phase == &"pilot_019_pay":
+		if input_data.get("cancelled", false):
+			SLog.log_raw("[TIMING] %s pilot_019 支付取消，effect=%s 中止" % [String(action_id), String(effect.effect_id)])
+			_pilot_019_abort_resume(action_id)
+			return
+		var p019_sel: Array = input_data.get("selected_card_ids", [])
+		if p019_sel.is_empty():
+			SLog.log_raw("[TIMING] %s pilot_019 支付选牌为空，effect=%s 中止" % [String(action_id), String(effect.effect_id)])
+			_pilot_019_abort_resume(action_id)
+			return
+		if not action.record.has("_pilot_019_chain"):
+			_pilot_019_abort_resume(action_id)
+			return
+		var p019_chain2: Dictionary = action.record["_pilot_019_chain"]
+		p019_chain2["x"] = p019_sel.size()
+		p019_chain2["pay_cards"] = p019_sel.duplicate()
+		p019_chain2["stage"] = &"pay_discarding"
+		p019_chain2["discard_issued"] = false
+		SLog.log_raw("[TIMING] %s pilot_019 支付选定 X=%d 张 effect=%s" % [String(action_id), p019_sel.size(), String(effect.effect_id)])
+		_pilot_019_drive(action)
+		return
+
+	# ── pilot_019 目标暗牌弃牌阶段：玩家从目标手牌选 X+1 张（selected_action_card_ids，DiscardSelectPanel optional confirm）──
+	# no_cancel=true 正常不会取消；取消/空选则跳过该目标（视为未选满，不弃不判伤害）。
+	if phase == &"pilot_019_target_pick":
+		if not action.record.has("_pilot_019_chain"):
+			_pilot_019_abort_resume(action_id)
+			return
+		var p019_chain3: Dictionary = action.record["_pilot_019_chain"]
+		if input_data.get("cancelled", false):
+			SLog.log_raw("[TIMING] %s pilot_019 目标选牌取消，跳过该目标 effect=%s" % [String(action_id), String(effect.effect_id)])
+			p019_chain3["idx"] = int(p019_chain3.get("idx", 0)) + 1
+			p019_chain3["stage"] = &"per_target"
+			p019_chain3["discard_issued"] = false
+			p019_chain3["target_cards"] = []
+			_pilot_019_drive(action)
+			return
+		var p019_sel2: Array = input_data.get("selected_action_card_ids", [])
+		if p019_sel2.is_empty():
+			SLog.log_raw("[TIMING] %s pilot_019 目标选牌为空，跳过该目标 effect=%s" % [String(action_id), String(effect.effect_id)])
+			p019_chain3["idx"] = int(p019_chain3.get("idx", 0)) + 1
+			p019_chain3["stage"] = &"per_target"
+			p019_chain3["discard_issued"] = false
+			p019_chain3["target_cards"] = []
+			_pilot_019_drive(action)
+			return
+		p019_chain3["target_cards"] = p019_sel2.duplicate()
+		p019_chain3["stage"] = &"target_discarding"
+		p019_chain3["discard_issued"] = false
+		SLog.log_raw("[TIMING] %s pilot_019 目标选牌 %d 张，进入弃置 effect=%s" % [String(action_id), p019_sel2.size(), String(effect.effect_id)])
+		_pilot_019_drive(action)
+		return
+
+	# ── pilot_020 肯德 弃任意行动牌：玩家选了 N 张自己行动牌（selected_card_ids，ThrustSelectPanel confirm）──
+	# 取消/空选 -> 中止（不消耗 once_per_turn）；选定 -> EXECUTE_DISCARD 子动作弃置，
+	# 子动作完成由 _after_sub_action_finished -> _continue_pilot_020_active 手动 mark once_per_turn + 恢复。
+	if phase == &"pilot_020_discard":
+		if input_data.get("cancelled", false):
+			SLog.log_raw("[TIMING] %s pilot_020 弃牌取消，effect=%s 中止" % [String(action_id), String(effect.effect_id)])
+			_pilot_020_abort_resume(action_id)
+			return
+		var p020_sel: Array = input_data.get("selected_card_ids", [])
+		if p020_sel.is_empty():
+			SLog.log_raw("[TIMING] %s pilot_020 弃牌选空，effect=%s 中止" % [String(action_id), String(effect.effect_id)])
+			_pilot_020_abort_resume(action_id)
+			return
+		var p020_pend_effect: ActionEffect = effect
+		action.record["_pilot_020_active_pending"] = {"effect": p020_pend_effect, "payload": payload}
+		if context.action_service != null:
+			context.action_service.execute_sub_action({
+				"type": &"EXECUTE_DISCARD",
+				"params": {"card_ids": p020_sel.duplicate(), "reason": &"pilot_020_active"},
+			}, payload, action)
+		SLog.log_raw("[TIMING] %s pilot_020 选定弃 %d 张行动牌，进入弃置 effect=%s" % [String(action_id), p020_sel.size(), String(effect.effect_id)])
+		if _last_created_sub_action_paused(action):
+			action.state = &"waiting_effect_action"
+			return
+		# 子动作同步完成：直接 mark + 恢复
+		_continue_pilot_020_active(action)
+		return
+
 	if phase == &"repeat_continue":
 		action.record.erase("_waiting_for_repeat_continue")
 		var rp_params: Dictionary = pending.get("repeat_params", {})
@@ -1806,6 +5278,37 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 		return
 
 	# ── 多选阶段：玩家选了若干牌（selected_card_ids）或取消 ──
+	# ── CHOOSE_MANY_MECHS 通用多选机甲（奥黛尔 pilot_038）：确认存 target_ids 后重跑 _execute_effect
+	# （shown 守卫仍保留，跳过 CHOOSE_MANY_MECHS 续跑 MARK_EFFECT_ONCE_PER_TURN_USED + FOR_EACH_TARGET
+	# 逐目标执行）；取消=不发动不计次（清守卫）。AI 玩家由 _prompt_choose_many_mechs 跳过不挂起 ──
+	if phase == &"choose_many_mechs":
+		if input_data.get("cancelled", false):
+			action.record.erase("_choose_many_mechs_shown")
+			SLog.log_raw("[TIMING] %s 多选机甲被取消，effect=%s 不发动" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		var mm_store_key: String = String(pending.get("mech_select_action", {}).get("params", {}).get("store_result_key", &""))
+		var mm_targets: Array = input_data.get("target_ids", [])
+		if mm_store_key != &"":
+			payload[mm_store_key] = mm_targets
+		SLog.log_raw("[TIMING] %s 多选机甲确认 %d 台 effect=%s" % [String(action_id), mm_targets.size(), String(effect.effect_id)])
+		# 重跑：_choose_many_mechs_shown 守卫仍在，CHOOSE_MANY_MECHS 跳过；续跑 MARK 计次 + FOR_EACH_TARGET
+		_execute_effect(effect, payload, action)
+		# 守卫：重跑后再次挂起（FOR_EACH 内嵌子动作暂停等待等）则等待，不可推进父动作
+		if action.state == &"waiting_timing" and _pending_effect.has(action.action_id):
+			return
+		if action.state == &"waiting_effect_action":
+			return
+		if _last_created_sub_action_paused(action):
+			action.state = &"waiting_effect_action"
+			return
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
+		return
+
 	# 推进：per_card_actions=动力+4，discard_selected=true 弃置选中推进。
 	# effect_063/078：per_card_actions=NEGATE_EQUIPMENT_EFFECT（$chosen_card.card_instance_id），discard_selected=false 不弃置。
 	if phase == &"choose_many_cards":
@@ -1813,49 +5316,73 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 		var cm_params: Dictionary = cm_action.get("params", {})
 		var per_card_actions: Array = cm_params.get("per_card_actions", [])
 		var cm_selected: Array = input_data.get("selected_card_ids", [])
+		# 掩护窗口附加选项（洛尔恩 pilot_062 等）：选中的 extra 效果 effect_id 列表（数组内元素可能是
+		# String/StringName，统一转 String 存储于 record，供 _run_next_cover_extra_if_pending 匹配）。
+		var cm_selected_extra: Array = input_data.get("selected_extra_ids", [])
 		var cm_discard_selected: bool = bool(cm_params.get("discard_selected", true))
 		var cm_discard_reason: StringName = cm_params.get("discard_reason", &"ACTION_CARD_PLAYED")
 		action.record.erase("_choose_many_shown")
 		# store_result_key 路径（pilot_002 批次转化）：存 payload[key]=选中牌，续跑主循环剩余 actions
 		var cm_store_key: StringName = cm_params.get("store_result_key", &"")
 		if cm_store_key != &"":
-			if input_data.get("cancelled", false):
-				SLog.log_raw("[TIMING] %s pilot_002 交牌取消，能力不发动 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+				if input_data.get("cancelled", false):
+					SLog.log_raw("[TIMING] %s pilot_002 交牌取消，能力不发动 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+					# 取消也清分支 _seq（CHOOSE_ONE 分支内 CHOOSE_MANY_CARDS：放弃整个分支，
+					# 剩余 REDIRECT/防御链不执行）。顶层取消路径 _seq 本不存在，erase 无害。
+					action.record.erase("_seq_effect_actions")
+					if context.action_engine != null:
+						action.state = &"waiting_input"
+						context.action_engine.continue_action(action_id, {})
+					return
+				payload[cm_store_key] = cm_selected
+				SLog.log_raw("[TIMING] %s pilot_002 批次存 %s=%d张 effect=%s" % [String(action.action_id), String(cm_store_key), cm_selected.size(), String(effect.effect_id)])
+				# store_result_key 路径确认即消耗每回合次数（pilot_003 埋牌 / pilot_022 弃甲铸威）。
+				# 取消已早退；空选(0张)视为无效操作不消耗。无 once_per_turn_key 的效果为 no-op。
+				# 效果若同时声明 once_per_game_key（如 pilot_033 本局1次），确认一并消耗本局次数。
+				if not cm_selected.is_empty():
+					_mark_once_per_turn_used(effect, payload)
+					if effect.once_per_game_key != &"":
+						_mark_once_per_game_used(effect, payload)
+				var cm_act_idx: int = int(pending.get("act_idx", -1))
+				# store_next_phase：存牌后弹下一阶段弹窗再续跑剩余 actions（pilot_003 effect_01 选置顶牌）。
+				# phase 链：CHOOSE_MANY 选牌 -> 弹"选1张置顶(可取消)"窗(phase=store_next_phase) ->
+				# resume 存 pilot_003_top_card_id 后续跑剩余 actions（INSERT 用 deck_top_card_id 置顶+打标签）。
+				var cm_next_phase: StringName = cm_params.get("store_next_phase", &"")
+				if cm_next_phase != &"" and not cm_selected.is_empty():
+					_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": cm_next_phase, "act_idx": cm_act_idx}
+					action.state = &"waiting_timing"
+					action_needs_input.emit(action.action_id, &"select_pilot_003_choose_top", {
+						"action_id": action.action_id,
+						"effect_id": effect.effect_id,
+						"card_ids": cm_selected,
+						"player_id": payload.get("binding_context", {}).get("player_id", &""),
+						"label": String(cm_params.get("store_next_phase_label", "选择1张正面牌放置到牌堆顶（可取消）")),
+					})
+					SLog.log_raw("[TIMING] %s store_next_phase=%s 弹窗 候选=%d effect=%s" % [String(action.action_id), String(cm_next_phase), cm_selected.size(), String(effect.effect_id)])
+					return
+				# 续跑 effect.actions 剩余（TRANSFER/GRANT_BATCH/DRAW）。若 CHOOSE_MANY_CARDS 挂起于
+				# CHOOSE_ONE 分支内（布鲁克 effect_02 转化防御/实体防御牌），分支剩余已存
+				# _seq_effect_actions（branch_seq=true），resume 优先续跑分支；完成后继续主循环。
+				var cm_has_branch_seq: bool = action.record.has("_seq_effect_actions") and bool(action.record["_seq_effect_actions"].get("branch_seq", false))
+				if cm_has_branch_seq:
+					action.state = &"waiting_effect_action"
+					if _continue_seq_effect_actions(action):
+						return
+				# 续跑 effect.actions 剩余（TRANSFER/GRANT_BATCH/DRAW/FOR_EACH_TARGET）。
+				# effect 引用随 _seq 保存：后续 FET 分支内嵌 CHOOSE_MANY_CARDS（泰格弃装解锁）需 effect
+				# 挂起 _pending_effect；缺失则 null-effect 守卫跳过弹窗（锁无法解锁）。
+				if cm_act_idx >= 0 and effect.actions.size() > cm_act_idx + 1:
+					action.record["_seq_effect_actions"] = {"payload": payload, "remaining": effect.actions.slice(cm_act_idx + 1), "effect": effect}
+					action.state = &"waiting_effect_action"
+					if _continue_seq_effect_actions(action):
+						return
 				if context.action_engine != null:
 					action.state = &"waiting_input"
 					context.action_engine.continue_action(action_id, {})
 				return
-			payload[cm_store_key] = cm_selected
-			SLog.log_raw("[TIMING] %s pilot_002 批次存 %s=%d张 effect=%s" % [String(action.action_id), String(cm_store_key), cm_selected.size(), String(effect.effect_id)])
-			var cm_act_idx: int = int(pending.get("act_idx", -1))
-			# store_next_phase：存牌后弹下一阶段弹窗再续跑剩余 actions（pilot_003 effect_01 选置顶牌）。
-			# phase 链：CHOOSE_MANY 选牌 -> 弹"选1张置顶(可取消)"窗(phase=store_next_phase) ->
-			# resume 存 pilot_003_top_card_id 后续跑剩余 actions（INSERT 用 deck_top_card_id 置顶+打标签）。
-			var cm_next_phase: StringName = cm_params.get("store_next_phase", &"")
-			if cm_next_phase != &"" and not cm_selected.is_empty():
-				_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": cm_next_phase, "act_idx": cm_act_idx}
-				action.state = &"waiting_timing"
-				action_needs_input.emit(action.action_id, &"select_pilot_003_choose_top", {
-					"action_id": action.action_id,
-					"effect_id": effect.effect_id,
-					"card_ids": cm_selected,
-					"player_id": payload.get("binding_context", {}).get("player_id", &""),
-					"label": String(cm_params.get("store_next_phase_label", "选择1张正面牌放置到牌堆顶（可取消）")),
-				})
-				SLog.log_raw("[TIMING] %s store_next_phase=%s 弹窗 候选=%d effect=%s" % [String(action.action_id), String(cm_next_phase), cm_selected.size(), String(effect.effect_id)])
-				return
-			# 续跑 effect.actions 剩余（TRANSFER/GRANT_BATCH/DRAW）
-			if cm_act_idx >= 0 and effect.actions.size() > cm_act_idx + 1:
-				action.record["_seq_effect_actions"] = {"payload": payload, "remaining": effect.actions.slice(cm_act_idx + 1)}
-				action.state = &"waiting_effect_action"
-				if _continue_seq_effect_actions(action):
-					return
-			if context.action_engine != null:
-				action.state = &"waiting_input"
-				context.action_engine.continue_action(action_id, {})
-			return
 		if not input_data.get("cancelled", false):
 			var cm_as_use_action_card: bool = bool(cm_params.get("as_use_action_card", false))
+			var cm_batch_suspended: bool = false
 			if cm_as_use_action_card:
 				# 掩护/推进重构：多选窗确认后批量创建 use_action_card 子动作（串行 _seq），
 				# 每张走完整使用流程（USE_ACTION_BEFORE 01a确认 + effect1 + USE_ACTION_AFTER 01b重跑 + settle弃牌），
@@ -1865,19 +5392,29 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 				var cm_holder_mech: StringName = cm_bind.get("mech_id", payload.get("source_mech_id", &""))
 				var cm_holder_pid: StringName = cm_bind.get("player_id", payload.get("player_id", &""))
 				var cm_use_actions: Array = []
+				# 温斯顿 pilot_082 转化（as_card_def_id）：把选中的攻击牌当作掩护/推进批量打出。
+				# as_use_action_card 选中的实体牌虚拟转化为 as_card_def_id（virtual_transform=true，
+				# 不消耗攻击次数），逐张完整使用流程；无 as_card_def_id 时保持原有语义（打出原牌）。
+				var cm_as_def: StringName = cm_params.get("as_card_def_id", &"")
 				for sel_cid in cm_selected:
+					var _ua_params: Dictionary = {
+						"card_instance_id": sel_cid,
+						"mech_id": cm_holder_mech,
+						"player_id": cm_holder_pid,
+					}
+					if cm_as_def != &"":
+						_ua_params["as_card_def_id"] = cm_as_def
+						_ua_params["virtual_transform"] = true
+						_ua_params["consume_attack_count"] = false
 					cm_use_actions.append({
 						"type": &"EXECUTE_USE_ACTION_CARD",
-						"params": {
-							"card_instance_id": sel_cid,
-							"mech_id": cm_holder_mech,
-							"player_id": cm_holder_pid,
-						}
+						"params": _ua_params,
 					})
 				for cm_ui: int in range(cm_use_actions.size()):
 					if context != null and context.action_service != null:
 						context.action_service.execute_sub_action(cm_use_actions[cm_ui], payload, action)
 					if _last_created_sub_action_paused(action):
+						cm_batch_suspended = true
 						var cm_u_remaining: Array = cm_use_actions.slice(cm_ui + 1)
 						if not cm_u_remaining.is_empty():
 							action.record["_seq_effect_actions"] = {
@@ -1894,6 +5431,21 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 							context.action_service.execute_sub_action(sub_act, payload, action)
 					if cm_discard_selected and context != null and context.action_service != null:
 						context.action_service.execute_sub_action({"type": &"EXECUTE_DISCARD", "params": {"card_ids": [sel_cid], "reason": cm_discard_reason}}, payload, action)
+			# 窗口附加选项（洛尔恩 pilot_062 转化掩护 / 温斯顿 pilot_082 转化推进）：真实掩护/推进全部
+			# 执行后，串行启动选中的 extra 效果（真实牌先按顺序执行，然后转化）。批量挂起时
+			# （use_action_card 子动作等待）只存 pending，由 _after_sub_action_finished 恢复钩子
+			# _run_next_window_extra_if_pending 在全部完成后续跑；同步完成则此处直接启动。
+			if not cm_selected_extra.is_empty():
+				# 窗口附加选项虚拟时点从 record 读取（开窗时写入 _window_extra_timing；
+				# 此作用域无 cm_collect_* 局部变量，不可在此重算）
+				var cm_window_timing: StringName = action.record.get("_window_extra_timing", &"")
+				if cm_window_timing != &"":
+					action.record["_window_extra_pending"] = cm_selected_extra
+					action.record["_window_extra_payload"] = payload
+					action.record["_window_extra_timing"] = cm_window_timing
+					if not cm_batch_suspended:
+						if _run_next_window_extra_if_pending(action):
+							return
 			# 标记每回合1次（赤枭躯干 effect_040/041：确认即消耗次数，含选0张=弃0+0动力；
 			# 取消路径不至此，不消耗。无 once_per_turn_key 的效果为 no-op）
 			_mark_once_per_turn_used(effect, payload)
@@ -1905,6 +5457,7 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 			if not cm_post_actions.is_empty() and not cm_selected.is_empty():
 				var cm_choice_full: Dictionary = payload.get("choice", {})
 				cm_choice_full["count"] = cm_selected.size()
+				cm_choice_full["card_ids"] = cm_selected  # 供 post_actions 的 $choice.card_ids 引用（莱特交牌）
 				payload["choice"] = cm_choice_full
 				var cm_resolved_post: Array = []
 				for cm_sub: Dictionary in cm_post_actions:
@@ -1934,6 +5487,22 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 								"remaining": cm_remaining,
 							}
 						break
+		# flat 内嵌 CM（泰格弃装解锁逐目标）：标记当前 target 已处理，续跑 flat _seq 剩余。
+		# 目标玩家确认（弃1装解锁）或取消（不弃置，锁保留）都推进到下一个目标；全部完成后父动作继续。
+		if bool(pending.get("_flat_cm", false)):
+			var fet_tgt: StringName = pending.get("_flat_cm_target", &"")
+			if fet_tgt != &"":
+				var fec: Dictionary = action.record.get("_fet_cm_executed", {})
+				fec[fet_tgt] = true
+				action.record["_fet_cm_executed"] = fec
+			action.state = &"waiting_effect_action"
+			if action.record.has("_seq_effect_actions"):
+				if _continue_seq_effect_actions(action):
+					return
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
 		payload.erase("chosen_card")
 		SLog.log_effect(effect.effect_id, action.source, action.action_id, String(action.action_type), {"status": "resuming_after_target", "input": input_data})
 		# 子动作挂起/未完成 -> 等 _after_sub_action_finished 恢复；否则恢复迎击牌 use_action_card 继续 effect1
@@ -1973,6 +5542,9 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 				"is_virtual": false,
 				"target_count": 1,
 				"source_action_id": action.action_id,
+				# 联合攻击来源标记：use_action_card(B) 的 record 自动注入（_ 前缀键），
+				# USE_ACTION_AT payload 携带 -> 莎菲雅 pilot_084 被动据此区分"因联合的效果使用攻击牌"。
+				"_unite_attack_origin": true,
 			}
 			if context.action_service != null:
 				var uao_result: Dictionary = context.action_service.execute(&"use_action_card", uao_params)
@@ -2000,14 +5572,190 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 			context.action_engine.continue_action(action_id, {})
 		return
 
+	# ── pilot_028 乌尔效果1 宣言：三选一（攻击/迎击/辅助）确认或取消 ──
+	if phase == &"pilot_028_declare":
+		action.record.erase("_p028_declare_shown")
+		var p28_d_card = _ActionPilotEffects.pilot_028_pilot_card(context.game_state)
+		var p28_owner_pid: StringName = payload.get("binding_context", {}).get("player_id", &"")
+		var p28_chosen: int = int(input_data.get("chosen_option_index", -1))
+		if input_data.get("cancelled", false) or p28_chosen < 0:
+			SLog.log_raw("[TIMING] %s 乌尔宣言取消：本轮无宣言 effect=%s" % [String(action_id), String(effect.effect_id)])
+		else:
+			var p28_decl: String = "辅助"
+			if p28_chosen == 0:
+				p28_decl = "攻击"
+			elif p28_chosen == 1:
+				p28_decl = "迎击"
+			if p28_d_card != null:
+				_ActionPilotEffects.set_pilot_028_declared(p28_d_card, p28_decl)
+				# 展示浮窗（非阻塞，所有玩家可见）：紧接 continue_action 前发出，随虚拟动作完成清空等待槽
+				_show_pilot_028_declared(p28_d_card, action, p28_owner_pid)
+			SLog.log_raw("[TIMING] %s 乌尔宣言=%s effect=%s" % [String(action_id), p28_decl, String(effect.effect_id)])
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
+		return
+
+	# ── pilot_028 乌尔效果2 需交牌：用牌玩家交2张行动牌给乌尔 / 取消或不足 → 行动牌不生效 ──
+	if phase == &"pilot_028_tribute":
+		action.record.erase("_p028_tribute_shown")
+		var p28_t_selected: Array = input_data.get("selected_card_ids", [])
+		if input_data.get("cancelled", false) or p28_t_selected.size() < 2:
+			action.record["_pilot_028_skip_effects"] = true
+			SLog.log_raw("[TIMING] %s 乌尔需交牌未交足（%d张），行动牌不生效 effect=%s" % [String(action_id), p28_t_selected.size(), String(effect.effect_id)])
+		else:
+			_pilot_028_do_tribute(action, p28_t_selected)
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
+		return
+
 	# ── pilot_006 战后逼迫选牌（effect_03）：被选机甲选1张攻击牌 use_action_card / 取消回落4伤害 ──
+	# ── pilot_027 维罗妮卡效果3 多阶段 ──
+	# ① 选目标：确认（target_id）→ stepper 给金金额；取消 → 不执行（不消耗次数）
+	if phase == &"pilot_027_target_select":
+		var p27_ts_target: StringName = input_data.get("target_id", input_data.get("target_mech_id", &""))
+		if input_data.get("cancelled", false) or p27_ts_target == &"":
+			SLog.log_raw("[TIMING] %s pilot_027 效果3选目标取消，不执行 effect=%s" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		var p27_ts_owner_mid: StringName = pending.get("pilot_027_owner_mid", &"")
+		var p27_ts_owner_pid: StringName = pending.get("pilot_027_owner_pid", &"")
+		# 目标仍须在 4+X 范围内（防移动/摧毁）
+		if p27_ts_owner_mid == &"" or not _pilot_027_target_in_range(p27_ts_owner_mid, p27_ts_target):
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		# ② stepper 给金金额：min 2，max=当前金币，步长5，可取消
+		var p27_ts_player = context.game_state.players.get(p27_ts_owner_pid) if p27_ts_owner_pid != &"" else null
+		var p27_ts_max: int = p27_ts_player.gold if p27_ts_player != null else 2
+		_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload,
+			"phase": &"pilot_027_choose_integer", "pilot_027_target_mech": p27_ts_target,
+			"pilot_027_owner_mid": p27_ts_owner_mid, "pilot_027_owner_pid": p27_ts_owner_pid}
+		action.record["_waiting_for_choose_integer"] = true
+		action.state = &"waiting_timing"
+		action_needs_input.emit(action.action_id, &"choose_integer", {
+			"action_id": action.action_id,
+			"effect_id": effect.effect_id,
+			"label": "维罗妮卡：给予 %s 多少金币（至少2）" % String(p27_ts_target),
+			"min_value": 2,
+			"max_value": p27_ts_max,
+			"bind_as": "n",
+			"optional": true,
+			"stepper": true,
+			"step": 5,
+			"player_id": _effect_popup_owner_pid(effect, payload, action),
+		})
+		return
+	# ② 给金金额：确认（chosen_value）→ 给金 + mark 次数 + 询问是否使用；取消 → 不执行（不消耗）
+	if phase == &"pilot_027_choose_integer":
+		action.record.erase("_waiting_for_choose_integer")
+		var p27_ci_target: StringName = pending.get("pilot_027_target_mech", &"")
+		var p27_ci_owner_mid: StringName = pending.get("pilot_027_owner_mid", &"")
+		var p27_ci_owner_pid: StringName = pending.get("pilot_027_owner_pid", &"")
+		if input_data.get("cancelled", false) or p27_ci_target == &"":
+			SLog.log_raw("[TIMING] %s pilot_027 效果3给金取消，不执行 effect=%s" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		var p27_ci_amount: int = maxi(2, int(input_data.get("chosen_value", 2)))
+		# ③ 给金（先扣自己再给目标；from_player 传递触发 GIVE_GOLD_AFTER 效果2 X+1）
+		_pilot_027_give_gold(p27_ci_owner_pid, p27_ci_target, p27_ci_amount)
+		# 给金完成即 mark once_per_turn（每回合2次用掉1次）；取消给金不消耗
+		_mark_once_per_turn_used(effect, payload)
+		# ④ 目标可用行动牌 → 询问是否立即使用（无可用牌则不弹询问，给金已生效结束）
+		var p27_ci_usable: Array = _pilot_027_usable_action_cards(p27_ci_target)
+		if p27_ci_usable.is_empty():
+			SLog.log_raw("[TIMING] %s pilot_027 效果3给金完成但目标无可用行动牌，不询问 effect=%s" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload,
+			"phase": &"pilot_027_ask_use", "pilot_027_target_mech": p27_ci_target}
+		action.state = &"waiting_timing"
+		action_needs_input.emit(action.action_id, &"choose_one_effect", {
+			"action_id": action.action_id,
+			"effect_id": effect.effect_id,
+			"options": [
+				{"label": "是，使其立即使用1张行动牌", "effect_id": &"option_0", "option_index": 0},
+				{"label": "否", "effect_id": &"option_1", "option_index": 1},
+			],
+			"optional": false,
+			"source_label": "维罗妮卡：是否使 %s 立即使用1张行动牌？" % String(p27_ci_target),
+			"player_id": _effect_popup_owner_pid(effect, payload, action),
+		})
+		return
+	# ④ 询问是否立即使用：选"是"→ 目标选牌；"否"/取消 → 结束（给金已生效）
+	if phase == &"pilot_027_ask_use":
+		var p27_au_target: StringName = pending.get("pilot_027_target_mech", &"")
+		var p27_au_opt: int = int(input_data.get("chosen_option_index", 1))
+		if input_data.get("cancelled", false) or p27_au_opt != 0:
+			SLog.log_raw("[TIMING] %s pilot_027 效果3选择不使用行动牌，结束 effect=%s" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		var p27_au_usable: Array = _pilot_027_usable_action_cards(p27_au_target)
+		if p27_au_usable.is_empty():
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		# ⑤ 目标选1张可用行动牌（必须选；单选面板取消兜底=不使用结束）
+		_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload,
+			"phase": &"pilot_027_card_select", "pilot_027_target_mech": p27_au_target}
+		action.state = &"waiting_timing"
+		action_needs_input.emit(action.action_id, &"select_pilot_006_attack_card", {
+			"action_id": action.action_id,
+			"effect_id": effect.effect_id,
+			"card_ids": p27_au_usable,
+			"target_mech_id": p27_au_target,
+			"player_id": _effect_popup_owner_pid(effect, payload, action),
+			"label": "维罗妮卡：选择1张行动牌使 %s 立即使用" % String(p27_au_target),
+		})
+		return
+	# ⑤ 目标选牌：确认（selected_card_id）→ use_action_card 被动使用；取消 → 结束（给金已生效）
+	if phase == &"pilot_027_card_select":
+		var p27_cs_target: StringName = pending.get("pilot_027_target_mech", &"")
+		var p27_cs_sel: StringName = input_data.get("selected_card_id", input_data.get("card_instance_id", &""))
+		if p27_cs_sel != &"" and not input_data.get("cancelled", false):
+			var p27_cs_player = context.game_state.get_player_for_mech(p27_cs_target) if (p27_cs_target != &"" and context != null and context.game_state != null) else null
+			if p27_cs_player != null:
+				# source_action_id 非空：效果产生的使用攻击牌不计攻击次数（被动攻击），
+				# 并继承本效果动作作父动作（attack/use_action_card 挂起时父等待）。
+				# 顶层 execute 后手动建父子链接（bug2：双连场景 fork2 响应窗口会覆盖其
+				# 选牌/选目标弹窗的共享等待槽 -> 死锁），未同步完成则效果动作等待它。
+				_link_spawned_use_action_as_child(context.action_service.execute(&"use_action_card", {
+					"card_instance_id": p27_cs_sel,
+					"mech_id": p27_cs_target,
+					"player_id": p27_cs_player.player_id,
+					"is_virtual": false,
+					"target_count": 1,
+					"source_action_id": action.action_id,
+				}), action)
+		SLog.log_raw("[TIMING] %s pilot_027 效果3选牌结束 use=%s effect=%s" % [String(action_id), String(p27_cs_sel), String(effect.effect_id)])
+		if action.state == &"waiting_timing" and _pending_effect.has(action.action_id):
+			return
+		if not action.pending_effect_action_ids.is_empty():
+			action.state = &"waiting_effect_action"
+			return
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
+		return
+
 	if phase == &"pilot_006_force_use_attack":
 		var p06_target_mech: StringName = pending.get("pilot_006_target_mech", &"")
 		var p06_selected: StringName = input_data.get("selected_card_id", input_data.get("card_instance_id", &""))
 		var p06_cancelled: bool = input_data.get("cancelled", false) or p06_selected == &""
 		if p06_cancelled:
-			# 取消/无选择：回落4伤害
-			_pilot_006_fallback_damage(p06_target_mech, action)
+			# 取消/无选择：回落4伤害（转 hp_change 子动作，挂起由下方 pending 检查捕获）
+			_pilot_006_fallback_damage(p06_target_mech, action, payload)
 		else:
 			# 选牌：use_action_card（passive，source_action_id 非空不计攻击数，选攻击目标）
 			var p06_player = context.game_state.get_player_for_mech(p06_target_mech) if (p06_target_mech != &"" and context != null and context.game_state != null) else null
@@ -2021,7 +5769,9 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 				"source_action_id": action.action_id,
 			}
 			if context.action_service != null:
-				context.action_service.execute(&"use_action_card", p06_use_params)
+				# 顶层 execute 后手动建父子链接（bug2：双连场景 fork2 响应窗口会覆盖其
+				# 选牌/选目标弹窗的共享等待槽 -> 死锁），未同步完成则效果动作等待它。
+				_link_spawned_use_action_as_child(context.action_service.execute(&"use_action_card", p06_use_params), action)
 		SLog.log_effect(effect.effect_id, action.source, action.action_id, String(action.action_type), {"status": "resuming_after_pilot_006_force", "cancelled": p06_cancelled})
 		if action.state == &"waiting_timing" and _pending_effect.has(action.action_id):
 			return
@@ -2033,8 +5783,651 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 			context.action_engine.continue_action(action_id, {})
 		return
 
-	# ── pilot_003 置顶选择（effect_01 phase 链）：选1张置顶 / 取消=不置顶（仅随机插入）──
+	# ── pilot_047 里欧娜 e1 分支① 立即使用1张攻击牌：被选机甲选攻击牌（no_cancel）→ use_action_card ──
+	if phase == &"pilot_047_force_use_attack":
+		action.record.erase("_pilot_047_force_shown")
+		var p47_fu_target: StringName = pending.get("pilot_047_target_mech", &"")
+		var p47_fu_to: StringName = pending.get("pilot_047_to_mech", &"")
+		var p47_fu_count: int = int(pending.get("pilot_047_count", 3))
+		var p47_fu_dpm: int = int(pending.get("pilot_047_dpm", 2))
+		var p47_fu_selected: StringName = input_data.get("selected_card_id", input_data.get("card_instance_id", &""))
+		var p47_fu_cancelled: bool = input_data.get("cancelled", false) or p47_fu_selected == &""
+		if p47_fu_cancelled:
+			# no_cancel 不应触发；防御：转交牌流程
+			_handle_pilot_047_force_handover({"type": &"PILOT_047_FORCE_HANDOVER", "params": {
+				"target_mech_id": p47_fu_target, "to_mech_id": p47_fu_to,
+				"count": p47_fu_count, "damage_per_missing": p47_fu_dpm,
+			}}, effect, payload, action)
+		else:
+			# 选牌：use_action_card（passive，source_action_id 非空不计攻击数）
+			var p47_fu_player = context.game_state.get_player_for_mech(p47_fu_target) if (p47_fu_target != &"" and context != null and context.game_state != null) else null
+			var p47_fu_pid: StringName = p47_fu_player.player_id if p47_fu_player != null else &""
+			var p47_fu_use_params: Dictionary = {
+				"card_instance_id": p47_fu_selected,
+				"mech_id": p47_fu_target,
+				"player_id": p47_fu_pid,
+				"is_virtual": false,
+				"target_count": 1,
+				"source_action_id": action.action_id,
+			}
+			if context.action_service != null:
+				# 顶层 execute 后手动建父子链接（bug2：双连场景 fork2 响应窗口会覆盖其
+				# 选牌/选目标弹窗的共享等待槽 -> 死锁），未同步完成则效果动作等待它。
+				_link_spawned_use_action_as_child(context.action_service.execute(&"use_action_card", p47_fu_use_params), action)
+		SLog.log_raw("[TIMING] %s pilot_047 立即使用攻击牌 resume cancelled=%s effect=%s" % [String(action.action_id), p47_fu_cancelled, String(effect.effect_id)])
+		if action.state == &"waiting_timing" and _pending_effect.has(action.action_id):
+			return
+		if not action.pending_effect_action_ids.is_empty():
+			action.state = &"waiting_effect_action"
+			return
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
+		return
+
+	# ── pilot_047 里欧娜 e1 分支② 交给牌：被选机甲选 count 张行动牌交出（no_cancel min=max=count）──
+	if phase == &"pilot_047_force_handover":
+		action.record.erase("_pilot_047_handover_shown")
+		var p47_fh_target: StringName = pending.get("pilot_047_target_mech", &"")
+		var p47_fh_to: StringName = pending.get("pilot_047_to_mech", &"")
+		var p47_fh_count: int = int(pending.get("pilot_047_count", 3))
+		var p47_fh_dpm: int = int(pending.get("pilot_047_dpm", 2))
+		var p47_fh_selected: Array = input_data.get("selected_card_ids", [])
+		if input_data.get("cancelled", false) or p47_fh_selected.is_empty():
+			# no_cancel 不应触发；防御：视为 0 张交出 → 满差额伤害
+			_pilot_047_do_handover(p47_fh_target, p47_fh_to, [], p47_fh_count, p47_fh_dpm, action, payload)
+		else:
+			_pilot_047_do_handover(p47_fh_target, p47_fh_to, p47_fh_selected, p47_fh_count, p47_fh_dpm, action, payload)
+		SLog.log_raw("[TIMING] %s pilot_047 交给牌 resume 交出=%d effect=%s" % [String(action.action_id), p47_fh_selected.size(), String(effect.effect_id)])
+		if action.state == &"waiting_timing" and _pending_effect.has(action.action_id):
+			return
+		if not action.pending_effect_action_ids.is_empty():
+			action.state = &"waiting_effect_action"
+			return
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
+		return
+
+	# ── pilot_018 苔丝 effect_01b 迎击弃牌：选了弃行动牌/装备牌类型 ──
+	if phase == &"pilot_018_choose_type":
+		var p18ct_cancelled: bool = input_data.get("cancelled", false)
+		var p18ct_idx: int = int(input_data.get("chosen_option_index", -1))
+		action.record.erase("_pilot_018_discard_shown")
+		if p18ct_cancelled or p18ct_idx < 0:
+			# 取消：不弃牌，结束
+			action.record["_pilot_018_discard_done"] = true
+			SLog.log_raw("[TIMING] %s pilot_018 迎击弃牌类型选择取消 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		# option_index 0=弃行动牌, 1=弃装备牌（与 _handle 弹窗顺序一致）
+		payload["pilot_018_chosen_type"] = &"action_cards" if p18ct_idx == 0 else &"equipment_card"
+		var p18ct_attacker: StringName = payload.get("attacker_id", &"")
+		var p18ct_attacker_player = context.game_state.get_player_for_mech(p18ct_attacker) if (p18ct_attacker != &"" and context != null and context.game_state != null) else null
+		var p18ct_pid: StringName = p18ct_attacker_player.player_id if p18ct_attacker_player != null else &""
+		# 走分支（可能再次挂起弹选牌窗）
+		if _pilot_018_execute_discard(effect, payload, action, p18ct_attacker, p18ct_pid):
+			return  # 挂起弹选牌窗，等 resume
+		# 已完成（直接弃/无可弃）：恢复 attack 继续
+		if action.state == &"waiting_timing" and _pending_effect.has(action.action_id):
+			return
+		if not action.pending_effect_action_ids.is_empty():
+			action.state = &"waiting_effect_action"
+			return
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
+		return
+
+	# ── pilot_018 苔丝：选了要弃的2张行动牌 ──
+	if phase == &"pilot_018_select_action_cards":
+		var p18ac_selected: Array = input_data.get("card_ids", input_data.get("selected_card_ids", input_data.get("selected_action_card_ids", [])))
+		var p18ac_attacker: StringName = payload.get("attacker_id", &"")
+		var p18ac_player = context.game_state.get_player_for_mech(p18ac_attacker) if (p18ac_attacker != &"" and context != null and context.game_state != null) else null
+		var p18ac_pid: StringName = p18ac_player.player_id if p18ac_player != null else &""
+		if not p18ac_selected.is_empty():
+			_pilot_018_do_discard(action, p18ac_selected, p18ac_pid)
+		action.record["_pilot_018_discard_done"] = true
+		SLog.log_raw("[TIMING] %s pilot_018 弃行动牌完成 effect=%s 弃=%d" % [String(action.action_id), String(effect.effect_id), p18ac_selected.size()])
+		if action.state == &"waiting_timing" and _pending_effect.has(action.action_id):
+			return
+		if not action.pending_effect_action_ids.is_empty():
+			action.state = &"waiting_effect_action"
+			return
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
+		return
+
+	# ── pilot_018 苔丝：选了要弃的1张损伤≥2装备牌 ──
+	if phase == &"pilot_018_select_equipment":
+		var p18eq_selected: StringName = input_data.get("selected_card_id", input_data.get("card_instance_id", &""))
+		var p18eq_attacker: StringName = payload.get("attacker_id", &"")
+		var p18eq_player = context.game_state.get_player_for_mech(p18eq_attacker) if (p18eq_attacker != &"" and context != null and context.game_state != null) else null
+		var p18eq_pid: StringName = p18eq_player.player_id if p18eq_player != null else &""
+		if p18eq_selected != &"":
+			_pilot_018_do_discard(action, [p18eq_selected], p18eq_pid)
+		action.record["_pilot_018_discard_done"] = true
+		SLog.log_raw("[TIMING] %s pilot_018 弃装备牌完成 effect=%s 弃=%s" % [String(action.action_id), String(effect.effect_id), String(p18eq_selected)])
+		if action.state == &"waiting_timing" and _pending_effect.has(action.action_id):
+			return
+		if not action.pending_effect_action_ids.is_empty():
+			action.state = &"waiting_effect_action"
+			return
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
+		return
+
+	# ── pilot_025 约书亚 1b：选了要设置的备用区装备牌 ──
+	# payload._p025_reserve_cards 候选；选 selected_card_id -> 算合法目标槽，弹槽位选择窗。
+	# 取消/无选 -> 结束（不发动 1b，恢复 attack）。
+	if phase == &"pilot_025_reserve_select":
+		var p025r_sel: StringName = input_data.get("selected_card_id", input_data.get("card_instance_id", &""))
+		var p025r_cancelled: bool = input_data.get("cancelled", false) or p025r_sel == &""
+		if p025r_cancelled:
+			SLog.log_raw("[TIMING] %s pilot_025 取消设置备用区装备 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+			_pending_effect.erase(action.action_id)
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		# 算该装备牌可设置的合法目标槽（PART->对应槽+备用区，WEAPON->武器槽+备用区）
+		var p025r_mech: StringName = payload.get("binding_context", {}).get("mech_id", &"")
+		var p025r_valid_slots: Array = []
+		var p025r_src_slot: StringName = &""
+		if context != null and context.game_state != null and p025r_mech != &"":
+			var p025r_m = context.game_state.mechs.get(p025r_mech)
+			var p025r_card = context.game_state.get_card(p025r_sel)
+			if p025r_m != null and p025r_card != null:
+				p025r_valid_slots = _valid_set_slots_for_drawn_card(p025r_m, p025r_card)
+				# 记录来源备用区槽（设置前需先从该槽移除）
+				for p025r_sid in [&"reserve_1", &"reserve_2"]:
+					var p025r_sslot = p025r_m.slots.get(p025r_sid)
+					if p025r_sslot != null and p025r_sslot.equipped_card != null and p025r_sslot.equipped_card.instance_id == p025r_sel:
+						p025r_src_slot = p025r_sid
+						break
+		if p025r_valid_slots.is_empty():
+			SLog.log_raw("[TIMING] %s pilot_025 备用装备无合法目标槽，放弃 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+			_pending_effect.erase(action.action_id)
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		# 弹槽位选择窗（复用 immediate_set_equipment 面板，显示该牌+可选目标槽）
+		var p025r_player_id: StringName = payload.get("binding_context", {}).get("player_id", &"")
+		_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"pilot_025_slot_select",
+			"selected_card_id": p025r_sel, "valid_slots": p025r_valid_slots, "src_slot": p025r_src_slot,
+			"mech_id": p025r_mech, "player_id": p025r_player_id}
+		action.state = &"waiting_timing"
+		action_needs_input.emit(action.action_id, &"pilot_025_slot_select", {
+			"action_id": action.action_id,
+			"effect_id": effect.effect_id,
+			"drawn_card_id": p025r_sel,
+			"valid_slots": p025r_valid_slots,
+			"mech_id": p025r_mech,
+			"player_id": p025r_player_id,
+			"source_label": "约书亚：选择目标区域设置该备用区装备",
+		})
+		SLog.log_raw("[TIMING] %s pilot_025 选目标槽 effect=%s 牌=%s 槽=%d" % [String(action.action_id), String(effect.effect_id), String(p025r_sel), p025r_valid_slots.size()])
+		return
+
+	# ── pilot_025 约书亚 1b：选了目标槽 -> 移除备用区设入 + set_equipment 子动作 + 抽2行动牌 ──
+	if phase == &"pilot_025_slot_select":
+		var p025s_slot: StringName = input_data.get("chosen_slot_id", &"")
+		var p025s_cancelled: bool = input_data.get("cancelled", false) or p025s_slot == &""
+		var p025s_valid: Array = pending.get("valid_slots", [])
+		var p025s_card: StringName = pending.get("selected_card_id", &"")
+		var p025s_mech: StringName = pending.get("mech_id", &"")
+		var p025s_pid: StringName = pending.get("player_id", &"")
+		var p025s_src: StringName = pending.get("src_slot", &"")
+		if p025s_cancelled or not p025s_valid.has(p025s_slot):
+			SLog.log_raw("[TIMING] %s pilot_025 取消目标槽 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+			_pending_effect.erase(action.action_id)
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		# 从来源备用区槽移除装备牌，放回装备手牌（供 set_equipment 走标准设置流程 erasing hand）。
+		# reserve 装备为 face_down 白板，移除即变回普通手牌（face_down 在 set_equipment._step_place_equip 按目标槽重设）。
+		if context != null and context.game_state != null and p025s_mech != &"" and p025s_src != &"":
+			var p025s_m = context.game_state.mechs.get(p025s_mech)
+			var p025s_player = context.game_state.get_player_for_mech(p025s_mech)
+			if p025s_m != null and p025s_player != null:
+				var p025s_sslot = p025s_m.slots.get(p025s_src)
+				if p025s_sslot != null and p025s_sslot.equipped_card != null and p025s_sslot.equipped_card.instance_id == p025s_card:
+					p025s_sslot.equipped_card = null
+				if not p025s_player.equipment_hand.has(p025s_card):
+					p025s_player.equipment_hand.append(p025s_card)
+		# 串行执行：set_equipment（带 slot_id，即时使用 hook 自动生效）-> 抽2张行动牌。
+		# 用 _seq_effect_actions 标准串行机制，子动作完成后由 _after_sub_action_finished 续跑抽牌。
+		var p025s_remaining: Array = [
+			{"type": &"EXECUTE_SET_EQUIP", "params": {"card_id": p025s_card, "mech_id": p025s_mech, "slot_id": p025s_slot}},
+			{"type": &"EXECUTE_GAIN_CARD", "params": {"from_zone": &"action_deck", "card_kind": &"action", "count": 2, "player_id": p025s_pid, "mech_ids": [p025s_mech]}},
+		]
+		_pending_effect.erase(action.action_id)
+		action.record["_pilot_025_done"] = true
+		action.record["_seq_effect_actions"] = {"payload": payload, "remaining": p025s_remaining, "source_check": false}
+		action.state = &"waiting_effect_action"
+		SLog.log_raw("[TIMING] %s pilot_025 设置装备+抽2 牌=%s 槽=%s effect=%s" % [String(action.action_id), String(p025s_card), String(p025s_slot), String(effect.effect_id)])
+		if _continue_seq_effect_actions(action):
+			return
+		if action.state == &"waiting_timing" and _pending_effect.has(action.action_id):
+			return
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
+		return
+
+	# ── 通用「查看隐藏装备」Phase B（霍恩 pilot_046 等）：选了要获取的隐藏牌 → 校验金够/每回合未用
+	#     → 弹 choice_panel(allow_cancel=false) 选目标 RESERVE 槽（全部玩家）。取消/无效 → 结束（不扣金）。
+	if phase == &"hidden_card_view":
+		var h46_params: Dictionary = pending.get("act", {}).get("params", {})
+		var h46_key: StringName = h46_params.get("once_per_turn_key", &"")
+		var h46_bind: Dictionary = payload.get("binding_context", {})
+		var h46_src_cid: StringName = h46_bind.get("card_instance_id", &"")
+		var h46_owner_pid: StringName = pending.get("owner_pid", &"")
+		var h46_sel: StringName = input_data.get("selected_card_id", &"")
+		var h46_cancelled: bool = input_data.get("cancelled", false) or h46_sel == &""
+		if h46_cancelled:
+			SLog.log_raw("[TIMING] %s 隐藏查看面板关闭 effect=%s" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		# 校验：每回合未用（查看无条件但获取限次）+ 牌有效 + 金币够（牌面原价）
+		if h46_key != &"" and h46_src_cid != &"" and not is_once_per_turn_key_available(h46_key, h46_src_cid, 1):
+			SLog.log_raw("[TIMING] %s 隐藏获取每回合已用满，中止 effect=%s" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		var h46_gs = context.game_state
+		var h46_card = h46_gs.get_card(h46_sel) if h46_gs != null else null
+		var h46_price: int = _hidden_card_face_cost(h46_card)
+		var h46_player = h46_gs.players.get(h46_owner_pid) if h46_gs != null else null
+		if h46_card == null or h46_player == null or h46_player.gold < h46_price:
+			SLog.log_raw("[TIMING] %s 隐藏获取校验失败（牌无效/金币不足 需%d），中止 effect=%s" % [String(action_id), h46_price, String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		# 收集全部机甲的 RESERVE 槽作为目标候选（含自己）
+		var h46_target_opts: Array[Dictionary] = []
+		var h46_target_map: Dictionary = {}
+		for h46_m in h46_gs.mechs.values():
+			if h46_m == null:
+				continue
+			for h46_sid in h46_m.slots:
+				var h46_slot = h46_m.slots[h46_sid]
+				if h46_slot == null or h46_slot.slot_kind != &"RESERVE":
+					continue
+				var h46_mname: String = String(h46_m.frame_def.display_name) if h46_m.frame_def != null and "display_name" in h46_m.frame_def else String(h46_m.mech_id)
+				var h46_occ: String = ""
+				if h46_slot.equipped_card != null and h46_slot.equipped_card.def != null:
+					h46_occ = String(h46_slot.equipped_card.def.display_name)
+				var h46_opt_id: String = "%s:%s" % [String(h46_m.mech_id), String(h46_sid)]
+				h46_target_opts.append({
+					"label": "%s·%s%s" % [h46_mname, String(h46_sid), ("（当前:%s）" % h46_occ) if h46_occ != "" else "（空）"],
+					"effect_id": StringName(h46_opt_id),
+				})
+				h46_target_map[h46_opt_id] = {"mech_id": h46_m.mech_id, "slot_id": h46_sid}
+		if h46_target_opts.is_empty():
+			SLog.log_raw("[TIMING] %s 无目标备用区，中止 effect=%s" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload,
+			"phase": &"hidden_reserve_slot", "act": pending.get("act", {}), "owner_pid": h46_owner_pid,
+			"selected_card_id": h46_sel, "price": h46_price, "target_map": h46_target_map}
+		action.state = &"waiting_timing"
+		action_needs_input.emit(action.action_id, &"hidden_reserve_slot", {
+			"action_id": action.action_id,
+			"effect_id": effect.effect_id,
+			"player_id": h46_owner_pid,
+			"options": h46_target_opts,
+			"label": "选择放置的备用区域（显示当前牌）",
+		})
+		SLog.log_raw("[TIMING] %s 隐藏获取选目标备用区 effect=%s 牌=%s" % [String(action_id), String(effect.effect_id), String(h46_sel)])
+		return
+
+	# ── 通用「查看隐藏装备」Phase B（霍恩 pilot_046 等）：选定目标 RESERVE 槽 → 清来源 + 重置归属
+	#     + 追加目标手牌 + _seq[SPEND_GOLD(原价), MARK计次, EXECUTE_SET_EQUIP]。目标强制选择不可取消。
+	if phase == &"hidden_reserve_slot":
+		var h46b_sel: StringName = pending.get("selected_card_id", &"")
+		var h46b_price: int = pending.get("price", 0)
+		var h46b_owner_pid: StringName = pending.get("owner_pid", &"")
+		var h46b_tmid: StringName = input_data.get("target_mech_id", &"")
+		var h46b_tsid: StringName = input_data.get("target_slot_id", &"")
+		var h46b_cancelled: bool = input_data.get("cancelled", false) or h46b_tmid == &"" or h46b_tsid == &""
+		var h46b_tmap: Dictionary = pending.get("target_map", {})
+		if h46b_cancelled or not h46b_tmap.has("%s:%s" % [String(h46b_tmid), String(h46b_tsid)]):
+			SLog.log_raw("[TIMING] %s 隐藏获取目标备用区无效，中止 effect=%s" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		var h46b_gs = context.game_state
+		var h46b_card = h46b_gs.get_card(h46b_sel) if h46b_gs != null else null
+		if h46b_card == null:
+			SLog.log_raw("[TIMING] %s 隐藏获取来源牌缺失，中止 effect=%s" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		var h46b_target_player = h46b_gs.get_player_for_mech(h46b_tmid) if h46b_gs != null else null
+		if h46b_target_player == null:
+			h46b_target_player = h46b_gs.players.get(h46b_owner_pid)
+		if h46b_target_player == null:
+			SLog.log_raw("[TIMING] %s 目标玩家不存在，中止 effect=%s" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		# 清来源（商店隐藏槽/来源机甲 RESERVE 槽）+ 重置归属到目标玩家 + 追加目标手牌（供 set_equipment 走标准流程）
+		_clear_hidden_card_source(h46b_card, h46b_gs)
+		h46b_card.owner_player_id = h46b_target_player.player_id
+		if not h46b_target_player.equipment_hand.has(h46b_sel):
+			h46b_target_player.equipment_hand.append(h46b_sel)
+		# 串行执行：扣金（牌面原价）→ 标记每回合1次 → 设置装备（目标 RESERVE 槽自动 face_down，
+		# 旧牌 equipment_replace 弃置）。
+		var h46b_remaining: Array = [
+			{"type": &"SPEND_GOLD", "params": {"player_id": h46b_owner_pid, "amount": h46b_price, "reason": &"pilot_046_acquire"}},
+			{"type": &"MARK_EFFECT_ONCE_PER_TURN_USED", "params": {"once_per_turn_key": pending.get("act", {}).get("params", {}).get("once_per_turn_key", &"")}},
+			{"type": &"EXECUTE_SET_EQUIP", "params": {"card_id": h46b_sel, "mech_id": h46b_tmid, "slot_id": h46b_tsid}},
+		]
+		_pending_effect.erase(action.action_id)
+		action.record["_pilot_046_done"] = true
+		action.record["_seq_effect_actions"] = {"payload": payload, "remaining": h46b_remaining, "source_check": false}
+		action.state = &"waiting_effect_action"
+		SLog.log_raw("[TIMING] %s 隐藏获取执行 effect=%s 牌=%s 目标=%s/%s 金=%d" % [String(action_id), String(effect.effect_id), String(h46b_sel), String(h46b_tmid), String(h46b_tsid), h46b_price])
+		if _continue_seq_effect_actions(action):
+			return
+		if action.state == &"waiting_timing" and _pending_effect.has(action.action_id):
+			return
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
+		return
+
+	# ── 通用「抽到的装备背面置备用区」（CHOOSE_RESERVE_SLOT_AND_SET_EQUIP，法尔科 pilot_073 等）：
+	#     已选目标 RESERVE 槽（复用 hidden_reserve_slot 弹窗回填 target_mech_id/target_slot_id，强制不可取消）
+	#     → 从打标签玩家手牌移除 + 归属改目标玩家 → _seq[EXECUTE_SET_EQUIP(card,mech,slot)]（RESERVE 自动 face_down）。
+	if phase == &"choose_reserve_slot_and_set":
+		var rs_b_tmid: StringName = input_data.get("target_mech_id", &"")
+		var rs_b_tsid: StringName = input_data.get("target_slot_id", &"")
+		var rs_b_cancelled: bool = input_data.get("cancelled", false) or rs_b_tmid == &"" or rs_b_tsid == &""
+		var rs_b_tmap: Dictionary = pending.get("target_map", {})
+		if rs_b_cancelled or not rs_b_tmap.has("%s:%s" % [String(rs_b_tmid), String(rs_b_tsid)]):
+			SLog.log_raw("[TIMING] %s 置备用区目标无效，中止 effect=%s" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		var rs_b_card_id: StringName = pending.get("card_id", &"")
+		var rs_b_owner_pid: StringName = pending.get("owner_pid", &"")
+		var rs_b_gs = context.game_state
+		var rs_b_card = rs_b_gs.get_card(rs_b_card_id) if rs_b_gs != null else null
+		if rs_b_card == null:
+			SLog.log_raw("[TIMING] %s 置备用区牌缺失，中止 effect=%s" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		var rs_b_target_player = rs_b_gs.get_player_for_mech(rs_b_tmid) if rs_b_gs != null else null
+		if rs_b_target_player == null:
+			rs_b_target_player = rs_b_gs.players.get(rs_b_owner_pid)
+		if rs_b_target_player == null:
+			SLog.log_raw("[TIMING] %s 目标玩家不存在，中止 effect=%s" % [String(action_id), String(effect.effect_id)])
+			if context.action_engine != null:
+				action.state = &"waiting_input"
+				context.action_engine.continue_action(action_id, {})
+			return
+		# 从打标签玩家（抽牌玩家）手牌移除 + 归属改目标玩家（供 set_equipment 走标准流程；
+		# 禁标签 owner 不变，仍由打标签玩家下回合开始后清除）
+		var rs_b_owner_player = rs_b_gs.players.get(rs_b_owner_pid)
+		if rs_b_owner_player != null:
+			rs_b_owner_player.equipment_hand.erase(rs_b_card_id)
+		rs_b_card.owner_player_id = rs_b_target_player.player_id
+		if not rs_b_target_player.equipment_hand.has(rs_b_card_id):
+			rs_b_target_player.equipment_hand.append(rs_b_card_id)
+		# 串行执行：效果驱动设置到目标 RESERVE 槽（自动 face_down，旧牌 equipment_replace 弃置）。
+		# 每回合1次已在 CHOOSE_MANY_CARDS 确认时标记，此处不再 MARK。
+		var rs_b_remaining: Array = [
+			{"type": &"EXECUTE_SET_EQUIP", "params": {"card_id": rs_b_card_id, "mech_id": rs_b_tmid, "slot_id": rs_b_tsid}},
+		]
+		_pending_effect.erase(action.action_id)
+		action.record["_seq_effect_actions"] = {"payload": payload, "remaining": rs_b_remaining, "source_check": false}
+		action.state = &"waiting_effect_action"
+		SLog.log_raw("[TIMING] %s 置备用区执行 effect=%s 牌=%s 目标=%s/%s" % [String(action_id), String(effect.effect_id), String(rs_b_card_id), String(rs_b_tmid), String(rs_b_tsid)])
+		if _continue_seq_effect_actions(action):
+			return
+		if action.state == &"waiting_timing" and _pending_effect.has(action.action_id):
+			return
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
+		return
+
+	# ── 通用「动力税」确认（POWER_SPEND_TAX，杰西卡 pilot_050 e1）：
+	#     拒绝 -> 清掉本次累计（已在触发时扣），剩余询问继续问；确认 -> 两次独立 hp_change
+	#     子动作链（先该机甲后我方，顺序结算），链尾 POWER_SPEND_TAX_CONTINUE 检查剩余询问。 ──
+	if phase == &"power_tax_confirm":
+		var ptx_ctx: Dictionary = action.record.get("_power_tax_ctx", {})
+		var ptx_cancelled: bool = input_data.get("cancelled", false) or int(input_data.get("chosen_option_index", -1)) < 0
+		if ptx_cancelled:
+			# 拒绝：本次累计清零（已扣），剩余询问继续弹
+			ptx_ctx["prompts_left"] = int(ptx_ctx.get("prompts_left", 1)) - 1
+			SLog.log_raw("[TIMING] %s 动力税确认被拒（剩%d次）effect=%s" % [String(action_id), int(ptx_ctx["prompts_left"]), String(effect.effect_id)])
+			if int(ptx_ctx["prompts_left"]) > 0:
+				action.record["_power_tax_ctx"] = ptx_ctx
+				_power_tax_prompt_confirm(action, payload, effect)
+				return
+			action.record.erase("_power_tax_ctx")
+			_continue_seq_effect_actions(action)  # 清空残留链（若有）
+			_power_tax_resume_host(action, action_id)
+			return
+		# 确认：两次独立生命变动（先该机甲后我方；来源均为我方；顺序结算：双方同濒死该机甲先死），
+		# 链尾哨兵续问剩余次数。
+		action.record["_seq_effect_actions"] = {"payload": payload, "remaining": [
+			{"type": &"EXECUTE_HP_CHANGE", "params": {
+				"mech_ids": [ptx_ctx.get("target_mech_id", &"")],
+				"value": int(ptx_ctx.get("damage", 2)),
+				"method": &"decrease",
+				"source_mech_id": ptx_ctx.get("owner_mech_id", &""),
+				"reason": &"power_tax",
+			}},
+			{"type": &"EXECUTE_HP_CHANGE", "params": {
+				"mech_ids": [ptx_ctx.get("owner_mech_id", &"")],
+				"value": int(ptx_ctx.get("damage", 2)),
+				"method": &"decrease",
+				"source_mech_id": ptx_ctx.get("owner_mech_id", &""),
+				"reason": &"power_tax",
+			}},
+			{"type": &"POWER_SPEND_TAX_CONTINUE"},
+		], "source_check": false, "effect": effect}
+		SLog.log_raw("[TIMING] %s 动力税确认执行双 hp_change effect=%s" % [String(action_id), String(effect.effect_id)])
+		if not _continue_seq_effect_actions(action):
+			_power_tax_resume_host(action, action_id)
+		return
+
+	# ── 通用「动力税贡赋」确认（POWER_TAX_TRIBUTE，杰西卡 pilot_050 e2）：
+	#     取消 -> 不发动不 mark（不消耗每回合1次）；确认 -> mark + X+1 -> 按新X选目标机甲。 ──
+	if phase == &"power_tax_tribute_confirm":
+		var tt_ctx: Dictionary = action.record.get("_power_tax_tribute", {})
+		var tt_p: Dictionary = tt_ctx.get("params", {})
+		var tt_cancelled: bool = input_data.get("cancelled", false) or int(input_data.get("chosen_option_index", -1)) < 0
+		if tt_cancelled:
+			action.record.erase("_power_tax_tribute")
+			SLog.log_raw("[TIMING] %s 动力税贡赋确认被取消（不消耗次数）effect=%s" % [String(action_id), String(effect.effect_id)])
+			_power_tax_resume_host(action, action_id)
+			return
+		# 确认：mark 每回合1次 + X+1（写绑定卡实例 counters["var_<counter_key>"]，先于范围计算）
+		var tt_key: StringName = tt_p.get("once_per_turn_key", &"")
+		if tt_key != &"":
+			mark_once_per_turn_key_used(tt_key, tt_ctx.get("card_instance_id", &""))
+		var tt_card = context.game_state.get_card(tt_ctx.get("card_instance_id", &""))
+		var tt_x: int = 0
+		if tt_card != null:
+			if tt_card.counters == null:
+				tt_card.counters = {}
+			var tt_ck: String = "var_%s" % String(tt_p.get("counter_key", &""))
+			tt_x = int(tt_card.counters.get(tt_ck, 0)) + 1
+			tt_card.counters[tt_ck] = tt_x
+		SLog.log_raw("[TIMING] %s 动力税贡赋确认：X+1 -> %d effect=%s" % [String(action_id), tt_x, String(effect.effect_id)])
+		# 按新 X 算候选（base_range + X 内其他机甲）；无候选 -> 仅 X+1，弃牌整段跳过
+		var tt_owner_mid: StringName = tt_ctx.get("owner_mech_id", &"")
+		var tt_owner = context.game_state.mechs.get(tt_owner_mid)
+		var tt_candidates: Array = []
+		if tt_owner != null:
+			for mid: StringName in context.game_state.mechs:
+				if mid == tt_owner_mid:
+					continue
+				var m = context.game_state.mechs[mid]
+				if m == null or m.destroyed:
+					continue
+				if _HexGrid.distance(tt_owner.position, m.position) <= int(tt_p.get("base_range", 4)) + tt_x:
+					tt_candidates.append(mid)
+		if tt_candidates.is_empty():
+			action.record.erase("_power_tax_tribute")
+			SLog.log_raw("[TIMING] %s 动力税贡赋：4+%d格内无其他机甲，仅 X+1 effect=%s" % [String(action_id), tt_x, String(effect.effect_id)])
+			_power_tax_resume_host(action, action_id)
+			return
+		# 选目标机甲（常规目标UI，valid_mech_ids 高亮；chooser=我方玩家）
+		action.record["_waiting_for_target"] = true
+		_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"power_tax_tribute_target"}
+		action.state = &"waiting_timing"
+		action_needs_input.emit(action.action_id, &"select_mech_target", {
+			"action_id": action.action_id,
+			"effect_id": effect.effect_id,
+			"rule": &"mech_target_select",
+			"mech_id": tt_owner_mid,
+			"valid_mech_ids": tt_candidates,
+			"player_id": tt_ctx.get("owner_player_id", &""),
+			"source_label": "选择1台%d格内的其他机甲（弃其%d张行动牌）" % [int(tt_p.get("base_range", 4)) + tt_x, int(tt_p.get("discard_count", 2))],
+		})
+		SLog.log_raw("[TIMING] %s 挂起动力税贡赋选目标（候选%d台 范围%d+%d）effect=%s" % [String(action_id), tt_candidates.size(), int(tt_p.get("base_range", 4)), tt_x, String(effect.effect_id)])
+		return
+
+	# ── 动力税贡赋：选定目标机甲 -> 启动弃牌链（先我方后目标，两段哨兵串行）。
+	#     取消/无选 -> X+1 已生效（次数已消耗），跳过弃牌。 ──
+	if phase == &"power_tax_tribute_target":
+		action.record.erase("_waiting_for_target")
+		var tt2_ctx: Dictionary = action.record.get("_power_tax_tribute", {})
+		var tt2_target: StringName = input_data.get("target_id", input_data.get("target_mech_id", &""))
+		if input_data.get("cancelled", false) or tt2_target == &"":
+			action.record.erase("_power_tax_tribute")
+			SLog.log_raw("[TIMING] %s 动力税贡赋选目标取消（X+1 已生效，跳过弃牌）effect=%s" % [String(action_id), String(effect.effect_id)])
+			_power_tax_resume_host(action, action_id)
+			return
+		tt2_ctx["target_mech_id"] = tt2_target
+		action.record["_power_tax_tribute"] = tt2_ctx
+		# 弃牌链：我方侧 -> 目标侧 -> 清理（两段独立 EXECUTE_DISCARD；>count 弹窗挂起由 resume 续跑）
+		action.record["_seq_effect_actions"] = {"payload": payload, "remaining": [
+			{"type": &"POWER_TAX_TRIBUTE_DISCARD_SIDE", "params": {"side": &"owner"}},
+			{"type": &"POWER_TAX_TRIBUTE_DISCARD_SIDE", "params": {"side": &"target"}},
+			{"type": &"POWER_TAX_TRIBUTE_CLEANUP"},
+		], "source_check": false, "effect": effect}
+		SLog.log_raw("[TIMING] %s 动力税贡赋目标=%s 启动弃牌链 effect=%s" % [String(action_id), String(tt2_target), String(effect.effect_id)])
+		if not _continue_seq_effect_actions(action):
+			_power_tax_resume_host(action, action_id)
+		return
+
+	# ── 动力税贡赋：选定了该侧要弃的 count 张行动牌 -> EXECUTE_DISCARD 子动作 ──
+	if phase == &"power_tax_tribute_discard":
+		var tt3_ctx: Dictionary = action.record.get("_power_tax_tribute", {})
+		var tt3_side: StringName = tt3_ctx.get("discard_side", &"owner")
+		var tt3_selected: Array = input_data.get("card_ids", input_data.get("selected_card_ids", []))
+		if input_data.get("cancelled", false) or tt3_selected.is_empty():
+			# no_cancel 不应触发；防御：跳过该侧弃牌
+			SLog.log_raw("[TIMING] %s 动力税贡赋 %s 侧空选跳过 effect=%s" % [String(action_id), String(tt3_side), String(effect.effect_id)])
+			_power_tax_resume_host(action, action_id)
+			return
+		# 弃置所选牌：插到现有 _seq 链头部（保留哨兵弹出前已存的后续动作，如 CLEANUP），
+		# 子动作完成后由 _continue_seq_effect_actions 续跑。
+		var tt3_rem: Array = [{"type": &"EXECUTE_DISCARD", "params": {"card_ids": tt3_selected, "reason": &"power_tax_tribute"}}]
+		if action.record.has("_seq_effect_actions"):
+			var tt3_seq: Dictionary = action.record["_seq_effect_actions"]
+			tt3_rem.append_array(tt3_seq.get("remaining", []))
+		action.record["_seq_effect_actions"] = {"payload": payload, "remaining": tt3_rem, "source_check": false, "effect": effect}
+		SLog.log_raw("[TIMING] %s 动力税贡赋 %s 侧弃 %d 张 effect=%s" % [String(action_id), String(tt3_side), tt3_selected.size(), String(effect.effect_id)])
+		if not _continue_seq_effect_actions(action):
+			_power_tax_resume_host(action, action_id)
+		return
+
+	# ── 通用「受伤回复」确认（INJURY_HEAL_DRAW，芮贝卡 pilot_078）：
+	#     取消 -> 不发动不 mark（不消耗每回合次数）；确认 -> mark 每回合1次（消耗1次）+
+	#     串行 [EXECUTE_HP_CHANGE 受伤机甲回复, EXECUTE_GAIN_CARD 受伤机甲所属玩家抽牌]。 ──
+	if phase == &"injury_heal_draw_confirm":
+		var ihd_r_ctx: Dictionary = action.record.get("_injury_heal_draw", {})
+		var ihd_r_p: Dictionary = ihd_r_ctx.get("params", {})
+		var ihd_r_cancelled: bool = input_data.get("cancelled", false) or int(input_data.get("chosen_option_index", -1)) < 0
+		if ihd_r_cancelled:
+			action.record.erase("_injury_heal_draw")
+			SLog.log_raw("[TIMING] %s 受伤回复确认被取消（不消耗次数）effect=%s" % [String(action_id), String(effect.effect_id)])
+			_power_tax_resume_host(action, action_id)
+			return
+		# 确认：mark 每回合1次（消耗1次，每玩家回合自动重置）
+		var ihd_r_key: StringName = ihd_r_p.get("once_per_turn_key", &"")
+		if ihd_r_key != &"":
+			mark_once_per_turn_key_used(ihd_r_key, ihd_r_ctx.get("card_instance_id", &""))
+		# 哨兵：本效果已确认发动，重跑 _execute_effect 时直接跳过（不重复弹窗）
+		payload["_injury_heal_draw_done"] = true
+		var ihd_r_tgt: StringName = ihd_r_ctx.get("target_mech_id", &"")
+		var ihd_r_tpid: StringName = ihd_r_ctx.get("target_player_id", &"")
+		var ihd_r_src: StringName = ihd_r_ctx.get("owner_mech_id", &"")
+		# 串行子动作链：先回复生命，再受伤机甲所属玩家抽行动牌（链空 -> 恢复主机）
+		action.record["_seq_effect_actions"] = {"payload": payload, "remaining": [
+			{"type": &"EXECUTE_HP_CHANGE", "params": {
+				"mech_ids": [ihd_r_tgt],
+				"value": int(ihd_r_p.get("heal_amount", 2)),
+				"method": &"restore",
+				"source_mech_id": ihd_r_src,
+				"reason": &"injury_heal_draw",
+			}},
+			{"type": &"EXECUTE_GAIN_CARD", "params": {
+				"from_zone": &"action_deck",
+				"card_kind": &"action",
+				"count": int(ihd_r_p.get("draw_count", 1)),
+				"player_id": ihd_r_tpid,
+				"mech_ids": [ihd_r_tgt],
+				"reason": &"injury_heal_draw",
+			}},
+		], "source_check": false, "effect": effect}
+		SLog.log_raw("[TIMING] %s 受伤回复确认：%s回复%d生命+抽%d行动牌 effect=%s" % [String(action_id), String(ihd_r_tgt), int(ihd_r_p.get("heal_amount", 2)), int(ihd_r_p.get("draw_count", 1)), String(effect.effect_id)])
+		if not _continue_seq_effect_actions(action):
+			_power_tax_resume_host(action, action_id)
+		return
 	# 存置顶牌到 payload(pilot_003_top_card_id)，标记 once，续跑剩余 actions（INSERT 用 deck_top_card_id 置顶+打标签）。
+	# ── 通用「攻击结算→抽牌+弃X再攻击」确认（ATTACK_SETTLE_DRAW_REATTACK，维奥拉 pilot_077）：
+	#     取消 -> 不发动不 mark（不消耗每回合次数）；确认 -> mark 每回合1次（消耗1次）+
+	#     串行 [EXECUTE_DISCARD 弃所选牌, 开凯威攻击窗口给攻击方]。 ──
+	if phase == &"attack_settle_draw_reattack_discard":
+		var asr_r_ctx: Dictionary = action.record.get("_attack_settle_draw_reattack", {})
+		var asr_r_p: Dictionary = asr_r_ctx.get("params", {})
+		var asr_r_selected: Array = input_data.get("card_ids", input_data.get("selected_card_ids", []))
+		if input_data.get("cancelled", false) or asr_r_selected.is_empty():
+			action.record.erase("_attack_settle_draw_reattack")
+			SLog.log_raw("[TIMING] %s 攻击结算弃牌取消（不消耗次数）effect=%s" % [String(action_id), String(effect.effect_id)])
+			_power_tax_resume_host(action, action_id)
+			return
+		# 确认：mark 每回合1次（消耗1次，每玩家回合自动重置）
+		var asr_r_key: StringName = asr_r_p.get("once_per_turn_key", &"")
+		if asr_r_key != &"":
+			mark_once_per_turn_key_used(asr_r_key, asr_r_ctx.get("card_instance_id", &""))
+		# 哨兵：本效果已确认发动，重跑 _execute_effect 时直接跳过（不重复弹窗）
+		payload["_attack_settle_draw_reattack_done"] = true
+		# 串行子动作链：先弃所选牌，再给攻击方开凯威攻击窗口（链空 -> 恢复主机）
+		action.record["_seq_effect_actions"] = {"payload": payload, "remaining": [
+			{"type": &"EXECUTE_DISCARD", "params": {"card_ids": asr_r_selected, "reason": &"attack_settle_draw_reattack"}},
+			{"type": &"ATTACK_SETTLE_DRAW_REATTACK_OPEN_WINDOW", "params": {}},
+		], "source_check": false, "effect": effect}
+		if not _continue_seq_effect_actions(action):
+			_power_tax_resume_host(action, action_id)
+		return
 	if phase == &"pilot_003_choose_top":
 		var p003t_sel: StringName = input_data.get("selected_card_id", input_data.get("card_instance_id", &""))
 		var p003t_cancelled: bool = input_data.get("cancelled", false) or p003t_sel == &""
@@ -2046,7 +6439,7 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 		# 续跑剩余 actions（INSERT：deck_top_card_id=$runtime.pilot_003_top_card_id 置顶 + face_up_bury 标签）
 		var p003t_act_idx: int = int(pending.get("act_idx", -1))
 		if p003t_act_idx >= 0 and effect.actions.size() > p003t_act_idx + 1:
-			action.record["_seq_effect_actions"] = {"payload": payload, "remaining": effect.actions.slice(p003t_act_idx + 1)}
+			action.record["_seq_effect_actions"] = {"payload": payload, "remaining": effect.actions.slice(p003t_act_idx + 1), "effect": effect}
 			action.state = &"waiting_effect_action"
 			if _continue_seq_effect_actions(action):
 				return
@@ -2093,6 +6486,28 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 			if context != null and context.deck_service != null:
 				context.deck_service.discard_card(deis_drawn_id_r, &"effect_unset_discard")
 		SLog.log_effect(effect.effect_id, action.source, action.action_id, String(action.action_type), {"status": "resuming_after_immediate_set", "input": input_data})
+		if action.state == &"waiting_timing" and _pending_effect.has(action.action_id):
+			return
+		if not action.pending_effect_action_ids.is_empty():
+			action.state = &"waiting_effect_action"
+			return
+		if context.action_engine != null:
+			action.state = &"waiting_input"
+			context.action_engine.continue_action(action_id, {})
+		return
+
+	# ── 机师牌放置阶段（事件牌招募 e008）：玩家选了「设置到机师区域 / 放回牌堆底」 ──
+	if phase == &"pilot_draw_place":
+		var pdp_card_id_r: StringName = pending.get("pilot_card_id", &"")
+		var pdp_mech_id_r: StringName = pending.get("mech_id", &"")
+		var pdp_choice: int = int(input_data.get("chosen_option_index", -1))
+		if pdp_choice == 0:
+			_pilot_place_to_slot(pdp_mech_id_r, pdp_card_id_r, false)
+		elif pdp_choice == 1 or pdp_choice < 0:
+			# 放回牌堆底（取消/非法选择兜底也是放牌堆底：牌已离堆不可弃置）
+			if context != null and context.deck_service != null:
+				context.deck_service.move_card_to_deck_bottom(pdp_card_id_r, &"pilot_deck")
+		SLog.log_effect(effect.effect_id, action.source, action.action_id, String(action.action_type), {"status": "resuming_after_pilot_place", "choice": pdp_choice})
 		if action.state == &"waiting_timing" and _pending_effect.has(action.action_id):
 			return
 		if not action.pending_effect_action_ids.is_empty():
@@ -2223,6 +6638,42 @@ func _once_per_turn_card_instance_id(effect: ActionEffect, payload: Dictionary) 
 		cid = payload.get("card_instance_id", &"") if payload != null else &""
 	if cid == &"" and effect.source is Dictionary:
 		cid = effect.source.get("card_instance_id", &"")
+	if cid == &"":
+		return cid
+	# 授予/跨机甲使用：各目标独立计数（泰特 pilot_074 授予他机后不共享来源的每回合N次）。
+	# equipment_panel 显示（EX 按钮悬停）须调用同一 once_per_turn_scope_cid，保证计数键一致。
+	return once_per_turn_scope_cid(bind_ctx, cid, payload if payload != null else {})
+
+
+## 授予/跨机甲使用 once_per_turn 计数隔离（通用件，不绑机师）：
+## 同一效果被授予到目标机甲后，应各目标独立计数，而不是共享来源牌实例的每回合N次。
+## 判定：① binding.granted=true（LISTEN 触发/显示侧，bind_ctx 携带 mech_id=目标机甲）
+##       ② 来源牌所在机甲 ≠ 执行机甲（DIRECT effect_fire 授予路径——_net_granted_effect
+##          的 payload 无 binding_context，用结构判定兜底）。
+## 合成独立计数键 = "{cid}__granted__{mech_id}"。engine 计数与面板显示共用此键。
+## 若无法判定（无目标机甲/来源牌不在场/牌无机甲归属）则原样返回 cid（不隔离）。
+## 兜底仅限 bind_ctx 为空的调用（DIRECT effect_fire 授予路径 payload 无 ctx）：
+## LISTEN 监听路径 fire_timing 注入的 bind_ctx.mech_id=注册监听器的来源牌机甲，执行机甲
+## 即它；若仍跑结构判定，payload.mech_id 是被监听动作的目标机甲（如李 pilot_051 e2 拦截
+## 敌方 EVENT_SET_BEFORE 时 =敌方机甲），会被误判"授予"合成 __granted__ 键；转设我方重入时
+## payload.mech_id=我方机甲，键名又变回原样，mark 与 check 两键不一致 -> once_per_game 失效
+## -> 第二个拦截窗（PvP3 实机「李本局1次要点两次」根因）。
+func once_per_turn_scope_cid(bind_ctx: Dictionary, cid: StringName, payload: Dictionary = {}) -> StringName:
+	if cid == &"":
+		return cid
+	var target_mech: StringName = &""
+	if not bind_ctx.is_empty() and bool(bind_ctx.get("granted", false)):
+		target_mech = bind_ctx.get("mech_id", &"")
+	if target_mech == &"" and bind_ctx.is_empty() and payload != null and not payload.is_empty():
+		var acting: StringName = payload.get("mech_id", payload.get("source_mech_id", &""))
+		if acting != &"" and context != null and context.get("game_state") != null:
+			var card = context.game_state.get_card(cid)
+			if card != null:
+				var card_mech: StringName = card.mech_id
+				if String(card_mech) != "" and String(card_mech) != String(acting):
+					target_mech = acting
+	if target_mech != &"":
+		return StringName("%s__granted__%s" % [String(cid), String(target_mech)])
 	return cid
 
 ## 取当前回合号（once_per_turn 的 scope key）。
@@ -2270,6 +6721,32 @@ func _mark_once_per_turn_used(effect: ActionEffect, payload: Dictionary) -> void
 	_once_per_turn_used[key] = turn_map
 
 
+## 按 key 检查某来源牌实例的每回合N次是否可用（跨效果共享额度的通用件）。
+## 用于效果分支里"消耗另一个效果的额度"（如布鲁克 effect_02 的转化防御分支复用 effect_01 的每回合1次）。
+## card_instance_id 为空时视为不限制（可用），与 _is_once_per_turn_used_up 的空实例退路一致。
+func is_once_per_turn_key_available(once_per_turn_key: StringName, card_instance_id: StringName, once_per_turn_max: int = 1) -> bool:
+	if once_per_turn_key == &"" or card_instance_id == &"":
+		return true
+	var key: String = "%s:%s" % [String(card_instance_id), String(once_per_turn_key)]
+	var turn_id: int = _current_turn_number()
+	var turn_map: Dictionary = _once_per_turn_used.get(key, {})
+	var used: int = int(turn_map.get(turn_id, 0))
+	return used < once_per_turn_max
+
+
+## 按 key 标记某来源牌实例的每回合N次已使用（+1）。供原子动作 MARK_EFFECT_ONCE_PER_TURN_USED 调用。
+func mark_once_per_turn_key_used(once_per_turn_key: StringName, card_instance_id: StringName) -> void:
+	if once_per_turn_key == &"" or card_instance_id == &"":
+		return
+	var key: String = "%s:%s" % [String(card_instance_id), String(once_per_turn_key)]
+	var turn_id: int = _current_turn_number()
+	if not _once_per_turn_used.has(key):
+		_once_per_turn_used[key] = {}
+	var turn_map: Dictionary = _once_per_turn_used[key]
+	turn_map[turn_id] = int(turn_map.get(turn_id, 0)) + 1
+	_once_per_turn_used[key] = turn_map
+
+
 ## 每局1次是否已用满（不带 turn 维度，本局持久）
 func _is_once_per_game_used_up(effect: ActionEffect, payload: Dictionary) -> bool:
 	var cid: StringName = _once_per_turn_card_instance_id(effect, payload)
@@ -2297,6 +6774,15 @@ func _mark_once_per_game_used(effect: ActionEffect, payload: Dictionary) -> void
 func can_trigger_active_effect(effect: ActionEffect, bind_ctx: Dictionary) -> bool:
 	if effect == null:
 		return false
+	# 铠威攻击窗口：只放行「攻击产生」类主动效果（伏特转化进攻 / 莱比尔EX / 投掷式飞弹等），
+	# 其余主动效果（维修/回能/抽牌等）在窗口期间置灰——严格只开放攻击。
+	if _attack_window_active_for_binding_ctx(bind_ctx) and not _effect_is_attack_producing(effect):
+		return false
+	# 通用弹窗锁定：有等待输入（目标选择/二选一/弃牌等弹窗进行中）时所有主动效果按钮置灰，
+	# 防止弹窗期间重复触发（塔莉娅021 点效果1后按钮仍可点，能一直抽3张牌）。
+	# 当前输入被确认/取消后 _waiting_action_id 清空，按钮自动恢复可点。
+	if context != null and context.get("action_ui_bridge") != null and not context.action_ui_bridge.get_waiting_action_info().is_empty():
+		return false
 	var payload: Dictionary = {"binding_context": bind_ctx}
 	# 条件检查（action=null：走 binding_context 取来源，不依赖某个具体动作）
 	if not _check_conditions(effect, payload, null):
@@ -2308,6 +6794,99 @@ func can_trigger_active_effect(effect: ActionEffect, bind_ctx: Dictionary) -> bo
 	if effect.once_per_game_key != &"" and _is_once_per_game_used_up(effect, payload):
 		return false
 	return true
+
+
+## 铠威攻击窗口归属判定（bind_ctx 版，equipment_panel 主动效果按钮置灰用）。
+## bind_ctx 含 mech_id（装备/机师 listener 的 binding_context）。
+func _attack_window_active_for_binding_ctx(bind_ctx: Dictionary) -> bool:
+	if context == null or context.game_state == null:
+		return false
+	var mid: StringName = bind_ctx.get("mech_id", &"")
+	if mid == &"":
+		return false
+	return _ActionPilotEffects.attack_window_active_for_mech(context.game_state, mid)
+
+
+## 效果是否为「攻击产生」效果（铠威攻击窗口期间只放行攻击类主动效果）。
+## 递归扫描 effect.actions：EXECUTE_ATTACK / PLAY_AS_NAMED(attack_is_active=true 或指向攻击牌) /
+## EXECUTE_USE_ACTION_CARD(指向攻击牌) 及其嵌套分支（CHOOSE_ONE options /
+## FOR_EACH_TARGET actions / CONDITIONAL_ACTIONS 分支）。找不到卡定义时宽松放行。
+func _effect_is_attack_producing(effect: ActionEffect) -> bool:
+	if effect == null:
+		return false
+	for act in effect.actions:
+		if act is Dictionary and _action_produces_attack(act):
+			return true
+	return false
+
+
+func _action_produces_attack(act: Dictionary) -> bool:
+	var t: StringName = act.get("type", &"")
+	var params: Dictionary = act.get("params", {})
+	if t == &"EXECUTE_ATTACK":
+		return true
+	if t == &"PLAY_AS_NAMED":
+		# attack_is_active=true 明确标记为攻击转化（伏特/莱比尔EX 进攻分支）；false=防御转化。
+		if bool(params.get("attack_is_active", false)):
+			return true
+		var named_id: StringName = params.get("as_card_def_id", &"")
+		if named_id != &"" and _card_def_is_attack(named_id):
+			return true
+		return false
+	if t == &"EXECUTE_USE_ACTION_CARD":
+		# 无法解析卡定义时宽松放行（避免误禁攻击类效果）
+		var use_id: StringName = params.get("card_id", &"")
+		if use_id == &"":
+			use_id = params.get("card_instance_id", &"")
+		if use_id != &"" and not _card_def_is_attack(use_id):
+			return false
+		return true
+	if t == &"CHOOSE_ONE":
+		for opt in params.get("options", []):
+			if opt is Dictionary:
+				for oa in opt.get("actions", []):
+					if oa is Dictionary and _action_produces_attack(oa):
+						return true
+		return false
+	if t == &"FOR_EACH_TARGET":
+		for ia in params.get("actions", []):
+			if ia is Dictionary and _action_produces_attack(ia):
+				return true
+		return false
+	if t == &"CONDITIONAL_ACTIONS":
+		for ca in params.get("if_true_actions", []) + params.get("if_false_actions", []):
+			if ca is Dictionary and _action_produces_attack(ca):
+				return true
+		return false
+	return false
+
+
+## 卡定义是否为攻击牌（ActionCardDef.action_type == "攻击"）。
+func _card_def_is_attack(card_id: StringName) -> bool:
+	if card_id == &"":
+		return false
+	var def = null
+	if context != null and context.get("card_database") != null:
+		def = context.card_database.get_card(card_id)
+	if def == null and context != null and context.get("game_state") != null:
+		var inst = context.game_state.cards.get(card_id)
+		if inst != null and inst.def != null:
+			def = inst.def
+	if def == null:
+		return false
+	# 兼容两种卡定义形态：CardDatabase.get_card() 返回类型化 CardDef（Resource 对象，
+	# 不能用 .get()）；game_state.cards 兜底路径可能拿到 Dictionary。
+	var kind: String
+	var action_type: String
+	if def is Dictionary:
+		kind = String(def.get("card_kind", ""))
+		action_type = String(def.get("action_type", ""))
+	else:
+		kind = String(def.card_kind)
+		action_type = String(def.action_type)
+	if kind != "action":
+		return false
+	return action_type == "攻击"
 
 
 ## 判断装备牌来源玩家是否为 AI（非人类）
@@ -2675,7 +7254,10 @@ func _check_availability(effect: ActionEffect, action, card_instance_id: StringN
 				max_range = max(max_range, int(wcard.def.range_value))
 		# 攻击目标须在持有者最大武器范围内
 		var map_cells: Dictionary = context.game_state.map_state.cells if context.game_state.map_state else {}
-		return _RangeCalculator.is_in_weapon_range(holder_mech.position, attacker_mech.position, max_range, map_cells)
+		var _cover_aura: Dictionary = context.map_service.get_attack_aura_cells()
+		# 掩护射程同样受机甲障碍影响（与攻击判定口径一致）
+		var _cover_blocked: Dictionary = context.map_service.get_attack_blocked_keys(holder_mech_id)
+		return _RangeCalculator.is_in_weapon_range(holder_mech.position, attacker_mech.position, max_range, map_cells, _cover_aura, _cover_blocked)
 
 	# 锁定状态封锁响应（通用路径：无 availability_condition 的 AVAILABILITY 响应效果，
 	# 如 granted 防御/094 光束/096 热能响应）：仅被锁目标自身的响应被封锁（priority < 20），相邻机甲不再被封锁。
@@ -2787,6 +7369,17 @@ func _check_conditions(effect: ActionEffect, payload: Dictionary, action, custom
 				conds.append(c)
 	# 创建临时 EffectBinding 用于 ConditionChecker
 	var binding = _make_binding_from_effect(effect, action, payload)
+	# 攻击窗口豁免：铠威等窗口归属机甲在窗口中发动攻击不依赖回合攻击次数——
+	# 跳过攻击门槛条件（ATTACK_COUNT_ABOVE 剩余攻击次数 / WEAPON_CAN_ATTACK_AGAIN）。
+	# 这样攻击类主动效果（伏特转化/莱比尔EX/投掷式飞弹）在窗口内即使回合攻击数已用完也可用。
+	# 窗口归属从 binding 来源机甲取（bind_ctx.mech_id == 窗口 owner_mech_id）。
+	if _attack_window_active_for_binding(binding):
+		var _bypass: Array = []
+		for c in conds:
+			var _cop: String = String(c.get("op", &""))
+			if _cop != "ATTACK_COUNT_ABOVE" and _cop != "WEAPON_CAN_ATTACK_AGAIN":
+				_bypass.append(c)
+		conds = _bypass
 	var ok: bool = _ConditionChecker.check_all(binding, payload, conds)
 	if not ok:
 		# 诊断：逐条件打印结果，定位 effect2 被跳过的根因（闪击不弹窗 bug）
@@ -2926,6 +7519,362 @@ func _register_listen_for_effect(act: Dictionary, payload: Dictionary, action) -
 		register_temporary_listener(listen_timing, listen_action_id, &"attack", listen_effect, rl_cid, &"", rl_bind)
 
 
+## CHOOSE_MANY_CARDS：效果多选弹窗（顶层 effect.actions 与 CHOOSE_ONE 分支内共用）。
+## 列出手牌候选供多选，确认后由 resume_pending_effect(phase=choose_many_cards) 处理
+## （per_card_actions 逐张执行 / store_result_key 存 payload[key] / as_use_action_card 批量打出）。
+## 挂起返回 true；无候选 / AI 持有者 / 已弹过则返回 false（调用方继续下一动作）。
+func _prompt_choose_many_cards(effect, payload: Dictionary, action, act: Dictionary, act_idx: int) -> bool:
+	var cm_params: Dictionary = act.get("params", {})
+	var cm_source: StringName = cm_params.get("source", &"HAND_CARDS")
+	var cm_bind_ctx: Dictionary = payload.get("binding_context", {})
+	# 主体优先级：binding_context.player_id（效果持有者/牌主）优先于 payload.player_id（时点发起者）。
+	# 事件牌"每当回合即将结束"类效果（拾荒 e005 等）在他人回合结束时触发，若取 payload.player_id
+	# （回合玩家）会导致：候选手牌取错人（弃的是回合玩家的牌）+ 弹窗路由错玩家（PvP3 实测
+	# 玩家1的拾荒弹给了玩家2）。无 binding（行动牌使用路径）回退 payload.player_id 不变。
+	var cm_player_id: StringName = cm_bind_ctx.get("player_id", payload.get("player_id", &""))
+	var cm_card_ids: Array = []
+	if cm_source == &"ATTACK_TARGET_EQUIPMENT":
+		# 收集攻击目标机甲正面设置、未压制的装备牌（供 effect_063/078 选目标装备无效 / 泰格弃装解锁）。
+		# FOR_EACH_TARGET 逐目标时优先读 current_target（泰格 pilot_040 双连多目标各自独立解锁）。
+		var ct_mech: StringName = &""
+		var ct_d: Variant = payload.get("current_target", {})
+		if ct_d is Dictionary:
+			ct_mech = ct_d.get("mech_id", &"")
+		var tgt_mech_id: StringName = ct_mech if ct_mech != &"" else payload.get("target_id", cm_bind_ctx.get("target_id", &""))
+		cm_player_id = cm_bind_ctx.get("player_id", cm_player_id)  # 弹窗默认给攻击方（效果持有者），chooser_mech_id 可覆盖
+		if tgt_mech_id != &"" and context != null and context.game_state != null:
+			var tgt_mech = context.game_state.mechs.get(tgt_mech_id)
+			if tgt_mech != null:
+				for sid in tgt_mech.slots:
+					var tslot = tgt_mech.slots[sid]
+					if tslot == null:
+						continue
+					var ec = tslot.get("equipped_card")
+					if ec == null or ec.def == null:
+						continue
+					if ec.get("face_down") == true or ec.get("disabled") == true or ec.get("effect_negated") == true:
+						continue
+					# 只选装备牌（排除 PILOT/EVENT 槽的机师/事件牌）：泰格弃装解锁「正面设置的装备牌」；
+					# effect_063/078 选目标装备无效同理只针对装备。
+					if ec.def.card_kind != &"equipment":
+						continue
+					cm_card_ids.append(ec.instance_id)
+	else:
+		# 默认：收集手牌中所有该 card_def_id 的牌（推进/掩护）
+		var cm_card_def_id: StringName = cm_params.get("card_def_id", &"")
+		if cm_player_id != &"" and context != null and context.game_state != null:
+			var cm_player = context.game_state.players.get(cm_player_id)
+			if cm_player != null:
+				for hand_cid: StringName in cm_player.action_hand:
+					var hand_card = context.game_state.get_card(hand_cid)
+					if hand_card != null and hand_card.def != null and String(hand_card.def.card_id) == String(cm_card_def_id):
+						cm_card_ids.append(hand_cid)
+	# OWNER_ACTION_HAND：列出持有者所有行动牌（赤枭躯干 effect_040/041 弃牌换动力 / 布鲁克转化防御）
+	# 不按 card_def_id 过滤，整手行动牌供多选弃置/转化。
+	# card_type_filter（温斯顿 pilot_082 当作掩护/推进）：仅列持有者手牌中 action_type==指定类型的行动牌
+	# （如只选攻击牌），与按钮条件 HAS_ACTION_CARD_TYPE_IN_HAND 共用语义。
+	if cm_source == &"OWNER_ACTION_HAND":
+		cm_card_ids.clear()
+		var cm_card_type: StringName = cm_params.get("card_type_filter", &"")
+		if cm_player_id != &"" and context != null and context.game_state != null:
+			var cm_player = context.game_state.players.get(cm_player_id)
+			if cm_player != null:
+				for hand_cid: StringName in cm_player.action_hand:
+					if cm_card_type == &"":
+						cm_card_ids.append(hand_cid)
+					else:
+						var cm_hand_card = context.game_state.get_card(hand_cid)
+						if cm_hand_card != null and cm_hand_card.def != null and String(cm_hand_card.def.action_type) == String(cm_card_type):
+							cm_card_ids.append(hand_cid)
+	# OWNER_WEAPON_EQUIPMENT_CARDS：列出持有者所有武器装备牌（提比里安 pilot_022 effect_01 弃甲铸威）。
+	# 范围=装备手牌+机甲已设置槽位中 def.equipment_kind==WEAPON 的牌（虚拟武器天然排除）。
+	# 复用 ConditionChecker 枚举 helper 保证与条件检查一致。
+	if cm_source == &"OWNER_WEAPON_EQUIPMENT_CARDS":
+		cm_card_ids = _ConditionChecker._weapon_equipment_card_ids(
+			context.game_state, cm_player_id)
+	# OWNER_EQUIPMENT_CARDS：列出持有者所有装备牌（装备手牌+所有机甲已设置槽位含备用区），
+	# 不限武器/部件，供"弃1张装备抽装备/高级装备"类主动效果（尤里 pilot_033 等）选择弃置。
+	if cm_source == &"OWNER_EQUIPMENT_CARDS":
+		cm_card_ids = _ConditionChecker._equipment_card_ids(
+			context.game_state, cm_player_id)
+	# OWNER_UNEQUIPPED_EQUIPMENT_CARDS：仅列出持有者"未设置的装备牌"（装备手牌，不含已设置槽位），
+	# 供"弃置未设置的装备牌"类主动效果弹窗候选（柏格 pilot_064 弃装获金抽装 等）。与按钮条件
+	# HAS_UNEQUIPPED_EQUIPMENT_CARD 共用 helper，保证候选与可用性判定一致。
+	if cm_source == &"OWNER_UNEQUIPPED_EQUIPMENT_CARDS":
+		cm_card_ids = _ConditionChecker._unequipped_equipment_card_ids(
+			context.game_state, cm_player_id)
+	# 窗口附加选项（collect_cover_window_extras / collect_thrust_window_extras）：扫描窗口拥有玩家
+	# 注册在 COVER_WINDOW_EXTRA / THRUST_WINDOW_EXTRA 虚拟时点的永久监听效果（洛尔恩 pilot_062 转化掩护 /
+	# 温斯顿 pilot_082 转化推进等），条件满足（次数可用/有攻击牌）时作为复选框选项展示。
+	# 即使无真实掩护/推进牌，只要存在可用 extra 选项也可弹窗。
+	var cm_extra_options: Array = []
+	var cm_collect_cover: bool = bool(cm_params.get("collect_cover_window_extras", false))
+	var cm_collect_thrust: bool = bool(cm_params.get("collect_thrust_window_extras", false))
+	# 把窗口附加选项的虚拟时点写进 record：确认路径 resume 时（另一个函数作用域）局部变量
+	# cm_collect_* 不可见，须经 record 持久化才能知道去 COVER_WINDOW_EXTRA / THRUST_WINDOW_EXTRA
+	# 查找选中的 extra 效果（_run_next_window_extra_if_pending 读取该键）。
+	if cm_collect_cover:
+		action.record["_window_extra_timing"] = _TimingConst.COVER_WINDOW_EXTRA
+		cm_extra_options = _collect_window_extra_options(_TimingConst.COVER_WINDOW_EXTRA, cm_player_id, payload, action)
+	elif cm_collect_thrust:
+		action.record["_window_extra_timing"] = _TimingConst.THRUST_WINDOW_EXTRA
+		cm_extra_options = _collect_window_extra_options(_TimingConst.THRUST_WINDOW_EXTRA, cm_player_id, payload, action)
+	if cm_card_ids.is_empty() and cm_extra_options.is_empty():
+		return false  # 无牌可选，跳过
+	# 仅人类玩家弹多选窗；AI 暂不支持（跳过=选0，避免挂死）
+	var cm_mech_id: StringName = payload.get("source_mech_id", cm_bind_ctx.get("mech_id", &""))
+	# chooser_mech_id 路由（泰格弃装解锁：弹窗给目标机甲持有者，而非效果持有者；FOR_EACH_TARGET
+	# 逐目标时 chooser_mech_id 传 $current_target.mech_id，各目标玩家各自弹各自独立解锁）。
+	var cm_chooser_expr: Variant = cm_params.get("chooser_mech_id", &"")
+	if cm_chooser_expr != null and String(cm_chooser_expr) != &"":
+		var chooser_mech_id: StringName = _resolve_mech_id_expr(String(cm_chooser_expr), payload)
+		if chooser_mech_id != &"" and context != null and context.game_state != null:
+			var chooser_mech = context.game_state.mechs.get(chooser_mech_id)
+			if chooser_mech != null and chooser_mech.owner_player_id != &"":
+				cm_player_id = chooser_mech.owner_player_id
+				cm_mech_id = chooser_mech_id
+	if _is_ai_owner(cm_player_id, cm_mech_id):
+		return false
+	# 去重守卫：同一动作只弹一次（多张共享一个监听，首个挂起后循环已中断）
+	if action.record.get("_choose_many_shown", false):
+		return false
+	action.record["_choose_many_shown"] = true
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": "choose_many_cards", "choose_many_action": act, "act_idx": act_idx}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"select_thrust_cards", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"card_ids": cm_card_ids,
+		"player_id": cm_player_id,
+		"label": String(cm_params.get("label", "选择要打出的牌")),
+		"per_card_suffix": String(cm_params.get("per_card_suffix", "")),
+		"confirm_verb": String(cm_params.get("confirm_verb", "打出")),
+		"cancel_label": String(cm_params.get("cancel_label", "不打出")),
+		"max_count": int(cm_params.get("max_count", 0)),
+		"min_count": int(cm_params.get("min_count", 0)),
+		"no_cancel": bool(cm_params.get("no_cancel", false)),
+		"extra_options": cm_extra_options,
+	})
+	SLog.log_raw("[TIMING] %s 挂起多选 effect=%s 候选=%d" % [String(action.action_id), String(effect.effect_id), cm_card_ids.size()])
+	return true
+
+
+## 收集窗口附加选项（洛尔恩 pilot_062 效果1 转化掩护 / 温斯顿 pilot_082 转化推进等，通用时点机制）。
+## 窗口多选窗（collect_cover_window_extras / collect_thrust_window_extras）调用：遍历窗口拥有玩家
+## 注册在指定虚拟时点（COVER_WINDOW_EXTRA / THRUST_WINDOW_EXTRA）的永久监听效果，用其自身
+## binding_context（机师/玩家）构造独立 payload 评估 conditions，通过者作为复选框选项返回
+## [{effect_id, label}]。虚拟时点不会被 fire_timing 触发，仅作存储/遍历入口；
+## 选项选中后由确认路径直接 _execute_actions 该效果。
+func _collect_window_extra_options(window_timing: StringName, cm_player_id: StringName, cover_payload: Dictionary, action) -> Array:
+	var result: Array = []
+	var extras: Array = permanent_listeners.get(window_timing, [])
+	if extras.is_empty():
+		return result
+	for entry in extras:
+		var eff: ActionEffect = entry.get("effect")
+		if eff == null:
+			continue
+		var entry_ctx: Dictionary = entry.get("binding_context", {})
+		# 仅收集窗口拥有玩家（掩护/推进牌持有者）自己的附加选项
+		if String(entry_ctx.get("player_id", &"")) != String(cm_player_id):
+			continue
+		# 构造该效果独立 payload：保留 cover 上下文（target_id/attacker_id 等攻击信息），
+		# 替换 binding_context 为本效果绑定（洛尔恩/温斯顿 mech/player），供条件精确匹配。
+		var extra_payload: Dictionary = cover_payload.duplicate(true)
+		extra_payload["binding_context"] = entry_ctx
+		if entry_ctx.has("player_id"):
+			extra_payload["player_id"] = entry_ctx["player_id"]
+		if entry_ctx.has("mech_id"):
+			extra_payload["source_mech_id"] = entry_ctx["mech_id"]
+		var cond_ok: bool = _check_conditions(eff, extra_payload, action)
+		if cond_ok:
+			result.append({
+				"effect_id": String(eff.effect_id),
+				"label": eff.display_name,
+			})
+	return result
+
+
+## 串行启动窗口附加选项效果（洛尔恩 pilot_062 转化掩护 / 温斯顿 pilot_082 转化推进等）。返回 true=
+## 已启动并挂起（等 resume 续跑），false=无 pending 或已全部处理完。
+## 调用点：① 窗口确认路径（真实牌同步执行完后）；② ActionEngine._after_sub_action_finished
+## （真实牌批量挂起-恢复完成后 / 转化流程完成后）。每个 extra 效果经 _execute_actions 独立执行
+## （洛尔恩/温斯顿效果1：选行动牌→转化），挂起时父动作等待其完成。
+## 窗口时点记录于 record._window_extra_timing（COVER_WINDOW_EXTRA / THRUST_WINDOW_EXTRA），
+## 从对应永久监听列表查找效果与其绑定。
+func _run_next_window_extra_if_pending(parent_action) -> bool:
+	if parent_action == null:
+		return false
+	var pending: Array = parent_action.record.get("_window_extra_pending", [])
+	if pending.is_empty():
+		return false
+	var cover_payload: Dictionary = parent_action.record.get("_window_extra_payload", {})
+	var window_timing: StringName = parent_action.record.get("_window_extra_timing", _TimingConst.COVER_WINDOW_EXTRA)
+	# 取第一个 extra effect_id（UI 返回 String/StringName 均可），从 pending 移除
+	var extra_effect_id: String = String(pending.pop_front())
+	parent_action.record["_window_extra_pending"] = pending
+	# 从窗口虚拟时点找到对应效果与其绑定（洛尔恩/温斯顿 mech/player）
+	var extras: Array = permanent_listeners.get(window_timing, [])
+	var found_eff: ActionEffect = null
+	var found_ctx: Dictionary = {}
+	for entry in extras:
+		var eff: ActionEffect = entry.get("effect")
+		if eff != null and String(eff.effect_id) == extra_effect_id:
+			found_eff = eff
+			found_ctx = entry.get("binding_context", {})
+			break
+	if found_eff == null:
+		SLog.log_raw("[TIMING] %s 窗口附加选项 %s 未找到效果，跳过" % [String(parent_action.action_id), extra_effect_id])
+		return _run_next_window_extra_if_pending(parent_action)
+	# 构造该效果独立 payload：保留窗口上下文（target_id/attacker_id 等攻击信息），
+	# 替换 binding_context 为本效果绑定（洛尔恩/温斯顿 mech/player），供 OWNER_ACTION_HAND 取手牌。
+	var extra_payload: Dictionary = cover_payload.duplicate(true)
+	extra_payload["binding_context"] = found_ctx
+	if found_ctx.has("player_id"):
+		extra_payload["player_id"] = found_ctx["player_id"]
+	if found_ctx.has("mech_id"):
+		extra_payload["source_mech_id"] = found_ctx["mech_id"]
+	SLog.log_raw("[TIMING] %s 启动窗口附加选项 effect=%s" % [String(parent_action.action_id), extra_effect_id])
+	_execute_actions(found_eff, extra_payload, parent_action)
+	# 挂起（选行动牌窗等）→ 等 resume 续跑，完成由 _after_sub_action_finished 钩子续下一个；
+	# 同步完成（无攻击牌不发动等）→ 继续处理下一个 extra
+	if parent_action.record.has("_seq_effect_actions") or _pending_effect.has(parent_action.action_id):
+		return true
+	return _run_next_window_extra_if_pending(parent_action)
+
+
+## PEEK_DECK_TOP_AND_DISCARD 第1阶段（通用"窥视牌堆顶并弃置"模块，银雪 pilot_065 effect_02）：
+## 单选我方1张行动牌作发动代价（max=1/min=0=可取消）。确认后弃置代价牌 -> 第2阶段窥视堆顶。
+## 无行动牌 / AI 持有者 -> 返回 false（不发动，效果跳过）。
+## params: {peek_count(默认3), deck_zone(默认action_deck), cost_label/cost_confirm_verb/cost_cancel_label, peek_*}
+func _handle_peek_select_cost(effect, payload: Dictionary, action, act: Dictionary) -> bool:
+	var pk_params: Dictionary = act.get("params", {})
+	var pk_bind: Dictionary = payload.get("binding_context", {})
+	var pk_player_id: StringName = pk_bind.get("player_id", payload.get("player_id", &""))
+	var pk_mech_id: StringName = pk_bind.get("mech_id", payload.get("source_mech_id", &""))
+	if pk_player_id == &"" or context == null or context.game_state == null:
+		return false
+	if _is_ai_owner(pk_player_id, pk_mech_id):
+		return false
+	var pk_player = context.game_state.players.get(pk_player_id)
+	if pk_player == null:
+		return false
+	var pk_cost_cards: Array = []
+	for pk_cid in pk_player.action_hand:
+		pk_cost_cards.append(pk_cid)
+	if pk_cost_cards.is_empty():
+		return false  # 无行动牌，不发动
+	if action.record.get("_peek_cost_shown", false):
+		return false
+	action.record["_peek_cost_shown"] = true
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": "peek_select_cost", "peek_params": pk_params}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"select_thrust_cards", {
+		"action_id": action.action_id, "effect_id": effect.effect_id,
+		"card_ids": pk_cost_cards, "player_id": pk_player_id,
+		"label": String(pk_params.get("cost_label", "弃置1张行动牌以窥视行动牌堆顶3张（可弃置其中任意牌）")),
+		"confirm_verb": String(pk_params.get("cost_confirm_verb", "弃置发动")),
+		"cancel_label": String(pk_params.get("cost_cancel_label", "不发动")),
+		"max_count": 1, "min_count": 0, "no_cancel": false,
+	})
+	SLog.log_raw("[TIMING] %s 银雪窥牌-代价阶段挂起 effect=%s 候选=%d" % [String(action.action_id), String(effect.effect_id), pk_cost_cards.size()])
+	return true
+
+
+## PEEK_DECK_TOP_AND_DISCARD 第2阶段哨兵 PEEK_DECK_SHOW：窥视行动牌堆顶 N 张，多选弃置（可不选）。
+## 由 _seq 续跑触发（代价牌弃置完成后 remaining 中的 PEEK_DECK_SHOW）。剩余牌保持原顺序置顶
+## （EXECUTE_DISCARD 用 remove_card_from_all_zones 仅删选中，未删的保留在前）。牌堆空/AI -> 返回 false。
+func _handle_peek_deck_show(act: Dictionary, effect, payload: Dictionary, parent_action) -> bool:
+	var pds_params: Dictionary = act.get("params", {})
+	var pds_count: int = int(pds_params.get("peek_count", 3))
+	var pds_deck_zone: StringName = pds_params.get("deck_zone", &"action_deck")
+	if context == null or context.game_state == null:
+		return false
+	if pds_deck_zone != &"action_deck":
+		return false  # 仅行动牌堆顶受支持
+	var pds_deck: Array = context.game_state.deck_state.action_deck
+	var pds_take: int = pds_count if pds_count < pds_deck.size() else pds_deck.size()
+	var pds_top: Array = []
+	for pds_i in range(pds_take):
+		pds_top.append(pds_deck[pds_i])
+	if pds_top.is_empty():
+		return false
+	var pds_bind: Dictionary = payload.get("binding_context", {})
+	var pds_player_id: StringName = pds_bind.get("player_id", payload.get("player_id", &""))
+	var pds_mech_id: StringName = pds_bind.get("mech_id", payload.get("source_mech_id", &""))
+	if _is_ai_owner(pds_player_id, pds_mech_id):
+		return false
+	_pending_effect[parent_action.action_id] = {"action": parent_action, "effect": effect, "payload": payload, "phase": "peek_select_discard", "peek_card_ids": pds_top}
+	parent_action.state = &"waiting_timing"
+	var pds_eff_id: StringName = effect.effect_id if effect != null else &""
+	action_needs_input.emit(parent_action.action_id, &"select_thrust_cards", {
+		"action_id": parent_action.action_id, "effect_id": pds_eff_id,
+		"card_ids": pds_top, "player_id": pds_player_id,
+		"label": String(pds_params.get("peek_label", "行动牌堆顶%d张（选择要弃置的牌，可不选）" % pds_top.size())),
+		"confirm_verb": String(pds_params.get("peek_confirm_verb", "弃置选中")),
+		"cancel_label": String(pds_params.get("peek_cancel_label", "不弃置")),
+		"max_count": pds_top.size(), "min_count": 0, "no_cancel": false,
+	})
+	SLog.log_raw("[TIMING] %s 银雪窥牌-堆顶阶段挂起 effect=%s 候选=%d" % [String(parent_action.action_id), String(pds_eff_id), pds_top.size()])
+	return true
+
+
+## CHOOSE_MANY_MECHS：通用「选多台机甲」地图点选（奥黛尔 pilot_038 等含我方主动效果）。
+## params: {range(hex距离,默认4), min_count(至少,默认1), max_count(最多,默认1),
+##          include_self(自己可选,默认false), store_result_key(选中mech_id数组存payload[key]), label}
+## 挂起 phase=choose_many_mechs -> action_needs_input(mech_multi_select) 由 app_root 弹地图点选；
+## resume：确认存 payload[key] 重跑 _execute_effect（shown 守卫跳过本动作续跑后续 MARK/FOR_EACH_TARGET），
+## 取消=不发动不计次。AI 跳过（暂不处理 AI 逻辑）。
+func _prompt_choose_many_mechs(effect, payload: Dictionary, action, act: Dictionary, act_idx: int) -> bool:
+	var mm_params: Dictionary = act.get("params", {})
+	var mm_bind_ctx: Dictionary = payload.get("binding_context", {})
+	var mm_mech_id: StringName = payload.get("source_mech_id", mm_bind_ctx.get("mech_id", &""))
+	var mm_player_id: StringName = payload.get("player_id", mm_bind_ctx.get("player_id", &""))
+	if mm_mech_id == &"" or context == null or context.game_state == null:
+		return false
+	var mm_src = context.game_state.mechs.get(mm_mech_id)
+	if mm_src == null:
+		return false
+	var mm_range: int = int(mm_params.get("range", 4))
+	var mm_min: int = int(mm_params.get("min_count", 1))
+	var mm_max: int = int(mm_params.get("max_count", 1))
+	var mm_include_self: bool = bool(mm_params.get("include_self", false))
+	# 候选：hex 距离 range 内存活机甲（include_self=false 排除自己）
+	var mm_candidates: int = 0
+	for mid: StringName in context.game_state.mechs:
+		if mid == mm_mech_id and not mm_include_self:
+			continue
+		var m = context.game_state.mechs[mid]
+		if m == null or m.destroyed:
+			continue
+		if _HexGrid.distance(mm_src.position, m.position) <= mm_range:
+			mm_candidates += 1
+	if mm_candidates < mm_min:
+		return false  # 无可选项（条件已保证，兜底）
+	# 仅人类玩家弹地图点选；AI 跳过（暂不处理 AI 逻辑）
+	if _is_ai_owner(mm_player_id, mm_mech_id):
+		return false
+	# 去重守卫：resume 重跑 _execute_effect 时跳过本动作
+	if action.record.get("_choose_many_mechs_shown", false):
+		return false
+	action.record["_choose_many_mechs_shown"] = true
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": "choose_many_mechs", "mech_select_action": act, "act_idx": act_idx}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"mech_multi_select", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"source_mech_id": mm_mech_id,
+		"range": mm_range,
+		"max_count": mm_max,
+		"min_count": mm_min,
+		"include_self": mm_include_self,
+		"store_result_key": String(mm_params.get("store_result_key", &"")),
+		"label": String(mm_params.get("label", "选择目标机甲")),
+	})
+	SLog.log_raw("[TIMING] %s 挂起多选机甲 effect=%s 范围=%d 候选=%d" % [String(action.action_id), String(effect.effect_id), mm_range, mm_candidates])
+	return true
+
+
 func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void:
 	if effect.actions.is_empty():
 		return
@@ -2937,6 +7886,14 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 		# 跳过注册监听器的动作
 		if act_type == &"REGISTER_LISTEN":
 			_register_listen_for_effect(act, payload, action)
+			continue
+		# CHOOSE_MANY_MECHS（奥黛尔 pilot_038「选最多2台4格内机甲」通用主动效果）：地图点选多台机甲。
+		# 收集 hex 范围内（含自己可选）存活机甲候选，弹 mech_multi_select 窗；确认 target_ids 存
+		# payload[store_result_key]，resume 重跑 _execute_effect（shown 守卫跳过本动作）续跑 MARK 计次 +
+		# FOR_EACH_TARGET 逐目标执行；取消=效果不发动不计次。AI 跳过（暂不处理 AI 逻辑）。
+		if act_type == &"CHOOSE_MANY_MECHS":
+			if _prompt_choose_many_mechs(effect, payload, action, act, _act_idx):
+				return
 			continue
 		# FOR_EACH_TARGET（pilot_012/013）：逐目标串行执行 inner actions。
 		# targets=$selected_targets（由 ALL_CURRENT_ATTACK_MECH_TARGETS / ALL_HIT_TARGETS_* 注入 payload）。
@@ -2957,6 +7914,83 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 			if _run_flat_inline(fet_flat, 0, effect, payload, action, fet_var):
 				return
 			continue
+		# CONDITIONAL_ACTIONS 顶层：按当前 payload 评估条件取 if_true/if_false 分支，
+		# 与剩余动作拼接后经 _seq_effect_actions 串行执行（青瞳 pilot_037 偷牌后按手牌差 -4 威力）。
+		# FOR_EACH_TARGET 内嵌的 CONDITIONAL_ACTIONS 由 _build_for_each_flat 展开，不走到这里。
+		if act_type == &"CONDITIONAL_ACTIONS":
+			var tca_params: Dictionary = act.get("params", {})
+			var tca_conds: Array = tca_params.get("conditions", [])
+			var tca_branch: Array = tca_params.get("if_false_actions", [])
+			var tca_bind = _make_binding_from_effect(effect, action, payload)
+			if tca_conds.is_empty() or _ConditionChecker.check_all(tca_bind, payload, tca_conds):
+				tca_branch = tca_params.get("if_true_actions", [])
+			if tca_branch.is_empty():
+				continue
+			# 拼接分支 + 剩余动作，交给 _continue_seq_effect_actions 串行执行（原子动作同步完成；
+			# 分支含需输入子动作时挂起等待，完成后继续剩余）。全部同步完成则 break——
+			# 剩余动作已随分支拼入 seq 处理完，continue 会让 for 循环把 slice(_act_idx+1) 重复执行一遍。
+			action.record["_seq_effect_actions"] = {"payload": payload, "remaining": tca_branch + _actions_list.slice(_act_idx + 1), "effect": effect}
+			if _continue_seq_effect_actions(action):
+				return
+			break
+		# PILOT_024_RE_CONFIRM：琳 RE 请求确认弹窗（请求方点击 RE 后弹给琳）。
+		# 首次挂起确认窗（_pending_effect phase=pilot_024_re_confirm）；resume 后由
+		# resume_pending_effect 处理（确认=开维修窗口并保持动作挂起阻塞请求方回合，取消=无事发生）。
+		# 窗口关闭后 continue_action 恢复本动作完成（handler 跳过不重跑）。
+		if act_type == &"PILOT_024_RE_CONFIRM":
+			if bool(payload.get("_p024_re_confirm_done", false)):
+				continue
+			_prompt_pilot_024_re_confirm(effect, payload, action)
+			return
+		# PILOT_081_RE_CONFIRM：汀兰 RE 请求确认弹窗（请求方点 RE 后弹给汀兰持有者）。
+		# 首次挂起确认窗（_pending_effect phase=pilot_081_re_confirm）；resume 后由
+		# resume_pending_effect 处理（同意=请求方回2血+获2金；取消=无事，RE 已消耗不退）。
+		if act_type == &"PILOT_081_RE_CONFIRM":
+			if bool(payload.get("_p081_re_confirm_done", false)):
+				continue
+			_prompt_pilot_081_re_confirm(effect, payload, action)
+			return
+		# PILOT_083_MODIFY_FLOW：瓦恩「武器修改」两阶段流程（主动按钮1 / RE 请求）。
+		# 首次挂起 phase1 武器单选（choose_one_effect）；resume 后转 phase2 三横排选项
+		# （weapon_modify_options_panel）；确认施加 / 取消由 resume_pending_effect 的
+		# p083_weapon_select / p083_options 阶段处理。流程完成设 _p083_flow_done 跳过不重跑。
+		# mode（owner/re）来自动作 params，注入 payload 供两阶段及施加读取。
+		if act_type == &"PILOT_083_MODIFY_FLOW":
+			if bool(payload.get("_p083_flow_done", false)):
+				continue
+			payload["_p083_mode"] = String(act.get("params", {}).get("mode", "owner"))
+			_start_pilot_083_flow(effect, payload, action)
+			return
+		# PILOT_039_SCHEDULE_AFTER_ATTACK：铠威「被响应攻击结算后抽1再攻」被动调度（非阻塞）。
+		# ATTACK_SETTLE 时登记完成钩子：攻击动作完成（action_completed）后由 ActionService
+		# 派发 pilot_039_after_attack_completed（入队触发 + 弹确认/开窗口）。不在此弹窗，
+		# 保证「此攻击结算后」= 攻击动作完全清理完成才提示。同一次攻击只登记一次（去重守卫）。
+		if act_type == &"PILOT_039_SCHEDULE_AFTER_ATTACK":
+			_handle_pilot_039_schedule_after_attack(effect, payload, action)
+			continue
+		# RESPONDED_EQUIP_SCHEDULE_AFTER_ATTACK：铠厉「被响应→抽2装备→逐张设置/弃置获金」被动调度（非阻塞）。
+		# 与 PILOT_039_SCHEDULE_AFTER_ATTACK 同构：ATTACK_SETTLE 时登记攻击完成钩子，攻击动作完全
+		# 结算（action_completed）后由 ActionService 派发 responded_equip_after_attack_completed
+		# （入队触发+弹确认+逐张「立即设置/弃置获金(cost)」链）。通用模块不绑机师。
+		if act_type == &"RESPONDED_EQUIP_SCHEDULE_AFTER_ATTACK":
+			_handle_responded_equip_schedule_after_attack(effect, payload, action)
+			continue
+		# PILOT_060_SCHEDULE_AFTER_ATTACK：铠德「被响应→三选一」被动调度（非阻塞）。
+		# 与 PILOT_039/RESPONDED_EQUIP 同构：ATTACK_SETTLE 时登记攻击完成钩子，攻击动作完全
+		# 结算（action_completed）后由 ActionService 派发 pilot_060_after_attack_completed
+		# （入队触发 + 弹三选一）。通用模块 pilot_060_* 不绑机师。
+		if act_type == &"PILOT_060_SCHEDULE_AFTER_ATTACK":
+			_handle_pilot_060_schedule_after_attack(effect, payload, action)
+			continue
+		# HIDDEN_VIEW_AND_ACQUIRE（霍恩 pilot_046 等通用「查看隐藏装备+花费金币获取」主动效果）：
+		# Phase A 打开 hidden_card_view_panel（阻塞，可关闭=取消效果可反复再点；打开即给商店隐藏牌
+		# known_to 标记本玩家）。选中牌点「花费获取」→ Phase B 弹 choice_panel(allow_cancel=false)
+		# 选目标 RESERVE 槽（全部玩家）→ 清来源 + 重置归属 + 追加目标手牌 →
+		# _seq[SPEND_GOLD(原价), MARK_EFFECT_ONCE_PER_TURN_USED, EXECUTE_SET_EQUIP]。全通用，AI 跳过。
+		if act_type == &"HIDDEN_VIEW_AND_ACQUIRE":
+			if _handle_hidden_view_and_acquire(act, effect, payload, action):
+				return
+			continue
 		# CHOOSE_ONE：维修等二选一。inline options[] 每项含 {label, actions[]}。
 		# 玩家未选时挂起弹窗（choose_one_effect）；选了则执行对应分支 actions[]，
 		# 并把目标机甲注入效果动作的 mech_ids（EXECUTE_HP_CHANGE/EXECUTE_DAMAGE_CHANGE 读 mech_ids）。
@@ -2964,6 +7998,21 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 			var chosen_idx: int = int(payload.get("chosen_option_index", -1))
 			var params_co: Dictionary = act.get("params", {})
 			var options: Array = params_co.get("options", [])
+			# 维修增强（通用机制 REPAIR_BOOST）：维修效果执行方机师牌带 repair_boost 时，改写维修
+			# 二选一选项：移除2→合并移除(2+extra_removal)；回复4→之后额外移除 extra_removal
+			# （带 TARGET_HAS_DAMAGE 条件，无损伤不生效）。坎得 pilot_023 等机师复用。
+			# 只改本地 options（深拷贝），不写回静态 effect.actions 防全局污染。
+			if effect.effect_id == &"repair_direct":
+				var rb_binding = _make_binding_from_effect(effect, action, payload)
+				var rb_mech: StringName = rb_binding.get_source_mech_id() if rb_binding != null else &""
+				if rb_mech != &"" and context != null and context.game_state != null:
+					var rb_boost: Dictionary = _ActionPilotEffects.get_repair_boost(context.game_state, rb_mech)
+					if not rb_boost.is_empty():
+						options = _apply_repair_boost_options(options, rb_boost)
+					# 琳 pilot_024 效果2：我方对其他机甲使用维修后，我方与该机甲各抽2张行动牌
+					# （我方先抽、目标后抽，串行）。任意来源维修（转化/实体牌/维修机械臂）都走
+					# repair_direct，在此统一给各可用分支追加抽牌动作。目标读本效果 payload。
+					options = _append_pilot_024_repair_draws(options, rb_mech, payload)
 			if chosen_idx < 0 or chosen_idx >= options.size():
 				# 按目标状态过滤可用 options（option.condition 评估，如维修：目标满血->只能移除损伤，
 				# 目标无损伤->只能回复生命）。无 condition 的 option 总是可用。
@@ -3037,6 +8086,13 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 			action.record.erase("_waiting_for_choose_one")
 			action.record.erase("_choose_one_effect_id")
 			var chosen_opt: Dictionary = options[chosen_idx] if options[chosen_idx] is Dictionary else {}
+			# 通用 store_record_key：选择后将选中 option 的 value 写入父动作 record 的指定键。
+			# （格温 pilot_043 宣言抽取：GAIN_CARD_BEFORE 宣言类型 -> GAIN_CARD_AFTER 监听器读 record 检查。）
+			# 幂等：重跑 _execute_effect 时写同值，无副作用。
+			if params_co.has("store_record_key"):
+				var _srk: StringName = StringName(params_co.get("store_record_key", &""))
+				if _srk != &"":
+					action.record[_srk] = chosen_opt.get("value", chosen_opt.get("label", &""))
 			var branch_actions: Array = chosen_opt.get("actions", [])
 			var target_id_co: StringName = StringName(payload.get("target_id", payload.get("target_mech_id", &"")))
 			if target_id_co == &"":
@@ -3049,6 +8105,16 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 			var _ba_idx: int = 0
 			while _ba_idx < branch_actions.size():
 				var sub_act: Dictionary = branch_actions[_ba_idx]
+				# 通用分支动作条件（维修增强 REPAIR_BOOST 追加的额外移除等）：
+				# 分支动作带 condition 时，条件不满足则跳过该动作（防止目标无损伤时弹空移除框卡死）。
+				var _ba_cond: Variant = sub_act.get("condition", [])
+				if _ba_cond is Dictionary:
+					_ba_cond = [_ba_cond]
+				if _ba_cond is Array and not (_ba_cond as Array).is_empty():
+					var _ba_cbind = _make_binding_from_effect(effect, action, payload)
+					if not _ConditionChecker.check_all(_ba_cbind, payload, _ba_cond):
+						_ba_idx += 1
+						continue
 				# 非首个子动作前，Q3 守卫：仅当上一个子动作是 fixed_slot EXECUTE_DAMAGE_CHANGE
 				# （置损伤致来源牌弃置）时检测来源牌是否仍在 slot，是则停止剩余。
 				# effect_019（主动弃自身换动力+4）等不在此列--弃置是主动成本，后续效果应执行。
@@ -3077,11 +8143,49 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 					_ba_idx += 1
 					continue
 				# PILOT_006_FORCE_USE_ATTACK：pilot_006 e3 战后逼迫选牌 use_action_card（分支内特判，仿 CHOOSE_*）
+				# PILOT_016_SHOW_AND_CONVERT：默多克展示转化（CHOOSE_ONE 确认后分支内执行）。
+				# 阶段1：展示牌A给其他玩家（复用美杜莎 pilot_009_show_display 非阻塞浮窗）。
+				# 阶段2：选2张B/C（排除牌A）选牌窗（阻塞，phase=pilot_016_choose_two）。
+				# resume：弃置C + 改造父record(B当牌A virtual_transform) + 清空剩余 listener + mark once_per_turn。
+				# 牌A保留手牌；B 由父 card_to_temp_zone 移入 temp_zone + 注册牌A效果；父 settle 弃B。
+				if sub_type == &"PILOT_016_SHOW_AND_CONVERT":
+					if _handle_pilot_016_show_and_convert(sub_act_merged, effect, payload, action):
+						return
+					_ba_idx += 1
+					continue
 				if sub_type == &"PILOT_006_FORCE_USE_ATTACK":
 					if _handle_pilot_006_force_use_attack(sub_act_merged, effect, payload, action):
 						var _p06_remaining: Array = branch_actions.slice(_ba_idx + 1)
 						if not _p06_remaining.is_empty():
 							action.record["_seq_effect_actions"] = {"payload": payload, "remaining": _p06_remaining, "source_check": false}
+						return
+					_ba_idx += 1
+					continue
+				# PILOT_047_FORCE_USE_ATTACK / PILOT_047_FORCE_HANDOVER：里欧娜 e1 战后二选一分支
+				# （CHOOSE_ONE 内特判，仿 PILOT_006；命中弹窗则挂起，剩余分支存 _seq_effect_actions）。
+				if sub_type == &"PILOT_047_FORCE_USE_ATTACK":
+					if _handle_pilot_047_force_use_attack(sub_act_merged, effect, payload, action):
+						var _p047_remaining: Array = branch_actions.slice(_ba_idx + 1)
+						if not _p047_remaining.is_empty():
+							action.record["_seq_effect_actions"] = {"payload": payload, "remaining": _p047_remaining, "source_check": false}
+						return
+					_ba_idx += 1
+					continue
+				if sub_type == &"PILOT_047_FORCE_HANDOVER":
+					if _handle_pilot_047_force_handover(sub_act_merged, effect, payload, action):
+						var _p047h_remaining: Array = branch_actions.slice(_ba_idx + 1)
+						if not _p047h_remaining.is_empty():
+							action.record["_seq_effect_actions"] = {"payload": payload, "remaining": _p047h_remaining, "source_check": false}
+						return
+					_ba_idx += 1
+					continue
+				# PILOT_025_SELECT_RESERVE_AND_SET：约书亚 1b 选备用装备设置+抽2（分支内特判，仿 PILOT_006）。
+				# handler 挂起 reserve_select 弹窗；resume 后由 _seq 续跑 set_equipment + 抽2。
+				if sub_type == &"PILOT_025_SELECT_RESERVE_AND_SET":
+					if _handle_pilot_025_select_reserve_and_set(sub_act_merged, effect, payload, action):
+						var _p025_remaining: Array = branch_actions.slice(_ba_idx + 1)
+						if not _p025_remaining.is_empty():
+							action.record["_seq_effect_actions"] = {"payload": payload, "remaining": _p025_remaining, "source_check": false}
 						return
 					_ba_idx += 1
 					continue
@@ -3100,6 +8204,12 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 				# 顶层 for 循环有特判，此处同样需要——execute_sub_action 无工厂会静默失败。
 				if sub_type == &"REGISTER_LISTEN":
 					_register_listen_for_effect(sub_act_merged, payload, action)
+					_ba_idx += 1
+					continue
+				# PILOT_058_SHOW_COUNT_BONUS：卡米拉效果1 展示牌型加成（CHOOSE_ONE 确认后分支内执行，同步）。
+				# 顶层 for 循环有特判，此处同样需要——execute_sub_action 无工厂会静默失败。
+				if sub_type == &"PILOT_058_SHOW_COUNT_BONUS":
+					_handle_pilot_058_show_count_bonus(sub_act_merged, effect, payload, action)
 					_ba_idx += 1
 					continue
 				# FOR_EACH_TARGET 嵌套在 CHOOSE_ONE 分支内（pilot_012 e1 / pilot_013 e2a）：
@@ -3199,10 +8309,22 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 							return
 					_ba_idx += 1
 					continue
-				if sub_type in [&"EXECUTE_HP_CHANGE", &"EXECUTE_DAMAGE_CHANGE", &"HEAL_HP", &"REMOVE_DAMAGE_TOKENS", &"DEAL_DAMAGE", &"PLACE_DAMAGE_TOKENS", &"MODIFY_DAMAGE_TOKENS", &"PILOT_006_DEAL_4_DAMAGE"]:
+				# CHOOSE_MANY_CARDS 嵌套在 CHOOSE_ONE 分支内（布鲁克 effect_02 转化防御/实体防御牌）：
+				# 复用顶层多选 helper 挂起弹窗；挂起时把剩余 branch_actions 存 _seq（branch_seq 标记），
+				# resume（store_result_key 路径）优先续跑分支剩余，避免 payload["chosen_option_index"] 持久
+				# 导致重跑 _execute_actions 再次命中 CHOOSE_MANY_CARDS 挂死。取消路径由 resume 清 _seq。
+				if sub_type == &"CHOOSE_MANY_CARDS":
+					if _prompt_choose_many_cards(effect, payload, action, sub_act_merged, _act_idx):
+						var _cm_rem: Array = branch_actions.slice(_ba_idx + 1)
+						if not _cm_rem.is_empty():
+							action.record["_seq_effect_actions"] = {"payload": payload, "remaining": _cm_rem, "source_check": false, "branch_seq": true}
+						return
+					_ba_idx += 1
+					continue
+				if sub_type in [&"EXECUTE_HP_CHANGE", &"EXECUTE_DAMAGE_CHANGE", &"HEAL_HP", &"REMOVE_DAMAGE_TOKENS", &"DEAL_DAMAGE", &"PLACE_DAMAGE_TOKENS", &"MODIFY_DAMAGE_TOKENS"]:
 					if not sub_params.has("mech_ids"):
 						sub_params["mech_ids"] = [target_id_co]
-					if not sub_params.has("mech_id") and sub_type in [&"HEAL_HP", &"REMOVE_DAMAGE_TOKENS", &"DEAL_DAMAGE", &"PLACE_DAMAGE_TOKENS", &"MODIFY_DAMAGE_TOKENS", &"PILOT_006_DEAL_4_DAMAGE"]:
+					if not sub_params.has("mech_id") and sub_type in [&"HEAL_HP", &"REMOVE_DAMAGE_TOKENS", &"DEAL_DAMAGE", &"PLACE_DAMAGE_TOKENS", &"MODIFY_DAMAGE_TOKENS"]:
 						sub_params["mech_id"] = target_id_co
 					sub_act_merged["params"] = sub_params
 				# 解析 params 的 $-占位符与 *_expr（仿 CHOOSE_INTEGER 分支）：CHOOSE_ONE 分支此前
@@ -3235,6 +8357,10 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 					return
 				_ba_idx += 1
 			continue
+		# ── 琳 RE 维修窗口关闭钩子（同步分支路径）──
+		# 维修二选一分支全部执行完毕（未挂起）：窗口内维修完成时关闭窗口并恢复请求方回合。
+		# 分支挂起（如移除损伤面板）的关闭由 _continue_seq_effect_actions 末尾统一处理。
+		_pilot_024_close_if_window_repair_done(effect, payload, action)
 		# CHOOSE_INTEGER：整数选择窗（effect_040/041 金币换动力）。选定后展开嵌套 actions 的
 		# *_expr（$choice.n + $binding_context + 算术），执行。
 		if act_type == &"CHOOSE_INTEGER":
@@ -3272,6 +8398,7 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 						"bind_as": ci_bind_as,
 						"optional": ci_optional,
 						"stepper": bool(ci_params.get("stepper", false)),
+						"step": int(ci_params.get("step", 3)),
 						"player_id": _effect_popup_owner_pid(effect, payload, action),
 					})
 					return
@@ -3417,72 +8544,18 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 		# CHOOSE_MANY_CARDS：推进 effect2 多选弹窗。持有者使用迎击牌时，列出手牌所有推进供多选，
 		# 确认后逐张执行 per_card_actions 并弃置，再继续迎击牌。AI 由 ActionUIBridge 自动全选。
 		if act_type == &"CHOOSE_MANY_CARDS":
-			var cm_params: Dictionary = act.get("params", {})
-			var cm_source: StringName = cm_params.get("source", &"HAND_CARDS")
-			var cm_bind_ctx: Dictionary = payload.get("binding_context", {})
-			var cm_player_id: StringName = payload.get("player_id", cm_bind_ctx.get("player_id", &""))
-			var cm_card_ids: Array = []
-			if cm_source == &"ATTACK_TARGET_EQUIPMENT":
-				# 收集攻击目标机甲正面设置、未压制的装备牌（供 effect_063/078 选目标装备无效）
-				var tgt_mech_id: StringName = payload.get("target_id", cm_bind_ctx.get("target_id", &""))
-				cm_player_id = cm_bind_ctx.get("player_id", cm_player_id)  # 弹窗给攻击方（效果持有者）
-				if tgt_mech_id != &"" and context != null and context.game_state != null:
-					var tgt_mech = context.game_state.mechs.get(tgt_mech_id)
-					if tgt_mech != null:
-						for sid in tgt_mech.slots:
-							var tslot = tgt_mech.slots[sid]
-							if tslot == null:
-								continue
-							var ec = tslot.get("equipped_card")
-							if ec == null or ec.def == null:
-								continue
-							if ec.get("face_down") == true or ec.get("disabled") == true or ec.get("effect_negated") == true:
-								continue
-							cm_card_ids.append(ec.instance_id)
-			else:
-				# 默认：收集手牌中所有该 card_def_id 的牌（推进/掩护）
-				var cm_card_def_id: StringName = cm_params.get("card_def_id", &"")
-				if cm_player_id != &"" and context != null and context.game_state != null:
-					var cm_player = context.game_state.players.get(cm_player_id)
-					if cm_player != null:
-						for hand_cid: StringName in cm_player.action_hand:
-							var hand_card = context.game_state.get_card(hand_cid)
-							if hand_card != null and hand_card.def != null and String(hand_card.def.card_id) == String(cm_card_def_id):
-								cm_card_ids.append(hand_cid)
-			# OWNER_ACTION_HAND：列出持有者所有行动牌（赤枭躯干 effect_040/041 弃牌换动力）
-			# 不按 card_def_id 过滤，整手行动牌供多选弃置。
-			if cm_source == &"OWNER_ACTION_HAND":
-				cm_card_ids.clear()
-				if cm_player_id != &"" and context != null and context.game_state != null:
-					var cm_player = context.game_state.players.get(cm_player_id)
-					if cm_player != null:
-						for hand_cid: StringName in cm_player.action_hand:
-							cm_card_ids.append(hand_cid)
-			if cm_card_ids.is_empty():
-				continue  # 无牌可选，跳过
-			# 仅人类玩家弹多选窗；AI 暂不支持（跳过=选0，避免挂死）
-			var cm_mech_id: StringName = payload.get("source_mech_id", cm_bind_ctx.get("mech_id", &""))
-			if _is_ai_owner(cm_player_id, cm_mech_id):
-				continue
-			# 去重守卫：同一动作只弹一次（多张共享一个监听，首个挂起后循环已中断）
-			if action.record.get("_choose_many_shown", false):
-				continue
-			action.record["_choose_many_shown"] = true
-			_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": "choose_many_cards", "choose_many_action": act, "act_idx": _act_idx}
-			action.state = &"waiting_timing"
-			action_needs_input.emit(action.action_id, &"select_thrust_cards", {
-				"action_id": action.action_id,
-				"effect_id": effect.effect_id,
-				"card_ids": cm_card_ids,
-				"player_id": cm_player_id,
-				"label": String(cm_params.get("label", "选择要打出的牌")),
-				"per_card_suffix": String(cm_params.get("per_card_suffix", "")),
-				"confirm_verb": String(cm_params.get("confirm_verb", "打出")),
-				"cancel_label": String(cm_params.get("cancel_label", "不打出")),
-				"max_count": int(cm_params.get("max_count", 0)),
-			})
-			SLog.log_raw("[TIMING] %s 挂起多选 effect=%s 候选=%d" % [String(action.action_id), String(effect.effect_id), cm_card_ids.size()])
-			return
+			if _prompt_choose_many_cards(effect, payload, action, act, _act_idx):
+				return
+			continue
+		# PEEK_DECK_TOP_AND_DISCARD（通用"窥视牌堆顶并弃置"模块，银雪 pilot_065 effect_02）：
+		# 第1阶段单选我方1张行动牌作代价（可取消=不发动）-> 弃置代价 -> 第2阶段窥视行动牌堆顶 N 张
+		# 多选弃置（可不选，剩余保持原顺序置顶）。代价弃置/堆顶弃置均走 EXECUTE_DISCARD 子动作
+		# （触发弃置时点，与其它"弃置后"效果联动）。无行动牌/AI -> 跳过。
+		# PEEK_DECK_SHOW 哨兵（第2阶段窥视）由 _seq 续跑触发。
+		if act_type == &"PEEK_DECK_TOP_AND_DISCARD":
+			if _handle_peek_select_cost(effect, payload, action, act):
+				return
+			continue
 		# CHOOSE_MANY_PLAYERS：pilot_003 effect_03 复选框——列出所有玩家（含自己），
 		# 勾选"抽牌跳过正面牌"的玩家，提交后生效（裁定权威"重要补充"）。resume 走
 		# phase=pilot_003_skip_players，用 player_ids 整组覆盖该瑟尔基尔来源的跳过集合。
@@ -3559,9 +8632,108 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 			})
 			SLog.log_raw("[TIMING] %s 挂起联合攻击选牌 effect=%s 候选=%d" % [String(action.action_id), String(effect.effect_id), uao_card_ids.size()])
 			return
+		# PILOT_027_SPLIT_GOLD：维罗妮卡效果1 获金分半（同步结算，不挂起）
+		if act_type == &"PILOT_027_SPLIT_GOLD":
+			_handle_pilot_027_split_gold(act, effect, payload, action)
+			continue
+		# PILOT_027_X_INC：维罗妮卡效果2 给予金币X+1（同步结算，不挂起）
+		if act_type == &"PILOT_027_X_INC":
+			_handle_pilot_027_x_inc(act, effect, payload, action)
+			continue
+		# PILOT_027_GIFT_AND_USE：维罗妮卡效果3 给予金币并使用行动牌（多阶段状态机，挂起）
+		if act_type == &"PILOT_027_GIFT_AND_USE":
+			if _handle_pilot_027_gift_and_use(act, effect, payload, action):
+				return
+			continue
+		# PILOT_028_DECLARE：乌尔效果1 宣言（每轮 ROUND_START，弹三选一可取消，挂起等输入）
+		if act_type == &"PILOT_028_DECLARE":
+			if _handle_pilot_028_declare(act, effect, payload, action):
+				return
+			continue
+		# PILOT_028_FORCE_TRIBUTE：乌尔效果2 需交牌（USE_ACTION_AT，弹交给牌窗挂起等输入）
+		if act_type == &"PILOT_028_FORCE_TRIBUTE":
+			if _handle_pilot_028_force_tribute(act, effect, payload, action):
+				return
+			continue
+		# PILOT_028_X_INC：乌尔效果3 X+1（USE_ACTION_AT，同步结算，不挂起）
+		if act_type == &"PILOT_028_X_INC":
+			_handle_pilot_028_x_inc(act, effect, payload, action)
+			continue
+		# PILOT_058_SHOW_COUNT_BONUS：卡米拉效果1 展示牌型加成（同步结算，不挂起）。
+		# 正常在 CHOOSE_ONE 分支内执行；此处顶层防御供复用者直接置于效果动作顶层。
+		if act_type == &"PILOT_058_SHOW_COUNT_BONUS":
+			_handle_pilot_058_show_count_bonus(act, effect, payload, action)
+			continue
+		# VIEW_RANDOM_OTHER_HAND_CARDS：通用「随机查看其他机甲行动牌+类型加成」模块（骇客 pilot_066）。
+		# LISTEN BASIC_MOVE_AFTER 触发：范围内持行动牌其他机甲目标选择（挂起），选定后随机查看
+		# view_count 张 + 展示浮窗 + 类型加成链（确认才 MARK 计次）。取消/无目标不计数。
+		if act_type == &"VIEW_RANDOM_OTHER_HAND_CARDS":
+			if _handle_view_random_other_hand(act, effect, payload, action):
+				return
+			continue
+		# PILOT_059_TURN_START_FLOW：薇尔效果1 回合开始损伤调整+分支（多阶段挂起）。
+		# 首次弹损伤调整面板（phase=pilot_059_adjust 由 resume_pending_effect 续跑），挂起即 return。
+		if act_type == &"PILOT_059_TURN_START_FLOW":
+			if _handle_pilot_059_turn_start_flow(act, effect, payload, action):
+				return
+			continue
 		# PILOT_006_FORCE_USE_ATTACK：pilot_006 e3 战后逼迫选牌（顶层防御；正常在 CHOOSE_ONE 分支内特判）
 		if act_type == &"PILOT_006_FORCE_USE_ATTACK":
 			if _handle_pilot_006_force_use_attack(act, effect, payload, action):
+				return
+			continue
+		# PILOT_047_FORCE_USE_ATTACK / PILOT_047_FORCE_HANDOVER：里欧娜 e1（顶层防御；正常在 CHOOSE_ONE 分支内特判）
+		if act_type == &"PILOT_047_FORCE_USE_ATTACK":
+			if _handle_pilot_047_force_use_attack(act, effect, payload, action):
+				return
+			continue
+		if act_type == &"PILOT_047_FORCE_HANDOVER":
+			if _handle_pilot_047_force_handover(act, effect, payload, action):
+				return
+			continue
+		# POWER_SPEND_TAX：通用「动力税」（杰西卡 pilot_050 e1/e1b；复用=复制定义改参数）。
+		# 监听其他机甲动力消耗（BASIC_MOVE_AT 移动 / power_spent 虚拟时点非移动消耗），
+		# 范围内每累计消耗 threshold 点弹确认窗，确认 -> 该机甲与我方各受 damage 伤害。
+		if act_type == &"POWER_SPEND_TAX":
+			if _handle_power_spend_tax(act, effect, payload, action):
+				return
+			continue
+		# POWER_TAX_TRIBUTE：通用「受伤 X+1 + 弃双方行动牌」状态机（杰西卡 pilot_050 e2）。
+		# 确认 -> X+1（先于范围计算）+ mark 每回合1次 -> 按新X选范围内其他机甲（无候选仅X+1）
+		# -> 我方/目标各弃 discard_count 张行动牌（chooser 均为我方，目标牌背面）。
+		if act_type == &"POWER_TAX_TRIBUTE":
+			if _handle_power_tax_tribute(act, effect, payload, action):
+				return
+			continue
+		# INJURY_HEAL_DRAW：通用「范围内受伤→确认→回复生命+抽行动牌」状态机（芮贝卡 pilot_078）。
+		# 监听 HP_CHANGE_SETTLE 实际掉血；确认弹窗给持有者 -> 回血+抽牌串行链（_seq_effect_actions）。
+		# 完成后哨兵 _injury_heal_draw_done 置位，重跑幂等。
+		if act_type == &"INJURY_HEAL_DRAW":
+			if bool(payload.get("_injury_heal_draw_done", false)):
+				continue
+			if _handle_injury_heal_draw(act, effect, payload, action):
+				return
+			continue
+		# ATTACK_SETTLE_DRAW_REATTACK：通用「范围内攻击结算→抽牌+每回合1次弃X再开攻击窗口」状态机
+		# （维奥拉 pilot_077 等）。监听 ATTACK_SETTLE（条件已校验攻击方在 base_range 内含自身）：
+		# 触发先抽 draw_count 张行动牌（强制），再每回合1次弹多选窗弃 discard_count 张（可取消不计次数）
+		# -> 给攻击方开凯威攻击窗口。哨兵 _attack_settle_draw_reattack_done 置位，重跑幂等。
+		if act_type == &"ATTACK_SETTLE_DRAW_REATTACK":
+			if bool(payload.get("_attack_settle_draw_reattack_done", false)):
+				continue
+			if _handle_attack_settle_draw_reattack(act, effect, payload, action):
+				return
+			continue
+		# PILOT_018_RESPOND_DISCARD：苔丝 effect_01b 迎击后弃攻击方牌。
+		# 两阶段弹窗：①CHOOSE_ONE 选弃2行动牌/1损伤≥2装备牌；②根据选择弹选牌窗（或直接弃）。
+		# 弃置后若弃的是本次攻击武器牌，attack_action._step_check_hit 检测 _weapon_still_held 失败 -> 未命中。
+		if act_type == &"PILOT_018_RESPOND_DISCARD":
+			if _handle_pilot_018_respond_discard(act, effect, payload, action):
+				return
+			continue
+		# PILOT_025_SELECT_RESERVE_AND_SET：约书亚 1b 选备用装备设置+抽2（顶层防御；正常在 CHOOSE_ONE 分支内特判）
+		if act_type == &"PILOT_025_SELECT_RESERVE_AND_SET":
+			if _handle_pilot_025_select_reserve_and_set(act, effect, payload, action):
 				return
 			continue
 		# PILOT_009_PAY_AND_RECORD_TYPE：美杜莎弹窗① 支付+记录类型。
@@ -3631,6 +8803,143 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 			})
 			SLog.log_raw("[TIMING] %s 挂起 pilot_009 支付选牌 effect=%s 展示牌=%d" % [String(action.action_id), String(effect.effect_id), p9_display_cards.size()])
 			return
+		# PILOT_088_CONQUER：征服宣言弃置（DIRECT 主动按钮，多阶段挂起模块）。
+		# 首次：弹 select_mech_target 选3格内持有行动牌的其他机甲（valid_mech_ids 过滤，取消=不计次不消耗）。
+		# 选定目标经 resume(phase=pilot_088_target)：消耗每回合1次 + 弹三选一类型（攻击/迎击/辅助，
+		# 不可取消）→ resume(phase=pilot_088_type)：随机展示+类型匹配弃置（_pilot_088_finish_conquer）。
+		if act_type == &"PILOT_088_CONQUER":
+			if _handle_pilot_088_conquer(act, effect, payload, action):
+				return
+			continue
+		# PILOT_051_INTERCEPT_EVENT_SET：李 e2「拦截事件牌设置」（LISTEN EVENT_SET_BEFORE，
+		# 每局1次，通用件不绑机师）。此时新牌已入区、效果未注册：弹窗三选（弃置/转设我方/取消
+		# 不计次），确认后写中止旗 + 摘牌 + _seq 分支（见 _handle_pilot_051_intercept）。
+		if act_type == &"PILOT_051_INTERCEPT_EVENT_SET":
+			if _handle_pilot_051_intercept(act, effect, payload, action):
+				return
+			continue
+		# PILOT_080_MARKER_INTERACT：墨尘 e1「相邻标记交互」（DIRECT 按钮，通用件不绑机师）。
+		# 前置 CHOOSE_MAP_CELL 已选相邻标记格；弹窗二选一（移去 / 移至该格后标记再生效2次，
+		# 可取消）。移至分支 _seq：免费基础移动 -> 标记第1次生效 -> 完全结束后第2次生效。
+		if act_type == &"PILOT_080_MARKER_INTERACT":
+			if _handle_pilot_080_marker_interact(act, effect, payload, action):
+				return
+			continue
+		# PILOT_014_SELECT_TARGET_PILOT_AND_GRANT：亚伦弹窗选场上机师牌施加行动牌上限+2。
+		# 首次：收集场上所有机师牌(含自己+所有玩家，mech 未 destroyed)，弹列表选框(每项显示机师名+行动牌上限)，
+		#   玩家选1个确定 -> resume grant_pilot_014_bonus + 续跑 _execute_effect(1320 自动 mark once_per_turn)；
+		#   取消 -> 中止不计次数。重跑幂等：payload.pilot_014_granted 已置则跳过(已施加，续跑 mark 路径)。
+		if act_type == &"PILOT_014_SELECT_TARGET_PILOT_AND_GRANT":
+			if payload.has("pilot_014_granted"):
+				continue
+			var p014_params: Dictionary = act.get("params", {})
+			var p014_optional: bool = bool(p014_params.get("optional", true))
+			var p014_bind: Dictionary = payload.get("binding_context", {})
+			var p014_src_pid: StringName = p014_bind.get("player_id", &"")
+			var p014_options: Array = []
+			if context != null and context.game_state != null:
+				for p014_mid: StringName in context.game_state.mechs:
+					var p014_m = context.game_state.mechs[p014_mid]
+					if p014_m == null or p014_m.destroyed:
+						continue
+					var p014_slot = p014_m.slots.get(&"pilot")
+					if p014_slot == null or p014_slot.equipped_card == null:
+						continue
+					var p014_pcard = p014_slot.equipped_card
+					var p014_player = context.game_state.get_player_for_mech(p014_mid)
+					var p014_limit: int = int(p014_player.action_card_limit) if p014_player != null else 0
+					var p014_pname: String = String(p014_pcard.def.display_name) if p014_pcard.def != null else "?"
+					p014_options.append({
+						"label": "%s（%s）  行动牌上限 %d" % [p014_pname, String(p014_m.owner_player_id), p014_limit],
+						"effect_id": p014_pcard.instance_id,
+						"pilot_instance": p014_pcard.instance_id,
+						"player_id": p014_m.owner_player_id,
+						"mech_id": p014_mid,
+					})
+			if p014_options.is_empty():
+				SLog.log_raw("[TIMING] %s pilot_014 场上无机师牌，跳过 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+				if context.action_engine != null:
+					action.state = &"waiting_input"
+					context.action_engine.continue_action(action.action_id, {})
+				continue
+			_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"pilot_014_select"}
+			action.state = &"waiting_timing"
+			action_needs_input.emit(action.action_id, &"pilot_014_target_select", {
+				"action_id": action.action_id,
+				"effect_id": effect.effect_id,
+				"options": p014_options,
+				"optional": p014_optional,
+				"executor": p014_src_pid,
+				"player_id": p014_src_pid,
+				"source_label": "亚伦：选择1张机师牌，使其行动牌上限+2",
+			})
+			SLog.log_raw("[TIMING] %s 挂起 pilot_014 选机师牌 effect=%s 候选=%d" % [String(action.action_id), String(effect.effect_id), p014_options.size()])
+			return
+		# PILOT_032_SELECT_TARGET_PILOT_AND_GRANT：爱瑞娅 弃1张行动牌 + 选场上机师牌 施加行动牌上限+2。
+		# 两阶段：先弹弃牌窗（pilot_032_pay，可取消=中止不计次数）确认弃牌，再弹选机师窗
+		# （pilot_032_select，可取消=已弃牌不返还、不计次数）。重跑幂等：pilot_032_paid 跳过弃牌、
+		# pilot_032_granted 跳过全部（完成手动 mark once_per_turn）。
+		# 阶段①弃牌后直接续跑到阶段②（不重跑 _execute_effect），避免 HAS_ACTION_CARD_IN_HAND
+		# 因手牌变空在重查条件时误判失败。
+		if act_type == &"PILOT_032_SELECT_TARGET_PILOT_AND_GRANT":
+			if payload.has("pilot_032_granted"):
+				continue
+			var p032_params: Dictionary = act.get("params", {})
+			var p032_discard_count: int = int(p032_params.get("discard_count", 0))
+			if p032_discard_count > 0 and not payload.has("pilot_032_paid"):
+				if _pilot_032_show_discard_pay(effect, payload, action, p032_params):
+					return
+				continue  # 无可弃行动牌兜底中止（条件已置灰按钮，此处双保险）
+			if _pilot_032_show_pilot_select(effect, payload, action, p032_params):
+				return
+			continue  # 场上无机师牌兜底中止
+		# PILOT_019_DISCARD_CHAIN：肯耳忒 缴械冲击 弃牌链。
+		# 阶段机状态存 action.record["_pilot_019_chain"]，跨多个输入窗口（目标多选 → 支付选牌 →
+		# 逐目标暗牌弃牌 X+1 → 清空判4伤害）。首次：防御校验（手牌≥1 + 4格内有其他机甲），
+		# 失败 -> deferred abort（不消耗 once_per_turn）；成功 -> 弹目标多选窗挂起。
+		# 重跑幂等：_pilot_019_chain 已置则跳过（链内续跑全走 resume_pending_effect 各 phase /
+		# ActionEngine._after_sub_action_finished -> _continue_pilot_019_chain，不重跑本拦截）。
+		if act_type == &"PILOT_019_DISCARD_CHAIN":
+			if action.record.has("_pilot_019_chain"):
+				continue
+			if _pilot_019_begin(action, effect, payload):
+				return  # 已挂起（弹目标选择窗 或 deferred abort）
+			continue
+		# PILOT_020_ACTIVE_DISCARD：肯德 效果1 主动弃任意张行动牌。
+		# 首次：手牌非空校验（条件已查 HAS_ACTION_CARD_IN_HAND，此处兜底）-> 弹 thrust_select 多选窗挂起；
+		#   取消/空选在 resume 阶段走 _pilot_020_abort_resume（不消耗 once_per_turn）。
+		# 选定 -> EXECUTE_DISCARD 子动作（DISCARD_SETTLE 触发 effect_02 计数计入 X），
+		#   子动作完成后由 _after_sub_action_finished -> _continue_pilot_020_active 手动 mark once_per_turn。
+		if act_type == &"PILOT_020_ACTIVE_DISCARD":
+			if _pilot_020_begin_active_discard(action, effect, payload):
+				return
+			continue
+		# PILOT_020_COUNT_DISCARD：肯德 效果2 弃置计数（LISTEN DISCARD_SETTLE）。
+		# 按快照 from_zone=="action_hand" && 牌归属肯德玩家 计数（使用牌 temp_zone 天然排除；
+		# 回合超限/预判/肯特/肯耳忒弃的牌也走 discard_card -> DISCARD_SETTLE 计入）。
+		# X≥2 时护甲+3 动力+3（上限+当前，cap_bonus 补满），每回合只触发一次。
+		if act_type == &"PILOT_020_COUNT_DISCARD":
+			_pilot_020_count_discard(effect, payload, action)
+			continue
+		# PILOT_020_DRAW_X：肯德 效果4 回合结束后抽 min(X,6) 张行动牌（LISTEN TURN_AFTER_END）。
+		if act_type == &"PILOT_020_DRAW_X":
+			_pilot_020_draw_x(effect, payload, action)
+			continue
+		# PILOT_085_DISCARD_GOLD：莽克 效果1 弃装获金（LISTEN DISCARD_SETTLE）。
+		# 按快照统计「原先正面设置在机甲上」的装备牌：原先属莽克机甲每张+4金、其他机甲每张+3金，
+		# 累加后一次通用获金（ga.gain_gold，自动 fire GAIN_GOLD_AFTER 时点）。
+		if act_type == &"PILOT_085_DISCARD_GOLD":
+			_pilot_085_discard_gold(effect, payload, action)
+			continue
+		# PILOT_086_DICE_BRANCH：獠鼠 效果1 攻击骰子分支（LISTEN ATTACK_PRE）。
+		# 首次：弹「发动/取消」二选一确认窗挂起（_pending_effect phase=pilot_086_confirm）；
+		# 取消=不发动；确认=掷骰后按点数分支出 _seq 动作链串行执行。_pilot_086_done 防重跑。
+		if act_type == &"PILOT_086_DICE_BRANCH":
+			if bool(action.record.get("_pilot_086_done", false)) or bool(payload.get("_pilot_086_done", false)):
+				continue
+			if _pilot_086_dice_branch(effect, payload, action):
+				return
+			continue
 		# DRAW_EQUIPMENT_AND_IMMEDIATELY_SET / DRAW_EQUIPMENT_AND_CHOOSE_SET_OR_SELL 伪动作：
 		# 抽装备立即设置(或卖出)。可作顶层 action（effect_005 联邦左臂/近战左腿离场诱发），也可嵌套在
 		# CHOOSE_ONE 分支内（effect_065 王牌臂外层 optional CHOOSE_ONE）。嵌套时走 execute_sub_action
@@ -3683,6 +8992,18 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 			if _handle_choose_many_map_cells(act, effect, payload, action):
 				return
 			continue
+		# GAIN_GOLD_BY_DIE（事件牌宝藏 e011 等通用）：投1骰子按区间查表获金。
+		# params: {player_id, reason, branches: [[min,max,amount],...]}。同步执行不挂起
+		# （roll_d6 走 context.rng 同步随机，双端同种子锁步；gain_gold 走 GameActions 原子）。
+		if act_type == &"GAIN_GOLD_BY_DIE":
+			_handle_gain_gold_by_die(act.get("params", {}), payload, action)
+			continue
+		# DRAW_PILOT_SET_TO_SLOT_OR_DECK_BOTTOM（事件牌招募 e008 等通用）：从机师牌堆抽1张，
+		# 弹"设置到机师区域 / 放回牌堆底"选择（互斥；不设置必须放牌堆底）。挂起 phase=pilot_draw_place。
+		if act_type == &"DRAW_PILOT_SET_TO_SLOT_OR_DECK_BOTTOM":
+			if _handle_draw_pilot_place(effect, payload, action):
+				return
+			continue
 		# pilot_003 e02 串行化（问题2）：正面牌因 gain_card/discard_card 离堆时延迟到 cause 动作 SETTLE。
 		# 此动作作为 cause 动作子动作，逐张串行执行判定（可用->use_action_card / 不可用->弃置+补偿抽），
 		# 使父级动作（如攻击中抽牌）等待判定完成。_run_p003_deferred_judgment 设 _seq 并启动首个子动作。
@@ -3691,6 +9012,13 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 				context.action_service._run_p003_deferred_judgment(action, payload)
 			# 子动作挂起 -> cause 动作被 fire_timing 置 waiting_effect_action，_seq 已由 Service 设好，保留并返回
 			if _last_created_sub_action_paused(action):
+				return
+			continue
+		# pilot_021 塔莉娅 effect_01：抽3张行动牌打"禁"标签 + 循环赐予（选机甲->选牌->转移）。
+		# 循环状态存 action.record["_pilot_021_loop"]；挂起时 _pending_effect 记 phase 指针，
+		# resume 后按 phase 分发（pilot_021_choose_mech/pilot_021_choose_cards）续跑循环。
+		if act_type == &"PILOT_021_LOOP_DEAL":
+			if _handle_pilot_021_loop_deal(act, effect, payload, action):
 				return
 			continue
 		# 委托给 ActionService 执行效果动作
@@ -3722,12 +9050,13 @@ func _handle_draw_equipment_pseudo(act_type: StringName, act_params: Dictionary,
 	var deis_bind_ctx: Dictionary = payload.get("binding_context", {})
 	var deis_mech_id: StringName = deis_bind_ctx.get("mech_id", payload.get("mech_id", payload.get("source_mech_id", &"")))
 	var deis_player_id: StringName = deis_bind_ctx.get("player_id", &"")
+	var deis_reason: StringName = StringName(String(act_params.get("reason", "effect_065_draw_and_set")))
 	var deis_drawn_id: StringName = &""
 	if deis_player_id != &"" and context != null and context.action_service != null:
 		# 走 gain_card 动作拿 GAIN_CARD 时点（gain_card 委托 draw_equipment_cards 自动 append+owner+hook）
 		context.action_service.execute(&"gain_card", {
 			"from_zone": &"equipment_deck", "card_kind": &"equipment", "count": 1,
-			"player_id": deis_player_id, "reason": &"effect_065_draw_and_set"
+			"player_id": deis_player_id, "reason": deis_reason
 		})
 		if context.game_state != null:
 			var deis_player = context.game_state.players.get(deis_player_id)
@@ -3736,6 +9065,13 @@ func _handle_draw_equipment_pseudo(act_type: StringName, act_params: Dictionary,
 	if deis_drawn_id == &"":
 		SLog.log_raw("[TIMING] %s %s 牌堆为空，无牌可抽" % [String(action.action_id), String(act_type)])
 		return &"skip"
+	# only_off_turn=true（事件牌增援等"我方回合外抽到的装备不立即设置则直接弃置"语义）：
+	# 我方回合内（owner 是当前回合玩家）抽到的装备牌留装备手牌（回合结束统一弃未设置装备），
+	# 不弹"立即设置"窗；我方回合外继续走立即设置/弃置流程。
+	if bool(act_params.get("only_off_turn", false)) and context != null and context.game_state != null:
+		if context.game_state.active_player_id == deis_player_id:
+			SLog.log_raw("[TIMING] %s %s 我方回合内抽取，装备牌留手牌（only_off_turn）effect=%s" % [String(action.action_id), String(act_type), String(effect.effect_id)])
+			return &"skip"
 	# 算合法设置槽位（PART->对应槽位+备用区，WEAPON->武器槽+备用区；含已占用槽允许替换）
 	var deis_valid_slots: Array = []
 	if context != null and context.game_state != null and deis_mech_id != &"":
@@ -3793,6 +9129,255 @@ func _handle_draw_equipment_pseudo(act_type: StringName, act_params: Dictionary,
 	return &"suspend"
 
 
+## GAIN_GOLD_BY_DIE（事件牌宝藏 e011 等通用）：投1骰子按区间查表获金。
+## params: {player_id, reason, branches: [[min,max,amount],...]}。同步执行不挂起：
+## roll_d6 走 context.rng（双端同种子锁步），gain_gold 走 GameActions 原子（发 GAIN_GOLD_AFTER）。
+func _handle_gain_gold_by_die(gb_params: Dictionary, payload: Dictionary, action) -> void:
+	if context == null or context.game_actions == null:
+		return
+	var asvc = context.action_service if context != null else null
+	var gb_bind_ctx: Dictionary = payload.get("binding_context", {})
+	var gb_player_id: StringName = gb_bind_ctx.get("player_id", payload.get("player_id", &""))
+	var gb_pid_raw = gb_params.get("player_id", &"")
+	if String(gb_pid_raw).begins_with("$") and asvc != null:
+		var gb_resolved = asvc._resolve_atomic_value(gb_pid_raw, payload, action)
+		gb_player_id = gb_resolved if gb_resolved is StringName else StringName(str(gb_resolved))
+	elif String(gb_pid_raw) != "":
+		gb_player_id = StringName(String(gb_pid_raw))
+	if gb_player_id == &"":
+		SLog.log_raw("[TIMING] %s GAIN_GOLD_BY_DIE 无 player_id，跳过" % String(action.action_id))
+		return
+	var gb_roll: int = context.game_actions.roll_d6({})
+	var gb_amount: int = 0
+	var gb_branches: Array = gb_params.get("branches", [])
+	for gb_branch in gb_branches:
+		if gb_branch is Array and gb_branch.size() >= 3 \
+				and int(gb_branch[0]) <= gb_roll and gb_roll <= int(gb_branch[1]):
+			gb_amount = int(gb_branch[2])
+			break
+	if gb_amount > 0:
+		context.game_actions.gain_gold({
+			"player_id": gb_player_id, "amount": gb_amount,
+			"reason": StringName(String(gb_params.get("reason", "gain_gold_by_die"))),
+		})
+	context.game_state.write_log(&"event_die_gold", {
+		"player_id": String(gb_player_id),
+		"die": gb_roll,
+		"amount": gb_amount,
+		"reason": String(gb_params.get("reason", "")),
+	})
+	SLog.log_raw("[TIMING] %s GAIN_GOLD_BY_DIE 骰子=%d -> %s 获%d金" % [String(action.action_id), gb_roll, String(gb_player_id), gb_amount])
+
+
+## ══ 李 pilot_051 e2「拦截事件牌设置」（通用件，不绑机师）══
+## LISTEN EVENT_SET_BEFORE（handler 先行翻转：此时新牌已入目标机甲事件区、效果未注册）。
+## 人类拥有者弹三选一窗：0=弃置（该牌后续流程空跑、效果不生效）/ 1=转设到我方机甲事件区
+##（完整设置-生效流程，顶掉我方旧事件牌）/ 取消=不发动不消耗本局1次。
+## 确认/取消路径见 resume_pending_effect 的 pilot_051_intercept 分支。
+func _handle_pilot_051_intercept(_act: Dictionary, effect, payload: Dictionary, action) -> bool:
+	if context == null or context.game_state == null:
+		return false
+	# 去重：同一次设置动作只弹一次窗（resume 经 _pending_effect 直达，不走重跑）
+	if action.record.has("_pilot_051_intercept_shown"):
+		return false
+	var p051_card_id: StringName = payload.get("event_card_id", &"")
+	var p051_target_mid: StringName = payload.get("mech_id", payload.get("source_mech_id", &""))
+	var p051_card = context.game_state.get_card(p051_card_id) if p051_card_id != &"" else null
+	var p051_target_mech = context.game_state.mechs.get(p051_target_mid) if p051_target_mid != &"" else null
+	if p051_card == null or p051_target_mech == null:
+		return false
+	# 防御：新牌须确已入目标机甲事件区（EVENT_SET_BEFORE 在放置步骤后 fire）
+	var p051_slot = p051_target_mech.slots.get(&"event")
+	if p051_slot == null or p051_slot.equipped_card != p051_card:
+		return false
+	var p051_bind_ctx: Dictionary = payload.get("binding_context", {})
+	var p051_owner_pid: StringName = p051_bind_ctx.get("player_id", &"")
+	if p051_owner_pid == &"":
+		return false
+	action.record["_pilot_051_intercept_shown"] = true
+	var p051_card_name: String = String(p051_card.def.display_name) if p051_card.def != null else String(p051_card_id)
+	var p051_target_label: String = String(p051_target_mid)
+	# frame_def 是 MechFrameDef 对象（非 Dictionary），Object.get() 不支持双参默认值，直接读属性
+	if p051_target_mech.frame_def != null and p051_target_mech.frame_def.display_name != "":
+		p051_target_label = p051_target_mech.frame_def.display_name
+	_pending_effect[action.action_id] = {
+		"action": action, "effect": effect, "payload": payload, "phase": &"pilot_051_intercept",
+	}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"choose_one_effect", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"options": [
+			{"label": "弃置该事件牌（其效果不生效）", "effect_id": &"option_0", "option_index": 0},
+			{"label": "将该事件牌转设到我方区域（顶掉我方旧事件牌）", "effect_id": &"option_1", "option_index": 1},
+		],
+		"optional": true,
+		"executor": p051_owner_pid,
+		"player_id": p051_owner_pid,
+		"source_label": "李：拦截事件牌「%s」→ 设置到 %s（本局1次，取消不消耗）" % [p051_card_name, p051_target_label],
+	})
+	SLog.log_raw("[TIMING] %s 挂起 pilot_051 拦截窗 effect=%s 牌=%s 目标=%s" % [String(action.action_id), String(effect.effect_id), String(p051_card_id), String(p051_target_mid)])
+	return true
+
+
+## ══ 墨尘 pilot_080 e1「相邻标记交互」（通用件，不绑机师）══
+## DIRECT 按钮，前置 CHOOSE_MAP_CELL 已选相邻标记格。弹二选一窗：
+##   0=移去（整格标记全部移除，不触发）/ 1=移至该格（免费基础移动，移到后该格标记再生效2次）
+##   / 取消=不发动（本效果无次数限制）。移至分支的 _seq 构造见 resume pilot_080_choice 分支。
+func _handle_pilot_080_marker_interact(act: Dictionary, effect, payload: Dictionary, action) -> bool:
+	if context == null or context.game_state == null or context.game_state.map_state == null:
+		return false
+	# 去重：同一次按钮动作只弹一次窗
+	if action.record.has("_pilot_080_choice_shown"):
+		return false
+	var p080_params: Dictionary = act.get("params", {})
+	var p080_cell_key: StringName = p080_params.get("cell_key", &"pilot_080_cell")
+	var p080_cell: String = String(payload.get(p080_cell_key, ""))
+	if p080_cell == "":
+		return false
+	var p080_parts := p080_cell.split(",")
+	var p080_q: int = int(p080_parts[0]) if p080_parts.size() >= 1 else 0
+	var p080_r: int = int(p080_parts[1]) if p080_parts.size() >= 2 else 0
+	# 防御：格上已无标记（选格与弹窗之间标记可能被移走）
+	var p080_markers: Array = context.game_state.map_state.get_markers_at(p080_q, p080_r)
+	if p080_markers.is_empty():
+		return false
+	var p080_bind_ctx: Dictionary = payload.get("binding_context", {})
+	var p080_pid: StringName = p080_bind_ctx.get("player_id", &"")
+	var p080_mech_id: StringName = p080_bind_ctx.get("mech_id", payload.get("mech_id", payload.get("source_mech_id", &"")))
+	if p080_pid == &"" or p080_mech_id == &"" or not context.game_state.mechs.has(p080_mech_id):
+		return false
+	# AI 拥有者：不弹窗不发动（AI 逻辑暂不实现，直接跳过）
+	if _is_ai_owner(p080_pid, p080_mech_id):
+		return false
+	action.record["_pilot_080_choice_shown"] = true
+	# 移至选项可行性：目标格非 RED / 无其他机甲占据 / 本机甲无 cannot_move 状态
+	var p080_move_ok: bool = true
+	var p080_cell_state = context.game_state.map_state.cells.get(p080_cell)
+	if p080_cell_state != null and p080_cell_state.terrain == &"RED":
+		p080_move_ok = false
+	for p080_mid: StringName in context.game_state.mechs:
+		var p080_other = context.game_state.mechs[p080_mid]
+		if p080_other == null or p080_other.destroyed or p080_mid == p080_mech_id:
+			continue
+		if int(p080_other.position.get("q", 0)) == p080_q and int(p080_other.position.get("r", 0)) == p080_r:
+			p080_move_ok = false
+			break
+	var p080_mech = context.game_state.mechs[p080_mech_id]
+	for p080_status: Dictionary in p080_mech.statuses:
+		if String(p080_status.get("status_id", "")) == "cannot_move":
+			p080_move_ok = false
+			break
+	var p080_options: Array = [
+		{"label": "移去该格全部标记（%d枚，不触发）" % p080_markers.size(), "effect_id": &"option_0", "option_index": 0},
+	]
+	if p080_move_ok:
+		p080_options.append({"label": "移至该格，移到后该格标记再生效2次（不耗动力）", "effect_id": &"option_1", "option_index": 1})
+	_pending_effect[action.action_id] = {
+		"action": action, "effect": effect, "payload": payload, "phase": &"pilot_080_choice",
+		"pilot_080_cell": p080_cell, "pilot_080_mech_id": p080_mech_id, "pilot_080_player_id": p080_pid,
+	}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"choose_one_effect", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"options": p080_options,
+		"optional": true,
+		"executor": p080_pid,
+		"player_id": p080_pid,
+		"source_label": "墨尘：与格(%d,%d)上的标记交互" % [p080_q, p080_r],
+	})
+	SLog.log_raw("[TIMING] %s 挂起 pilot_080 标记交互窗 effect=%s 格=(%d,%d) 标记=%d" % [String(action.action_id), String(effect.effect_id), p080_q, p080_r, p080_markers.size()])
+	return true
+
+
+## 墨尘 pilot_080 移至分支的单标记单次生效原子：通用「标记生效」模块
+## （MarkerService.build_marker_trigger_atom，效果 _seq 链串行触发标准入口）。
+## 两次生效各取一枚原子，相互独立（陷阱连锁完整算1次后再独立爆1次）。
+func _pilot_080_marker_trigger_atom(marker: Dictionary, mech_id: StringName, player_id: StringName) -> Dictionary:
+	if context == null or context.marker_service == null:
+		return {}
+	return context.marker_service.build_marker_trigger_atom(marker, mech_id, player_id)
+
+
+## DRAW_PILOT_SET_TO_SLOT_OR_DECK_BOTTOM（事件牌招募 e008 等通用）：从机师牌堆抽1张，
+## 玩家选「设置到机师区域 / 放回牌堆底」（不设置必须放牌堆底，不弃置）。
+## 返回 true=已挂起（弹 choose_one_effect 窗）/ AI 已自动处理完成；false=牌堆空跳过。
+## 设置时若机师区域已有旧机师：先 unset_pilot 弃置旧牌，再 set_pilot（换机师规则）。
+func _handle_draw_pilot_place(effect: ActionEffect, payload: Dictionary, action) -> bool:
+	if context == null or context.deck_service == null or context.game_setup_service == null:
+		return false
+	var pdp_bind_ctx: Dictionary = payload.get("binding_context", {})
+	var pdp_mech_id: StringName = pdp_bind_ctx.get("mech_id", payload.get("mech_id", payload.get("source_mech_id", &"")))
+	var pdp_player_id: StringName = pdp_bind_ctx.get("player_id", &"")
+	if pdp_mech_id == &"" or pdp_player_id == &"" or not context.game_state.mechs.has(pdp_mech_id):
+		SLog.log_raw("[TIMING] %s DRAW_PILOT_SET 缺 mech_id/player_id，跳过 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+		return false
+	var pdp_drawn: Array = context.deck_service.draw_from_deck(&"pilot_deck", 1)
+	if pdp_drawn.is_empty():
+		SLog.log_raw("[TIMING] %s DRAW_PILOT_SET 机师牌堆为空（永久离场不重洗），跳过 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+		return false
+	var pdp_card_id: StringName = pdp_drawn[0]
+	var pdp_card = context.game_state.get_card(pdp_card_id)
+	if pdp_card != null:
+		pdp_card.owner_player_id = pdp_player_id
+		pdp_card.mech_id = pdp_mech_id
+	# AI owner：自动决策（机师区域空则设置，否则放牌堆底），避免挂死
+	if _is_ai_owner(pdp_player_id, pdp_mech_id):
+		_pilot_place_to_slot(pdp_mech_id, pdp_card_id, true)
+		return true
+	# 人类：挂起弹「设置到机师区域 / 放回牌堆底」选择窗（choose_one_effect 链路）
+	_pending_effect[action.action_id] = {
+		"action": action, "effect": effect, "payload": payload, "phase": &"pilot_draw_place",
+		"pilot_card_id": pdp_card_id, "mech_id": pdp_mech_id, "player_id": pdp_player_id,
+	}
+	action.state = &"waiting_timing"
+	var pdp_pilot_name: String = ""
+	if pdp_card != null and pdp_card.def != null:
+		pdp_pilot_name = String(pdp_card.def.display_name)
+	action_needs_input.emit(action.action_id, &"choose_one_effect", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"options": [
+			{"label": "设置到机师区域（%s）" % (pdp_pilot_name if pdp_pilot_name != "" else "替换当前机师"), "effect_id": &"option_0", "option_index": 0},
+			{"label": "放回机师牌堆底", "effect_id": &"option_1", "option_index": 1},
+		],
+		"optional": false,
+		"player_id": pdp_player_id,
+		"source_label": "招募：抽到机师牌 %s，设置到机师区域或放回牌堆底" % pdp_pilot_name,
+	})
+	SLog.log_raw("[TIMING] %s 挂起机师牌放置 effect=%s card=%s mech=%s" % [String(action.action_id), String(effect.effect_id), String(pdp_card_id), String(pdp_mech_id)])
+	return true
+
+
+## 机师牌落位：option 0=设置到机师区域（旧机师先弃置）；option 1=放回机师牌堆底。
+## ai_auto=true 时机师区域空才设置（否则放牌堆底）。
+func _pilot_place_to_slot(mech_id: StringName, pilot_card_id: StringName, ai_auto: bool) -> void:
+	if context == null or context.game_setup_service == null or context.game_state == null:
+		return
+	var pdp_mech = context.game_state.mechs.get(mech_id)
+	if pdp_mech == null:
+		return
+	var pdp_slot = pdp_mech.slots.get(&"pilot")
+	if pdp_slot == null:
+		return
+	var pdp_has_old: bool = pdp_slot.equipped_card != null
+	if ai_auto and pdp_has_old:
+		context.deck_service.move_card_to_deck_bottom(pilot_card_id, &"pilot_deck")
+		SLog.log_raw("[TIMING] AI 机师牌放置：区域已有机师，放回牌堆底 card=%s" % String(pilot_card_id))
+		return
+	# 旧机师先弃置（换机师规则：须先弃旧再设新）
+	if pdp_has_old:
+		var pdp_old_id: StringName = pdp_slot.equipped_card.instance_id
+		context.game_setup_service.unset_pilot(mech_id)
+		if context.deck_service != null:
+			context.deck_service.discard_card(pdp_old_id, &"pilot_replaced")
+	var pdp_card = context.game_state.get_card(pilot_card_id)
+	if pdp_card != null:
+		context.game_setup_service.set_pilot(mech_id, pdp_card)
+		SLog.log_raw("[TIMING] 机师牌设置到区域 card=%s mech=%s" % [String(pilot_card_id), String(mech_id)])
+
+
 ## 判断父动作 pending 列表末尾的子动作是否"未立即完成"（挂起等待输入/时点/更小子动作）。
 ## 用于 _execute_actions 串行：仅当一个子动作挂起时才暂停循环、存剩余动作。
 func _last_created_sub_action_paused(parent_action) -> bool:
@@ -3807,32 +9392,845 @@ func _last_created_sub_action_paused(parent_action) -> bool:
 	return last_sub.state == &"waiting_input" or last_sub.state == &"waiting_timing" or last_sub.state == &"waiting_effect_action"
 
 
+## ── pilot_019 肯耳忒 缴械冲击：弃牌链阶段机 ──
+## 主动效果：弃我方X张行动牌（X≥1），逐目标弃X+1张，清空目标行动手牌则4伤害。
+## 状态存 action.record["_pilot_019_chain"]（Dictionary 引用语义，链内各处直接改）。
+
+## 起始：防御校验 + 初始化阶段机。返回 true = 已挂起（弹目标选择窗 或 deferred abort）。
+func _pilot_019_begin(action, effect: ActionEffect, payload: Dictionary) -> bool:
+	var info: Dictionary = _pilot_019_owner_info(payload, action)
+	var owner_pid: StringName = info.get("owner_pid", &"")
+	var owner_mech: StringName = info.get("owner_mech", &"")
+	if not _pilot_019_can_start(owner_pid, owner_mech):
+		# 防御校验失败（条件已由 set_conditions 检查过，此处兜底）：deferred abort 不消耗 once_per_turn。
+		# 不能同步 continue_action：_execute_effect 返回后 state 检查会误 mark once_per_turn；
+		# deferred 时 _pending_effect 仍挂着 waiting_timing -> 早退不 mark，再由 _pilot_019_abort_resume 恢复。
+		SLog.log_raw("[TIMING] %s pilot_019 肯耳忒不可发动（手牌<1 或 4格内无其他机甲）effect=%s" % [String(action.action_id), String(effect.effect_id)])
+		_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"pilot_019_abort"}
+		action.state = &"waiting_timing"
+		call_deferred("_pilot_019_abort_resume", action.action_id)
+		return true
+	action.record["_pilot_019_chain"] = {
+		"payload": payload,
+		"effect": effect,
+		"targets": [],
+		"idx": 0,
+		"x": 0,
+		"stage": &"wait_targets",
+		"pay_cards": [],
+		"target_cards": [],
+		"discard_issued": false,
+		"damage_issued": false,
+		"owner_pid": owner_pid,
+		"owner_mech": owner_mech,
+	}
+	_pilot_019_emit_target_select(action)
+	return true
+
+
+## 取 pilot_019 来源玩家/机甲（binding_context 优先，回退 payload/action.source）。
+func _pilot_019_owner_info(payload: Dictionary, action) -> Dictionary:
+	var bind: Dictionary = payload.get("binding_context", {})
+	var owner_pid: StringName = bind.get("player_id", payload.get("player_id", &""))
+	var owner_mech: StringName = bind.get("mech_id", payload.get("source_mech_id", payload.get("mech_id", &"")))
+	if owner_pid == &"" and action != null and action.source is Dictionary:
+		owner_pid = action.source.get("player_id", &"")
+	if owner_mech == &"" and action != null and action.source is Dictionary:
+		owner_mech = action.source.get("mech_id", &"")
+	if owner_mech == &"" and owner_pid != &"" and context != null and context.game_state != null:
+		for mid in context.game_state.mechs:
+			var m = context.game_state.mechs[mid]
+			if m != null and m.owner_player_id == owner_pid:
+				owner_mech = mid
+				break
+	return {"owner_pid": owner_pid, "owner_mech": owner_mech}
+
+
+## 防御校验：肯耳忒有行动牌 + 4格内存在其他存活机甲。
+func _pilot_019_can_start(owner_pid: StringName, owner_mech: StringName) -> bool:
+	if context == null or context.game_state == null:
+		return false
+	var owner_player = context.game_state.players.get(owner_pid) if owner_pid != &"" else null
+	if owner_player == null or owner_player.action_hand.is_empty():
+		return false
+	var src = context.game_state.mechs.get(owner_mech)
+	if src == null or src.destroyed or src.position.is_empty():
+		return false
+	for mid in context.game_state.mechs:
+		if mid == owner_mech:
+			continue
+		var m = context.game_state.mechs[mid]
+		if m == null or m.destroyed or m.position.is_empty():
+			continue
+		if _ConditionChecker._hex_distance(src.position, m.position) <= 4:
+			return true
+	return false
+
+
+## 目标手牌（目标机甲归属玩家的 action_hand）
+func _pilot_019_target_hand(target_mech: StringName) -> Array:
+	if context == null or context.game_state == null:
+		return []
+	var player = context.game_state.get_player_for_mech(target_mech)
+	if player == null:
+		return []
+	return player.action_hand
+
+
+## 目标归属玩家 id
+func _pilot_019_target_pid(target_mech: StringName) -> StringName:
+	if context == null or context.game_state == null:
+		return &""
+	var mech = context.game_state.mechs.get(target_mech)
+	if mech != null:
+		return mech.owner_player_id
+	return &""
+
+
+## 弹目标多选窗（select_attack_target，target_count=2，hex 距离4）。
+## 路由：_popup_owner(attack_target_select) 按 attacker_id（=owner_mech）归属 -> 弹给肯耳忒持有者。
+func _pilot_019_emit_target_select(action) -> void:
+	var chain: Dictionary = action.record.get("_pilot_019_chain", {})
+	var effect: ActionEffect = chain.get("effect")
+	var owner_mech: StringName = chain.get("owner_mech", &"")
+	var owner_pid: StringName = chain.get("owner_pid", &"")
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": chain.get("payload", {}), "phase": &"pilot_019_wait_targets"}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"select_attack_target", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"attacker_id": owner_mech,
+		"player_id": owner_pid,
+		"executor": owner_pid,
+		"weapon_range": 4,
+		"target_count": 2,
+		"target_kind": &"pilot_019",
+		"source_label": "缴械冲击：选择最多2台4格范围内的其他机甲（点「取消」用已选目标继续）",
+	})
+	SLog.log_raw("[TIMING] %s 挂起 pilot_019 选目标 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+
+
+## 弹支付选牌窗（thrust_select 多选checkbox，可悬停看效果文本）。
+## 玩家选 N 张自己行动牌确认 -> selected_card_ids；ThrustSelectPanel confirm 永不禁用，
+## 空选在 resume 阶段视为取消中止。
+func _pilot_019_emit_pay(action, chain: Dictionary) -> void:
+	var effect: ActionEffect = chain.get("effect")
+	var owner_pid: StringName = chain.get("owner_pid", &"")
+	var owner_player = context.game_state.players.get(owner_pid) if (context != null and context.game_state != null) else null
+	var pay_cards: Array = []
+	if owner_player != null:
+		pay_cards = owner_player.action_hand.duplicate()
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": chain.get("payload", {}), "phase": &"pilot_019_pay"}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"thrust_select", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"card_ids": pay_cards,
+		"player_id": owner_pid,
+		"executor": owner_pid,
+		"label": "缴械冲击：弃置我方 X 张行动牌（X 最低为1，悬停看效果）",
+		"per_card_suffix": "",
+		"confirm_verb": "确认弃置",
+		"cancel_label": "取消（不发动）",
+		"max_count": 0,
+		"min_count": 1,
+		"source_label": "缴械冲击",
+	})
+	SLog.log_raw("[TIMING] %s 挂起 pilot_019 支付选牌 effect=%s 手牌=%d" % [String(action.action_id), String(effect.effect_id), pay_cards.size()])
+
+
+## 弹目标暗牌弃牌窗（select_discard_cards optional 分支：confirm -> selected_action_card_ids）。
+## discard_player_id=目标玩家（面板列出目标暗牌"行动牌 #N"）；executor=肯耳忒持有者（弹窗路由给持有者）。
+## no_cancel=true 强制选满 X+1 张。
+func _pilot_019_emit_target_pick(action, chain: Dictionary, tgt: StringName, need: int) -> void:
+	var effect: ActionEffect = chain.get("effect")
+	var owner_pid: StringName = chain.get("owner_pid", &"")
+	var tgt_pid: StringName = _pilot_019_target_pid(tgt)
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": chain.get("payload", {}), "phase": &"pilot_019_target_pick"}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"select_discard_cards", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"executor": owner_pid,
+		"discard_player_id": tgt_pid,
+		"count": need,
+		"max_count": need,
+		"min_count": need,
+		"face_up": false,
+		"action_verb": &"discard",
+		"no_cancel": true,
+		"player_id": owner_pid,
+		"mode": &"resume_pending",
+		"source_label": "缴械冲击：选择目标弃置的行动牌（未知），需弃 %d 张" % need,
+	})
+	SLog.log_raw("[TIMING] %s 挂起 pilot_019 目标 %s 选弃牌 effect=%s need=%d" % [String(action.action_id), String(tgt), String(effect.effect_id), need])
+
+
+## 阶段机主循环：按 chain.stage 推进，返回 true = 已挂起（等待 UI/子动作），false = 完成/已推进。
+## 各阶段：
+##   wait_pay          -> 弹支付窗挂起
+##   pay_discarding    -> 弃置肯耳忒 X 张（EXECUTE_DISCARD 子动作），完成后进入 per_target
+##   per_target        -> 逐目标：手牌空跳过；不足 X+1 直接弃全部；足量弹目标暗牌弃牌窗挂起
+##   target_discarding -> 弃目标牌，弃完判清空 -> 4伤害，进入下一目标
+func _pilot_019_drive(action) -> bool:
+	var chain: Dictionary = action.record.get("_pilot_019_chain", {})
+	if chain.is_empty():
+		return false
+	while true:
+		var stage: StringName = chain.get("stage", &"wait_targets")
+		match stage:
+			&"wait_pay":
+				chain["stage"] = &"paying"
+				_pilot_019_emit_pay(action, chain)
+				return true
+			&"pay_discarding":
+				if not chain.get("discard_issued", false):
+					chain["discard_issued"] = true
+					if _pilot_019_discard_cards(action, chain, chain.get("pay_cards", []), &"pilot_019_pay"):
+						return true
+				chain["stage"] = &"per_target"
+				chain["idx"] = 0
+				chain["discard_issued"] = false
+				continue
+			&"per_target":
+				var targets: Array = chain.get("targets", [])
+				var idx: int = int(chain.get("idx", 0))
+				if idx >= targets.size():
+					_pilot_019_finish(action, chain)
+					return false
+				var tgt: StringName = StringName(String(targets[idx]))
+				var tgt_hand: Array = _pilot_019_target_hand(tgt)
+				if tgt_hand.is_empty():
+					chain["idx"] = idx + 1
+					chain["discard_issued"] = false
+					chain["target_cards"] = []
+					continue
+				var need: int = int(chain.get("x", 1)) + 1
+				if tgt_hand.size() < need:
+					# 目标手牌不足 X+1：不弹窗直接弃全部（弃完必清空 -> 判4伤害）
+					chain["target_cards"] = tgt_hand.duplicate()
+					chain["stage"] = &"target_discarding"
+					chain["discard_issued"] = false
+					continue
+				chain["stage"] = &"target_picking"
+				_pilot_019_emit_target_pick(action, chain, tgt, need)
+				return true
+			&"target_discarding":
+				var t_cards: Array = chain.get("target_cards", [])
+				if not chain.get("discard_issued", false):
+					chain["discard_issued"] = true
+					if not t_cards.is_empty():
+						if _pilot_019_discard_cards(action, chain, t_cards, &"pilot_019_target"):
+							return true
+				# 弃牌完成（或原为空）：目标行动手牌被清空 -> 4伤害
+				# （转 EXECUTE_HP_CHANGE 子动作：HP_CHANGE_BEFORE 可被杰狞 pilot_049 转移等拦截；
+				#   挂起时 damage_issued 防重入重复发伤害，子动作完成后经 _continue_pilot_019_chain 重入推进）
+				var tgt2: StringName = StringName(String(chain.get("targets", [])[int(chain.get("idx", 0))]))
+				if _pilot_019_target_hand(tgt2).is_empty() and not chain.get("damage_issued", false):
+					chain["damage_issued"] = true
+					if _deal_direct_hp_change_sub(action, chain.get("payload", {}), tgt2, 4, chain.get("owner_mech", &""), &"pilot_019_clear_discard"):
+						return true
+				chain["idx"] = int(chain.get("idx", 0)) + 1
+				chain["stage"] = &"per_target"
+				chain["discard_issued"] = false
+				chain["damage_issued"] = false
+				chain["target_cards"] = []
+				continue
+			_:
+				# 未知阶段（不应发生）：安全结束
+				_pilot_019_finish(action, chain)
+				return false
+	return false
+
+
+## 弃置指定牌（EXECUTE_DISCARD 子动作，card_ids 预指定无 UI，发 DISCARD_BEFORE/AFTER/SETTLE 时点）。
+## 返回 true = 子动作挂起（父动作切 waiting_effect_action，等 _after_sub_action_finished -> _continue_pilot_019_chain 续跑）。
+func _pilot_019_discard_cards(action, chain: Dictionary, card_ids: Array, reason: StringName) -> bool:
+	if card_ids.is_empty() or context == null or context.action_service == null:
+		return false
+	context.action_service.execute_sub_action({
+		"type": &"EXECUTE_DISCARD",
+		"params": {
+			"card_ids": card_ids.duplicate(),
+			"reason": reason,
+		},
+	}, chain.get("payload", {}), action)
+	if _last_created_sub_action_paused(action):
+		action.state = &"waiting_effect_action"
+		return true
+	return false
+
+
+## 阶段机完成：清状态 + 手动 mark once_per_turn（多阶段挂起，_execute_effect 未走到末尾 mark）
+## + emit effect_executed + 恢复父动作。
+func _pilot_019_finish(action, chain: Dictionary) -> void:
+	action.record.erase("_pilot_019_chain")
+	_pending_effect.erase(action.action_id)
+	var effect: ActionEffect = chain.get("effect")
+	var payload: Dictionary = chain.get("payload", {})
+	if effect != null:
+		_mark_once_per_turn_used(effect, payload)
+		if effect.once_per_game_key != &"":
+			_mark_once_per_game_used(effect, payload)
+		effect_executed.emit(effect.effect_id, action.action_id)
+		_mark_effect_executed(effect.effect_id, action.action_id)
+		SLog.log_raw("[TIMING] %s pilot_019 缴械冲击 完成 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+	if context != null and context.action_engine != null:
+		action.state = &"waiting_input"
+		context.action_engine.continue_action(action.action_id, {})
+
+
+## 中止：清状态 + 恢复父动作（不消耗 once_per_turn）。
+## 从 _pilot_019_begin 防御失败路径经 call_deferred 调用（避免 _execute_effect 末尾误 mark）；
+## 从 resume_pending_effect 取消路径同步调用（此时 _pending_effect 已 pop，无 mark 风险）。
+func _pilot_019_abort_resume(action_id: StringName) -> void:
+	_pending_effect.erase(action_id)
+	if context == null or context.action_engine == null:
+		return
+	var action = context.action_registry.get_action(action_id) if context.action_registry != null else null
+	if action == null:
+		return
+	action.record.erase("_pilot_019_chain")
+	action.state = &"waiting_input"
+	context.action_engine.continue_action(action_id, {})
+
+
+## ActionEngine._after_sub_action_finished 钩子：EXECUTE_DISCARD 子动作完成后续跑弃牌链。
+func _continue_pilot_019_chain(parent_action) -> bool:
+	if parent_action == null or not parent_action.record.has("_pilot_019_chain"):
+		return false
+	return _pilot_019_drive(parent_action)
+
+
+# ════════════════════════════════════════════════════════════
+# pilot_032 爱瑞娅：弃1张行动牌 + 选场上机师牌 施加行动牌上限+2（两阶段弹窗）
+# ════════════════════════════════════════════════════════════
+
+## 阶段①：弹弃牌窗（从我方手牌选1张弃置，可取消=中止不计次数）。
+## 返回 true=已挂起等输入；false=无可弃行动牌（调用方 continue 中止，不消耗次数）。
+func _pilot_032_show_discard_pay(effect: ActionEffect, payload: Dictionary, action, p032_params: Dictionary) -> bool:
+	var p032_optional: bool = bool(p032_params.get("optional", true))
+	var p032_discard_count: int = int(p032_params.get("discard_count", 1))
+	var p032_bind: Dictionary = payload.get("binding_context", {})
+	var p032_ctrl_pid: StringName = p032_bind.get("player_id", &"")
+	# 兜底校验：持有者至少1张行动牌（条件 HAS_ACTION_CARD_IN_HAND 已置灰按钮，此处双保险）。
+	var p032_can_pay: bool = false
+	if context != null and context.game_state != null and p032_ctrl_pid != &"":
+		var p032_ctrl_player = context.game_state.players.get(p032_ctrl_pid)
+		if p032_ctrl_player != null:
+			for p032_cid: StringName in p032_ctrl_player.action_hand:
+				var p032_c = context.game_state.get_card(p032_cid)
+				if p032_c != null and p032_c.def != null and p032_c.def.card_kind == &"action":
+					p032_can_pay = true
+					break
+	if not p032_can_pay:
+		SLog.log_raw("[TIMING] %s pilot_032 爱瑞娅无可弃行动牌，中止 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+		return false
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"pilot_032_pay", "params": p032_params}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"pilot_032_pay_select", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"executor": p032_ctrl_pid,
+		"discard_player_id": p032_ctrl_pid,
+		"count": p032_discard_count,
+		"face_up": true,
+		"action_verb": &"discard",
+		"no_cancel": not p032_optional,
+		"player_id": p032_ctrl_pid,
+		"source_label": "爱瑞娅：弃置1张我方行动牌，使1张场上机师牌行动牌上限+2",
+	})
+	SLog.log_raw("[TIMING] %s 挂起 pilot_032 弃牌支付 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+	return true
+
+
+## 阶段②：弹场上机师牌选择窗（choice_panel，选项含机师名+归属+当前行动牌上限）。
+## 返回 true=已挂起等输入；false=场上无机师牌（调用方 continue 中止，不消耗次数）。
+func _pilot_032_show_pilot_select(effect: ActionEffect, payload: Dictionary, action, p032_params: Dictionary) -> bool:
+	var p032_optional: bool = bool(p032_params.get("optional", true))
+	var p032_bind: Dictionary = payload.get("binding_context", {})
+	var p032_src_pid: StringName = p032_bind.get("player_id", &"")
+	var p032_options: Array = []
+	if context != null and context.game_state != null:
+		for p032_mid: StringName in context.game_state.mechs:
+			var p032_m = context.game_state.mechs[p032_mid]
+			if p032_m == null or p032_m.destroyed:
+				continue
+			var p032_slot = p032_m.slots.get(&"pilot")
+			if p032_slot == null or p032_slot.equipped_card == null:
+				continue
+			var p032_pcard = p032_slot.equipped_card
+			var p032_player = context.game_state.get_player_for_mech(p032_mid)
+			var p032_limit: int = int(p032_player.action_card_limit) if p032_player != null else 0
+			var p032_pname: String = String(p032_pcard.def.display_name) if p032_pcard.def != null else "?"
+			p032_options.append({
+				"label": "%s（%s）  行动牌上限 %d" % [p032_pname, String(p032_m.owner_player_id), p032_limit],
+				"effect_id": p032_pcard.instance_id,
+				"pilot_instance": p032_pcard.instance_id,
+				"player_id": p032_m.owner_player_id,
+				"mech_id": p032_mid,
+			})
+	if p032_options.is_empty():
+		SLog.log_raw("[TIMING] %s pilot_032 场上无机师牌，跳过 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+		return false
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"pilot_032_select", "params": p032_params}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"pilot_032_target_select", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"options": p032_options,
+		"optional": p032_optional,
+		"executor": p032_src_pid,
+		"player_id": p032_src_pid,
+		"source_label": "爱瑞娅：选择1张机师牌，使其行动牌上限+2",
+	})
+	SLog.log_raw("[TIMING] %s 挂起 pilot_032 选机师牌 effect=%s 候选=%d" % [String(action.action_id), String(effect.effect_id), p032_options.size()])
+	return true
+
+
+# ════════════════════════════════════════════════════════════
+# pilot_020 肯德：弃任意行动牌 + X 计数 + 回合末抽牌
+# ════════════════════════════════════════════════════════════
+
+## 取 pilot_020 来源玩家/机甲（binding_context 优先，回退 payload/action.source）。
+func _pilot_020_owner_info(payload: Dictionary, action) -> Dictionary:
+	var bind: Dictionary = payload.get("binding_context", {})
+	var owner_pid: StringName = bind.get("player_id", payload.get("player_id", &""))
+	var owner_mech: StringName = bind.get("mech_id", payload.get("source_mech_id", payload.get("mech_id", &"")))
+	if owner_pid == &"" and action != null and action.source is Dictionary:
+		owner_pid = action.source.get("player_id", &"")
+	if owner_mech == &"" and action != null and action.source is Dictionary:
+		owner_mech = action.source.get("mech_id", &"")
+	return {"owner_pid": owner_pid, "owner_mech": owner_mech}
+
+
+## 效果1 起始：防御校验（手牌非空）+ 弹 thrust_select 多选窗挂起。返回 true=已挂起。
+func _pilot_020_begin_active_discard(action, effect: ActionEffect, payload: Dictionary) -> bool:
+	var info: Dictionary = _pilot_020_owner_info(payload, action)
+	var owner_pid: StringName = info.get("owner_pid", &"")
+	var owner_player = context.game_state.players.get(owner_pid) if (owner_pid != &"" and context != null and context.game_state != null) else null
+	if owner_player == null or owner_player.action_hand.is_empty():
+		# 防御失败（条件已由 set_conditions 查过 HAS_ACTION_CARD_IN_HAND，此处兜底）：
+		# deferred abort 不消耗 once_per_turn（与 _pilot_019_begin 同款防误 mark）。
+		SLog.log_raw("[TIMING] %s pilot_020 肯德不可发动（无行动牌）effect=%s" % [String(action.action_id), String(effect.effect_id)])
+		_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"pilot_020_abort"}
+		action.state = &"waiting_timing"
+		call_deferred("_pilot_020_abort_resume", action.action_id)
+		return true
+	var hand: Array = owner_player.action_hand.duplicate()
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"pilot_020_discard"}
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"thrust_select", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"card_ids": hand,
+		"player_id": owner_pid,
+		"executor": owner_pid,
+		"label": "肯德·弃任意行动牌：选择要弃置的行动牌（至少1张，悬停看效果）",
+		"per_card_suffix": "",
+		"confirm_verb": "确认弃置",
+		"cancel_label": "取消（不发动）",
+		"max_count": 0,
+		"min_count": 1,
+		"source_label": "肯德·弃任意行动牌",
+	})
+	SLog.log_raw("[TIMING] %s 挂起 pilot_020 弃牌选牌 effect=%s 手牌=%d" % [String(action.action_id), String(effect.effect_id), hand.size()])
+	return true
+
+
+## 效果2 计数 + X≥2 护甲+3 动力+3（LISTEN DISCARD_SETTLE 每张弃置牌快照过滤后累加）。
+## 只做同步数值变更，不挂起。返回 false（不中断 _execute_actions）。
+func _pilot_020_count_discard(effect, payload: Dictionary, action) -> bool:
+	if context == null or context.game_state == null:
+		return false
+	var bind: Dictionary = payload.get("binding_context", {})
+	var pcard = _ActionPilotEffects.get_pilot_020_pilot_card(context.game_state, bind)
+	if pcard == null:
+		return false
+	var owner_pid: StringName = bind.get("player_id", &"")
+	if owner_pid == &"":
+		return false
+	var mech_id: StringName = bind.get("mech_id", &"")
+	var snapshots: Array = payload.get("discard_snapshots", [])
+	var counted: int = 0
+	for snap in snapshots:
+		if not (snap is Dictionary):
+			continue
+		# 只计「手牌区(action_hand)」弃出的、归属肯德玩家的行动牌。
+		# 使用牌走 temp_zone 弃入（快照 from_zone=temp_zone）天然排除；
+		# 回合超限弃牌/预判/肯特/肯耳忒弃牌均走 discard_card，快照 from_zone=action_hand 计入。
+		# 归属判定用牌实例 owner_player_id（真实玩法手牌行动卡 mech_id 为空，
+		# draw_action_cards 不设 mech_id，故不能按 from_mech_id 过滤）。
+		if String(snap.get("from_zone", &"")) != "action_hand":
+			continue
+		var s_card = context.game_state.cards.get(snap.get("card_id", &""))
+		if s_card == null or s_card.owner_player_id != owner_pid:
+			continue
+		counted += 1
+	if counted == 0:
+		return false
+	var turn: int = int(context.game_state.turn_number)
+	_ActionPilotEffects.increment_pilot_020_x(pcard, turn, counted)
+	var x: int = _ActionPilotEffects.get_pilot_020_x(pcard, turn)
+	SLog.log_raw("[pilot_020] 肯德行动牌弃置 +%d，X=%d player=%s mech=%s turn=%d" % [counted, x, String(owner_pid), String(mech_id), turn])
+	# X≥2（大于1）时：护甲+3 + 动力+3（上限+当前，cap_bonus 补满），每回合只触发一次。
+	if x >= 2 and not _ActionPilotEffects.is_pilot_020_armor_applied(pcard, turn):
+		_ActionPilotEffects.mark_pilot_020_armor_applied(pcard, turn)
+		if context.game_actions != null:
+			context.game_actions.modify_armor({"mech_id": mech_id, "delta": 3, "duration": &"THIS_TURN", "source_card_id": pcard.instance_id})
+			context.game_actions.modify_mech_power({"mech_id": mech_id, "delta": 3, "mode": &"cap_bonus", "duration": &"THIS_TURN", "source_card_id": pcard.instance_id})
+		SLog.log_raw("[pilot_020] 肯德 X=%d>=2，护甲+3 动力+3(上限+当前) mech=%s" % [x, String(mech_id)])
+	return false
+
+
+## 效果4 回合结束后抽 min(X,6) 张行动牌（LISTEN TURN_AFTER_END）。
+## 条件已查 X≥4，此处兜底并读 X 确定数量。gain_card 走动作拿 GAIN_CARD 时点。返回 false。
+func _pilot_020_draw_x(effect, payload: Dictionary, action) -> bool:
+	if context == null or context.game_state == null or context.action_service == null:
+		return false
+	var bind: Dictionary = payload.get("binding_context", {})
+	var pcard = _ActionPilotEffects.get_pilot_020_pilot_card(context.game_state, bind)
+	if pcard == null:
+		return false
+	var turn: int = int(context.game_state.turn_number)
+	var x: int = _ActionPilotEffects.get_pilot_020_x(pcard, turn)
+	if x < 4:
+		return false
+	var draw_n: int = mini(x, 6)
+	var owner_pid: StringName = bind.get("player_id", &"")
+	if owner_pid == &"":
+		owner_pid = pcard.owner_player_id
+	if owner_pid == &"":
+		return false
+	SLog.log_raw("[pilot_020] 肯德 X=%d>=4，回合结束后抽 %d 张行动牌 player=%s" % [x, draw_n, String(owner_pid)])
+	context.action_service.execute(&"gain_card", {
+		"from_zone": &"action_deck", "card_kind": &"action", "count": draw_n,
+		"player_id": owner_pid, "reason": &"pilot_020_draw"
+	})
+	return false
+
+
+## 莽克 pilot_085 效果1 弃装获金（LISTEN DISCARD_SETTLE）。
+## 按本次弃置动作快照统计「原先正面设置在机甲上」的装备牌：
+##   原先属于莽克所在机甲(from_mech_id==bind.mech_id) → 每张+4金；其他机甲 → 每张+3金。
+## 每张都发、累加后一次通用获金（ga.gain_gold，自动 fire GAIN_GOLD_AFTER 供维罗妮卡等监听）。
+func _pilot_085_discard_gold(effect, payload: Dictionary, action) -> bool:
+	if context == null or context.game_state == null:
+		return false
+	var bind: Dictionary = payload.get("binding_context", {})
+	var owner_pid: StringName = bind.get("player_id", &"")
+	var mech_id: StringName = bind.get("mech_id", &"")
+	if owner_pid == &"" or mech_id == &"":
+		return false
+	var snapshots: Array = payload.get("discard_snapshots", [])
+	var self_count: int = 0
+	var other_count: int = 0
+	for snap in snapshots:
+		if not (snap is Dictionary):
+			continue
+		# 只计「原先正面设置在机甲上」的装备牌（from_zone==equipment_slot 且非 face_down）。
+		# 手上未设置(from_zone=equipment_hand)/临时区(temp_zone)/备用区背面(face_down)不计。
+		if String(snap.get("card_kind", &"")) != "equipment":
+			continue
+		if String(snap.get("from_zone", &"")) != "equipment_slot":
+			continue
+		var from_mech: StringName = StringName(snap.get("from_mech_id", &""))
+		if from_mech == &"":
+			continue
+		if bool(snap.get("face_down", false)):
+			continue
+		if from_mech == mech_id:
+			self_count += 1
+		else:
+			other_count += 1
+	var total_gold: int = self_count * 4 + other_count * 3
+	if total_gold <= 0:
+		return false
+	SLog.log_raw("[pilot_085] 莽克装弃获金 +%d (自%d*4 + 他%d*3) player=%s mech=%s" % [total_gold, self_count, other_count, String(owner_pid), String(mech_id)])
+	if context.game_actions != null:
+		context.game_actions.gain_gold({
+			"player_id": owner_pid,
+			"amount": total_gold,
+			"source_card_id": bind.get("card_instance_id", &""),
+			"reason": &"pilot_085_discard_gold",
+		})
+	return false
+
+
+## 獠鼠 pilot_086 效果1 攻击骰子分支（LISTEN ATTACK_PRE，priority 40）。
+## 「指定目标发动攻击时，可以投掷1个骰子：1：我方机甲设置2损伤；2~3：我方抽2张行动牌；
+##  4~5：弃置目标2张行动牌；6：对目标施加锁定效果。」
+## 首次：弹「发动/取消」二选一确认窗挂起（_pending_effect phase=pilot_086_confirm，
+## choose_one_effect options=[发动/取消]，source_label=效果说明）；AI 自动确认直接掷骰。
+## 取消=不发动（不耗资源，恢复动作继续后续步骤）。返回 true=已挂起（应 return）。
+func _pilot_086_dice_branch(effect: ActionEffect, payload: Dictionary, action) -> bool:
+	if context == null or context.game_state == null:
+		return false
+	var p86_bind: Dictionary = payload.get("binding_context", {})
+	var p86_owner_pid: StringName = p86_bind.get("player_id", &"")
+	var p86_owner_mid: StringName = p86_bind.get("mech_id", &"")
+	# 防御：无归属（机师未设置/离场）则不弹窗不发动
+	if p86_owner_pid == &"" or p86_owner_mid == &"":
+		return false
+	if _is_ai_owner(p86_owner_pid, p86_owner_mid):
+		# AI：暂不处理 AI 确认弹窗逻辑，直接跳过（用户明确 PvP/PvP3 人类玩家优先）
+		SLog.log_raw("[TIMING] %s 獠鼠为 AI 持有者，跳过 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+		return false
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"pilot_086_confirm"}
+	action.record["_pilot_086_confirm_shown"] = true
+	action.state = &"waiting_timing"
+	action_needs_input.emit(action.action_id, &"choose_one_effect", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"options": [
+			{"label": "发动", "effect_id": &"option_0", "option_index": 0},
+			{"label": "取消", "effect_id": &"option_1", "option_index": 1},
+		],
+		"player_id": _effect_popup_owner_pid(effect, payload, action),
+		"source_label": String(effect.description),
+	})
+	SLog.log_raw("[TIMING] %s 挂起獠鼠骰子确认 effect=%s player=%s mech=%s" % [String(action.action_id), String(effect.effect_id), String(p86_owner_pid), String(p86_owner_mid)])
+	return true
+
+
+## 獠鼠骰子确认后掷骰+分支。构建 _seq 动作链串行执行（原子动作同步完成；含挂起子动作
+## ——EXECUTE_DAMAGE_CHANGE 弹放置损伤UI / FOR_EACH_TARGET 内嵌弃牌选框——由
+## _continue_seq_effect_actions 挂起等待，ActionEngine._after_sub_action_finished 续跑）。
+func _pilot_086_confirm_resume(effect: ActionEffect, payload: Dictionary, action) -> void:
+	if context == null or context.game_state == null:
+		return
+	var p86_dice: int = int(payload.get("pilot_086_forced_dice", 0))
+	if p86_dice < 1 or p86_dice > 6:
+		# 确定性 hash 派生（瑟尔基尔/征服同款修复模式）：种子=施法者机师牌实例id+回合数*97+action_id。
+		# 不依赖 context.rng 消耗序列（PvP/PvP3 各端 rng 一旦分叉即永久分叉）；action_id 参与
+		# 保证同一回合多次发动骰子不同。pilot_086_forced_dice 注入后门保留（测试用）。
+		var p86_bc: Dictionary = payload.get("binding_context", {})
+		var p86_seed: int = abs(int(String(p86_bc.get("card_instance_id", "")).hash()) \
+			+ int(context.game_state.turn_number) * 97 \
+			+ int(String(action.action_id).hash()))
+		p86_dice = p86_seed % 6 + 1
+	payload["pilot_086_dice"] = p86_dice
+	SLog.log_raw("[TIMING] %s 獠鼠骰子=%d effect=%s" % [String(action.action_id), p86_dice, String(effect.effect_id)])
+	var p86_bind: Dictionary = payload.get("binding_context", {})
+	var p86_owner_pid: StringName = p86_bind.get("player_id", &"")
+	var p86_owner_mid: StringName = p86_bind.get("mech_id", &"")
+	var p86_branch: Array = []
+	if p86_dice == 1:
+		# 1：我方机甲设置2损伤（逐点弹放置UI，executor=我方）
+		p86_branch.append({"type": &"EXECUTE_DAMAGE_CHANGE", "params": {
+			"mech_ids": [p86_owner_mid],
+			"value": 2,
+			"method": &"increase",
+			"executor": p86_owner_pid,
+			"source_label": String(effect.description),
+			"reason": &"pilot_086_dice_1",
+		}})
+	elif p86_dice == 2 or p86_dice == 3:
+		# 2~3：我方抽2张行动牌（走 GAIN_CARD 时点）
+		p86_branch.append({"type": &"EXECUTE_GAIN_CARD", "params": {
+			"from_zone": &"action_deck",
+			"card_kind": &"action",
+			"count": 2,
+			"player_id": p86_owner_pid,
+			"mech_ids": [p86_owner_mid],
+			"reason": &"pilot_086_dice_2_3",
+		}})
+	elif p86_dice == 4 or p86_dice == 5:
+		# 4~5：弃置目标2张行动牌。多目标按目标顺序逐目标迭代；目标行动牌≤2 直接弃不弹窗
+		# （auto_discard_all_if_covered），>2 逐目标弹未知选框（face_up=false）。
+		p86_branch.append({"type": &"FOR_EACH_TARGET", "params": {
+			"targets": "$payload.target_ids",
+			"execution_mode": &"SERIAL",
+			"preserve_order": true,
+			"current_target_variable": &"current_target",
+			"actions": [
+				{"type": &"EXECUTE_DISCARD", "params": {
+					"from_target": true,
+					"target_id": "$current_target.mech_id",
+					"count": 2,
+					"choose": true,
+					"face_up": false,
+					"auto_discard_all_if_covered": true,
+					"reason": &"pilot_086_dice_4_5",
+				}},
+			],
+		}})
+	else:
+		# 6：对攻击所有目标施加锁定（预判样式 duration=1，skip_clear_on_hit=false：本攻击命中即清除）
+		p86_branch.append({"type": &"FOR_EACH_TARGET", "params": {
+			"targets": "$payload.target_ids",
+			"execution_mode": &"SERIAL",
+			"preserve_order": true,
+			"current_target_variable": &"current_target",
+			"actions": [
+				{"type": &"APPLY_OR_CHECK_LOCKED", "params": {
+					"mode": &"apply",
+					"duration": 1,
+					"skip_clear_on_hit": false,
+					"target_id": "$current_target.mech_id",
+					"source_player_id": "$binding_context.player_id",
+					"source_card_id": "$binding_context.card_instance_id",
+				}},
+			],
+		}})
+	# 标记完成防重跑（dispatch 读 record/payload 双保险）
+	action.record["_pilot_086_done"] = true
+	payload["_pilot_086_done"] = true
+	action.record.erase("_pilot_086_confirm_shown")
+	action.record["_seq_effect_actions"] = {"payload": payload, "remaining": p86_branch, "source_check": false, "effect": effect, "branch_seq": true}
+	action.state = &"waiting_effect_action"
+	if _continue_seq_effect_actions(action):
+		return
+	# 分支全部同步完成：恢复父动作推进
+	if context.action_engine != null:
+		action.state = &"waiting_input"
+		context.action_engine.continue_action(action.action_id, {})
+
+
+## 效果1 完成：EXECUTE_DISCARD 子动作完成后手动 mark once_per_turn + 恢复父动作。
+## 由 ActionEngine._after_sub_action_finished 钩子调用（子动作挂起路径）；同步完成路径直接调用。
+func _continue_pilot_020_active(parent_action) -> bool:
+	if parent_action == null or not parent_action.record.has("_pilot_020_active_pending"):
+		return false
+	var pend: Dictionary = parent_action.record["_pilot_020_active_pending"]
+	parent_action.record.erase("_pilot_020_active_pending")
+	var effect: ActionEffect = pend.get("effect")
+	var payload: Dictionary = pend.get("payload", {})
+	if effect != null:
+		_mark_once_per_turn_used(effect, payload)
+		if effect.once_per_game_key != &"":
+			_mark_once_per_game_used(effect, payload)
+		effect_executed.emit(effect.effect_id, parent_action.action_id)
+		_mark_effect_executed(effect.effect_id, parent_action.action_id)
+	SLog.log_raw("[TIMING] %s pilot_020 弃任意行动牌 完成 effect=%s" % [String(parent_action.action_id), String(effect.effect_id) if effect != null else "?"])
+	if context != null and context.action_engine != null:
+		parent_action.state = &"waiting_input"
+		context.action_engine.continue_action(parent_action.action_id, {})
+	return true
+
+
+## 中止：清状态 + 恢复父动作（不消耗 once_per_turn）。
+## 从 _pilot_020_begin_active_discard 防御失败路径经 call_deferred 调用（避免 _execute_effect 末尾误 mark）；
+## 从 resume_pending_effect 取消路径同步调用（此时 _pending_effect 已 pop，无 mark 风险）。
+func _pilot_020_abort_resume(action_id: StringName) -> void:
+	_pending_effect.erase(action_id)
+	if context == null or context.action_engine == null:
+		return
+	var action = context.action_registry.get_action(action_id) if context.action_registry != null else null
+	if action == null:
+		return
+	action.record.erase("_pilot_020_active_pending")
+	action.state = &"waiting_input"
+	context.action_engine.continue_action(action_id, {})
+
+
 ## 串行续跑：上一个效果子动作完成/取消后，创建下一个待执行的效果子动作。
 ## 由 ActionEngine._after_sub_action_finished 在父动作所有子动作结束时调用。
 ## 返回 true 表示创建了新的未完成子动作（父动作继续等待）；false 表示无更多动作（父动作可推进）。
 
-## 处理 CHOOSE_MAP_CELL（机雷设陷单格选格）。返回 true=已挂起(应return)；false=已处理/无可用格(continue)。
+## 处理 CHOOSE_MAP_CELL（通用单格选格）。返回 true=已挂起(应return)；false=已处理/无可用格(continue)。
 ## 人类：挂起 select_map_cell 选格 UI（标绿+点击）；AI：自动选第一格。
-## 选中格 id 由 resume_pending_effect 注入 payload["selected_cell_id"]，后续 PLACE_OR_TRIGGER_TRAP 读 $payload.selected_cell_id。
+## 选中格 id 由 resume_pending_effect 注入 payload（store_result_key 或默认 selected_cell_id），
+## 后续动作经 $payload.<key> / $runtime.<key> 读取。
 ## 顶层 _execute_actions 与 CHOOSE_ONE 分支循环共用本方法（分支内 execute_sub_action 无法处理 CHOOSE_*）。
+##
+## 两种候选格来源：
+##   · 无 params.cells（legacy 机雷设陷）：武器有效范围内可放陷阱格（get_valid_trap_cells）。
+##   · params.cells 通用源（效果绑定不绑机师，格雷厄姆 pilot_057 等）：
+##     - {"markers": {"type": &"TRAP", "range": 4}}：源机甲 hex 距离 range 内含该类型标记的格子
+##       （复用 ConditionChecker.get_marker_cells_in_range）。
+##     - {"circle": {"center": "$runtime.key", "radius": 8}}
+##       或 {"circle": {"center": "$runtime.key", "per_count_key": "$runtime.ids", "per": 4}}：
+##       以 center（"q,r" 字符串，支持 $ 引用）为圆心的 hex 距离圆；radius 或
+##       per×len(per_count_key 解析数组) 定半径；排除红格（RED）与圆心本身，
+##       含有机甲/其他标记的格子照常可选（由调用方语义决定后果）。
+## params.store_result_key：选中格存 payload[key]（支持同链多次选格互不覆盖）；
+## params.no_cancel：透传 UI 隐藏取消按钮（弃牌已付出的后续阶段用）。
 func _handle_choose_map_cell(act: Dictionary, effect, payload: Dictionary, action) -> bool:
-	if payload.has("selected_cell_id"):
-		return false  # resume 重跑时已选格：跳过（后续 PLACE_OR_TRIGGER_TRAP 读 $payload.selected_cell_id）
 	var cmc_params: Dictionary = act.get("params", {})
-	var cmc_bind: Dictionary = payload.get("binding_context", {})
-	var cmc_card_id: StringName = cmc_bind.get("card_instance_id", payload.get("card_instance_id", &""))
-	var cmc_mech_id: StringName = cmc_bind.get("mech_id", payload.get("source_mech_id", payload.get("mech_id", &"")))
-	if cmc_card_id == &"" or cmc_mech_id == &"" or context == null or context.game_state == null:
-		return false
-	var cmc_valid: Array[Dictionary] = _ConditionChecker.get_valid_trap_cells(context.game_state, cmc_card_id, cmc_mech_id)
+	var cmc_store_key: StringName = cmc_params.get("store_result_key", &"")
+	var cmc_skip_key: String = String(cmc_store_key) if cmc_store_key != &"" else "selected_cell_id"
+	if payload.has(cmc_skip_key):
+		return false  # resume 重跑时已选格：跳过（后续动作读 $payload.<store_key>）
+	var cmc_cells_spec: Dictionary = cmc_params.get("cells", {})
+	var cmc_valid: Array[Dictionary] = []
+	var cmc_mech_id: StringName = &""
+	if cmc_cells_spec.is_empty():
+		# legacy 机雷设陷：武器范围可放陷阱格
+		var cmc_bind: Dictionary = payload.get("binding_context", {})
+		var cmc_card_id: StringName = cmc_bind.get("card_instance_id", payload.get("card_instance_id", &""))
+		cmc_mech_id = cmc_bind.get("mech_id", payload.get("source_mech_id", payload.get("mech_id", &"")))
+		if cmc_card_id == &"" or cmc_mech_id == &"" or context == null or context.game_state == null:
+			return false
+		cmc_valid = _ConditionChecker.get_valid_trap_cells(context.game_state, cmc_card_id, cmc_mech_id, context.map_service.get_attack_aura_cells(), context.map_service.get_attack_blocked_keys(cmc_mech_id))
+	else:
+		var cmc_bind2: Dictionary = payload.get("binding_context", {})
+		cmc_mech_id = payload.get("source_mech_id", cmc_bind2.get("mech_id", payload.get("mech_id", &"")))
+		if context == null or context.game_state == null:
+			return false
+		var cmc_markers_spec: Dictionary = cmc_cells_spec.get("markers", {})
+		var cmc_circle_spec: Dictionary = cmc_cells_spec.get("circle", {})
+		var cmc_path_spec: Dictionary = cmc_cells_spec.get("path", {})
+		if not cmc_markers_spec.is_empty():
+			# 标记格源：源机甲 range 内含指定类型标记的格子（min_distance=1 仅严格相邻，
+			# 墨尘 pilot_080「相邻格子上的标记」不含自身格）
+			var cmc_src_mech = context.game_state.mechs.get(cmc_mech_id) if cmc_mech_id != &"" else null
+			if cmc_src_mech == null:
+				return false
+			cmc_valid = _ConditionChecker.get_marker_cells_in_range(
+				context.game_state, cmc_src_mech.position,
+				cmc_markers_spec.get("type", &"TRAP"), int(cmc_markers_spec.get("range", 4)),
+				int(cmc_markers_spec.get("min_distance", 0)))
+		elif not cmc_circle_spec.is_empty() or not cmc_path_spec.is_empty():
+			# 范围圆源（circle）或 路径式移动源（path）：center/半径(预算) 解析共用
+			var ccb = _resolve_map_cell_center_and_budget(
+				cmc_path_spec if not cmc_path_spec.is_empty() else cmc_circle_spec, payload, action)
+			if ccb == null:
+				return false
+			var ccb_d: Dictionary = ccb
+			var ccb_center: Dictionary = ccb_d.get("center", {})
+			var ccb_budget: int = int(ccb_d.get("budget", 0))
+			if not cmc_path_spec.is_empty():
+				# 路径式移动源：从 center 出发 BFS 连续移动，预算=格数（红格排除）。
+				# 绿格消耗由 spec.green_cost 决定（默认2=同普通移动；1=与普通格一视同仁）。
+				# 机甲所在格可作终点（陷阱移入即触发/引爆）但不可穿过（不构成连续移动的
+				# 中途经条件，blocked_by_mechs=false 可关）。通用件，不绑机师（格雷厄姆移陷）。
+				var pm_blocked: Dictionary = {}
+				if bool(cmc_path_spec.get("blocked_by_mechs", true)):
+					for pm_mid: StringName in context.game_state.mechs:
+						var pm_mech = context.game_state.mechs[pm_mid]
+						if pm_mech != null and not pm_mech.destroyed:
+							pm_blocked[_HexGrid.key(pm_mech.position)] = true
+				var pm_green_cost: int = int(cmc_path_spec.get("green_cost", 2))
+				for hx: Dictionary in _RangeCalculator.get_path_move_hexes(
+						ccb_center, ccb_budget, context.game_state.map_state.cells, pm_blocked, pm_green_cost):
+					var hx_id: String = "%d,%d" % [int(hx.get("q", 0)), int(hx.get("r", 0))]
+					cmc_valid.append({"q": int(hx.get("q", 0)), "r": int(hx.get("r", 0)), "cell_id": hx_id})
+			else:
+				for hx: Dictionary in _RangeCalculator.get_skill_range_hexes(
+						ccb_center, ccb_budget, context.game_state.map_state.cells):
+					var hx_id: String = "%d,%d" % [int(hx.get("q", 0)), int(hx.get("r", 0))]
+					var hx_cell = context.game_state.map_state.cells.get(StringName(hx_id))
+					# 红格（RED）不可承载陷阱：圆内排除
+					if hx_cell != null and hx_cell.terrain == &"RED":
+						continue
+					cmc_valid.append({"q": int(hx.get("q", 0)), "r": int(hx.get("r", 0)), "cell_id": hx_id})
+		else:
+			return false  # 未知 cells 源
 	if cmc_valid.is_empty():
-		SLog.log_raw("[TIMING] %s CHOOSE_MAP_CELL 无可放陷阱格，跳过 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+		SLog.log_raw("[TIMING] %s CHOOSE_MAP_CELL 无可选格，跳过 effect=%s" % [String(action.action_id), String(effect.effect_id)])
 		return false
 	var cmc_owner_pid: StringName = _effect_popup_owner_pid(effect, payload, action)
 	if _is_ai_owner(cmc_owner_pid, cmc_mech_id):
-		payload["selected_cell_id"] = String(cmc_valid[0].get("cell_id", &""))
+		if cmc_store_key != &"":
+			payload[cmc_store_key] = String(cmc_valid[0].get("cell_id", &""))
+		else:
+			payload["selected_cell_id"] = String(cmc_valid[0].get("cell_id", &""))
 		return false
-	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"pre_actions_target"}
+	_pending_effect[action.action_id] = {
+		"action": action, "effect": effect, "payload": payload,
+		"phase": &"map_cell_select", "map_cell_store_key": cmc_store_key,
+	}
 	action.record["_waiting_for_map_cell"] = true
 	action.state = &"waiting_timing"
 	var cmc_cells: Array = []
@@ -3844,12 +10242,49 @@ func _handle_choose_map_cell(act: Dictionary, effect, payload: Dictionary, actio
 		"valid_cells": cmc_cells,
 		"count": 1,
 		"mech_id": cmc_mech_id,
-		"card_instance_id": cmc_card_id,
-		"label": String(cmc_params.get("label", "选择格子设置陷阱")),
+		"card_instance_id": payload.get("binding_context", {}).get("card_instance_id", payload.get("card_instance_id", &"")),
+		"label": String(cmc_params.get("label", "选择格子")),
 		"player_id": cmc_owner_pid,
+		"no_cancel": bool(cmc_params.get("no_cancel", false)),
 	})
-	SLog.log_raw("[TIMING] %s 挂起陷阱选格 effect=%s 候选=%d" % [String(action.action_id), String(effect.effect_id), cmc_valid.size()])
+	SLog.log_raw("[TIMING] %s 挂起选格 effect=%s 候选=%d" % [String(action.action_id), String(effect.effect_id), cmc_valid.size()])
 	return true
+
+
+## 解析 CHOOSE_MAP_CELL circle/path 源的 center 与「半径/预算」：
+## center 支持 "$runtime.x"/"$payload.x"/字面 "q,r"；半径 = 字面 radius 或
+## per × len(per_count_key 解析数组)（如弃N张×4格叠加）。失败返回 null。
+func _resolve_map_cell_center_and_budget(spec: Dictionary, payload: Dictionary, action) -> Variant:
+	var ccb_center_raw: Variant = spec.get("center", "")
+	var ccb_center: String = String(ccb_center_raw)
+	if ccb_center.begins_with("$"):
+		var ccb_resolved = _resolve_center_ref(ccb_center, payload, action)
+		if ccb_resolved == null:
+			return null
+		ccb_center = String(ccb_resolved)
+	var ccb_parts := ccb_center.split(",")
+	if ccb_parts.size() != 2:
+		return null
+	var ccb_budget: int = int(spec.get("radius", 0))
+	var ccb_per_key: String = String(spec.get("per_count_key", ""))
+	if ccb_budget <= 0 and ccb_per_key != "":
+		var ccb_count_resolved = _resolve_center_ref(ccb_per_key, payload, action)
+		var ccb_count: int = 0
+		if typeof(ccb_count_resolved) == TYPE_ARRAY:
+			ccb_count = (ccb_count_resolved as Array).size()
+		elif typeof(ccb_count_resolved) == TYPE_INT or typeof(ccb_count_resolved) == TYPE_FLOAT:
+			ccb_count = int(ccb_count_resolved)
+		ccb_budget = int(spec.get("per", 1)) * ccb_count
+	if ccb_budget <= 0:
+		return null
+	return {"center": {"q": int(ccb_parts[0]), "r": int(ccb_parts[1])}, "budget": ccb_budget}
+
+
+## 解析 CHOOSE_MAP_CELL circle 源的 "$runtime.x"/"$payload.x" 引用（返回原值；失败 null）。
+func _resolve_center_ref(ref: String, payload: Dictionary, action):
+	if context == null or context.action_service == null:
+		return null
+	return context.action_service._resolve_atomic_value(ref, payload, action)
 
 
 ## 处理 CHOOSE_MANY_MAP_CELLS（双子机雷设陷多格选格，单次挂起收集 N 格）。返回 true=已挂起。
@@ -3865,7 +10300,7 @@ func _handle_choose_many_map_cells(act: Dictionary, effect, payload: Dictionary,
 	var mmc_mech_id: StringName = mmc_bind.get("mech_id", payload.get("source_mech_id", payload.get("mech_id", &"")))
 	if mmc_card_id == &"" or mmc_mech_id == &"" or context == null or context.game_state == null:
 		return false
-	var mmc_valid: Array[Dictionary] = _ConditionChecker.get_valid_trap_cells(context.game_state, mmc_card_id, mmc_mech_id)
+	var mmc_valid: Array[Dictionary] = _ConditionChecker.get_valid_trap_cells(context.game_state, mmc_card_id, mmc_mech_id, context.map_service.get_attack_aura_cells(), context.map_service.get_attack_blocked_keys(mmc_mech_id))
 	if mmc_valid.size() < mmc_count:
 		SLog.log_raw("[TIMING] %s CHOOSE_MANY_MAP_CELLS 可放陷阱格不足%d，跳过 effect=%s" % [String(action.action_id), mmc_count, String(effect.effect_id)])
 		return false
@@ -3910,6 +10345,27 @@ func _resolve_fet_targets(targets_raw, payload: Dictionary, action) -> Array:
 				result.append(item.get("mech_id", &""))
 			else:
 				result.append(item)
+	elif resolved is Dictionary and resolved.has("range"):
+		# 范围扫描目标源（肯兹尔 pilot_045 弃牌等通用需求）：收集距源机甲 range 内所有存活机甲，
+		# 不分敌我。源机甲取 payload.source_mech_id 或 binding_context.mech_id；include_self=false
+		# 排除自己。仿 _prompt_choose_many_mechs 的候选收集逻辑（_HexGrid.distance 轴向距离）。
+		var rs_range: int = int(resolved.get("range", 1))
+		var rs_include_self: bool = bool(resolved.get("include_self", false))
+		var rs_src_mid: StringName = payload.get("source_mech_id", &"")
+		if rs_src_mid == &"" and payload.has("binding_context"):
+			var rs_bc: Dictionary = payload.get("binding_context", {})
+			rs_src_mid = rs_bc.get("mech_id", &"")
+		if rs_src_mid != &"" and context != null and context.game_state != null:
+			var rs_src = context.game_state.mechs.get(rs_src_mid)
+			if rs_src != null:
+				for rs_mid: StringName in context.game_state.mechs:
+					if rs_mid == rs_src_mid and not rs_include_self:
+						continue
+					var rs_m = context.game_state.mechs[rs_mid]
+					if rs_m == null or rs_m.destroyed:
+						continue
+					if _HexGrid.distance(rs_src.position, rs_m.position) <= rs_range:
+						result.append(rs_mid)
 	elif resolved is Dictionary:
 		for mid in resolved.get("mech_ids", []):
 			result.append(mid)
@@ -3992,6 +10448,35 @@ func _flat_item_choose_one(item: Dictionary, effect, payload: Dictionary, action
 	return &"pause"
 
 
+## FOR_EACH_TARGET 内嵌 CHOOSE_MANY_CARDS 逐目标弹窗（泰格 pilot_040 弃装解锁）。
+## 与 inner CHOOSE_ONE 同模式：per-target executed 标记（_fet_cm_executed）避免 resume 重跑时
+## 重复弹窗/重复执行。_prompt_choose_many_cards 无候选 / AI 持有者返回 false -> 标记已处理跳过
+## （锁保留，不弹窗）。返回同 _flat_item_choose_one：&"pass"（非 CM）/ &"next"（已处理）/ &"pause"。
+func _flat_item_choose_many_cards(item: Dictionary, effect, payload: Dictionary, action) -> StringName:
+	var item_action: Dictionary = item.get("action", {})
+	if item_action.get("type", &"") != &"CHOOSE_MANY_CARDS":
+		return &"pass"
+	if effect == null:
+		return &"pass"  # 防御：旧 _seq 无 effect 引用时走 execute_sub_action（无工厂静默失败）
+	var fet_tgt: StringName = item.get("target_id", &"")
+	var exec_d: Dictionary = action.record.get("_fet_cm_executed", {})
+	if bool(exec_d.get(fet_tgt, false)):
+		return &"next"  # 已处理（弃牌解锁或不弃置），跳过
+	# 未处理：走标准多选弹窗。act_idx=-1 防止 resume 的 store 路径按 effect.actions 续跑
+	# （flat 项不属于 effect.actions 顶层，续跑由 _seq_effect_actions 驱动）。
+	if _prompt_choose_many_cards(effect, payload, action, item_action, -1):
+		# 标记 flat 续跑信息：resume(phase=choose_many_cards) 据此标记 target 已处理并续跑 flat 剩余
+		var pend: Dictionary = _pending_effect.get(action.action_id, {})
+		pend["_flat_cm"] = true
+		pend["_flat_cm_target"] = fet_tgt
+		_pending_effect[action.action_id] = pend
+		return &"pause"
+	# 无候选（目标无正面装备）/ AI：视为已处理，锁保留不弹窗
+	exec_d[fet_tgt] = true
+	action.record["_fet_cm_executed"] = exec_d
+	return &"next"
+
+
 ## 串行执行 flat 列表（FOR_EACH_TARGET 展开）。设 current_target 后 execute_sub_action；
 ## 子动作挂起则存 _seq(flat) 并返回 true。返回 false=全部完成。
 func _run_flat_inline(flat: Array, start_idx: int, effect, payload: Dictionary, action, var_name: StringName) -> bool:
@@ -4004,19 +10489,30 @@ func _run_flat_inline(flat: Array, start_idx: int, effect, payload: Dictionary, 
 		if ci_ret == &"pause":
 			var remaining_ci: Array = flat.slice(i + 1)
 			if not remaining_ci.is_empty():
-				action.record["_seq_effect_actions"] = {"payload": payload, "remaining": remaining_ci, "flat": true, "var_name": var_name}
+				action.record["_seq_effect_actions"] = {"payload": payload, "remaining": remaining_ci, "flat": true, "var_name": var_name, "effect": effect}
 			action.state = &"waiting_effect_action"
 			return true
 		if ci_ret == &"next":
 			i += 1
 			continue
-		# pass：非 CHOOSE_ONE，走 execute_sub_action
+		# inner CHOOSE_MANY_CARDS（泰格 pilot_040 弃装解锁）：per-target 串行弹窗，走专用 helper
+		var cm_ret: StringName = _flat_item_choose_many_cards(item, effect, payload, action)
+		if cm_ret == &"pause":
+			var remaining_cm: Array = flat.slice(i + 1)
+			if not remaining_cm.is_empty():
+				action.record["_seq_effect_actions"] = {"payload": payload, "remaining": remaining_cm, "flat": true, "var_name": var_name, "effect": effect}
+			action.state = &"waiting_effect_action"
+			return true
+		if cm_ret == &"next":
+			i += 1
+			continue
+		# pass：非 CHOOSE_ONE / CHOOSE_MANY_CARDS，走 execute_sub_action
 		if context != null and context.action_service != null:
 			context.action_service.execute_sub_action(item.get("action", {}), payload, action)
 		if _last_created_sub_action_paused(action):
 			var remaining: Array = flat.slice(i + 1)
 			if not remaining.is_empty():
-				action.record["_seq_effect_actions"] = {"payload": payload, "remaining": remaining, "flat": true, "var_name": var_name}
+				action.record["_seq_effect_actions"] = {"payload": payload, "remaining": remaining, "flat": true, "var_name": var_name, "effect": effect}
 			# 子动作挂起：父动作切 waiting_effect_action，等 ActionEngine._after_sub_action_finished
 			# 调 _continue_seq_effect_actions 续跑剩余 flat（pilot_012 e1 EXECUTE_STEAL 选牌后继续 MODIFY_MECH_POWER）
 			action.state = &"waiting_effect_action"
@@ -4040,17 +10536,132 @@ func _continue_seq_effect_actions(parent_action) -> bool:
 			return false
 		var act: Dictionary = remaining.pop_front()
 		# 先回写 record（remaining 已 pop），供后续断点/取消路径读取一致状态（保留 source_check/flat 标记）
-		parent_action.record["_seq_effect_actions"] = {"payload": payload, "remaining": remaining, "source_check": seq.get("source_check", false), "flat": is_flat, "var_name": flat_var}
+		parent_action.record["_seq_effect_actions"] = {"payload": payload, "remaining": remaining, "source_check": seq.get("source_check", false), "flat": is_flat, "var_name": flat_var, "branch_seq": bool(seq.get("branch_seq", false)), "effect": seq.get("effect")}
 		var act_type: StringName = act.get("type", &"")
 		# flat 模式（FOR_EACH_TARGET 展开）：item = {action, target_id, var_name}。
 		# 设 current_target 后执行 item.action（item 本身无 type -> 走 flat 分支）。
 		if is_flat and not act.has("type"):
 			var fet_tgt: StringName = act.get("target_id", &"")
 			payload[String(act.get("var_name", flat_var))] = {"mech_id": fet_tgt}
+			# flat 内嵌 CHOOSE_MANY_CARDS（泰格弃装解锁）：逐目标弹窗，走专用 helper。
+			# _seq 已在 pop 后 re-save（含当前 item 之后的 remaining），挂起时直接等 resume 续跑。
+			var fcm_ret: StringName = _flat_item_choose_many_cards(act, seq.get("effect"), payload, parent_action)
+			if fcm_ret == &"pause":
+				parent_action.state = &"waiting_effect_action"
+				return true
+			if fcm_ret == &"next":
+				continue
 			if context != null and context.action_service != null:
 				context.action_service.execute_sub_action(act.get("action", {}), payload, parent_action)
 			if _last_created_sub_action_paused(parent_action):
 				return true
+			continue
+		# CONDITIONAL_ACTIONS（顶层/序列）：按当前 payload 评估条件取 if_true/if_false 分支，
+		# 拼接到 remaining 头部续跑。供 _seq 序列中分支动作（青瞳 pilot_037 偷牌挂起后 resume
+		# 的剩余链含此动作）以及 _execute_actions 顶层 splice 的场景复用。
+		if act_type == &"CONDITIONAL_ACTIONS":
+			var seq_ca_params: Dictionary = act.get("params", {})
+			var seq_ca_conds: Array = seq_ca_params.get("conditions", [])
+			var seq_ca_branch: Array = seq_ca_params.get("if_false_actions", [])
+			var seq_ca_bind = _make_binding_from_effect(null, parent_action, payload)
+			if seq_ca_conds.is_empty() or _ConditionChecker.check_all(seq_ca_bind, payload, seq_ca_conds):
+				seq_ca_branch = seq_ca_params.get("if_true_actions", [])
+			remaining = seq_ca_branch + remaining
+			parent_action.record["_seq_effect_actions"] = {"payload": payload, "remaining": remaining, "source_check": seq.get("source_check", false), "flat": is_flat, "var_name": flat_var, "branch_seq": bool(seq.get("branch_seq", false)), "effect": seq.get("effect")}
+			continue
+		# FOR_EACH_TARGET（_seq 序列中，如泰格 pilot_040 弃行动牌后对多目标施加锁+逐目标解锁弹窗）：
+		# 顶层 _execute_actions / CHOOSE_ONE 分支都有特判，此处同样需要——execute_sub_action 无工厂会
+		# 静默失败。展开为 flat 串行执行（内嵌 CHOOSE_MANY_CARDS 逐目标弹窗）。挂起时 flat _seq 已设
+		# （_run_flat_inline 覆盖），把本 FET 之后的剩余动作追加到 flat _seq.remaining 末尾，
+		# flat 全部完成后按普通动作续跑（泰格 ③锁 ④解锁 两段 FOR_EACH 串行）。
+		if act_type == &"FOR_EACH_TARGET":
+			var seq_fet_params: Dictionary = act.get("params", {})
+			var seq_fet_targets: Array = _resolve_fet_targets(seq_fet_params.get("targets", &""), payload, parent_action)
+			if seq_fet_targets.is_empty():
+				continue
+			var seq_fet_var: StringName = seq_fet_params.get("current_target_variable", &"current_target")
+			var seq_fet_effect = seq.get("effect")
+			var seq_fet_flat: Array = _build_for_each_flat(seq_fet_targets, seq_fet_params.get("actions", []), seq_fet_var, seq_fet_effect, payload, parent_action)
+			if _run_flat_inline(seq_fet_flat, 0, seq_fet_effect, payload, parent_action, seq_fet_var):
+				var seq_fet_after: Array = remaining
+				if not seq_fet_after.is_empty() and parent_action.record.has("_seq_effect_actions"):
+					var _sf_seq: Dictionary = parent_action.record["_seq_effect_actions"]
+					var _sf_rem: Array = _sf_seq.get("remaining", [])
+					_sf_rem.append_array(seq_fet_after)
+					_sf_seq["remaining"] = _sf_rem
+					_sf_seq["flat"] = true
+					parent_action.record["_seq_effect_actions"] = _sf_seq
+				return true
+			continue
+		# POWER_SPEND_TAX_CONTINUE：动力税伤害链尾哨兵（杰西卡 pilot_050 e1）。两次 hp_change
+		# 完成后检查剩余询问次数：还有 -> 再弹确认窗（挂起）；没有 -> 清 ctx 结束。
+		if act_type == &"POWER_SPEND_TAX_CONTINUE":
+			var ptc_ctx: Dictionary = parent_action.record.get("_power_tax_ctx", {})
+			ptc_ctx["prompts_left"] = int(ptc_ctx.get("prompts_left", 1)) - 1
+			var ptc_left: int = int(ptc_ctx["prompts_left"])
+			SLog.log_raw("[TIMING] %s 动力税伤害链完成（剩%d次询问）" % [String(parent_action.action_id), ptc_left])
+			if ptc_left > 0:
+				parent_action.record["_power_tax_ctx"] = ptc_ctx
+				_power_tax_prompt_confirm(parent_action, payload, seq.get("effect"))
+				return true
+			parent_action.record.erase("_power_tax_ctx")
+			continue
+		# POWER_TAX_TRIBUTE_DISCARD_SIDE：动力税贡赋弃牌侧哨兵（杰西卡 pilot_050 e2）。
+		# <=count 直接全选 EXECUTE_DISCARD（挂起检查由调用处 _last_created_sub_action_paused）；
+		# >count 弹多选窗挂起（phase=power_tax_tribute_discard 由 resume 续跑）。
+		if act_type == &"POWER_TAX_TRIBUTE_DISCARD_SIDE":
+			var tds_side: StringName = act.get("params", {}).get("side", &"owner")
+			if _power_tax_tribute_discard_side(parent_action, payload, seq.get("effect"), tds_side):
+				return true
+			continue
+		# POWER_TAX_TRIBUTE_CLEANUP：动力税贡赋链尾清理（e2 全部完成）。
+		if act_type == &"POWER_TAX_TRIBUTE_CLEANUP":
+			parent_action.record.erase("_power_tax_tribute")
+			continue
+		# ATTACK_SETTLE_DRAW_REATTACK_AFTER_DRAW：抽牌完成后检查每回合1次可用+手牌足够，
+		# 弹多选窗选 discard_count 张弃置（可取消不计次数；resume phase=attack_settle_draw_reattack_discard 续跑）。
+		if act_type == &"ATTACK_SETTLE_DRAW_REATTACK_AFTER_DRAW":
+			if _asdr_offer_discard(parent_action, payload, seq.get("effect")):
+				return true
+			continue
+		# ATTACK_SETTLE_DRAW_REATTACK_OPEN_WINDOW：弃置完成后给攻击方开凯威攻击窗口（攻击动作完成后打开）。
+		if act_type == &"ATTACK_SETTLE_DRAW_REATTACK_OPEN_WINDOW":
+			_asdr_open_attack_window(parent_action, payload, seq.get("effect"))
+			continue
+		# CHOOSE_MAP_CELL（_seq 序列中，如格雷厄姆 pilot_057 e2 弃牌后的第二次选格）：
+		# execute_sub_action 无工厂会静默失败，须走专用 helper 挂起选格 UI
+		# （resume phase=map_cell_select 回到本序列续跑剩余链）。
+		if act_type == &"CHOOSE_MAP_CELL":
+			if _handle_choose_map_cell(act, seq.get("effect"), payload, parent_action):
+				return true
+			continue
+		# CHOOSE_RESERVE_SLOT_AND_SET_EQUIP（通用「抽到的装备背面置备用区」，法尔科 pilot_073 等）：
+		# execute_sub_action 无工厂会静默失败，须走专用 helper 读取抽牌 sink + 挂起备用区选择 UI
+		# （复用 hidden_reserve_slot 弹窗，resume phase=choose_reserve_slot_and_set 回本序列续跑）。
+		if act_type == &"CHOOSE_RESERVE_SLOT_AND_SET_EQUIP":
+			if _handle_choose_reserve_slot_and_set(act, seq.get("effect"), payload, parent_action):
+				return true
+			continue
+		# PEEK_DECK_SHOW（通用窥牌模块第2阶段哨兵，银雪 pilot_065）：代价牌弃置完成后由 _seq 续跑触发。
+		# execute_sub_action 无工厂会静默失败，须走专用 helper 挂起堆顶多选窗（resume phase=peek_select_discard）。
+		if act_type == &"PEEK_DECK_SHOW":
+			if _handle_peek_deck_show(act, seq.get("effect"), payload, parent_action):
+				return true
+			continue
+		# GAIN_GOLD_BY_DIE（事件牌宝藏 e011 等通用）：_seq 续跑同样拦截（首跑在 _execute_actions
+		# 行 GAIN_GOLD_BY_DIE 分支处理；弃牌窗挂起恢复后续跑本序列时无工厂会静默失败 ->
+		# 宝藏掷骰获金整链失效）。同步执行不挂起，continue 下一动作。
+		if act_type == &"GAIN_GOLD_BY_DIE":
+			_handle_gain_gold_by_die(act.get("params", {}), payload, parent_action)
+			continue
+		# DRAW_EQUIPMENT_AND_IMMEDIATELY_SET / DRAW_EQUIPMENT_AND_CHOOSE_SET_OR_SELL 伪动作：
+		# _seq 恢复循环同样拦截（事件牌拾荒 e005 / 增援 e001 / 约书亚 pilot_025 等），
+		# 否则 execute_sub_action 无注册工厂报"未注册的动作类型"静默失败
+		# （PvP3 推进选格后 resume 续跑拾荒抽装备链的实机报错路径）。
+		var _seq_deis_ret: StringName = _handle_draw_equipment_pseudo(act_type, act.get("params", {}), seq.get("effect"), payload, parent_action)
+		if _seq_deis_ret == &"suspend":
+			return true
+		if _seq_deis_ret == &"skip":
 			continue
 		# REGISTER_LISTEN/CHOOSE_ONE/OFFER_DAMAGE_REDIRECT 不创建子动作或走 waiting_timing 挂起，
 		# 不应出现在 _seq remaining（_execute_actions 仅对 execute_sub_action 类动作设 _seq）。防御跳过。
@@ -4070,6 +10681,10 @@ func _continue_seq_effect_actions(parent_action) -> bool:
 			return true
 		# 否则（原子动作无子动作 / 子动作同步完成）继续下一个
 	# 全部剩余动作处理完毕
+	# 琳 RE 维修窗口：分支挂起续跑完成（如移除损伤面板）后关闭窗口并恢复请求方回合。
+	# 窗口内维修的目标锁定标志 _pilot_024_window_locked 随 payload 存于 _seq，据此判断。
+	if bool(payload.get("_pilot_024_window_locked", false)):
+		_pilot_024_close_if_window_repair_done(null, payload, parent_action)
 	parent_action.record.erase("_seq_effect_actions")
 	return false
 
@@ -4297,3 +10912,363 @@ func _make_binding_from_effect(effect: ActionEffect, action, payload: Dictionary
 	# 注入 context，供 ConditionChecker 查询 game_state（ATTACK_TARGET_ALIVE 等）
 	binding.context = context
 	return binding
+
+
+## 维修增强（通用机制 REPAIR_BOOST）：改写 repair_direct 二选一选项（深拷贝，不污染静态 effect）。
+## - 含 method=decrease 的损伤移除选项：value += extra_removal（合并为一次移除，如 移除2→移除4）。
+## - 其他选项（回复生命）：追加额外移除 extra_removal，带 TARGET_HAS_DAMAGE 条件（无损伤不生效，
+##   否则 decrease 会对无损伤目标弹空移除框卡死）。坎得 pilot_023 等维修增强机师复用。
+func _apply_repair_boost_options(options: Array, boost: Dictionary) -> Array:
+	var extra: int = int(boost.get("extra_removal", 0))
+	if extra <= 0:
+		return options
+	var result: Array = []
+	for opt in options:
+		if not (opt is Dictionary):
+			result.append(opt)
+			continue
+		var opt_copy: Dictionary = opt.duplicate(true)
+		var acts: Array = opt_copy.get("actions", [])
+		var acts_out: Array = []
+		var has_removal: bool = false
+		for a in acts:
+			if not (a is Dictionary):
+				acts_out.append(a)
+				continue
+			var a_copy: Dictionary = a.duplicate(true)
+			if a.get("type", &"") == &"EXECUTE_DAMAGE_CHANGE" and String(a.get("params", {}).get("method", &"increase")) == "decrease":
+				a_copy["params"]["value"] = int(a.get("params", {}).get("value", 0)) + extra
+				has_removal = true
+			acts_out.append(a_copy)
+		if not has_removal:
+			acts_out.append({
+				"type": &"EXECUTE_DAMAGE_CHANGE",
+				"params": {"value": extra, "method": &"decrease"},
+				"condition": [{"op": &"TARGET_HAS_DAMAGE"}],
+			})
+		opt_copy["actions"] = acts_out
+		result.append(opt_copy)
+	return result
+
+
+# ════════════════════════════════════════════════════════════
+# pilot_024 琳：RE 请求确认 / 维修后双方各抽2 / 维修窗口关闭
+# ════════════════════════════════════════════════════════════
+
+## 弹琳 RE 请求确认窗（choose_one_effect 单选项 + 请求方信息作来源说明）。
+## 弹窗路由到琳玩家窗口；确认/取消由 resume_pending_effect phase=pilot_024_re_confirm 处理。
+func _prompt_pilot_024_re_confirm(effect: ActionEffect, payload: Dictionary, action) -> void:
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"pilot_024_re_confirm"}
+	action.record["_waiting_for_p024_re_confirm"] = true
+	action.state = &"waiting_timing"
+	var bind_ctx: Dictionary = payload.get("binding_context", {}) if payload != null else {}
+	var requester_mid: StringName = StringName(bind_ctx.get("mech_id", payload.get("mech_id", &"")))
+	var lin_mid: StringName = _ActionPilotEffects.pilot_024_find_lin_mech(context.game_state)
+	var lin_player: StringName = &""
+	if lin_mid != &"":
+		var lin_m = context.game_state.mechs.get(lin_mid)
+		if lin_m != null:
+			lin_player = lin_m.owner_player_id
+	var desc: String = "请求维修"
+	if requester_mid != &"":
+		var r_m = context.game_state.mechs.get(requester_mid)
+		if r_m != null:
+			var r_player = context.game_state.players.get(r_m.owner_player_id) if context.game_state.players != null else null
+			# PlayerState/MechFrameDef 是 RefCounted 对象（非 Dictionary）：.get() 只收1参，
+			# 直接属性访问最稳。PlayerState 无 display_name 字段，用 player_id 作玩家名。
+			var r_pname: String = String(r_player.player_id) if r_player != null else String(r_m.owner_player_id)
+			var r_mname: String = String(r_m.frame_def.display_name) if r_m.frame_def != null else String(r_m.mech_id)
+			desc = "【%s】的 %s（HP %d/%d，%s）请求维修" % [
+				r_pname, r_mname, int(r_m.current_hp), int(r_m.max_hp), _pilot_024_damage_summary(r_m),
+			]
+	action_needs_input.emit(action.action_id, &"choose_one_effect", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"options": [{"label": "确认维修", "effect_id": &"option_0", "option_index": 0}],
+		"optional": true,
+		"player_id": lin_player,
+		"source_label": desc,
+	})
+	SLog.log_raw("[TIMING] %s 琳 RE 请求确认弹窗 requester=%s" % [String(action.action_id), String(requester_mid)])
+
+
+## 汀兰 pilot_081 RE 请求确认窗（choose_one_effect 单选项 + 请求方信息作来源说明）。
+## 弹窗路由到汀兰持有者玩家（按 binding.card_instance_id 精确定位持有者，多汀兰可区分）；
+## 同意/拒绝由 resume_pending_effect phase=pilot_081_re_confirm 处理。
+func _prompt_pilot_081_re_confirm(effect: ActionEffect, payload: Dictionary, action) -> void:
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"pilot_081_re_confirm"}
+	action.record["_waiting_for_p081_re_confirm"] = true
+	action.state = &"waiting_timing"
+	var bind_ctx: Dictionary = payload.get("binding_context", {}) if payload != null else {}
+	var requester_mid: StringName = StringName(bind_ctx.get("mech_id", payload.get("mech_id", &"")))
+	var holder_inst: StringName = StringName(bind_ctx.get("card_instance_id", payload.get("card_instance_id", &"")))
+	var holder_mid: StringName = _ActionPilotEffects.pilot_081_find_holder_for_pilot_instance(context.game_state, holder_inst)
+	var holder_player: StringName = &""
+	if holder_mid != &"":
+		var h_m = context.game_state.mechs.get(holder_mid)
+		if h_m != null:
+			holder_player = h_m.owner_player_id
+	var desc: String = "请求汀兰回复"
+	if requester_mid != &"":
+		var r_m = context.game_state.mechs.get(requester_mid)
+		if r_m != null:
+			var r_player = context.game_state.players.get(r_m.owner_player_id) if context.game_state.players != null else null
+			# PlayerState/MechFrameDef 是 RefCounted 对象（非 Dictionary）：.get() 只收1参，
+			# 直接属性访问最稳。PlayerState 无 display_name 字段，用 player_id 作玩家名。
+			var r_pname: String = String(r_player.player_id) if r_player != null else String(r_m.owner_player_id)
+			var r_mname: String = String(r_m.frame_def.display_name) if r_m.frame_def != null else String(r_m.mech_id)
+			desc = "【%s】的 %s（HP %d/%d）请求汀兰回复2生命、获2金" % [
+				r_pname, r_mname, int(r_m.current_hp), int(r_m.max_hp),
+			]
+	action_needs_input.emit(action.action_id, &"choose_one_effect", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"options": [{"label": "同意回复", "effect_id": &"option_0", "option_index": 0}],
+		"optional": true,
+		"player_id": holder_player,
+		"source_label": desc,
+	})
+	SLog.log_raw("[TIMING] %s 汀兰 RE 请求确认弹窗 requester=%s holder=%s" % [String(action.action_id), String(requester_mid), String(holder_mid)])
+
+
+# ════════════════════════════════════════════════════════════
+# pilot_083 瓦恩：武器修改两阶段流程（phase1 武器单选 → phase2 三横排选项 → 施加）
+# ════════════════════════════════════════════════════════════
+
+## 瓦恩武器修改流程启动：phase1 武器单选（choose_one_effect → choice_panel）。
+## mode=owner：按钮1主动，武器=全场武器；mode=re：RE 请求，武器=请求方武器。
+## 弹窗路由到瓦恩持有者玩家窗口（re 由 binding.card_instance_id 精确定位持有者）。
+func _start_pilot_083_flow(effect: ActionEffect, payload: Dictionary, action) -> void:
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"p083_weapon_select"}
+	action.record["_waiting_for_p083_weapon_select"] = true
+	action.state = &"waiting_timing"
+	var bind_ctx: Dictionary = payload.get("binding_context", {}) if payload != null else {}
+	var holder_inst: StringName = StringName(bind_ctx.get("card_instance_id", payload.get("card_instance_id", &"")))
+	var mode: String = String(payload.get("_p083_mode", "owner"))
+	var requester_mid: StringName = StringName(bind_ctx.get("mech_id", payload.get("mech_id", &"")))
+	if requester_mid == &"":
+		requester_mid = StringName(payload.get("source_mech_id", &""))
+	var holder_mid: StringName = _ActionPilotEffects.pilot_083_find_holder_for_pilot_instance(context.game_state, holder_inst)
+	var holder_player: StringName = &""
+	if holder_mid != &"":
+		var h_m = context.game_state.mechs.get(holder_mid)
+		if h_m != null:
+			holder_player = h_m.owner_player_id
+	# 武器候选：owner=全场；re=请求方武器（含实体/虚拟/基础武器，基础武器键 "base:<mech_id>:<slot>"）
+	var w_target_mech: StringName = &""
+	if mode == &"re":
+		w_target_mech = requester_mid
+	var options: Array = _ActionPilotEffects.pilot_083_list_weapon_options(context.game_state, w_target_mech)
+	# choice_panel 选项 effect_id 用作 weapon_key（"card:<instance_id>" / "base:<mech_id>:<slot>"），option_index 递增
+	var typed_opts: Array[Dictionary] = []
+	for o in options:
+		if o is Dictionary:
+			typed_opts.append({
+				"label": String(o.get("label", "")),
+				"effect_id": StringName(String(o.get("weapon_key", ""))),
+				"option_index": typed_opts.size(),
+				"mech_id": o.get("mech_id", &""),
+				"slot_id": o.get("slot_id", &""),
+				"is_virtual": bool(o.get("is_virtual", false)),
+			})
+	var desc: String = "瓦恩-武器修改：选择1把武器"
+	if mode == &"re" and requester_mid != &"":
+		var r_m = context.game_state.mechs.get(requester_mid)
+		if r_m != null:
+			var r_player = context.game_state.players.get(r_m.owner_player_id) if context.game_state.players != null else null
+			var r_pname: String = String(r_player.player_id) if r_player != null else String(r_m.owner_player_id)
+			var r_mname: String = String(r_m.frame_def.display_name) if r_m.frame_def != null else String(r_m.mech_id)
+			desc = "【%s】的 %s（HP %d/%d）请求瓦恩对其武器使用武器修改：选择1把武器" % [
+				r_pname, r_mname, int(r_m.current_hp), int(r_m.max_hp),
+			]
+	action_needs_input.emit(action.action_id, &"choose_one_effect", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"options": typed_opts,
+		"optional": true,
+		"player_id": holder_player,
+		"source_label": desc,
+	})
+	SLog.log_raw("[TIMING] %s 瓦恩武器修改 phase1 武器选择 mode=%s requester=%s holder=%s" % [String(action.action_id), mode, String(requester_mid), String(holder_mid)])
+
+
+## 瓦恩 phase2：选中武器后弹三横排选项面板（weapon_modify_options_panel）。
+## 弹窗路由到瓦恩持有者玩家窗口；确认打包状态 / 取消由 resume_pending_effect phase=p083_options 处理。
+func _prompt_pilot_083_options(effect: ActionEffect, payload: Dictionary, action) -> void:
+	_pending_effect[action.action_id] = {"action": action, "effect": effect, "payload": payload, "phase": &"p083_options"}
+	action.record["_waiting_for_p083_options"] = true
+	action.state = &"waiting_timing"
+	var bind_ctx: Dictionary = payload.get("binding_context", {}) if payload != null else {}
+	var holder_inst: StringName = StringName(bind_ctx.get("card_instance_id", payload.get("card_instance_id", &"")))
+	var holder_mid: StringName = _ActionPilotEffects.pilot_083_find_holder_for_pilot_instance(context.game_state, holder_inst)
+	var holder_player: StringName = &""
+	if holder_mid != &"":
+		var h_m = context.game_state.mechs.get(holder_mid)
+		if h_m != null:
+			holder_player = h_m.owner_player_id
+	var weapon_name: String = _pilot_083_weapon_label(context.game_state, String(payload.get("_p083_weapon_key", "")))
+	action_needs_input.emit(action.action_id, &"pilot_083_options", {
+		"action_id": action.action_id,
+		"effect_id": effect.effect_id,
+		"player_id": holder_player,
+		"weapon_name": weapon_name,
+		"source_label": "瓦恩-武器修改",
+	})
+	SLog.log_raw("[TIMING] %s 瓦恩武器修改 phase2 三横排选项 weapon=%s" % [String(action.action_id), weapon_name])
+
+
+## 瓦恩最终应用：把打包状态施加到所选武器 +（owner 模式）标记效果1每回合1次已用。
+## 施加数据经 counters["pilot_083_apps"] 累积（数值叠加/名称后缀累积/类型最新覆盖）。
+func _apply_pilot_083_flow(effect: ActionEffect, payload: Dictionary, action) -> void:
+	var bind_ctx: Dictionary = payload.get("binding_context", {}) if payload != null else {}
+	var holder_inst: StringName = StringName(bind_ctx.get("card_instance_id", payload.get("card_instance_id", &"")))
+	var mode: String = String(payload.get("_p083_mode", "owner"))
+	var weapon_key: String = String(payload.get("_p083_weapon_key", ""))
+	var app: Dictionary = payload.get("_p083_options", {})
+	var holder_mid: StringName = _ActionPilotEffects.pilot_083_find_holder_for_pilot_instance(context.game_state, holder_inst)
+	var holder_player: StringName = &""
+	if holder_mid != &"":
+		var h_m = context.game_state.mechs.get(holder_mid)
+		if h_m != null:
+			holder_player = h_m.owner_player_id
+	if weapon_key.begins_with("base:"):
+		# 基础武器（无卡牌实例，施加存机甲 pilot_083_base_apps）：base:<mech_id>:<slot_index>
+		var parts: PackedStringArray = weapon_key.substr(5).split(":")
+		if parts.size() < 2:
+			SLog.log_raw("[TIMING] %s 瓦恩武器修改非法基础武器键 weapon_key=%s，取消施加" % [String(action.action_id), weapon_key])
+			_finish_pilot_083_flow(action, payload)
+			return
+		var b_mech = context.game_state.mechs.get(StringName(parts[0])) if context.game_state.mechs != null else null
+		if b_mech == null:
+			SLog.log_raw("[TIMING] %s 瓦恩武器修改找不到基础武器机甲 %s，取消施加" % [String(action.action_id), parts[0]])
+			_finish_pilot_083_flow(action, payload)
+			return
+		_ActionPilotEffects.pilot_083_apply_to_base_weapon(b_mech, int(parts[1]), holder_player, int(context.game_state.turn_number), app)
+		SLog.log_raw("[TIMING] %s 瓦恩武器修改施加(基础武器) weapon=%s app=%s mode=%s" % [String(action.action_id), weapon_key, str(app), mode])
+	else:
+		var card = _resolve_pilot_083_weapon_card(context.game_state, weapon_key)
+		if card == null:
+			SLog.log_raw("[TIMING] %s 瓦恩武器修改找不到武器卡 weapon_key=%s，取消施加" % [String(action.action_id), weapon_key])
+			_finish_pilot_083_flow(action, payload)
+			return
+		_ActionPilotEffects.pilot_083_apply_to_weapon(card, holder_player, int(context.game_state.turn_number), app)
+		SLog.log_raw("[TIMING] %s 瓦恩武器修改施加 weapon=%s app=%s mode=%s" % [String(action.action_id), weapon_key, str(app), mode])
+	# owner 模式：标记效果1每回合1次已用（取消不计，仅在最终应用时标记）
+	if mode == &"owner" and holder_inst != &"":
+		mark_once_per_turn_key_used(&"pilot_083_effect_01", holder_inst)
+	_finish_pilot_083_flow(action, payload)
+
+
+## 瓦恩流程收尾：标记完成并恢复动作推进（handler 见 _p083_flow_done 跳过不重跑）。
+func _finish_pilot_083_flow(action, payload: Dictionary) -> void:
+	action.record.erase("_waiting_for_p083_weapon_select")
+	action.record.erase("_waiting_for_p083_options")
+	if payload != null:
+		payload["_p083_flow_done"] = true
+	action.record["_p083_flow_done"] = true
+	if context != null and context.action_engine != null:
+		action.state = &"waiting_input"
+		context.action_engine.continue_action(action.action_id, {})
+
+
+## 解析 weapon_key（"card:<instance_id>"）→ 武器卡；找不到返回 null。
+func _resolve_pilot_083_weapon_card(gs, weapon_key: String) -> Variant:
+	if gs == null or weapon_key == "" or not weapon_key.begins_with("card:"):
+		return null
+	var inst_id: StringName = StringName(weapon_key.substr(5))
+	return gs.cards.get(inst_id) if gs.cards != null else null
+
+
+## 取武器显示名（选项面板标题用），失败回退 weapon_key。
+func _pilot_083_weapon_label(gs, weapon_key: String) -> String:
+	if weapon_key.begins_with("base:"):
+		var parts: PackedStringArray = weapon_key.substr(5).split(":")
+		if parts.size() >= 2 and gs != null and gs.mechs != null:
+			var b_mech = gs.mechs.get(StringName(parts[0]))
+			if b_mech != null:
+				var bws: Dictionary = _ActionPilotEffects.get_base_weapon_effective_stats(b_mech, int(parts[1]))
+				return String(bws.get("weapon_name", weapon_key))
+		return weapon_key
+	var card = _resolve_pilot_083_weapon_card(gs, weapon_key)
+	if card == null:
+		return weapon_key
+	if card.get("def") != null and card.def != null:
+		var _GEE = _ActionPilotEffects._get_gen_equip_effects()
+		if _GEE != null and _GEE.has_method(&"get_effective_weapon_stats"):
+			var st: Dictionary = _GEE.get_effective_weapon_stats(card)
+			return String(st.get("weapon_name", card.def.display_name))
+	return String(card.instance_id)
+
+
+## 琳 pilot_024 效果2：维修后双方各抽2。向维修 CHOOSE_ONE 各分支追加抽牌动作。
+## 只有维修来源是琳且目标非琳自己时追加（我方先抽、目标后抽，串行）。
+## 追加到分支末尾：修复完成（HP/损伤变更）后抽牌，符合"使用维修后"语义。
+func _append_pilot_024_repair_draws(options: Array, src_mech: StringName, payload: Dictionary) -> Array:
+	var target_id: StringName = StringName(payload.get("target_id", payload.get("target_mech_id", &"")))
+	var draw_players: Array = _ActionPilotEffects.pilot_024_draw_players_after_repair(context.game_state, src_mech, target_id)
+	if draw_players.is_empty():
+		return options
+	var result: Array = []
+	for opt in options:
+		if not (opt is Dictionary):
+			result.append(opt)
+			continue
+		var opt_copy: Dictionary = opt.duplicate(true)
+		var acts: Array = opt_copy.get("actions", [])
+		for pid: StringName in draw_players:
+			acts.append({"type": &"EXECUTE_GAIN_CARD", "params": {
+				"player_id": pid, "count": 2, "from_zone": &"action_deck",
+				"reason": &"PILOT_024_REPAIR_DRAW",
+			}})
+		opt_copy["actions"] = acts
+		result.append(opt_copy)
+	return result
+
+
+## 琳 RE 维修窗口关闭钩子：当前完成的 repair_direct 是窗口内维修（来源=琳、目标=窗口请求方）
+## 时，关闭维修窗口并恢复被阻塞的 RE 请求动作（请求方回合继续）。
+## effect 可为 null（_continue_seq_effect_actions 续跑路径无 effect），此时从 payload 反查来源。
+func _pilot_024_close_if_window_repair_done(effect, payload: Dictionary, action) -> void:
+	if context == null or context.game_state == null or payload == null:
+		return
+	var src_mech: StringName = &""
+	if effect != null:
+		var b = _make_binding_from_effect(effect, action, payload)
+		src_mech = b.get_source_mech_id() if b != null else &""
+	else:
+		var src_d: Dictionary = payload.get("source", {}) if payload.has("source") else {}
+		src_mech = StringName(src_d.get("mech_id", &""))
+		if src_mech == &"":
+			# source.mech_id 为空（顶层 use_action_card 来源仅带 card_instance_id）时
+			# 回退 payload 的 mech_id/source_mech_id，保证窗口关闭判断仍能定位来源机甲。
+			src_mech = StringName(payload.get("source_mech_id", payload.get("mech_id", &"")))
+	if src_mech == &"":
+		return
+	if effect != null and effect.effect_id != &"repair_direct":
+		return
+	var target_id: StringName = StringName(payload.get("target_id", payload.get("target_mech_id", &"")))
+	var wreq: StringName = _ActionPilotEffects.pilot_024_window_requester_for(context.game_state, src_mech)
+	if wreq == &"" or wreq != target_id:
+		return
+	# 窗口关闭（维修已完成），恢复请求方回合
+	_ActionPilotEffects.pilot_024_close_repair_window(context)
+	pilot_024_repair_window_changed.emit(false, target_id)
+	SLog.log_raw("[TIMING] 琳维修完成，RE 维修窗口关闭 requester=%s，请求方回合恢复" % String(target_id))
+
+
+## 机甲损伤概况（供 RE 确认弹窗展示）：统计区域+装备牌损伤点数。
+func _pilot_024_damage_summary(mech) -> String:
+	if mech == null:
+		return "无损伤"
+	var total_dmg: int = 0
+	if mech.slots != null:
+		for sid: StringName in mech.slots:
+			var slot = mech.slots[sid]
+			if slot == null:
+				continue
+			total_dmg += int(slot.get("region_damage_tokens"))
+			if slot.equipped_card != null:
+				total_dmg += int(slot.equipped_card.get("damage_tokens"))
+	if total_dmg <= 0:
+		return "无损伤"
+	return "损伤%d点" % total_dmg

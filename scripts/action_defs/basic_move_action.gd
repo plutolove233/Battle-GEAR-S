@@ -39,6 +39,9 @@ func _step_extract_target(action: Action) -> Dictionary:
 	var mech = context.game_state.mechs.get(mech_id)
 	if mech == null or target_cell == &"":
 		return {"error": "缺少机甲或目标格"}
+	# 陷落等 cannot_move 状态：基础移动不可执行（UI 高亮已屏蔽，此处兜底程序化调用路径）
+	if mech.has_status(&"cannot_move"):
+		return {"error": "机甲无法移动"}
 	var parts: PackedStringArray = String(target_cell).split(",")
 	if parts.size() < 2:
 		return {"error": "目标格格式错误"}
@@ -55,7 +58,12 @@ func _step_extract_target(action: Action) -> Dictionary:
 		var other = context.game_state.mechs[other_id]
 		if other_id != mech_id and not other.destroyed and _HexGrid.key(other.position) == _HexGrid.key(target):
 			return {"error": "目标格已被占据"}
-	var cost: int = 2 if terrain == &"GREEN" else 1
+	# 通用移动消耗参数（效果元数据驱动）：绿格耗 green_cost（光环持有者玩家折扣），
+	# 光环转化绿格对所有人视为绿格（红格已在上方排除，光环本就不含红格）。
+	var _mcp: Dictionary = context.map_service.resolve_move_cost_params(mech.owner_player_id)
+	var _target_key: StringName = StringName("%d,%d" % [int(target.q), int(target.r)])
+	var _is_green: bool = terrain == &"GREEN" or _mcp["aura_cells"].has(_target_key)
+	var cost: int = int(_mcp["green_cost"]) if _is_green else 1
 	var free_move: bool = bool(action.record.get("free_move", false))
 	# 免费移动（狙击腿）不检查动力
 	if not free_move:
@@ -83,9 +91,11 @@ func _step_consume_power(action: Action) -> Dictionary:
 		return {"error": "无效的移动消耗"}
 
 	# 消耗动力（免费移动跳过，仍走完 BASIC_MOVE_AT 时点）
+	# reason=BASIC_MOVE：GameActions.spend_power 据此跳过 power_spent 事件通知
+	# （移动消耗由 BASIC_MOVE_AT 时点监听，避免动力税效果双计）。
 	var free_move: bool = bool(action.record.get("free_move", false))
 	if not free_move and context.game_actions != null:
-		context.game_actions.spend_power({"mech_id": mech_id, "amount": cost})
+		context.game_actions.spend_power({"mech_id": mech_id, "amount": cost, "reason": &"BASIC_MOVE"})
 
 	result["power_cost"] = cost
 	# 注入本回合累计消耗动力，供 POWER_SPENT_THIS_TURN_ABOVE 条件（effect_044/045）在 BASIC_MOVE_AFTER 读

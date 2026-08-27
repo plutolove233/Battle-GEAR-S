@@ -51,6 +51,29 @@ func draw_from_deck(deck_key: StringName, count: int) -> Array[StringName]:
 	return drawn
 
 
+## 抽高级装备牌（DRAW_ADVANCED_EQUIPMENT 原子动作 / 尤里 pilot_033 effect_02「弃装抽高级」等）。
+## 从 advanced_equipment_deck 抽 1 张进 player 的装备手牌（空堆自动洗入弃牌堆），
+## 返回 instance_id（无牌可抽返回 &""）。draw_from_deck 已把 zone 置 equipment_hand，
+## 此处补 equipment_hand 数组 + owner_player_id（与 GameActions.draw_equipment_cards 一致）。
+func draw_advanced_equipment(player_id: StringName) -> StringName:
+	var drawn := draw_from_deck(&"advanced_equipment_deck", 1)
+	if drawn.is_empty():
+		return &""
+	var card_id: StringName = drawn[0]
+	var player = context.game_state.players.get(player_id) if context != null and context.game_state != null else null
+	if player != null and not player.equipment_hand.has(card_id):
+		player.equipment_hand.append(card_id)
+	var card = context.game_state.get_card(card_id) if context != null and context.game_state != null else null
+	if card != null:
+		card.owner_player_id = player_id
+		# 补持有者机甲归属（弃牌快照 from_mech_id 判定，同 GameActions.draw_equipment_cards）
+		if card.mech_id == &"":
+			var adv_holder_mech = context.game_state.get_mech_for_player(player_id)
+			if adv_holder_mech != null:
+				card.mech_id = adv_holder_mech.mech_id
+	return card_id
+
+
 ## pilot_003 effect_02：带 face_up_bury 标签的牌 zone 从 action_deck 变走时（CardInstance.zone setter emit
 ## left_action_deck 信号）触发。fire CARD_LEAVE_ACTION_DECK_BEFORE 时点，effect_02 LISTEN 监听器事后处理：
 ## 可用则瑟尔基尔立即使用，不可用则当前持有者弃置+瑟尔基尔抽1。

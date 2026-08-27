@@ -185,7 +185,7 @@
     "type": "辅助",
     "rarity": "N",
     "count": 5,
-    "effect_text": "已设置武器的范围内存在机甲(包括我方)被攻击时可以打出，使该攻击威力-5。",
+    "effect_text": "已设置武器的范围内存在机甲(包括我方)被其他机甲攻击时可以使用，使该攻击威力-5。",
     "effect_ids": [
       "cover_reduce_attack_power_5"
     ]
