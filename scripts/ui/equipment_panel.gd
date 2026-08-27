@@ -222,9 +222,11 @@ func _teardown_all() -> void:
 
 ## 获取（或懒建）某槽位的持久行骨架
 func _ensure_row(slot_id: StringName, slot) -> Dictionary:
-	var row: Dictionary = _slot_rows.get(slot_id)
-	if row != null:
-		return row
+	# 注意：不得用 `var row: Dictionary = _slot_rows.get(slot_id)`——槽位不在缓存时
+	# get() 返回 nil，赋给 Dictionary 值类型变量会抛 "Trying to assign value of type
+	# 'Nil' to a variable of type 'Dictionary'"（GDScript 4 禁止 nil 赋给值类型）。
+	if _slot_rows.has(slot_id):
+		return _slot_rows[slot_id]
 
 	var hbox = HBoxContainer.new()
 
@@ -279,7 +281,7 @@ func _ensure_row(slot_id: StringName, slot) -> Dictionary:
 	hbox.mouse_exited.connect(Callable(self, "_on_equipment_hover_exited"))
 
 	add_child(hbox)
-	row = {
+	var row: Dictionary = {
 		"hbox": hbox, "equip_label": equip_label, "damage_label": damage_label,
 		"armor_label": armor_label, "power_label": power_label,
 		"set_btn": set_btn, "btn_box": btn_box,
@@ -307,10 +309,9 @@ func _make_row_hover_handler(slot_id: StringName) -> Callable:
 ## granted_effects: 授予型 DIRECT 效果（来源牌不在本机甲），仅机师槽行渲染为 EX 按钮。
 func _update_slot_row(slot_id: StringName, slot, active_by_card: Dictionary, granted_effects: Array) -> void:
 	if slot == null:
-		# 该机甲无此槽位：隐藏既有行
-		var old_row: Dictionary = _slot_rows.get(slot_id)
-		if old_row != null:
-			old_row["hbox"].visible = false
+		# 该机甲无此槽位：隐藏既有行（has() 判定，避免 nil 赋给 Dictionary 抛错）
+		if _slot_rows.has(slot_id):
+			_slot_rows[slot_id]["hbox"].visible = false
 		return
 
 	var row: Dictionary = _ensure_row(slot_id, slot)
