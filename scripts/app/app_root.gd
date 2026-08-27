@@ -2631,7 +2631,14 @@ func _on_battle_hex_clicked(hex: Dictionary) -> void:
 							battle.log.append({"message": "该机甲不在4格范围内，请选择范围内的机甲", "details": {}})
 							_request_refresh()
 							return
-						_net_exec("ui_confirmed", {"data": {"target_id": mech_id}})
+						# 引擎级挂起（_pending_effect）的效果选目标：确认按 action_id 精确路由（resume_effect）。
+						# 否则对端槽被 skip_remote_waiting 清空后共享槽 ui_confirmed 早 return 丢输入
+						# （骇客窥牌/维罗妮卡/征服/塔莉娅/动力税贡赋等 PvP 三方卡死）。无捕获回退原路径。
+						var smt_aid: StringName = StringName(wait_info.get("action_id", &""))
+						if smt_aid != &"":
+							_net_exec("resume_effect", {"action_id": smt_aid, "data": {"target_id": mech_id}})
+						else:
+							_net_exec("ui_confirmed", {"data": {"target_id": mech_id}})
 					return
 				&"select_repair_target":
 					# 维修目标：自身或1格内的机甲，且须为非满状态（HP未满或有损伤）
@@ -2646,7 +2653,13 @@ func _on_battle_hex_clicked(hex: Dictionary) -> void:
 							battle.log.append({"message": "该机甲满状态（满血且无损伤），无可维修项", "details": {}})
 							_request_refresh()
 						else:
-							_net_exec("ui_confirmed", {"data": {"target_id": mech_id}})
+							# 引擎级挂起的目标选择确认：按 action_id 精确路由（同 select_mech_target 理由，
+							# 对端槽被 skip_remote_waiting 清空后共享槽 ui_confirmed 丢输入）。
+							var rp_aid: StringName = StringName(wait_info.get("action_id", &""))
+							if rp_aid != &"":
+								_net_exec("resume_effect", {"action_id": rp_aid, "data": {"target_id": mech_id}})
+							else:
+								_net_exec("ui_confirmed", {"data": {"target_id": mech_id}})
 					return
 				_:
 					# 其它输入类型：地图点击不响应、不走 move_unit
@@ -5425,7 +5438,14 @@ func _on_cancel_attack() -> void:
 				_clear_attack_highlights()
 				_net_exec("resume_effect", {"action_id": smc_aid, "data": {"cancelled": true}})
 				return
-			_net_exec("ui_cancelled", {})
+			# 引擎级挂起（_pending_effect）的效果取消：按 action_id 精确路由带 cancelled=true
+			# （骇客窥牌/通用目标选择等。共享槽 ui_cancelled 在对端被 skip_remote_waiting
+			# 清槽后早 return 丢输入->对端停在挂起三方卡死）。无挂起走原共享槽路径。
+			var _uic_aid: StringName = StringName(wait_info.get("action_id", &""))
+			if _uic_aid != &"" and battle.context.timing_engine.has_pending_effect(_uic_aid):
+				_net_exec("resume_effect", {"action_id": _uic_aid, "data": {"cancelled": true}})
+			else:
+				_net_exec("ui_cancelled", {})
 			_clear_attack_highlights()
 			return
 
