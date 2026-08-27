@@ -30,6 +30,16 @@ var _capped: bool = false
 const _CAP_MEGABYTES: int = 50
 const _CAP_BYTES: int = _CAP_MEGABYTES * 1024 * 1024
 
+## ── 攒批落盘（写缓冲）──
+## 每行都 flush 在 Windows 上是 FlushFileBuffers（数毫秒级同步磁盘提交），
+## 一次动作爆发几十行日志（每个时点/步骤都写）会把交互拖慢半秒级。
+## 改为攒批：满 _FLUSH_LINES 行或距上次落盘超过 _FLUSH_INTERVAL_MS 才写文件。
+## 关窗/退出（_close_session_file）兜底落盘；崩溃/强杀最多丢最后一段（≤半秒）。
+const _FLUSH_LINES: int = 64
+const _FLUSH_INTERVAL_MS: int = 500
+var _line_buffer: PackedStringArray = PackedStringArray()
+var _last_flush_ticks: int = 0
+
 
 func _ready() -> void:
 	_open_session_file()
@@ -203,13 +213,15 @@ func _open_session_file() -> void:
 
 
 func _close_session_file() -> void:
+	# 关闭前把缓冲中的剩余行落盘
+	_flush_line_buffer()
 	if _file != null and is_instance_valid(_file):
 		_file.close()
 	_file = null
 	_opened = false
 
 
-## 写入一行并立即落盘（会话日志量不大，实时 flush 便于崩溃后复盘）
+## 写入一行：先进缓冲，满 _FLUSH_LINES 行或距上次落盘超 _FLUSH_INTERVAL_MS 才真正写文件。
 ## 软上限兜底：累计写入超过 _CAP_BYTES 后停止落盘，防止异常循环写爆磁盘。
 func _write_line(line: String) -> void:
 	if _capped:
@@ -223,15 +235,31 @@ func _write_line(line: String) -> void:
 	var line_bytes: int = line.to_utf8_buffer().size() + 1  # +1 for newline
 	if _bytes_written + line_bytes > _CAP_BYTES:
 		_capped = true
+		_flush_line_buffer()
 		_file.seek_end()
 		_file.store_line("[CAP] 会话日志已达软上限 %d MB，停止落盘（疑似异常循环写日志）" % _CAP_MEGABYTES)
 		_file.flush()
 		push_warning("SessionLogger: 会话日志达软上限，停止落盘")
 		return
-	_file.seek_end()
-	_file.store_line(line)
-	_file.flush()
+	_line_buffer.append(line)
 	_bytes_written += line_bytes
+	if _line_buffer.size() >= _FLUSH_LINES or (Time.get_ticks_msec() - _last_flush_ticks) >= _FLUSH_INTERVAL_MS:
+		_flush_line_buffer()
+
+
+## 把缓冲中的行一次性写入文件并 flush（单次磁盘提交代替逐行提交）
+func _flush_line_buffer() -> void:
+	if _file == null or not is_instance_valid(_file):
+		_line_buffer.clear()
+		_last_flush_ticks = Time.get_ticks_msec()
+		return
+	if not _line_buffer.is_empty():
+		_file.seek_end()
+		for l in _line_buffer:
+			_file.store_line(l)
+		_file.flush()
+		_line_buffer.clear()
+	_last_flush_ticks = Time.get_ticks_msec()
 
 
 ## 尽量紧凑地把任意对象转成单行字符串（去掉换行，避免破坏日志结构）

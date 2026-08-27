@@ -48,6 +48,8 @@ var map_tiles: Array[Dictionary] = []
 var turn_number: int = 0
 var active_side: String = "player"
 var log: Array[Dictionary] = []
+## 已同步进 log 的 gs.log 条目数（增量同步游标，见 _sync_compat_fields）
+var _log_synced_len: int = 0
 var units: Dictionary = {}
 
 ## DataRegistry 引用（兼容旧接口）
@@ -540,7 +542,18 @@ func _sync_compat_fields() -> void:
 	# 同步回合信息
 	turn_number = gs.turn_number
 	active_side = String(gs.active_player_id)
-	log = gs.log.duplicate(true)
+	# 兼容日志增量同步：只追加自上次同步以来的新条目（浅拷贝）。
+	# 此前每次 _refresh_battle / _refresh_board_only 都 duplicate(true) 深拷贝整个日志，
+	# 而 gs.log 随对局只增不减（每格移动/攻击/抽牌都追加），刷新成本 = O(全量日志)，
+	# 是"越玩越卡（尤其移动）"的根因。改为 O(新增条目)。
+	# 日志变短（reset_all/新对局）时清空重同步。
+	# app_root 直接 battle.log.append 的消息不受影响（追加在尾部，永不丢失）。
+	if gs.log.size() < _log_synced_len:
+		log.clear()
+		_log_synced_len = 0
+	for i in range(_log_synced_len, gs.log.size()):
+		log.append(gs.log[i].duplicate())
+	_log_synced_len = gs.log.size()
 
 	# 同步地图（地形在一场战斗中不变，仅在格数变化时重建，
 	# 避免每次 _refresh_battle 都 clear+append 192 格字典造成卡顿）
