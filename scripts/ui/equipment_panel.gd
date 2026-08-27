@@ -1,7 +1,12 @@
-## EquipmentPanel.gd — 机甲装备面板
+## EquipmentPanel.gd - 机甲装备面板
 ##
 ## 显示机甲的所有槽位（6部件+2武器+2备用+1事件+1机师），
 ## 每个槽位显示装备名、护甲/动力数值、损伤/耐久。
+##
+## 差量刷新：标题/摘要/12行槽位骨架只建一次，各标签就地更新文本与颜色；
+## 动态按钮（触发/1-2-3/EX/RE）集中在每行的 btn_box 内按需重建，
+## 样式盒懒创建后共享复用。旧实现每次刷新 queue_free 整树再重建
+## （约60个Label+全部按钮+每按钮3个StyleBoxFlat），是点击延迟的主要构成之一。
 extends VBoxContainer
 class_name EquipmentPanel
 
@@ -25,7 +30,7 @@ signal equipment_active_clicked(card_instance_id: StringName, effect_id: StringN
 ## 但执行机甲是被授予的联邦机甲 A，故须显式传 A 的 mech_id（equipment_active_clicked 仅2参无法表达）。
 signal granted_effect_clicked(card_instance_id: StringName, effect_id: StringName, mech_id: StringName)
 
-## 「详情」按钮被点击（参数：当前机甲 MechState）——打开机甲详细信息框
+## 「详情」按钮被点击（参数：当前机甲 MechState）--打开机甲详细信息框
 signal mech_detail_requested(mech)
 
 ## 当前机甲引用
@@ -62,6 +67,23 @@ const SLOT_NAMES: Dictionary = {
 	&"event": "事件", &"pilot": "机师",
 }
 
+# ── 差量刷新缓存 ──
+## 骨架（标题行+摘要标签）是否已构建
+var _skeleton_built: bool = false
+## 生命/动力摘要标签（持久，只改文本）
+var _summary_label: Label = null
+## 「详情」按钮（持久，可见性随 context 注入切换）
+var _detail_btn: Button = null
+## 槽位行缓存：slot_id -> {hbox, equip_label, damage_label, armor_label, power_label, set_btn, btn_box}
+var _slot_rows: Dictionary = {}
+
+## 动态按钮共享样式盒（懒创建，[normal, hover, disabled]；同款按钮共用一份，
+## 避免每次重建按钮时各分配 3 个 StyleBoxFlat）
+var _sb_circle: Array = []  # 蓝灰圆形（机师 1/2/3 与 EX）
+var _sb_re24: Array = []    # 紫色 RE（pilot_024 琳）
+var _sb_re81: Array = []    # 绿色 RE（pilot_081 汀兰）
+var _sb_re83: Array = []    # 橙色 RE（pilot_083 瓦恩）
+
 
 ## 配置面板
 ## mech: 机甲状态
@@ -79,43 +101,27 @@ func _ready() -> void:
 	set_process(false)
 
 
-## 刷新装备显示
+## 刷新装备显示（差量）
 func _refresh() -> void:
 	_hide_tooltip()
-	for child in get_children():
-		child.queue_free()
 
 	if not _mech:
+		_teardown_all()
 		return
 
-	# 标题 + 详情按钮（仅注入了 context 的面板显示：主面板有，敌方信息弹窗内无）
-	var title_row := HBoxContainer.new()
-	var title := Label.new()
-	title.text = "── 装备面板 ──"
-	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title_row.add_child(title)
-	if _mech != null and _context != null:
-		var detail_btn := Button.new()
-		detail_btn.text = "详情"
-		detail_btn.custom_minimum_size = Vector2(46, 24)
-		detail_btn.tooltip_text = "查看机甲动力/护甲来源明细与状态"
-		detail_btn.pressed.connect(func(): mech_detail_requested.emit(_mech))
-		title_row.add_child(detail_btn)
-	add_child(title_row)
+	_ensure_skeleton()
+	# 详情按钮：仅注入了 context 的面板显示（主面板有，敌方信息弹窗内无）
+	_detail_btn.visible = _context != null
 
 	# 生命/动力摘要
-	var summary = Label.new()
-	summary.text = "HP: %d/%d  动力: %d  护甲: %d  攻击: %d/%d" % [
+	_summary_label.text = "HP: %d/%d  动力: %d  护甲: %d  攻击: %d/%d" % [
 		_mech.current_hp, _mech.max_hp,
 		_mech.power, _mech.get_armor(),
 		_mech.attack_count_this_turn, _mech.max_attacks_per_turn
 	]
-	summary.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	add_child(summary)
 
 	# 基础武器信息不再单列一行：武器槽（weapon_1/weapon_2）为空时
-	# 已在 _add_slot_row 中显示基础武器名与威/射，无需重复。
+	# 已在 _update_slot_row 中显示基础武器名与威/射，无需重复。
 	# 本机甲装备主动效果索引：card_instance_id -> Array[Dictionary{effect, bind_ctx}]
 	# 仅在 _refresh 内构建一次，供各槽位行查询自己该挂哪些「触发」按钮，
 	# 避免每个槽位行都重复扫描、把同一按钮挂到所有槽位上。
@@ -165,29 +171,154 @@ func _refresh() -> void:
 					_active_by_card[cid] = []
 				_active_by_card[cid].append({"effect": eff, "bind_ctx": bind_ctx})
 
-	# 各槽位
+	# 各槽位（行骨架按 slot_id 缓存复用，内容就地更新）
 	for slot_id: StringName in SLOT_ORDER:
-		if not _mech.slots.has(slot_id):
-			continue
-		var slot: MechSlotState = _mech.slots[slot_id]
-		_add_slot_row(slot_id, slot, _active_by_card, _granted_effects if String(slot_id) == "pilot" else [])
+		var slot: MechSlotState = _mech.slots.get(slot_id)
+		_update_slot_row(slot_id, slot, _active_by_card, _granted_effects if String(slot_id) == "pilot" else [])
 
 
-## 添加单行槽位显示
-## active_by_card: card_instance_id -> Array[Dictionary{effect, bind_ctx}]，
-## 本槽位 equipped_card 命中的主动效果会在此行内挂「触发」按钮。
-## granted_effects: 授予型 DIRECT 效果（来源牌不在本机甲），仅机师槽行渲染为 EX 按钮。
-func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}, granted_effects: Array = []) -> void:
+## 构建骨架（标题行 + 摘要标签，仅首次）
+func _ensure_skeleton() -> void:
+	if _skeleton_built:
+		return
+	_skeleton_built = true
+
+	# 标题 + 详情按钮
+	var title_row := HBoxContainer.new()
+	var title := Label.new()
+	title.text = "── 装备面板 ──"
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title_row.add_child(title)
+	_detail_btn = Button.new()
+	_detail_btn.text = "详情"
+	_detail_btn.custom_minimum_size = Vector2(46, 24)
+	_detail_btn.tooltip_text = "查看机甲动力/护甲来源明细与状态"
+	_detail_btn.pressed.connect(_on_detail_pressed)
+	title_row.add_child(_detail_btn)
+	add_child(title_row)
+
+	# 生命/动力摘要
+	_summary_label = Label.new()
+	_summary_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	add_child(_summary_label)
+
+
+## 详情按钮回调：按下时读当前 _mech（不闭包捕获，换机甲后不发出过期引用）
+func _on_detail_pressed() -> void:
+	if _mech != null:
+		mech_detail_requested.emit(_mech)
+
+
+## 无机甲时释放骨架与全部行缓存
+func _teardown_all() -> void:
+	_slot_rows.clear()
+	for child in get_children():
+		child.queue_free()
+	_skeleton_built = false
+	_summary_label = null
+	_detail_btn = null
+
+
+## 获取（或懒建）某槽位的持久行骨架
+func _ensure_row(slot_id: StringName, slot) -> Dictionary:
+	var row: Dictionary = _slot_rows.get(slot_id)
+	if row != null:
+		return row
+
 	var hbox = HBoxContainer.new()
 
 	# 槽位名
 	var name_label = Label.new()
 	name_label.text = SLOT_NAMES.get(slot_id, String(slot_id))
 	name_label.custom_minimum_size = Vector2(50, 24)
+	name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hbox.add_child(name_label)
 
 	# 装备名
 	var equip_label = Label.new()
+	equip_label.custom_minimum_size = Vector2(100, 20)
+	equip_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hbox.add_child(equip_label)
+
+	# 损伤/耐久
+	var damage_label = Label.new()
+	damage_label.custom_minimum_size = Vector2(70, 20)
+	damage_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hbox.add_child(damage_label)
+
+	# 有效护甲和动力（部件槽位；槽位类型不变，骨架期确定）
+	var armor_label: Label = null
+	var power_label: Label = null
+	if slot != null and slot.slot_kind == &"PART":
+		armor_label = Label.new()
+		armor_label.custom_minimum_size = Vector2(35, 20)
+		armor_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		hbox.add_child(armor_label)
+		power_label = Label.new()
+		power_label.custom_minimum_size = Vector2(35, 20)
+		power_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		hbox.add_child(power_label)
+
+	# 备用区设置按钮（骨架期建好，可见性/置灰按刷新状态切换）
+	var set_btn: Button = null
+	if slot_id == &"reserve_1" or slot_id == &"reserve_2":
+		set_btn = Button.new()
+		set_btn.text = "设置"
+		set_btn.custom_minimum_size = Vector2(40, 20)
+		var captured_slot_id = slot_id
+		set_btn.pressed.connect(func(): reserve_set_clicked.emit(captured_slot_id))
+		hbox.add_child(set_btn)
+
+	# 动态按钮区（触发/1-2-3/EX/RE）：每次刷新整体重建子按钮，样式盒共享
+	var btn_box = HBoxContainer.new()
+	hbox.add_child(btn_box)
+
+	# 整行悬停：悬停瞬间实时读当前槽位与装备牌（换装/换机甲后闭包不过期）
+	hbox.mouse_entered.connect(_make_row_hover_handler(slot_id))
+	hbox.mouse_exited.connect(Callable(self, "_on_equipment_hover_exited"))
+
+	add_child(hbox)
+	row = {
+		"hbox": hbox, "equip_label": equip_label, "damage_label": damage_label,
+		"armor_label": armor_label, "power_label": power_label,
+		"set_btn": set_btn, "btn_box": btn_box,
+	}
+	_slot_rows[slot_id] = row
+	return row
+
+
+## 整行悬停回调工厂：有装备牌且非「敌方备用区（隐藏信息）」时展示效果浮框
+func _make_row_hover_handler(slot_id: StringName) -> Callable:
+	return func():
+		if _mech == null or not _mech.slots.has(slot_id):
+			return
+		var slot = _mech.slots[slot_id]
+		if slot == null or slot.equipped_card == null:
+			return
+		if _is_enemy and slot.slot_kind == &"RESERVE":
+			return
+		_on_equipment_hover_entered(slot, slot.equipped_card.instance_id)
+
+
+## 更新单行槽位显示（就地更新标签文本/颜色/按钮状态）
+## active_by_card: card_instance_id -> Array[Dictionary{effect, bind_ctx}]，
+## 本槽位 equipped_card 命中的主动效果会在行内挂「触发」按钮。
+## granted_effects: 授予型 DIRECT 效果（来源牌不在本机甲），仅机师槽行渲染为 EX 按钮。
+func _update_slot_row(slot_id: StringName, slot, active_by_card: Dictionary, granted_effects: Array) -> void:
+	if slot == null:
+		# 该机甲无此槽位：隐藏既有行
+		var old_row: Dictionary = _slot_rows.get(slot_id)
+		if old_row != null:
+			old_row["hbox"].visible = false
+		return
+
+	var row: Dictionary = _ensure_row(slot_id, slot)
+	row["hbox"].visible = true
+
+	# ── 装备名（就地更新；先清颜色覆盖，防止上一刷新的条件色残留）──
+	var equip_label: Label = row["equip_label"]
+	equip_label.remove_theme_color_override(&"font_color")
 	if slot.equipped_card and slot.equipped_card.def:
 		equip_label.text = slot.equipped_card.def.display_name
 		# 附加数值信息
@@ -244,11 +375,10 @@ func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}, g
 			equip_label.text = "（空）"
 	else:
 		equip_label.text = "（空）"
-	equip_label.custom_minimum_size = Vector2(100, 20)
-	hbox.add_child(equip_label)
 
-	# 损伤/耐久
-	var damage_label = Label.new()
+	# ── 损伤/耐久（先清颜色覆盖）──
+	var damage_label: Label = row["damage_label"]
+	damage_label.remove_theme_color_override(&"font_color")
 	if slot.equipped_card and slot.equipped_card.def is _EquipmentCardDef:
 		var durability: int = slot.equipped_card.def.durability
 		var card_dmg: int = slot.equipped_card.damage_tokens
@@ -265,20 +395,11 @@ func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}, g
 		damage_label.add_theme_color_override("font_color", Color.YELLOW)
 	else:
 		damage_label.text = ""
-	damage_label.custom_minimum_size = Vector2(70, 20)
-	hbox.add_child(damage_label)
 
-	# 有效护甲和动力（部件槽位）
-	if slot.slot_kind == &"PART":
-		var armor_label = Label.new()
-		armor_label.text = "甲:%d" % slot.get_effective_armor(_mech)
-		armor_label.custom_minimum_size = Vector2(35, 20)
-		hbox.add_child(armor_label)
-
-		var power_label = Label.new()
-		power_label.text = "动:%d" % slot.get_effective_power()
-		power_label.custom_minimum_size = Vector2(35, 20)
-		hbox.add_child(power_label)
+	# ── 有效护甲和动力（部件槽位）──
+	if row["armor_label"] != null and row["power_label"] != null:
+		row["armor_label"].text = "甲:%d" % slot.get_effective_armor(_mech)
+		row["power_label"].text = "动:%d" % slot.get_effective_power()
 
 	# 武器槽位显示基础武器的耐久（固定1）
 	if (slot_id == &"weapon_1" or slot_id == &"weapon_2") and not slot.equipped_card:
@@ -287,17 +408,32 @@ func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}, g
 			damage_label.text = "（基础武器）"
 			damage_label.add_theme_color_override("font_color", Color.CYAN)
 
-	# 备用区设置按钮（仅在我方且有装备时显示）
-	if (slot_id == &"reserve_1" or slot_id == &"reserve_2") and not _is_enemy:
-		if slot.equipped_card != null:
-			var set_btn = Button.new()
-			set_btn.text = "设置"
-			set_btn.custom_minimum_size = Vector2(40, 20)
+	# ── 备用区设置按钮（仅在我方且有装备时显示）──
+	var set_btn: Button = row["set_btn"]
+	if set_btn != null:
+		set_btn.visible = (not _is_enemy) and slot.equipped_card != null
+		if set_btn.visible:
 			# "禁"标签装备不能主动设置（法尔科 pilot_073 等）：按钮置灰，后端 CardSetService 双保险。
 			set_btn.disabled = _ActionPilotEffects.equip_forbid_tagged(slot.equipped_card)
-			var captured_slot_id = slot_id
-			set_btn.pressed.connect(func(): reserve_set_clicked.emit(captured_slot_id))
-			hbox.add_child(set_btn)
+
+	# ── 整行悬停命中条件：有装备牌且非敌方备用区 ──
+	# 有牌时 HBox 设为顶层命中控件（Labels 已 IGNORE），无牌时恢复容器默认（PASS）
+	row["hbox"].mouse_filter = Control.MOUSE_FILTER_STOP \
+		if (slot.equipped_card != null and not (_is_enemy and slot.slot_kind == &"RESERVE")) \
+		else Control.MOUSE_FILTER_PASS
+
+	# ── 动态按钮区 ──
+	_rebuild_row_buttons(row, slot_id, slot, active_by_card, granted_effects)
+
+
+## 重建行内动态按钮（触发/1-2-3/EX/RE）。
+## 按钮数量少且状态（置灰/悬停描述）每刷新都可能变化，故整区重建；
+## 样式盒经 _get_*_styleboxes 共享，避免 StyleBoxFlat 重复分配。
+func _rebuild_row_buttons(row: Dictionary, slot_id: StringName, slot, active_by_card: Dictionary, granted_effects: Array) -> void:
+	var btn_box: HBoxContainer = row["btn_box"]
+	for c in btn_box.get_children():
+		btn_box.remove_child(c)
+		c.queue_free()
 
 	# 装备/机师效果按钮：仅挂在该效果来源牌所在槽位行内（玩家面板、有 context 时）。
 	# 机师槽：1/2/3 圆形按钮，从 get_effects_for_pilot 拿全部 effect_ids（含未注册的被动 effect_01/02），
@@ -346,7 +482,7 @@ func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}, g
 				var bind_ctx: Dictionary = _vi.bind_ctx
 				var is_registered: bool = _vi.is_registered
 				_eff_index += 1
-				# 该按钮序号上需合并的隐藏效果描述（数组，可为空）——hover handler 同时支持单效果与数组
+				# 该按钮序号上需合并的隐藏效果描述（数组，可为空）--hover handler 同时支持单效果与数组
 				var _hover_extra: Variant = _hidden_merge.get(_eff_index, null)
 				var is_passive: bool = eff.mode == _TC.MODE_LISTEN or not is_registered
 				var btn = Button.new()
@@ -357,19 +493,10 @@ func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}, g
 				btn.add_theme_font_size_override("font_size", 15)
 				btn.add_theme_constant_override("outline_size", 4)
 				btn.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.7))
-				var circle := StyleBoxFlat.new()
-				circle.bg_color = Color(0.16, 0.22, 0.32, 0.95)
-				circle.border_color = Color(0.5, 0.7, 0.9, 0.9)
-				circle.set_border_width_all(1)
-				circle.set_corner_radius_all(13)
-				circle.set_content_margin_all(0)
-				btn.add_theme_stylebox_override("normal", circle)
-				var circle_hover := circle.duplicate()
-				circle_hover.bg_color = Color(0.25, 0.32, 0.45, 1.0)
-				btn.add_theme_stylebox_override("hover", circle_hover)
-				var circle_dis := circle.duplicate()
-				circle_dis.bg_color = Color(0.1, 0.12, 0.16, 0.9)
-				btn.add_theme_stylebox_override("disabled", circle_dis)
+				var _sbs := _get_circle_styleboxes()
+				btn.add_theme_stylebox_override("normal", _sbs[0])
+				btn.add_theme_stylebox_override("hover", _sbs[1])
+				btn.add_theme_stylebox_override("disabled", _sbs[2])
 				# 置灰判定：被动(LISTEN/未注册) 永远置灰不可点但可悬停；主动按条件/每回合1次置灰。
 				var can_trigger: bool = false
 				if not is_passive and _context.get("timing_engine") != null:
@@ -381,7 +508,7 @@ func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}, g
 					btn.pressed.connect(func(): equipment_active_clicked.emit(_cid_press, eid))
 				btn.mouse_entered.connect(func(): _on_pilot_effect_button_hover_entered(eff, bind_ctx, _hover_extra))
 				btn.mouse_exited.connect(Callable(self, "_on_equipment_hover_exited"))
-				hbox.add_child(btn)
+				btn_box.add_child(btn)
 		elif not active_by_card.is_empty() and active_by_card.has(inst_id):
 			# 装备槽：主动效果"触发"按钮（LISTEN 非机师槽已在 _refresh 过滤，此处皆 DIRECT 主动）
 			var items: Array = active_by_card[inst_id]
@@ -399,7 +526,7 @@ func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}, g
 				var cid: StringName = bind_ctx.get("card_instance_id", &"")
 				var eid: StringName = eff.effect_id
 				btn.pressed.connect(func(): equipment_active_clicked.emit(cid, eid))
-				hbox.add_child(btn)
+				btn_box.add_child(btn)
 
 	# granted 授予效果 EX 按钮（pilot_002 莱比尔转化进攻+防御）：仅机师槽行，合并为1个圆形"EX"按钮。
 	# 进攻(DIRECT)可主动点击；防御(AVAILABILITY)走响应窗口不能主动用，但其描述合并到 EX 按钮悬停说明。
@@ -453,19 +580,10 @@ func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}, g
 				g_btn.add_theme_font_size_override("font_size", 13)
 				g_btn.add_theme_constant_override("outline_size", 4)
 				g_btn.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.7))
-				var g_circle := StyleBoxFlat.new()
-				g_circle.bg_color = Color(0.16, 0.22, 0.32, 0.95)
-				g_circle.border_color = Color(0.5, 0.7, 0.9, 0.9)
-				g_circle.set_border_width_all(1)
-				g_circle.set_corner_radius_all(13)
-				g_circle.set_content_margin_all(0)
-				g_btn.add_theme_stylebox_override("normal", g_circle)
-				var g_hover := g_circle.duplicate()
-				g_hover.bg_color = Color(0.25, 0.32, 0.45, 1.0)
-				g_btn.add_theme_stylebox_override("hover", g_hover)
-				var g_dis := g_circle.duplicate()
-				g_dis.bg_color = Color(0.1, 0.12, 0.16, 0.9)
-				g_btn.add_theme_stylebox_override("disabled", g_dis)
+				var _g_sbs := _get_circle_styleboxes()
+				g_btn.add_theme_stylebox_override("normal", _g_sbs[0])
+				g_btn.add_theme_stylebox_override("hover", _g_sbs[1])
+				g_btn.add_theme_stylebox_override("disabled", _g_sbs[2])
 				# 进攻(DIRECT)主动可点；防御(AVAILABILITY)走响应窗口，EX 按钮置灰仅展示描述
 				var g_is_direct: bool = _g_main.mode == _TC.MODE_DIRECT
 				var g_can: bool = g_is_direct and _context.get("timing_engine") != null and _context.timing_engine.can_trigger_active_effect(_g_main, _g_main_bind)
@@ -478,12 +596,12 @@ func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}, g
 				# 悬停：显示进攻+防御合并描述（防御描述作补充）
 				g_btn.mouse_entered.connect(func(): _on_pilot_effect_button_hover_entered(_g_main, _g_main_bind, _g_extra))
 				g_btn.mouse_exited.connect(Callable(self, "_on_equipment_hover_exited"))
-				hbox.add_child(g_btn)
+				btn_box.add_child(g_btn)
 
 	# pilot_024 琳 RE 请求维修按钮：场上琳（非本机甲）在4格内时，本机师槽行渲染"RE"圆形按钮。
 	# 请求方自己回合1次，点击即消耗本回合 RE 次数（琳拒绝也不刷新）；满状态不可点。
 	# 点击 emit granted_effect_clicked(琳 pilot 牌 instance_id, "pilot_024_re_request", 本机甲 mech_id)，
-	# app_root 走 effect_fire → RE 请求流程（给琳弹确认窗）。
+	# app_root 走 effect_fire -> RE 请求流程（给琳弹确认窗）。
 	if String(slot_id) == "pilot" and not _is_enemy and _context != null and _context.get("game_state") != null:
 		var _gs24 = _context.game_state
 		var _lin24_mid: StringName = _ActionPilotEffects.pilot_024_find_lin_mech(_gs24)
@@ -506,19 +624,10 @@ func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}, g
 						_re24_btn.add_theme_font_size_override("font_size", 12)
 						_re24_btn.add_theme_constant_override("outline_size", 4)
 						_re24_btn.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.7))
-						var _re24_circle := StyleBoxFlat.new()
-						_re24_circle.bg_color = Color(0.18, 0.12, 0.28, 0.95)
-						_re24_circle.border_color = Color(0.9, 0.6, 0.9, 0.9)
-						_re24_circle.set_border_width_all(1)
-						_re24_circle.set_corner_radius_all(13)
-						_re24_circle.set_content_margin_all(0)
-						_re24_btn.add_theme_stylebox_override("normal", _re24_circle)
-						var _re24_hover := _re24_circle.duplicate()
-						_re24_hover.bg_color = Color(0.28, 0.2, 0.42, 1.0)
-						_re24_btn.add_theme_stylebox_override("hover", _re24_hover)
-						var _re24_dis := _re24_circle.duplicate()
-						_re24_dis.bg_color = Color(0.1, 0.08, 0.14, 0.9)
-						_re24_btn.add_theme_stylebox_override("disabled", _re24_dis)
+						var _re24_sbs := _get_re24_styleboxes()
+						_re24_btn.add_theme_stylebox_override("normal", _re24_sbs[0])
+						_re24_btn.add_theme_stylebox_override("hover", _re24_sbs[1])
+						_re24_btn.add_theme_stylebox_override("disabled", _re24_sbs[2])
 						_re24_btn.disabled = not _re24_can
 						_re24_btn.add_theme_color_override("font_color", Color(0.95, 0.8, 0.95) if _re24_can else Color(0.5, 0.5, 0.5))
 						var _lin24_pilot_card = _ActionPilotEffects.pilot_024_lin_pilot_card(_gs24)
@@ -535,7 +644,7 @@ func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}, g
 						}
 						_re24_btn.mouse_entered.connect(func(): _on_pilot_effect_button_hover_entered(_re24_eff, _re24_bind))
 						_re24_btn.mouse_exited.connect(Callable(self, "_on_equipment_hover_exited"))
-						hbox.add_child(_re24_btn)
+						btn_box.add_child(_re24_btn)
 
 	# pilot_081 汀兰 RE 请求回复按钮：本机甲在光环格上（有覆盖的存活汀兰持有者，含自身）时，
 	# 机师槽行逐持有者渲染"RE"按钮。请求方自己回合1次，点击即消耗本回合次数（持有者拒绝也不刷新）。
@@ -568,19 +677,10 @@ func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}, g
 					_re81_btn.add_theme_font_size_override("font_size", 12)
 					_re81_btn.add_theme_constant_override("outline_size", 4)
 					_re81_btn.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.7))
-					var _re81_circle := StyleBoxFlat.new()
-					_re81_circle.bg_color = Color(0.10, 0.30, 0.16, 0.95)
-					_re81_circle.border_color = Color(0.30, 0.85, 0.40, 0.9)
-					_re81_circle.set_border_width_all(1)
-					_re81_circle.set_corner_radius_all(13)
-					_re81_circle.set_content_margin_all(0)
-					_re81_btn.add_theme_stylebox_override("normal", _re81_circle)
-					var _re81_hover := _re81_circle.duplicate()
-					_re81_hover.bg_color = Color(0.16, 0.42, 0.22, 1.0)
-					_re81_btn.add_theme_stylebox_override("hover", _re81_hover)
-					var _re81_dis := _re81_circle.duplicate()
-					_re81_dis.bg_color = Color(0.08, 0.14, 0.10, 0.9)
-					_re81_btn.add_theme_stylebox_override("disabled", _re81_dis)
+					var _re81_sbs := _get_re81_styleboxes()
+					_re81_btn.add_theme_stylebox_override("normal", _re81_sbs[0])
+					_re81_btn.add_theme_stylebox_override("hover", _re81_sbs[1])
+					_re81_btn.add_theme_stylebox_override("disabled", _re81_sbs[2])
 					_re81_btn.disabled = not _re81_can
 					_re81_btn.add_theme_color_override("font_color", Color(0.85, 0.95, 0.85) if _re81_can else Color(0.5, 0.5, 0.5))
 					var _re81_mid_emit: StringName = _mech.mech_id
@@ -595,7 +695,7 @@ func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}, g
 					}
 					_re81_btn.mouse_entered.connect(func(): _on_pilot_effect_button_hover_entered(_re81_eff, _re81_bind))
 					_re81_btn.mouse_exited.connect(Callable(self, "_on_equipment_hover_exited"))
-					hbox.add_child(_re81_btn)
+					btn_box.add_child(_re81_btn)
 
 	# pilot_083 瓦恩 RE 请求武器修改按钮：本机甲3格内有覆盖的存活瓦恩持有者（排除自身--
 	# 瓦恩持有者不能自己请求自己）时，机师槽行逐持有者渲染"RE"按钮。请求方自己回合1次，
@@ -631,19 +731,10 @@ func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}, g
 					_re83_btn.add_theme_font_size_override("font_size", 12)
 					_re83_btn.add_theme_constant_override("outline_size", 4)
 					_re83_btn.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.7))
-					var _re83_circle := StyleBoxFlat.new()
-					_re83_circle.bg_color = Color(0.22, 0.14, 0.30, 0.95)
-					_re83_circle.border_color = Color(0.95, 0.75, 0.30, 0.9)
-					_re83_circle.set_border_width_all(1)
-					_re83_circle.set_corner_radius_all(13)
-					_re83_circle.set_content_margin_all(0)
-					_re83_btn.add_theme_stylebox_override("normal", _re83_circle)
-					var _re83_hover := _re83_circle.duplicate()
-					_re83_hover.bg_color = Color(0.32, 0.22, 0.42, 1.0)
-					_re83_btn.add_theme_stylebox_override("hover", _re83_hover)
-					var _re83_dis := _re83_circle.duplicate()
-					_re83_dis.bg_color = Color(0.10, 0.08, 0.14, 0.9)
-					_re83_btn.add_theme_stylebox_override("disabled", _re83_dis)
+					var _re83_sbs := _get_re83_styleboxes()
+					_re83_btn.add_theme_stylebox_override("normal", _re83_sbs[0])
+					_re83_btn.add_theme_stylebox_override("hover", _re83_sbs[1])
+					_re83_btn.add_theme_stylebox_override("disabled", _re83_sbs[2])
 					_re83_btn.disabled = not _re83_can
 					_re83_btn.add_theme_color_override("font_color", Color(0.95, 0.85, 0.75) if _re83_can else Color(0.5, 0.5, 0.5))
 					var _re83_mid_emit: StringName = _mech.mech_id
@@ -658,21 +749,63 @@ func _add_slot_row(slot_id: StringName, slot, active_by_card: Dictionary = {}, g
 					}
 					_re83_btn.mouse_entered.connect(func(): _on_pilot_effect_button_hover_entered(_re83_eff, _re83_bind))
 					_re83_btn.mouse_exited.connect(Callable(self, "_on_equipment_hover_exited"))
-					hbox.add_child(_re83_btn)
+					btn_box.add_child(_re83_btn)
 
-	# 悬停效果浮框：有装备牌且非「敌方备用区（隐藏信息）」时，整行可悬停查看效果
-	if slot.equipped_card != null and not (_is_enemy and slot.slot_kind == &"RESERVE"):
-		hbox.mouse_filter = Control.MOUSE_FILTER_STOP
-		# Labels 设 IGNORE 让 HBox 成为整行的顶层命中控件，接收 mouse_entered/exited
-		for c in hbox.get_children():
-			if c is Label:
-				c.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var captured_slot = slot
-		var captured_cid: StringName = slot.equipped_card.instance_id
-		hbox.mouse_entered.connect(func(): _on_equipment_hover_entered(captured_slot, captured_cid))
-		hbox.mouse_exited.connect(Callable(self, "_on_equipment_hover_exited"))
 
-	add_child(hbox)
+# ═══════════════════════════════════════════
+# 共享样式盒（懒创建）
+# ═══════════════════════════════════════════
+
+
+## 圆形按钮样式组：[normal, hover, disabled]
+func _make_circle_stylebox_set(bg: Color, border: Color, hover_bg: Color, dis_bg: Color) -> Array:
+	var circle := StyleBoxFlat.new()
+	circle.bg_color = bg
+	circle.border_color = border
+	circle.set_border_width_all(1)
+	circle.set_corner_radius_all(13)
+	circle.set_content_margin_all(0)
+	var hover := circle.duplicate()
+	hover.bg_color = hover_bg
+	var dis := circle.duplicate()
+	dis.bg_color = dis_bg
+	return [circle, hover, dis]
+
+
+## 机师 1/2/3 与 EX 按钮的蓝灰圆形样式（共享）
+func _get_circle_styleboxes() -> Array:
+	if _sb_circle.is_empty():
+		_sb_circle = _make_circle_stylebox_set(
+			Color(0.16, 0.22, 0.32, 0.95), Color(0.5, 0.7, 0.9, 0.9),
+			Color(0.25, 0.32, 0.45, 1.0), Color(0.1, 0.12, 0.16, 0.9))
+	return _sb_circle
+
+
+## pilot_024 琳 RE 按钮的紫色圆形样式（共享）
+func _get_re24_styleboxes() -> Array:
+	if _sb_re24.is_empty():
+		_sb_re24 = _make_circle_stylebox_set(
+			Color(0.18, 0.12, 0.28, 0.95), Color(0.9, 0.6, 0.9, 0.9),
+			Color(0.28, 0.2, 0.42, 1.0), Color(0.1, 0.08, 0.14, 0.9))
+	return _sb_re24
+
+
+## pilot_081 汀兰 RE 按钮的绿色圆形样式（共享）
+func _get_re81_styleboxes() -> Array:
+	if _sb_re81.is_empty():
+		_sb_re81 = _make_circle_stylebox_set(
+			Color(0.10, 0.30, 0.16, 0.95), Color(0.30, 0.85, 0.40, 0.9),
+			Color(0.16, 0.42, 0.22, 1.0), Color(0.08, 0.14, 0.10, 0.9))
+	return _sb_re81
+
+
+## pilot_083 瓦恩 RE 按钮的橙色圆形样式（共享）
+func _get_re83_styleboxes() -> Array:
+	if _sb_re83.is_empty():
+		_sb_re83 = _make_circle_stylebox_set(
+			Color(0.22, 0.14, 0.30, 0.95), Color(0.95, 0.75, 0.30, 0.9),
+			Color(0.32, 0.22, 0.42, 1.0), Color(0.10, 0.08, 0.14, 0.9))
+	return _sb_re83
 
 
 # ═══════════════════════════════════════════
