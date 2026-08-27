@@ -15,12 +15,23 @@ var _text_display: RichTextLabel
 var _context = null  # type: GameContext
 var _last_log_index: int = 0
 var _messages: Array[String] = []
+## 增量 append_text 已累积条数：每满 _APPEND_RESYNC 整段重建一次（重置 RichTextLabel 内部累积）
+var _append_count: int = 0
+## 同帧待刷新的消息行（帧末合并一次 append_text + 一次 scroll，避免移动每格多条消息逐条触发整树布局）
+var _pending_lines: Array[String] = []
+var _flush_queued: bool = false
+var _scroll_queued: bool = false
 
-## 消息缓冲上限。_messages 永不裁剪会让 _rebuild_display（O(N) 字符串拼接 +
+## 消息缓冲上限。_messages 永不裁剪会让整段重建（O(N) 字符串拼接 +
 ## RichTextLabel 整段 BBCode 重排）随游戏推进越来越慢--每条时点/钩子消息触发一次重建，
-## 移动每格发 4 条时点消息尤为明显（"逐渐卡顿、移动为甚"根因）。裁到最近 N 条后，
-## 单次重建成本恒定，长局后期与开局同样流畅。N=500 兼顾回看与性能。
+## 移动每格发 ~10 条时点消息尤为明显（"越移动越慢"根因，实测 70 步后 400ms+/步）。
+## 裁到最近 N 条后单次重建成本有界。N=500 兼顾回看与性能。
 const _MAX_MESSAGES := 500
+## 增量 append_text 每满 N 条整段重建一次（重置 RichTextLabel 内部行累积，防其内部分片膨胀）
+const _APPEND_RESYNC := 60
+## 整段重建只渲染最近 N 条（控制单次重建成本恒定，不随长局历史消息数增长）。
+## 窗口 80 条 ≈ 3-4 屏滚动量，1536×768 下足够回看。
+const _DISPLAY_WINDOW := 80
 
 ## 槽位中文名映射（与 EquipmentPanel 保持一致）
 const SLOT_NAMES: Dictionary = {
@@ -106,12 +117,17 @@ func on_equipment_effect_fired(card_name: String, _effect_id: StringName, descri
 	add_message(text)
 
 
-## 追加一条消息并自动滚动
+## 追加一条消息并自动滚动。同帧多条消息合并到 _pending_lines，帧末一次
+## append_text + 一次 scroll——避免移动每格 ~10 条消息逐条触发 RichTextLabel
+## 整树布局（实测可见 message_log 每步占 ~60ms，隐藏后每步 108ms→62ms）。
 func add_message(text: String) -> void:
 	_messages.append(text)
 	_trim_messages()
 	SLog.log_message(text)
-	_rebuild_display()
+	_pending_lines.append(text)
+	if not _flush_queued:
+		_flush_queued = true
+		call_deferred("_flush_pending_lines")
 
 
 # ═══════════════════════════════════════════
@@ -142,10 +158,11 @@ func _catch_up_log() -> void:
 		_rebuild_display()
 
 
-## 裁剪消息缓冲到最近 _MAX_MESSAGES 条（丢弃最旧的），限制 _rebuild_display 成本。
+## 裁剪消息缓冲到最近 _MAX_MESSAGES 条（丢弃最旧的），限制重建成本。
+## 用 slice 一次分配替代 remove_at(0) 逐条前移（O(N) 移位）。
 func _trim_messages() -> void:
-	while _messages.size() > _MAX_MESSAGES:
-		_messages.remove_at(0)
+	if _messages.size() > _MAX_MESSAGES:
+		_messages = _messages.slice(_messages.size() - _MAX_MESSAGES)
 
 
 ## 推进日志索引到当前日志末尾（防止 _catch_up_log 重复翻译 hook 已处理的事件）
@@ -155,17 +172,43 @@ func _advance_log_index() -> void:
 	_last_log_index = _context.game_state.log.size()
 
 
-## 重建 BBCode 显示文本
+## 帧末刷新待批消息：合并为一批 append_text（O(1)），满阈值整段重建一次。
+func _flush_pending_lines() -> void:
+	_flush_queued = false
+	if _pending_lines.is_empty():
+		return
+	var batch: String = "\n".join(_pending_lines) + "\n"
+	var n: int = _pending_lines.size()
+	_pending_lines.clear()
+	if _append_count + n >= _APPEND_RESYNC:
+		# 整段重建已渲染最近 _DISPLAY_WINDOW 条（含本批），本批不再 append，避免重复显示
+		_rebuild_display()
+		return
+	_append_count += n
+	_text_display.append_text(batch)
+	_queue_scroll_to_bottom()
+
+
+## 重建 BBCode 显示文本。只渲染最近 _DISPLAY_WINDOW 条（控制重建成本恒定），
+## 用 join 一次性拼接替代字符串 += 反复复制。重建后重置增量计数，后续行走 append_text。
 func _rebuild_display() -> void:
-	var bbcode: String = ""
-	for msg in _messages:
-		bbcode += msg + "\n"
-	_text_display.text = bbcode
-	# 延迟一帧自动滚动到底部
+	var limit: int = mini(_messages.size(), _DISPLAY_WINDOW)
+	var tail: Array = _messages.slice(_messages.size() - limit)
+	_text_display.text = "\n".join(tail)
+	_append_count = 0
+	_queue_scroll_to_bottom()
+
+
+## 滚动去重：一帧最多排队一次（多条消息/多次重建只滚一次）
+func _queue_scroll_to_bottom() -> void:
+	if _scroll_queued:
+		return
+	_scroll_queued = true
 	call_deferred("_scroll_to_bottom")
 
 
 func _scroll_to_bottom() -> void:
+	_scroll_queued = false
 	if _scroll_container and is_instance_valid(_scroll_container):
 		var vbar = _scroll_container.get_v_scroll_bar()
 		if vbar:
@@ -813,6 +856,13 @@ const TIMING_NAMES: Dictionary = {
 func _translate_timing(timing: StringName, payload: Dictionary) -> String:
 	var name: String = TIMING_NAMES.get(timing, "")
 	if name == "":
+		return ""
+	# 移动时点消息降噪：每格 5 条（BEFORE/AT/AFTER/SETTLE + SINGLE_MOVE_SETTLE）对玩家是纯噪声——
+	# 机甲移动视觉已可见，显示只会淹没关键事件，且每格触发 RichTextLabel 布局拖慢移动
+	#（移动每步成本主因，实测 message_log 可见时占 ~60ms/步）。完整移动记录仍在 SessionLogger 文件日志。
+	if timing == &"BASIC_MOVE_BEFORE" or timing == &"BASIC_MOVE_AT" \
+		or timing == &"BASIC_MOVE_AFTER" or timing == &"BASIC_MOVE_SETTLE" \
+		or timing == &"SINGLE_MOVE_SETTLE":
 		return ""
 	var action_type: String = String(payload.get("action_type", ""))
 	var player_id: String = String(payload.get("player_id", ""))
