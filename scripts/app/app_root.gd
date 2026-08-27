@@ -2528,7 +2528,15 @@ func _on_battle_hex_clicked(hex: Dictionary) -> void:
 						return
 					if target_id != &"":
 						_clear_attack_highlights()
-						_net_exec("ui_confirmed", {"data": {"target_id": target_id}})
+						# select_attack_target 兼引擎级挂起（pilot_019 缴械冲击目标多选）：
+						# 有 _pending_effect 时按 action_id 精确路由（对端槽被 skip_remote_waiting
+						# 清空后共享槽 ui_confirmed 丢输入->对端停在挂起三方卡死）；
+						# 正常攻击（桥槽 need_input 无 _pending_effect）走 per-end 自驱 ui_confirmed。
+						var sat_aid: StringName = StringName(wait_info.get("action_id", &""))
+						if sat_aid != &"" and battle.context.timing_engine.has_pending_effect(sat_aid):
+							_net_exec("resume_effect", {"action_id": sat_aid, "data": {"target_id": target_id}})
+						else:
+							_net_exec("ui_confirmed", {"data": {"target_id": target_id}})
 					else:
 						# 陷阱可选为攻击目标（攻击即引爆，无响应窗口）：点含陷阱标记的格
 						var sat_q: int = int(hex.get("q", 0))
@@ -5347,7 +5355,11 @@ func _on_weapon_selected(weapon_id: StringName) -> void:
 			weapon_picker_panel.visible = false
 			_show_cancel_button(false)
 			_support_weapon_select_card_id = &""
-			_net_exec("ui_confirmed", {"data": {"selected_weapon_id": weapon_id}})
+			var wchg_aid: StringName = StringName(wait_info.get("action_id", &""))
+			if wchg_aid != &"":
+				_net_exec("resume_effect", {"action_id": wchg_aid, "data": {"selected_weapon_id": weapon_id}})
+			else:
+				_net_exec("ui_confirmed", {"data": {"selected_weapon_id": weapon_id}})
 			return
 
 	if battle == null or battle.context == null:
@@ -6113,7 +6125,16 @@ func _on_choice_made(effect_id: StringName) -> void:
 					var es := String(effect_id)
 					if es.begins_with("option_"):
 						idx = es.substr(7).to_int()
-				if idx >= 0:
+				# 引擎级挂起（_pending_effect）的效果确认：按 action_id 精确路由（resume_effect）。
+				# 对端槽被 skip_remote_waiting 清空后共享槽 ui_confirmed 早 return 丢输入->三方卡死
+				#（同骇客窥牌根因）。无捕获回退原共享槽路径。主路径（_effect_choice_action_id 捕获）见 6088。
+				var co_aid: StringName = StringName(wait_info.get("action_id", &""))
+				if co_aid != &"":
+					var co_data: Dictionary = {"chosen_effect_id": effect_id, "confirmed": true}
+					if idx >= 0:
+						co_data["chosen_option_index"] = idx
+					_net_exec("resume_effect", {"action_id": co_aid, "data": co_data})
+				elif idx >= 0:
 					_net_exec("ui_confirmed", {"data": {"chosen_option_index": idx, "chosen_effect_id": effect_id, "confirmed": true}})
 				else:
 					_net_exec("ui_confirmed", {"data": {"chosen_effect_id": effect_id, "confirmed": true}})
@@ -6127,9 +6148,17 @@ func _on_choice_made(effect_id: StringName) -> void:
 					stepper_panel.visible = false
 				if es_ci.begins_with("__int_") and es_ci.ends_with("__"):
 					var n_ci: int = es_ci.substr(6, es_ci.length() - 8).to_int()
-					_net_exec("ui_confirmed", {"data": {"chosen_value": n_ci, "confirmed": true}})
+					var ci_aid: StringName = StringName(wait_info.get("action_id", &""))
+					if ci_aid != &"":
+						_net_exec("resume_effect", {"action_id": ci_aid, "data": {"chosen_value": n_ci, "confirmed": true}})
+					else:
+						_net_exec("ui_confirmed", {"data": {"chosen_value": n_ci, "confirmed": true}})
 				else:
-					_net_exec("ui_confirmed", {"data": {"cancelled": true}})
+					var ci_aid2: StringName = StringName(wait_info.get("action_id", &""))
+					if ci_aid2 != &"":
+						_net_exec("resume_effect", {"action_id": ci_aid2, "data": {"cancelled": true}})
+					else:
+						_net_exec("ui_confirmed", {"data": {"cancelled": true}})
 				return
 			if input_type == &"redirect_select":
 				# 损伤转移：把选中的档位 effect_id(__redirect_N__) 解析为转移点数，构造 redirect_plan 回填
@@ -6144,7 +6173,11 @@ func _on_choice_made(effect_id: StringName) -> void:
 					_redirect_context = {}
 					if choice_panel:
 						choice_panel.visible = false
-					_net_exec("ui_confirmed", {"data": {"redirect_plan": ao_plan, "all_or_nothing_confirmed": ao_confirmed}})
+					var rd_ao_aid: StringName = StringName(wait_info.get("action_id", &""))
+					if rd_ao_aid != &"":
+						_net_exec("resume_effect", {"action_id": rd_ao_aid, "data": {"redirect_plan": ao_plan, "all_or_nothing_confirmed": ao_confirmed}})
+					else:
+						_net_exec("ui_confirmed", {"data": {"redirect_plan": ao_plan, "all_or_nothing_confirmed": ao_confirmed}})
 					return
 				var es := String(effect_id)
 				var n: int = 0
@@ -6156,7 +6189,11 @@ func _on_choice_made(effect_id: StringName) -> void:
 				_redirect_context = {}
 				if choice_panel:
 					choice_panel.visible = false
-				_net_exec("ui_confirmed", {"data": {"redirect_plan": plan}})
+				var rd_aid: StringName = StringName(wait_info.get("action_id", &""))
+				if rd_aid != &"":
+					_net_exec("resume_effect", {"action_id": rd_aid, "data": {"redirect_plan": plan}})
+				else:
+					_net_exec("ui_confirmed", {"data": {"redirect_plan": plan}})
 				return
 			if input_type == &"pilot_014_target_select":
 				# pilot_014 亚伦选机师牌：effect_id=选中机师牌 instance_id，回查 option 取 player_id/mech_id。
@@ -6172,7 +6209,11 @@ func _on_choice_made(effect_id: StringName) -> void:
 						p014_mid = od.get("mech_id", &"")
 						break
 				_pilot_014_select_options = []
-				_net_exec("ui_confirmed", {"data": {"pilot_014_target_pilot": p014_target, "pilot_014_player_id": p014_pid, "pilot_014_mech_id": p014_mid, "confirmed": true}})
+				var p14_aid: StringName = StringName(wait_info.get("action_id", &""))
+				if p14_aid != &"":
+					_net_exec("resume_effect", {"action_id": p14_aid, "data": {"pilot_014_target_pilot": p014_target, "pilot_014_player_id": p014_pid, "pilot_014_mech_id": p014_mid, "confirmed": true}})
+				else:
+					_net_exec("ui_confirmed", {"data": {"pilot_014_target_pilot": p014_target, "pilot_014_player_id": p014_pid, "pilot_014_mech_id": p014_mid, "confirmed": true}})
 				return
 			if input_type == &"pilot_088_type_select":
 				# pilot_088 征服宣言类型三选一（攻击/迎击/辅助，不可取消）：effect_id 即选项中的
@@ -6186,7 +6227,11 @@ func _on_choice_made(effect_id: StringName) -> void:
 						p088_declared = String(od.get("declared_type", ""))
 						break
 				_pilot_088_type_options = []
-				_net_exec("ui_confirmed", {"data": {"pilot_088_declared_type": p088_declared, "confirmed": true}})
+				var p88_aid: StringName = StringName(wait_info.get("action_id", &""))
+				if p88_aid != &"":
+					_net_exec("resume_effect", {"action_id": p88_aid, "data": {"pilot_088_declared_type": p088_declared, "confirmed": true}})
+				else:
+					_net_exec("ui_confirmed", {"data": {"pilot_088_declared_type": p088_declared, "confirmed": true}})
 				return
 			if input_type == &"pilot_032_target_select":
 				# pilot_032 爱瑞娅选机师牌：effect_id=选中机师牌 instance_id，回查 option 取 player_id/mech_id。
@@ -6202,7 +6247,11 @@ func _on_choice_made(effect_id: StringName) -> void:
 						p032_mid = od.get("mech_id", &"")
 						break
 				_pilot_032_select_options = []
-				_net_exec("ui_confirmed", {"data": {"pilot_032_target_pilot": p032_target, "pilot_032_player_id": p032_pid, "pilot_032_mech_id": p032_mid, "confirmed": true}})
+				var p32_aid: StringName = StringName(wait_info.get("action_id", &""))
+				if p32_aid != &"":
+					_net_exec("resume_effect", {"action_id": p32_aid, "data": {"pilot_032_target_pilot": p032_target, "pilot_032_player_id": p032_pid, "pilot_032_mech_id": p032_mid, "confirmed": true}})
+				else:
+					_net_exec("ui_confirmed", {"data": {"pilot_032_target_pilot": p032_target, "pilot_032_player_id": p032_pid, "pilot_032_mech_id": p032_mid, "confirmed": true}})
 				return
 			if input_type == &"pilot_018_select_equipment":
 				# pilot_018 苔丝弃装备牌：effect_id=选中装备牌 instance_id，走 resume_pending_effect 回填。
@@ -6402,7 +6451,12 @@ func _on_choice_cancelled() -> void:
 	if not _redirect_context.is_empty():
 		_redirect_context = {}
 		if battle and battle.context and battle.context.action_ui_bridge:
-			_net_exec("ui_confirmed", {"data": {"redirect_plan": []}})
+			var rd_cancel_wait: Dictionary = battle.context.action_ui_bridge.get_waiting_action_info()
+			var rd_cancel_aid: StringName = StringName(rd_cancel_wait.get("action_id", &""))
+			if rd_cancel_aid != &"":
+				_net_exec("resume_effect", {"action_id": rd_cancel_aid, "data": {"redirect_plan": []}})
+			else:
+				_net_exec("ui_confirmed", {"data": {"redirect_plan": []}})
 		return
 
 	# effect_choice（choose_one_effect）弹窗取消：按隐藏前捕获的 action_id 精确路由（bug1，
@@ -6429,7 +6483,14 @@ func _on_choice_cancelled() -> void:
 				_pilot_014_select_options = []
 				_pilot_032_select_options = []
 				_pilot_088_type_options = []
-				_net_exec("ui_cancelled", {})
+				# 引擎级挂起（_pending_effect）的效果取消：按 action_id 精确路由带 cancelled=true
+				#（同确认路径根因：共享槽 ui_cancelled 在对端被 skip_remote_waiting 清槽后
+				# 早 return 丢输入 -> 对端停在挂起三方卡死）。无挂起回退原共享槽路径。
+				var _cc_aid: StringName = StringName(wi.get("action_id", &""))
+				if _cc_aid != &"" and battle.context.timing_engine.has_pending_effect(_cc_aid):
+					_net_exec("resume_effect", {"action_id": _cc_aid, "data": {"cancelled": true}})
+				else:
+					_net_exec("ui_cancelled", {})
 				return
 
 	# 卖出模式取消
@@ -7127,10 +7188,17 @@ func _select_support_target(hex: Dictionary) -> void:
 
 	# 锁步:目标选择回填走 ui_confirmed op（_waiting_action_id 已由 action_needs_input 设）
 	if _pending_target_action_id != &"":
+		var pt_aid: StringName = _pending_target_action_id
 		_pending_target_action_id = &""
 		_pending_target_effect_id = &""
-		_net_exec("ui_confirmed", {"data": {"target_id": target_mech_id, "target_mech_id": target_mech_id}})
-		return
+		var pt_pending: bool = false
+		if battle and battle.context and battle.context.timing_engine:
+			pt_pending = battle.context.timing_engine.has_pending_effect(pt_aid)
+		if pt_pending:
+			_net_exec("resume_effect", {"action_id": String(pt_aid), "data": {"target_id": target_mech_id, "target_mech_id": target_mech_id}})
+		else:
+			_net_exec("ui_confirmed", {"data": {"target_id": target_mech_id, "target_mech_id": target_mech_id}})
+	return
 
 	# 旧流程：将目标信息加入 payload 并打出辅助牌
 	var payload := {"target_mech_id": target_mech_id}
@@ -7159,11 +7227,14 @@ func _refresh_battle_coalesced() -> void:
 	if battle.context.action_ui_bridge and not battle.context.action_ui_bridge.get_waiting_action_info().is_empty():
 		_refresh_panels_only()
 		return
-	# 逐格移动进行中：跳过全量刷新。_refresh_board_only 已在每格 BASIC_MOVE_AFTER 同步刷新
-	# 棋盘+状态栏；若再全量 _refresh_battle（重建手牌/装备等面板）会引发布局抖动，使
-	# battle_board 的 _grid_scale 读到瞬态 get_rect() -> 棋盘变形放大。移动结束时
-	#（_has_active_single_move 为 false）再全量刷新补齐面板。
+	# 逐格移动进行中：不碰棋盘。_refresh_board_only 已在每格 BASIC_MOVE_AFTER 同步刷新棋盘+
+	# 状态栏；若全量 _refresh_battle（重建手牌/装备等面板）会引发布局抖动，使 battle_board 的
+	# _grid_scale 读到瞬态 get_rect() -> 棋盘变形放大。但面板轻量刷新照做——移动中触发的效果
+	#（骇客窥牌加成攻击次数/行动牌上限、汀兰光环改动力消耗等）须立即显示，否则数值要等移动
+	# 整个动作完成后才更新（用户反馈"过了一会才加上"）。panels_only 差量便宜、不重建棋盘，
+	# 无布局抖动。移动结束时（_has_active_single_move 为 false）再全量 _refresh_battle 补齐。
 	if _has_active_single_move():
+		_refresh_panels_only()
 		return
 	_refresh_battle()
 

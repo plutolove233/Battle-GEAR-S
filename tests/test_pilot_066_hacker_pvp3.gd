@@ -227,7 +227,18 @@ func test_p066_peek_pvp3_sync() -> Variant:
 	c1._apply_remote_input("resume_effect", relay_uc)
 	await _pump(2)
 	c2._apply_remote_input("resume_effect", relay_uc)
-	await _pump(12)
+	# 逐帧读骇客端 hand_panel 状态标签，定位"数值延迟显示"在第几帧
+	var ui_frames: Array = []
+	for f in range(1, 9):
+		await _pump(1)
+		var hp = h.hand_panel
+		if hp == null:
+			ui_frames.append("f%d:no-panel" % f)
+			continue
+		var atk_txt: String = hp._stat_attack_label.text if hp._stat_attack_label != null else "?"
+		var act_txt: String = hp._stat_action_label.text if hp._stat_action_label != null else "?"
+		ui_frames.append("f%d:[%s|%s]" % [f, atk_txt, act_txt])
+	diag.append("UI帧: " + " ".join(PackedStringArray(ui_frames)))
 	diag.append("resume后: pending=%d/%d/%d wait=%s/%s/%s" % [_pending_count(h), _pending_count(c1), _pending_count(c2),
 		String(_wait_info(h).get("input_type", &"")), String(_wait_info(c1).get("input_type", &"")), String(_wait_info(c2).get("input_type", &""))])
 	# ④ 断言三端一致：pending 清零 / 位置一致 / 加成一致
@@ -300,6 +311,7 @@ func test_p066_peek_pvp3_sync() -> Variant:
 		diag.append("FAIL: " + " | ".join(PackedStringArray(errs)))
 		await _free3(h, c1, c2)
 		return " | ".join(PackedStringArray(diag))
+	print("DIAG: " + " | ".join(PackedStringArray(diag)))
 	await _free3(h, c1, c2)
 	return true
 
