@@ -417,9 +417,9 @@ func _show_main_menu() -> void:
 		_quit_pvp_session()
 		return
 	var layout := _begin_screen("机斗战甲")
+	_add_button(layout, "3人PvP测试（全面测试用）", Callable(self, "_start_pvp3_host"))
 	_add_button(layout, "新战役", Callable(self, "_show_loadout"))
 	_add_button(layout, "PvP测试模式", Callable(self, "_start_pvp_host"))
-	_add_button(layout, "3人PvP测试", Callable(self, "_start_pvp3_host"))
 	_add_button(layout, "图鉴", Callable(self, "_show_collection"))
 	_add_button(layout, "退出", Callable(self, "_quit_app"))
 

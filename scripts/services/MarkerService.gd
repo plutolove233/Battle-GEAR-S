@@ -2,7 +2,7 @@
 ##
 ## 处理地图标记的效果执行（触发由 MapService._check_map_markers 驱动）：
 ## - 金币标记：投1骰，按映射得金币（1-3→3、4-5→4、6→6）
-## - 事件标记：抽1张事件牌并设置（效果待实装，当前仅文本）
+## - 事件标记：抽1张事件牌并设置（_trigger_event_marker 预抽并记录事件牌名，日志显示生效事件）
 ## - 陷阱标记：发起 trap_explosion 动作（洪水扩散+逐机甲HP/损伤结算）
 ##
 ## 标记的查找/移除/重生由 MapState/MapService 负责，本服务只执行效果。
@@ -114,17 +114,31 @@ func _trigger_gold_marker(mech_id: StringName, _marker: Dictionary) -> Dictionar
 
 ## 事件标记：拾取后立即将事件牌堆顶1张设置到机甲事件区域（set_event_card 动作：
 ## 顶掉旧牌/注册效果/初始化计时；牌堆耗尽仅记日志）。效果即刻生效（瞬时+持续）。
+## 预抽事件牌堆顶1张（pop_front 确定性，PvP 双/三端同一移动操作下抽到同一张），
+## 把事件牌信息写入 marker_event 日志供 UI 显示"此次生效的事件"，并把该牌传给
+## set_event_card 动作（其 _step_resolve_card 优先用 record.event_card_id，不再二次抽取）。
 func _trigger_event_marker(mech_id: StringName, _marker: Dictionary) -> Dictionary:
 	var gs = context.game_state
+	var ev_card_id: StringName = &""
+	var ev_name := ""
+	if context.deck_service != null:
+		var ev_drawn: Array = context.deck_service.draw_from_deck(&"event_deck", 1)
+		if not ev_drawn.is_empty():
+			ev_card_id = StringName(String(ev_drawn[0]))
+			var ev_card = gs.get_card(ev_card_id)
+			if ev_card != null and ev_card.def != null:
+				ev_name = String(ev_card.def.display_name)
 	gs.write_log(&"marker_event", {
 		"mech_id": String(mech_id),
+		"card_id": String(ev_card_id),
+		"card_name": ev_name,
 	})
 	if context.action_service != null:
-		context.action_service.execute(&"set_event_card", {
-			"mech_id": mech_id,
-			"source": {"mech_id": mech_id},
-		})
-	return {"ok": true, "type": "event"}
+		var ev_params: Dictionary = {"mech_id": mech_id, "source": {"mech_id": mech_id}}
+		if ev_card_id != &"":
+			ev_params["event_card_id"] = ev_card_id
+		context.action_service.execute(&"set_event_card", ev_params)
+	return {"ok": true, "type": "event", "event_card_id": ev_card_id}
 
 
 ## 陷阱标记：发起陷阱爆炸动作（洪水扩散+逐机甲结算，HP+损伤经 damage_change 路由）。

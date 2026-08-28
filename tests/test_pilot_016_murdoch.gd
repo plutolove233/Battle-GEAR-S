@@ -1,9 +1,9 @@
 ## test_pilot_016_murdoch.gd - 默多克（pilot_016）效果1测试
 ##
 ## 展示转化（被动监听 USE_ACTION_BEFORE，显示说明按钮）：
-## 每玩家回合1次，使用行动牌前可展示此牌，将另外2张行动牌当作此牌使用（转化机制）。
+## 每玩家回合1次，使用行动牌前可展示此牌，将另外1张行动牌当作此牌使用（转化机制）。
 ## 流程：CHOOSE_ONE optional 询问 -> 确认 -> PILOT_016_SHOW_AND_CONVERT（展示牌A给其他玩家 +
-##   选2张B/C排除牌A + 改造父record为B当牌A virtual_transform + 弃置C）。
+##   选1张B排除牌A + 改造父record为B当牌A virtual_transform）。
 extends RefCounted
 
 const DataRegistry = preload("res://scripts/data/data_registry.gd")
@@ -169,8 +169,8 @@ func test_p016_definition() -> Variant:
 # 转化主流程
 # ═══════════════════════════════════════════
 
-## 测试2：完整转化流程（CHOOSE_ONE确认 -> 选2张B/C -> B当作A virtual_transform，
-##  B/C 进临时区 -> 牌A保留手牌 -> settle 弃 B/C）
+## 测试2：完整转化流程（CHOOSE_ONE确认 -> 选1张B -> B当作A virtual_transform，
+##  B 进临时区 -> 牌A保留手牌 -> settle 弃 B）
 func test_p016_show_convert() -> Variant:
 	var battle := _new_battle()
 	if battle == null or battle.context == null:
@@ -181,13 +181,12 @@ func test_p016_show_convert() -> Variant:
 	var gs = s.gs
 	var mech = s.mech
 	battle.context.action_ui_bridge.context = battle.context
-	# player 3张手牌：牌A=进攻 + B=防御 + C=维修
+	# player 2张手牌：牌A=进攻 + B=防御（新语义只需展示牌A+另外1张）
 	_clear_action_hand(battle, &"player")
 	var card_a_id = _add_card_to_hand(battle, &"player", "action_001_进攻")
 	var card_b_id = _add_card_to_hand(battle, &"player", "action_009_防御")
-	var card_c_id = _add_card_to_hand(battle, &"player", "action_013_维修")
-	if gs.players.get(&"player").action_hand.size() != 3:
-		return "setup 应3张牌"
+	if gs.players.get(&"player").action_hand.size() != 2:
+		return "setup 应2张牌"
 	var te = battle.context.timing_engine
 	_disconnect_needs_input(te)
 	# 通过 Action Engine 完整驱动 use_action_card（牌A）。注意：必须走 execute_action，
@@ -219,9 +218,9 @@ func test_p016_show_convert() -> Variant:
 	te.resume_pending_effect(ua.action_id, {"chosen_option_index": 0})
 	await _pump_frames(3)
 	if not te._pending_effect.has(ua.action_id):
-		return "确认后应挂起 _pending_effect（pilot_016_choose_two）"
-	# resume 选2张 B/C
-	te.resume_pending_effect(ua.action_id, {"selected_action_card_ids": [card_b_id, card_c_id], "cancelled": false})
+		return "确认后应挂起 _pending_effect（pilot_016_choose_one）"
+	# resume 选1张 B
+	te.resume_pending_effect(ua.action_id, {"selected_action_card_ids": [card_b_id], "cancelled": false})
 	await _pump_frames(5)
 	# 验证 record 改造：B 当牌A virtual_transform
 	if StringName(ua.record.get("card_instance_id", &"")) != card_b_id:
@@ -237,30 +236,18 @@ func test_p016_show_convert() -> Variant:
 	var b_card = gs.get_card(card_b_id)
 	if b_card == null or String(b_card.zone) != "temp_zone":
 		return "B 应在临时区(temp_zone) 实=%s" % (String(b_card.zone) if b_card != null else "null")
-	# C 进 temp_zone（choose_two 同步移入）
-	var c_card = gs.get_card(card_c_id)
-	if c_card == null or String(c_card.zone) != "temp_zone":
-		return "C 应在临时区(temp_zone) 实=%s" % (String(c_card.zone) if c_card != null else "null")
-	var ua_tz: Array = ua.record.get("temp_zone_card_ids", [])
-	if not ua_tz.has(card_c_id):
-		return "record.temp_zone_card_ids 应含 C"
 	# 父动作继续 execute_effects -> 创建虚拟进攻子动作（attack 挂起选目标）。enemy 在远处
-	# 无可选目标，取消攻击子动作，父 settle 仍弃 B/C（避免驱动完整攻击结算，聚焦转化语义）。
+	# 无可选目标，取消攻击子动作，父 settle 仍弃 B（避免驱动完整攻击结算，聚焦转化语义）。
 	await _pump_frames(3)
 	for _atk in battle.context.action_registry.get_actions_by_type(&"attack"):
 		battle.context.action_service.cancel_action(_atk.action_id)
 	await _pump_frames(8)
-	# 结算后：B/C 入弃牌堆，牌A保留手牌
+	# 结算后：B 入弃牌堆，牌A保留手牌
 	var b_final = gs.get_card(card_b_id)
 	if b_final == null or String(b_final.zone) != "discard":
 		return "B 应在弃牌堆（settle 后） 实=%s" % (String(b_final.zone) if b_final != null else "null")
 	if not gs.deck_state.action_discard_pile.has(card_b_id):
 		return "B 应在 action_discard_pile"
-	var c_final = gs.get_card(card_c_id)
-	if c_final == null or String(c_final.zone) != "discard":
-		return "C 应在弃牌堆（settle 后） 实=%s" % (String(c_final.zone) if c_final != null else "null")
-	if not gs.deck_state.action_discard_pile.has(card_c_id):
-		return "C 应在 action_discard_pile"
 	if not gs.players.get(&"player").action_hand.has(card_a_id):
 		return "结算后 牌A 应仍保留手牌"
 	return true
@@ -308,8 +295,8 @@ func test_p016_cancel_no_convert() -> Variant:
 	return true
 
 
-## 测试4：手牌<3张不触发（条件 HAS_ACTION_CARD_IN_HAND count:3 失败）
-func test_p016_fewer_than_3_no_trigger() -> Variant:
+## 测试4：手牌<2张不触发（条件 HAS_ACTION_CARD_IN_HAND count:2 失败）
+func test_p016_fewer_than_2_no_trigger() -> Variant:
 	var battle := _new_battle()
 	if battle == null or battle.context == null:
 		return "battle 初始化失败"
@@ -321,8 +308,7 @@ func test_p016_fewer_than_3_no_trigger() -> Variant:
 	battle.context.action_ui_bridge.context = battle.context
 	_clear_action_hand(battle, &"player")
 	var card_a_id = _add_card_to_hand(battle, &"player", "action_001_进攻")
-	_add_card_to_hand(battle, &"player", "action_009_防御")
-	# 只2张牌
+	# 只1张牌（A），无另外可转化的牌
 	var te = battle.context.timing_engine
 	_disconnect_needs_input(te)
 	var ua := _make_use_action(battle, card_a_id, &"player", mech.mech_id)
@@ -331,7 +317,7 @@ func test_p016_fewer_than_3_no_trigger() -> Variant:
 	te.fire_timing(_TimingConst.USE_ACTION_BEFORE, ua)
 	await _pump_frames(3)
 	if te._pending_effect.has(ua.action_id):
-		return "手牌<3张不应触发 CHOOSE_ONE"
+		return "手牌<2张不应触发 CHOOSE_ONE"
 	return true
 
 
@@ -349,7 +335,6 @@ func test_p016_once_per_turn() -> Variant:
 	_clear_action_hand(battle, &"player")
 	var card_a_id = _add_card_to_hand(battle, &"player", "action_001_进攻")
 	var card_b_id = _add_card_to_hand(battle, &"player", "action_009_防御")
-	var card_c_id = _add_card_to_hand(battle, &"player", "action_013_维修")
 	var te = battle.context.timing_engine
 	_disconnect_needs_input(te)
 	# 第一次转化
@@ -360,9 +345,9 @@ func test_p016_once_per_turn() -> Variant:
 	await _pump_frames(3)
 	te.resume_pending_effect(ua.action_id, {"chosen_option_index": 0})
 	await _pump_frames(3)
-	te.resume_pending_effect(ua.action_id, {"selected_action_card_ids": [card_b_id, card_c_id], "cancelled": false})
+	te.resume_pending_effect(ua.action_id, {"selected_action_card_ids": [card_b_id], "cancelled": false})
 	await _pump_frames(3)
-	# 补2张牌（B/C 已移入临时区；牌A保留手牌，不影响新 action）
+	# 补2张牌（B 已移入临时区；牌A保留手牌，不影响新 action）
 	_add_card_to_hand(battle, &"player", "action_001_进攻")
 	_add_card_to_hand(battle, &"player", "action_009_防御")
 	# 第二次 fire（同回合）应被 once_per_turn 拦截

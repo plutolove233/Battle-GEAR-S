@@ -1843,13 +1843,12 @@ func _resolve_mech_id_expr(expr: String, payload: Dictionary) -> StringName:
 ## pilot_016 默多克展示转化（CHOOSE_ONE 确认后分支内执行）。返回 true=已挂起弹窗。
 ## 阶段1：展示牌A给其他玩家（复用美杜莎 pilot_009_show_display 非阻塞浮窗；
 ##   target_id=默多克机甲=牌A持有者，除其拥有者外全显示）。
-## 阶段2：选2张B/C（排除牌A）选牌窗（阻塞，phase=pilot_016_choose_two）。
-## 候选不足2张 -> 返回 false（不转化，回父正常用牌A）。
-## resume(phase=pilot_016_choose_two)：B/C 都移入临时区（B 由父 card_to_temp_zone 移入并当牌A
-##   virtual_transform，C 写 record.temp_zone_card_ids 由父 settle 弃置）+
+## 阶段2：选1张B（排除牌A）选牌窗（阻塞，phase=pilot_016_choose_one）。
+## 候选不足1张 -> 返回 false（不转化，回父正常用牌A）。
+## resume(phase=pilot_016_choose_one)：B 由父 card_to_temp_zone 移入临时区并当牌A virtual_transform +
 ##   改造父record(B当牌A virtual_transform) + 清空剩余 listener（避免旧 payload 误触发阿克罗姆01a 等）+
 ##   mark once_per_turn。
-## 牌A保留手牌；父 execute_effects 执行牌A的 DIRECT 效果（"调用执行A的效果"）；父 settle 弃B和C。
+## 牌A保留手牌；父 execute_effects 执行牌A的 DIRECT 效果（"调用执行A的效果"）；父 settle 弃B。
 func _handle_pilot_016_show_and_convert(act: Dictionary, effect: ActionEffect, payload: Dictionary, action) -> bool:
 	# 重跑幂等：已转化则跳过（resume 推进父动作后不再触发）
 	if payload.has("pilot_016_converted"):
@@ -1877,8 +1876,8 @@ func _handle_pilot_016_show_and_convert(act: Dictionary, effect: ActionEffect, p
 		var p016_c = context.game_state.get_card(p016_cid)
 		if p016_c != null and p016_c.def != null and p016_c.def.card_kind == &"action":
 			p016_candidates.append(p016_cid)
-	if p016_candidates.size() < 2:
-		SLog.log_raw("[TIMING] %s pilot_016 候选牌不足2张，中止转化 effect=%s" % [String(action.action_id), String(effect.effect_id)])
+	if p016_candidates.is_empty():
+		SLog.log_raw("[TIMING] %s pilot_016 候选牌不足1张，中止转化 effect=%s" % [String(action.action_id), String(effect.effect_id)])
 		return false  # 不转化，回父正常用牌A
 	# 阶段1：展示牌A给其他玩家（非阻塞浮窗，复用美杜莎展示框）
 	var p016_display_cards: Array = []
@@ -1894,10 +1893,10 @@ func _handle_pilot_016_show_and_convert(act: Dictionary, effect: ActionEffect, p
 		"player_id": p016_pid,
 		"source_label": "默多克·展示转化：展示的行动牌",
 	})
-	# 阶段2：选2张B/C（阻塞，候选已排除牌A；exclude_card_ids 让面板再保险排除牌A）
+	# 阶段2：选1张B（阻塞，候选已排除牌A；exclude_card_ids 让面板再保险排除牌A）
 	_pending_effect[action.action_id] = {
 		"action": action, "effect": effect, "payload": payload,
-		"phase": &"pilot_016_choose_two",
+		"phase": &"pilot_016_choose_one",
 		"card_a_id": p016_card_a_id, "card_a_def": p016_card_a_def,
 		"mech_id": p016_mech_id, "player_id": p016_pid,
 	}
@@ -1907,15 +1906,15 @@ func _handle_pilot_016_show_and_convert(act: Dictionary, effect: ActionEffect, p
 		"effect_id": effect.effect_id,
 		"executor": p016_pid,
 		"discard_player_id": p016_pid,
-		"count": 2,
+		"count": 1,
 		"face_up": true,
 		"action_verb": &"select",
 		"no_cancel": true,
 		"player_id": p016_pid,
 		"exclude_card_ids": [p016_card_a_id],
-		"source_label": "默多克·展示转化：选择2张行动牌当作展示牌使用",
+		"source_label": "默多克·展示转化：选择1张行动牌当作展示牌使用",
 	})
-	SLog.log_raw("[TIMING] %s 挂起 pilot_016 选2张转化牌 effect=%s 候选=%d" % [String(action.action_id), String(effect.effect_id), p016_candidates.size()])
+	SLog.log_raw("[TIMING] %s 挂起 pilot_016 选1张转化牌 effect=%s 候选=%d" % [String(action.action_id), String(effect.effect_id), p016_candidates.size()])
 	return true
 
 
@@ -4958,53 +4957,35 @@ func resume_pending_effect(action_id: StringName, input_data: Dictionary) -> voi
 			context.action_engine.continue_action(action_id, {})
 		return
 
-	# ── pilot_016 选2张转化牌阶段：玩家选了2张B/C（selected_action_card_ids）──
-	# 新语义：B/C 都移入临时区（C 写 record.temp_zone_card_ids 由父 settle 弃置，同步移牌不发时点，
-	#   与迪恩 temp_zone 弃置一致，避免与父动作推进竞争）+ 改造父 use_action_card.record(B当牌A
-	#   virtual_transform) + 清空剩余 listener + mark once_per_turn。
-	# 牌A保留手牌；B 由父 card_to_temp_zone 移入 temp_zone + 注册牌A效果；父 execute_effects 执行牌A效果；
-	# 父 settle 弃B和C。
-	if phase == &"pilot_016_choose_two":
+	# ── pilot_016 选1张转化牌阶段：玩家选了1张B（selected_action_card_ids）──
+	# 新语义：改造父 use_action_card.record(B当牌A virtual_transform) + 清空剩余 listener +
+	#   mark once_per_turn。B 由父 card_to_temp_zone 移入 temp_zone + 注册牌A效果；
+	#   父 execute_effects 执行牌A效果；父 settle 弃B。
+	if phase == &"pilot_016_choose_one":
 		var p016_c_a_id: StringName = pending.get("card_a_id", &"")
 		var p016_c_a_def: StringName = pending.get("card_a_def", &"")
 		var p016_sel: Array = input_data.get("selected_action_card_ids", [])
-		# 取消/不足2张（不应发生，no_cancel）：不转化，回父正常用牌A
-		if input_data.get("cancelled", false) or p016_sel.size() < 2:
-			SLog.log_raw("[TIMING] %s pilot_016 转化选牌取消/不足2张，不转化 effect=%s" % [String(action_id), String(effect.effect_id)])
+		# 取消/不足1张（不应发生，no_cancel）：不转化，回父正常用牌A
+		if input_data.get("cancelled", false) or p016_sel.is_empty():
+			SLog.log_raw("[TIMING] %s pilot_016 转化选牌取消/不足1张，不转化 effect=%s" % [String(action_id), String(effect.effect_id)])
 			if context.action_engine != null:
 				action.state = &"waiting_input"
 				context.action_engine.continue_action(action_id, {})
 			return
 		var p016_b_id: StringName = StringName(String(p016_sel[0]))  # B：当牌A用（虚拟）
-		var p016_c_id: StringName = StringName(String(p016_sel[1]))  # C：弃置消耗
-		# 保险：B/C 不应为牌A（面板已排除，AI 路径可能误选则回退不转化）
-		if p016_b_id == p016_c_a_id or p016_c_id == p016_c_a_id:
+		# 保险：B 不应为牌A（面板已排除，AI 路径可能误选则回退不转化）
+		if p016_b_id == p016_c_a_id:
 			SLog.log_raw("[TIMING] %s pilot_016 选牌含展示牌A，回退不转化 effect=%s" % [String(action_id), String(effect.effect_id)])
 			if context.action_engine != null:
 				action.state = &"waiting_input"
 				context.action_engine.continue_action(action_id, {})
 			return
-		# C 移入临时区（新语义：B/C 都进临时区，链末随父 use_action_card settle 统一入弃牌堆）。
-		# 同步移牌不发时点；写 action.record.temp_zone_card_ids 供父 settle 读取弃置（use_action_card_action 通用支持）。
-		var p016_c_card = context.game_state.get_card(p016_c_id) if context.game_state != null else null
-		if p016_c_card != null:
-			var p016_c_owner: StringName = p016_c_card.owner_player_id
-			if p016_c_owner != &"" and context.game_state.players.has(p016_c_owner):
-				context.game_state.players[p016_c_owner].action_hand.erase(p016_c_id)
-			if context.timing_engine != null:
-				context.timing_engine.unregister_listeners_for_card(p016_c_id)
-			p016_c_card.zone = &"temp_zone"
-			var _p016_tz: Array = action.record.get("temp_zone_card_ids", [])
-			if not _p016_tz.has(p016_c_id):
-				_p016_tz.append(p016_c_id)
-			action.record["temp_zone_card_ids"] = _p016_tz
-			SLog.log_raw("[TIMING] %s pilot_016 C=%s 移入临时区（链末随父 settle 弃）" % [String(action_id), String(p016_c_id)])
 		# 改造父 use_action_card.record：B 当牌A virtual_transform
 		action.record["card_instance_id"] = p016_b_id
 		action.record["as_card_def_id"] = p016_c_a_def
 		action.record["virtual_transform"] = true
 		payload["pilot_016_converted"] = true
-		SLog.log_raw("[TIMING] %s pilot_016 转化完成 B=%s 当 %s，B/C进临时区，牌A=%s 保留手牌 effect=%s" % [String(action_id), String(p016_b_id), String(p016_c_a_def), String(p016_c_a_id), String(effect.effect_id)])
+		SLog.log_raw("[TIMING] %s pilot_016 转化完成 B=%s 当 %s，牌A=%s 保留手牌 effect=%s" % [String(action_id), String(p016_b_id), String(p016_c_a_def), String(p016_c_a_id), String(effect.effect_id)])
 		# 标记每回合1次（多阶段挂起，_execute_effect 未走到末尾 mark，此处补）
 		_mark_once_per_turn_used(effect, payload)
 		# 清空剩余 USE_ACTION_BEFORE listener：转化后牌A不打（B虚拟牌A打），
@@ -8145,8 +8126,8 @@ func _execute_actions(effect: ActionEffect, payload: Dictionary, action) -> void
 				# PILOT_006_FORCE_USE_ATTACK：pilot_006 e3 战后逼迫选牌 use_action_card（分支内特判，仿 CHOOSE_*）
 				# PILOT_016_SHOW_AND_CONVERT：默多克展示转化（CHOOSE_ONE 确认后分支内执行）。
 				# 阶段1：展示牌A给其他玩家（复用美杜莎 pilot_009_show_display 非阻塞浮窗）。
-				# 阶段2：选2张B/C（排除牌A）选牌窗（阻塞，phase=pilot_016_choose_two）。
-				# resume：弃置C + 改造父record(B当牌A virtual_transform) + 清空剩余 listener + mark once_per_turn。
+				# 阶段2：选1张B（排除牌A）选牌窗（阻塞，phase=pilot_016_choose_one）。
+				# resume：改造父record(B当牌A virtual_transform) + 清空剩余 listener + mark once_per_turn。
 				# 牌A保留手牌；B 由父 card_to_temp_zone 移入 temp_zone + 注册牌A效果；父 settle 弃B。
 				if sub_type == &"PILOT_016_SHOW_AND_CONVERT":
 					if _handle_pilot_016_show_and_convert(sub_act_merged, effect, payload, action):

@@ -2449,21 +2449,20 @@ static func build_pilot_effects() -> Dictionary:
 
 	# ── pilot_016_effect_01 展示转化（被动监听，显示说明按钮）──
 	# 每玩家回合1次：默多克拥有者使用实体行动牌前（USE_ACTION_BEFORE，牌未进临时区），可展示此牌，
-	# 将另外2张行动牌当作此牌使用（转化机制）。迎击牌响应窗口也触发（不排除迎击牌）。
+	# 将另外1张行动牌当作此牌使用（转化机制）。迎击牌响应窗口也触发（不排除迎击牌）。
 	# 触发方式：玩家先点击牌A（正常使用，use_action_card validate 已检查A可用：攻击牌需范围内有目标+
-	#   攻击次数等，条件不足点不了A），USE_ACTION_BEFORE 触发本效果再弹窗选B/C。
+	#   攻击次数等，条件不足点不了A），USE_ACTION_BEFORE 触发本效果再弹窗选B。
 	# 流程：CHOOSE_ONE optional 询问 -> 确认 -> PILOT_016_SHOW_AND_CONVERT（展示牌A给其他玩家 +
-	#   选2张B/C排除牌A。新语义：B/C都移入临时区（C 写 record.temp_zone_card_ids），
-	#   改造父record为B当牌A virtual_transform）。
+	#   选1张B排除牌A。B 由父 card_to_temp_zone 移入临时区，改造父record为B当牌A virtual_transform）。
 	# 改造后父use_action_card继续跑：card_to_temp_zone(B进temp_zone+注册牌A效果) -> execute_effects(执行牌A的
-	#   DIRECT效果，即"调用执行A的效果") -> settle(弃B + record.temp_zone_card_ids 里的C)。
+	#   DIRECT效果，即"调用执行A的效果") -> settle(弃B)。
 	# 牌A保留手牌。迎击牌LISTEN(如counter_effect2)注册到原攻击触发完整响应。
 	# 防递归：条件 PAYLOAD_IS_PHYSICAL_ACTION_CARD 排除virtual_transform虚拟牌（改造后父不再触发本效果）。
 	# priority 20：高于阿克罗姆01a(10)，先转化使01a排除虚拟牌不触发。
 	var p016e1 := _ActionEffect.new()
 	p016e1.effect_id = &"pilot_016_effect_01"
 	p016e1.display_name = "展示转化"
-	p016e1.description = "每回合1次，使用行动牌前可展示此牌，将另外2张行动牌当作此牌使用（迎击牌也可转化响应）。"
+	p016e1.description = "每回合1次，可以展示持有的1张行动牌，之后将另外1张行动牌当作该展示的牌使用。"
 	p016e1.mode = _TC.MODE_LISTEN
 	p016e1.priority = 20
 	p016e1.listen_timing = _TC.USE_ACTION_BEFORE
@@ -2473,13 +2472,13 @@ static func build_pilot_effects() -> Dictionary:
 	p016e1.set_conditions([
 		{"op": &"USED_CARD_EXECUTOR_IS_SELF"},
 		{"op": &"PAYLOAD_IS_PHYSICAL_ACTION_CARD"},
-		{"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"count": 3}},
+		{"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"count": 2}},
 	])
 	p016e1.set_target_rules([{"rule": &"NO_TARGET"}])
 	p016e1.set_costs([])
 	p016e1.set_actions([{
 		"type": &"CHOOSE_ONE",
-		"params": {"optional": true, "options": [{"label": "展示此牌，将另外2张行动牌当作此牌使用", "actions": [
+		"params": {"optional": true, "options": [{"label": "展示此牌，将另外1张行动牌当作此牌使用", "actions": [
 			{"type": &"PILOT_016_SHOW_AND_CONVERT", "params": {}}
 		]}]}
 	}])

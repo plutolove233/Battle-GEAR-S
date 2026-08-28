@@ -37,7 +37,7 @@ var _source_text: String = ""
 var _no_cancel: bool = false
 ## 已选择的牌 ID 列表
 var _selected: Array[StringName] = []
-## 排除的牌 ID 列表（默多克展示转化：选另外2张时排除展示的牌A，不使其被选）
+## 排除的牌 ID 列表（默多克展示转化：选另外1张时排除展示的牌A，不使其被选）
 var _exclude_card_ids: Array = []
 
 ## 内部布局容器
@@ -210,7 +210,7 @@ func _refresh() -> void:
 		if _card_type_filter != &"" and card.def.action_type != _card_type_filter:
 			continue
 
-		# 排除指定牌（默多克展示转化：选另外2张时排除展示的牌A）
+		# 排除指定牌（默多克展示转化：选另外1张时排除展示的牌A）
 		if card_id in _exclude_card_ids:
 			continue
 

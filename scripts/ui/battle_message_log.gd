@@ -755,7 +755,10 @@ func _translate_log_entry(entry: Dictionary) -> String:
 			return "  [color=gold]└ %s 分走 %s 的 %d 金币（获金分半）[/color]" % [split_name, gainer_name, split_amt]
 		"marker_event":
 			var mech_name := _mech_display_name(String(entry.get("mech_id", "")))
-			return "[color=#7c6]✦ %s 触发事件标记（效果待实装，无事发生）[/color]" % mech_name
+			var ev_name := String(entry.get("card_name", ""))
+			if ev_name == "":
+				return "[color=#7c6]✦ %s 触发事件标记，事件牌堆已空[/color]" % mech_name
+			return "[color=#7c6]✦ %s 触发事件标记，设置事件牌【%s】[/color]" % [mech_name, ev_name]
 		"marker_trap":
 			var mech_name := _mech_display_name(String(entry.get("mech_id", "")))
 			return "[color=#e66]▲ %s 触发陷阱标记，引发爆炸！[/color]" % mech_name
