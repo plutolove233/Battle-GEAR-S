@@ -209,6 +209,16 @@ func _reach_concurrent_suspend(battle, s: Dictionary) -> String:
 	s["main_id"] = main_id
 	s["fork1_id"] = fork1_id
 	var fork1 = ar.get_action(fork1_id)
+	# 通用转移注入后 fork1 ATTACK_AT 弹转移目标窗口（杰狞 enemy1 相邻 enemy2 且在 player 范围），
+	# pass 放弃转移让 fork1 继续到 ATTACK_AFTER（杰狞受伤 -> hp_change 挂起于伤害转移弹窗）。
+	var te = battle.context.timing_engine
+	var _pass_sel: Array[Dictionary] = []
+	while String(fork1.state) == &"waiting_timing" and fork1.record.get("has_response_window", false):
+		te.handle_response_selection(fork1_id, _pass_sel, &"enemy")
+		var _rwt = Engine.get_main_loop() as SceneTree
+		if _rwt != null:
+			await _rwt.process_frame
+		fork1 = ar.get_action(fork1_id)
 	var hp_id := _find_pending_sub(battle, fork1, &"hp_change", &"waiting_timing")
 	if hp_id == &"":
 		return "hp_change 未挂起于杰狞转移弹窗（state=%s pending=%s）" % [String(fork1.state), str(fork1.pending_effect_action_ids)]
@@ -264,7 +274,7 @@ func test_p049_concurrent_transfer_confirm_precise_routing() -> Variant:
 		return s["err"]
 	var enemy1_mech = s["enemy1_mech"]
 	var enemy2_mech = s["enemy2_mech"]
-	var err := _reach_concurrent_suspend(battle, s)
+	var err := await _reach_concurrent_suspend(battle, s)
 	if err != "":
 		return err
 	var bridge = battle.context.action_ui_bridge
@@ -329,7 +339,7 @@ func test_p049_concurrent_transfer_cancel_precise_routing() -> Variant:
 		return s["err"]
 	var enemy1_mech = s["enemy1_mech"]
 	var enemy2_mech = s["enemy2_mech"]
-	var err := _reach_concurrent_suspend(battle, s)
+	var err := await _reach_concurrent_suspend(battle, s)
 	if err != "":
 		return err
 	var bridge = battle.context.action_ui_bridge

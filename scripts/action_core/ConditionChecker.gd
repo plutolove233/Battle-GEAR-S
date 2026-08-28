@@ -126,7 +126,7 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 
 		&"HAS_UNEQUIPPED_EQUIPMENT_CARD":
 			# 通用件：持有者装备手牌中至少1张"未设置的装备牌"（仅装备手牌，不含已设置槽位）。
-			# 供"弃置未设置的装备牌"类主动效果按钮置灰判定（柏格 pilot_064 等）。
+			# 供"弃置未设置的装备牌"类主动效果按钮置灰判定（柏格 pilot_065 等）。
 			var hue_player: StringName = _equip_player_id(binding, payload)
 			var hue_ctx = binding.context if binding != null else null
 			if hue_player == &"" or hue_ctx == null or hue_ctx.get("game_state") == null:
@@ -800,7 +800,7 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 
 		&"EVENT_DECK_HAS_CARDS":
 			# 通用：事件牌堆剩余张数 >= minimum（默认1）。供「抽1张事件牌设置到区域」类
-			# 主动效果按钮置灰（李 pilot_051 e1：事件牌堆耗尽不可点）。
+			# 主动效果按钮置灰（李 pilot_053 e1：事件牌堆耗尽不可点）。
 			var edc_ctx = binding.context if binding != null else null
 			if edc_ctx == null or edc_ctx.get("game_state") == null:
 				return false
@@ -809,7 +809,7 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 
 		&"OWNER_IS_HUMAN":
 			# 通用：效果绑定来源玩家 is_human（PvE 敌方 AI=false 跳过弹窗类被动；
-			# PvP/PvP3 全人类恒真）。李 pilot_051 e2 拦截弹窗对 AI 拥有者不触发。
+			# PvP/PvP3 全人类恒真）。李 pilot_053 e2 拦截弹窗对 AI 拥有者不触发。
 			var oh_bind_ctx: Dictionary = payload.get("binding_context", {})
 			var oh_pid: StringName = oh_bind_ctx.get("player_id", &"")
 			if oh_pid == &"":
@@ -932,7 +932,7 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 			return soia_status_mech != &"" and soia_status_mech == soia_attacker
 
 		&"OWNER_HAS_WEAPON_EQUIPMENT_CARD":
-			# 提比里安 pilot_022 effect_01 主动按钮可用性：持有者玩家是否持有任意武器装备牌
+			# 提比里安 pilot_021 effect_01 主动按钮可用性：持有者玩家是否持有任意武器装备牌
 			# （装备手牌 + 机甲所有已设置槽位中 def.equipment_kind==WEAPON 的牌）。
 			# 虚拟武器天然排除——虚拟武器 def.equipment_kind==PART（神莺躯干），枚举只看 WEAPON。
 			var ohw_owner: StringName = _equip_player_id(binding, payload)
@@ -965,14 +965,14 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 			return false
 
 		&"PILOT_022_NOT_USED_THIS_GAME":
-			# 提比里安 pilot_022 effect_02 本局1次：来源机师牌实例 counters 无已用标记时方可触发。
+			# 提比里安 pilot_021 effect_02 本局1次：来源机师牌实例 counters 无已用标记时方可触发。
 			var p022_cid: StringName = _equip_card_instance_id(binding, payload)
 			if p022_cid == &"" or binding == null or binding.context == null or binding.context.get("game_state") == null:
 				return false
 			var p022_card = binding.context.game_state.get_card(p022_cid)
 			if p022_card == null:
 				return false
-			return not bool(p022_card.counters.get("pilot_022_effect_02_used", false))
+			return not bool(p022_card.counters.get("pilot_021_effect_02_used", false))
 
 		&"SELF_MECH_NOT_ATTACK_TARGET":
 			# 本牌所属机甲 != 攻击目标（pilot_002 防御分支：被授予机师非被攻击目标）
@@ -1142,7 +1142,7 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 			# 可选 from_zone 参数限定弃置来源区（德伦迪用 action_hand=仅从手牌弃置触发）；
 			# 可选 card_kind 参数限定牌类型（默认 action 保持德伦迪行为；霍克 pilot_055 卖出翻倍用
 			#   equipment=本次卖出的是效果持有者自己的装备牌）；
-			# 可选 action_type 参数限定行动牌类型（如 辅助：肯尼斯 pilot_075 判定本次弃置含辅助牌——
+			# 可选 action_type 参数限定行动牌类型（如 辅助：肯尼斯 pilot_072 判定本次弃置含辅助牌——
 			#   按快照 card_id 查 gs.get_card().def.action_type，非行动牌/无 def 不命中）；
 			# 可选 negate 参数取反（布尔，默认 false）：本次弃置【不】含满足上述条件的牌时命中
 			#   （肯尼斯 effect_02 弹窗分支=不含辅助牌时弹 CHOOSE_ONE）。
@@ -1221,7 +1221,7 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 
 		&"SET_EQUIP_INCLUDES_OWNER_FACE_UP":
 			# 本次设置装备动作：目标机甲是效果持有者机甲 + 设置的装备牌（card_kind=equipment）
-			# + 正面设置（槽位非 RESERVE）+ 非「设置即损坏弃置」（亚林 pilot_053：正面设置触发）。
+			# + 正面设置（槽位非 RESERVE）+ 非「设置即损坏弃置」（亚林 pilot_052：正面设置触发）。
 			# SET_EQUIP_AT 时点 payload=record（card_id/mech_id/slot_id/equipment_broken_on_set）。
 			var se_mech: StringName = _equip_mech_id(binding, payload)
 			if se_mech == &"":
@@ -1255,7 +1255,7 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 			return true
 
 		&"DISCARD_INCLUDES_OWNER_FACE_UP_EQUIPMENT":
-			# 本次弃置的牌中至少1张是效果持有者机甲上正面朝上的装备牌（亚林 pilot_053：弃置触发）。
+			# 本次弃置的牌中至少1张是效果持有者机甲上正面朝上的装备牌（亚林 pilot_052：弃置触发）。
 			# discard_snapshots 含 from_mech_id/from_slot_id/from_zone/card_kind；
 			# 正面=from_zone=equipment_slot（已设置在区域）且槽位非 RESERVE（备用区背面）。
 			var de_mech: StringName = _equip_mech_id(binding, payload)
@@ -1471,12 +1471,12 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 		&"USED_CARD_IS_COVER":
 			# 当前 use_action_card 打出的牌是掩护（card_def_id == action_016_掩护）。
 			# 转化掩护（PLAY_AS_NAMED as_card_def_id=action_016_掩护）record.card_def_id 以
-			# as_card_def_id 优先，故转化与原版掩护均命中。洛尔恩 pilot_062 效果2 用：
+			# as_card_def_id 优先，故转化与原版掩护均命中。洛尔恩 pilot_063 效果2 用：
 			# 我方使用掩护（转化或原版，不含进攻）后二选一（损伤-1 / 不可响应）。
 			return String(payload.get("card_def_id", &"")) == "action_016_掩护"
 
 		&"PAYLOAD_ARRAY_NOT_EMPTY":
-			# payload[key] 是数组且非空。通用条件 op（洛尔恩 pilot_062 效果1 转化掩护：
+			# payload[key] 是数组且非空。通用条件 op（洛尔恩 pilot_063 效果1 转化掩护：
 			# CHOOSE_MANY_CARDS store_result_key 选中行动牌后，CONDITIONAL_ACTIONS 据此判定
 			# 无牌不发动不计次——无牌时 CHOOSE_MANY_CARDS 空候选跳过，payload 无此键，取空数组）。
 			var pne_params: Dictionary = condition.get("params", {})
@@ -1490,7 +1490,7 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 			# 通用件：payload[key]（CHOOSE_MANY_CARDS store_result_key 存的卡 id 数组）中
 			# 第一张牌是否为武器装备牌（def.equipment_kind == WEAPON）。弃置后牌实例仍在
 			# game_state.cards（进弃牌堆），def 保留可查。供"弃置的是武器则追加效果"类
-			# 条件分支（柏格 pilot_064 弃装获金抽装 等）。
+			# 条件分支（柏格 pilot_065 弃装获金抽装 等）。
 			var pwi_params: Dictionary = condition.get("params", {})
 			var pwi_key: String = String(pwi_params.get("key", &""))
 			if pwi_key == "":
@@ -1745,7 +1745,7 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 
 		&"CAN_ACTIVE_ATTACK":
 			# 可主动发起进攻：本回合可攻击（攻击数>0），或我方攻击窗口激活期间（铠威窗口豁免攻击次数）。
-			# 布彻尔 pilot_063「当作进攻」通用条件：主阶段用普通攻击次数，窗口内豁免（窗口攻击本身不耗次数）。
+			# 布彻尔 pilot_064「当作进攻」通用条件：主阶段用普通攻击次数，窗口内豁免（窗口攻击本身不耗次数）。
 			var caa_mech_id: StringName = _equip_mech_id(binding, payload)
 			var caa_ctx = binding.context if binding != null else null
 			if caa_mech_id == &"" or caa_ctx == null or caa_ctx.get("game_state") == null:
@@ -1759,7 +1759,7 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 
 		&"ATTACK_IS_ASSAULT_CLASS":
 			# 本次攻击是否属于「进攻」类（进攻牌/转化进攻/视为进攻）。
-			# 布彻尔 pilot_063「我方使用的进攻」通用条件：原版进攻牌、转化进攻（PLAY_AS_NAMED 等写入
+			# 布彻尔 pilot_064「我方使用的进攻」通用条件：原版进攻牌、转化进攻（PLAY_AS_NAMED 等写入
 			# virtual_as_def_id）、诺拉视为纯进攻（_effect_flags 的 pilot_015_force_pure_assault）都算；
 			# 强袭/猛击/破甲/掩护/闪击/反击等非进攻效果不算。
 			# params.card_def_id 可指定判定的进攻牌 def id（默认 action_001_进攻，可复用）。
@@ -1781,7 +1781,7 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 		&"ATTACK_IS_NAMED_CARD":
 			# 本次攻击的来源行动牌是否为具名行动牌（原版 def.card_id 或转化 virtual_as_def_id）。
 			# 通用条件（不绑机师）：params.card_def_id 指定判定的行动牌 id（默认 action_001_进攻）。
-			# 丹 pilot_067「双连加成」判双连（card_def_id=action_005_双连）：原版双连 / 转化双连都算；
+			# 丹 pilot_068「双连加成」判双连（card_def_id=action_005_双连）：原版双连 / 转化双连都算；
 			# 强袭/猛击/破甲/掩护/闪击/反击等非双连效果不算。
 			var anc_params: Dictionary = condition.get("params", condition)
 			var anc_def_id: String = String(anc_params.get("card_def_id", &"action_001_进攻"))
@@ -1794,7 +1794,7 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 			# 本次攻击选定的机甲目标数 >= params.count（双连等多目标）。
 			# 读 payload.target_ids 大小（缺省回退 target_count）。主攻击 ATTACK_PRE 时目标已选定
 			# （select_target step handler 先执行写入 target_ids，再 fire ATTACK_PRE，故 PRE 可判定）。
-			# 丹 pilot_067「双连加成」2目标判定：count=2。
+			# 丹 pilot_068「双连加成」2目标判定：count=2。
 			var atc_params: Dictionary = condition.get("params", condition)
 			var atc_min: int = int(atc_params.get("count", 1))
 			var atc_tids: Array = payload.get("target_ids", [])
@@ -2071,7 +2071,7 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 			return false
 
 		&"OTHER_MECH_WITH_ACTION_CARD_IN_HEX_RANGE":
-			# 本牌所属机甲 hex 范围内存在其他存活机甲且其玩家持有行动牌（骇客 pilot_066 移动窥牌用）。
+			# 本牌所属机甲 hex 范围内存在其他存活机甲且其玩家持有行动牌（骇客 pilot_067 移动窥牌用）。
 			# params.range 为六角距离上限；距离用 _hex_distance（odd-q offset 校正）。
 			# 只统计「玩家手牌 action_hand 非空」的机甲（0张行动牌的机甲不算候选，即使可被查看空窗）。
 			var omw_params: Dictionary = condition.get("params", condition)
@@ -2293,7 +2293,7 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 			return false
 
 		&"DISCARD_CONTAINS_FACEUP_EQUIPMENT":
-			# 本次弃置动作中含「原先正面设置在机甲上」的装备牌（pilot_085 莽克弃装获金）。
+			# 本次弃置动作中含「原先正面设置在机甲上」的装备牌（pilot_088 莽克弃装获金）。
 			# 正面设置 = 快照 from_zone==equipment_slot 且非 face_down（备用区背面设置除外）；
 			# 手上未设置(from_zone=equipment_hand)/临时区(temp_zone)天然排除。
 			# 覆盖被新牌顶掉(equipment_replace)/损坏(damage_durability)/卖出(量产装 sell_set_equipment)等弃置路径。
@@ -2437,7 +2437,7 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 
 		&"HP_CHANGE_TARGET_WITHIN_RANGE_INCLUDING_SELF":
 			# 生命变动目标机甲 == 效果所属机甲，或 hex 距离 ≤ base_range（含自身的"范围内受伤"通用条件，
-			# 芮贝卡 pilot_078 等用；与 HP_CHANGE_TARGET_IS_OTHER_WITHIN_RANGE 的区别是允许目标=自身）。
+			# 芮贝卡 pilot_075 等用；与 HP_CHANGE_TARGET_IS_OTHER_WITHIN_RANGE 的区别是允许目标=自身）。
 			# 目标已毁灭（HP≤0 在本动作 step 已 destroy）不可回复，直接排除。
 			var hcw_params: Dictionary = condition.get("params", condition)
 			var hcw_range: int = int(hcw_params.get("base_range", condition.get("base_range", 3)))
@@ -2459,7 +2459,7 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 			return _hex_distance(hcw_src.position, hcw_tgt.position) <= hcw_range
 
 		&"ATTACK_ATTACKER_WITHIN_RANGE_INCLUDING_SELF":
-			# 攻击方机甲在 base_range 内（含自身=效果所属机甲）的通用条件（维奥拉 pilot_077 等）。
+			# 攻击方机甲在 base_range 内（含自身=效果所属机甲）的通用条件（维奥拉 pilot_074 等）。
 			# 与 HP_CHANGE_TARGET_WITHIN_RANGE_INCLUDING_SELF 同构：允许攻击方==效果所属机甲，
 			# 与 HP_CHANGE_TARGET_IS_OTHER_WITHIN_RANGE 的区别是允许攻击方=自身。
 			var aaws_params: Dictionary = condition.get("params", condition)
@@ -2624,7 +2624,7 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 		&"CARD_COUNTER_IS":
 			# 通用：来源牌实例 counters[key] == value。键不存在时按 default_when_absent（默认 true）。
 			# 开关型效果：DIRECT 按钮翻转 flag（SET_CARD_COUNTER），LISTEN 效果读 flag 决定是否发动。
-			# 银雪 pilot_065 窥牌拦截默认启用（absent->true==true 通过）；禁用后 false!=true 不发动。
+			# 银雪 pilot_066 窥牌拦截默认启用（absent->true==true 通过）；禁用后 false!=true 不发动。
 			var cci_p: Dictionary = condition.get("params", condition)
 			var cci_key: String = String(cci_p.get("key", &""))
 			if cci_key == "":
@@ -2644,7 +2644,7 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 
 		&"GAIN_CARD_DRAW_MECH_WITHIN_HEX_RANGE":
 			# 通用：抽取方机甲（payload.draw_mech_ids，空则回退 draw_player_id 的全部机甲）
-			# 在效果拥有者机甲 hex 范围内（含自身，距离0）。银雪 pilot_065：3格内机甲（含我方）抽牌前触发。
+			# 在效果拥有者机甲 hex 范围内（含自身，距离0）。银雪 pilot_066：3格内机甲（含我方）抽牌前触发。
 			var gdmwr_p: Dictionary = condition.get("params", condition)
 			var gdmwr_range: int = int(gdmwr_p.get("range", condition.get("range", 3)))
 			var gdmwr_bind_mech: StringName = _equip_mech_id(binding, payload)
@@ -2674,7 +2674,7 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 
 		&"SHOP_BUYER_IS_SELF":
 			# 商店购买者（buyer_player_id/buyer_mech_id）== 效果拥有者（binding_context.player_id/mech_id）。
-			# 通用条件（莉卡尔 pilot_054 等"购买后触发"效果）：只对效果拥有者自己的购买生效。
+			# 通用条件（莉卡尔 pilot_051 等"购买后触发"效果）：只对效果拥有者自己的购买生效。
 			var sbis: Dictionary = payload.get("binding_context", {})
 			var sbis_pid: StringName = sbis.get("player_id", &"")
 			var sbis_mid: StringName = sbis.get("mech_id", &"")
@@ -2690,7 +2690,7 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 
 		&"PAYLOAD_BOOL_IS_TRUE":
 			# 读 payload 布尔标志（通用：params.key 指定的 payload 键为真）。
-			# 莉卡尔 pilot_054 判断本次购买的是否高级装备（payload.is_advanced）。
+			# 莉卡尔 pilot_051 判断本次购买的是否高级装备（payload.is_advanced）。
 			var pbt_params: Dictionary = condition.get("params", {})
 			var pbt_key: String = String(pbt_params.get("key", &""))
 			if pbt_key == "":
@@ -3313,7 +3313,7 @@ static func check_single(binding, payload: Dictionary, condition: Dictionary) ->
 
 ## 攻击来源行动牌是否匹配具名卡 id（原版 def.card_id 或转化 counters.virtual_as_def_id）。
 ## 通用（不绑机师）：从 payload.attack_action_cards 取来源（缺省回退 attack_card_id），逐张判定。
-## 布彻尔 pilot_063 进攻判定 / 丹 pilot_067 双连判定共用。
+## 布彻尔 pilot_064 进攻判定 / 丹 pilot_068 双连判定共用。
 static func _attack_source_is_card_class(payload: Dictionary, gs, def_id: String) -> bool:
 	var src: Array = payload.get("attack_action_cards", [])
 	if src.is_empty():
@@ -3431,7 +3431,7 @@ static func _equipment_card_ids(game_state, player_id: StringName) -> Array:
 
 
 ## 枚举某玩家所有"未设置的装备牌"实例 id（仅装备手牌，不含任何已设置槽位）。
-## 供"弃置未设置的装备牌"类效果弹窗候选与按钮条件检查共用（柏格 pilot_064 等）。
+## 供"弃置未设置的装备牌"类效果弹窗候选与按钮条件检查共用（柏格 pilot_065 等）。
 static func _unequipped_equipment_card_ids(game_state, player_id: StringName) -> Array:
 	var result: Array = []
 	if game_state == null or player_id == &"":
@@ -3454,7 +3454,7 @@ static func _is_equipment_card_def(def) -> bool:
 	return true
 
 
-## 枚举某玩家所有武器装备牌实例 id（供提比里安 pilot_022 effect_01 弃置与条件检查共用）。
+## 枚举某玩家所有武器装备牌实例 id（供提比里安 pilot_021 effect_01 弃置与条件检查共用）。
 ## 范围：装备手牌 + 该玩家机甲所有已设置槽位中 def.equipment_kind==WEAPON 的牌。
 ## 虚拟武器天然排除——虚拟武器 def.equipment_kind==PART（神莺躯干），此处只看 WEAPON。
 static func _weapon_equipment_card_ids(game_state, player_id: StringName) -> Array:

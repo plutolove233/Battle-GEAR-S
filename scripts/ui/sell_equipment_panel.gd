@@ -121,7 +121,7 @@ func _refresh() -> void:
 		if card and card.def:
 			has_options = true
 			var btn = Button.new()
-			# "禁"标签装备不能主动卖出（法尔科 pilot_073 等）：置灰禁选，后端 CardSetService 双保险。
+			# "禁"标签装备不能主动卖出（法尔科 pilot_078 等）：置灰禁选，后端 CardSetService 双保险。
 			var forbid = _ActionPilotEffects.equip_forbid_tagged(card)
 			btn.text = "%s (手中)%s" % [card.def.display_name, "（禁）" if forbid else ""]
 			btn.custom_minimum_size = Vector2(260, 36)
@@ -144,7 +144,7 @@ func _refresh() -> void:
 				has_options = true
 				var reserve_name = "备用1" if rs_id == &"reserve_1" else "备用2"
 				var btn = Button.new()
-				# "禁"标签装备不能主动卖出（法尔科 pilot_073 等）：置灰禁选，后端 CardSetService 双保险。
+				# "禁"标签装备不能主动卖出（法尔科 pilot_078 等）：置灰禁选，后端 CardSetService 双保险。
 				var forbid = _ActionPilotEffects.equip_forbid_tagged(card)
 				btn.text = "%s: %s%s" % [reserve_name, card.def.display_name, "（禁）" if forbid else ""]
 				btn.custom_minimum_size = Vector2(260, 36)

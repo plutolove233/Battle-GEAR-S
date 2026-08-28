@@ -495,7 +495,7 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 			_ActionPilotEffects.clear_pilot_035_mark(p035_csrc)
 		return {"state": &"completed"}
 
-	# 通用：在来源牌实例 counters 上设键值（开关型效果：银雪 pilot_065 拦截开关等）。
+	# 通用：在来源牌实例 counters 上设键值（开关型效果：银雪 pilot_066 拦截开关等）。
 	# params 含 $binding_context 等表达式时先解析；card_instance_id 缺省回退 binding_context。
 	if act_type == &"SET_CARD_COUNTER":
 		var scc_params: Dictionary = _resolve_atomic_params(action_def.get("params", {}), payload, parent_action)
@@ -574,7 +574,7 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 						SLog.log_raw("[ACTION] APPLY_NEXT_ATTACK_BONUS 范围+%d（应用计数器）" % ap_rn)
 		return {"state": &"completed"}
 
-	# 通用：累积「近战弃牌威力加成」（泰特 pilot_074 等）。来源牌实例 × 机甲分离存储
+	# 通用：累积「近战弃牌威力加成」（泰特 pilot_073 等）。来源牌实例 × 机甲分离存储
 	# _melee_buff[source_cid][mech_id] 计数（泰特自己与他机各自独立）。与效果绑定不绑机师。
 	if act_type == &"ACCUMULATE_MELEE_MIGHT":
 		var am_params: Dictionary = _resolve_atomic_params(action_def.get("params", {}), payload, parent_action)
@@ -585,7 +585,7 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 		)
 		return {"state": &"completed"}
 
-	# 通用：应用「近战弃牌威力加成」（泰特 pilot_074 等）。ATTACK_BEFORE 读 _melee_buff 计数
+	# 通用：应用「近战弃牌威力加成」（泰特 pilot_073 等）。ATTACK_BEFORE 读 _melee_buff 计数
 	# 累加进目标 attack record 的 extra_might（选目标前生效，双连 fork 深拷贝继承）。
 	# 不清空——近战攻击结算（ATTACK_SETTLE）由 CLEAR_MELEE_MIGHT 消耗（取消攻击保留）。
 	if act_type == &"APPLY_MELEE_MIGHT":
@@ -607,7 +607,7 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 				SLog.log_raw("[ACTION] APPLY_MELEE_MIGHT 威力+%d（近战弃牌加成）mech=%s" % [apm_n, String(apm_params.get("mech_id", &""))])
 		return {"state": &"completed"}
 
-	# 通用：清空「近战弃牌威力加成」（泰特 pilot_074 等）。近战攻击结算（ATTACK_SETTLE）后
+	# 通用：清空「近战弃牌威力加成」（泰特 pilot_073 等）。近战攻击结算（ATTACK_SETTLE）后
 	# 消耗一次（取消攻击保留）；自己回合结束后（TURN_AFTER_END）清空"本回合"待发。
 	if act_type == &"CLEAR_MELEE_MIGHT":
 		var clm_params: Dictionary = _resolve_atomic_params(action_def.get("params", {}), payload, parent_action)
@@ -617,7 +617,7 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 		)
 		return {"state": &"completed"}
 
-	# 通用：授予目标机甲「近战弃牌威力加成」效果（泰特 pilot_074 等）。
+	# 通用：授予目标机甲「近战弃牌威力加成」效果（泰特 pilot_073 等）。
 	# 向目标机甲注册 DIRECT 按钮（虚拟时点）+ 隐藏 LISTEN（ATTACK_BEFORE 应用/ATTACK_SETTLE 消耗/
 	# TURN_AFTER_END 清空），binding 打 granted=true 标记（equipment_panel EX 按钮通用检测）。
 	# 记录到 _melee_grant_mechs 供到期注销。
@@ -629,7 +629,7 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 		)
 		return {"state": &"completed"}
 
-	# 通用：到期注销「近战弃牌威力加成」授予（泰特 pilot_074 等）。
+	# 通用：到期注销「近战弃牌威力加成」授予（泰特 pilot_073 等）。
 	# 来源下个回合开始后（TURN_AFTER_START）注销目标机甲 DIRECT+隐藏 LISTEN，清待发威力（EX 消失）。
 	if act_type == &"EXPIRE_MELEE_MIGHT":
 		var em_params: Dictionary = _resolve_atomic_params(action_def.get("params", {}), payload, parent_action)
@@ -753,19 +753,19 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 		SLog.log_raw("[ACTION] %s damage %+d (累计=%d, target=%s)" % [String(mad_atk.action_id), mad_delta, int(mad_atk.record.get("damage", 0)), String(mad_target)])
 		return {"state": &"completed"}
 
-	# 提比里安 pilot_022 effect_01（弃甲铸威）：PILOT_022_APPLY_POWER_BONUS
+	# 提比里安 pilot_021 effect_01（弃甲铸威）：PILOT_022_APPLY_POWER_BONUS
 	# 我方回合1次，弃置1张武器装备牌 -> 该武器牌面威力每5点 → 本回合下次攻击威力+3。
 	# 威力加成存 PILOT_022_POWER_BONUS 状态（stacks=X，duration=1），由状态监听器在下次
 	# ATTACK_PRE 注入 extra_might 后移除；回合结束经 DECREMENT_STATUS_DURATION 兜底清除。
 	# 弃置走 EXECUTE_DISCARD（效果2 弃置原因），本动作只算 X 并施加/累加状态。
 	if act_type == &"PILOT_022_APPLY_POWER_BONUS":
 		var p022a_params: Dictionary = _resolve_atomic_params(action_def.get("params", {}), payload, parent_action)
-		var p022a_weapon_ids: Array = p022a_params.get("card_ids", payload.get("pilot_022_weapon", []))
+		var p022a_weapon_ids: Array = p022a_params.get("card_ids", payload.get("pilot_021_weapon", []))
 		var p022a_mech: StringName = p022a_params.get("mech_id", payload.get("source_mech_id", payload.get("mech_id", &"")))
 		if p022a_mech == &"":
 			push_warning("PILOT_022_APPLY_POWER_BONUS: 缺少来源机甲")
 			return {"state": &"completed"}
-		# 取被弃武器装备牌（CHOOSE_MANY_CARDS 已把选中牌存 payload["pilot_022_weapon"]）
+		# 取被弃武器装备牌（CHOOSE_MANY_CARDS 已把选中牌存 payload["pilot_021_weapon"]）
 		var p022a_might: int = 0
 		if p022a_weapon_ids is Array and not p022a_weapon_ids.is_empty():
 			var p022a_card = context.game_state.get_card(p022a_weapon_ids[0]) if context.game_state != null else null
@@ -802,7 +802,7 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 		SLog.log_raw("[ACTION] PILOT_022 弃甲铸威 might=%d bonus=%d on %s" % [p022a_might, p022a_bonus, String(p022a_mech)])
 		return {"state": &"completed"}
 
-	# 提比里安 pilot_022 effect_02（火力爆发）：PILOT_022_MULTIPLY_ATTACK_MIGHT
+	# 提比里安 pilot_021 effect_02（火力爆发）：PILOT_022_MULTIPLY_ATTACK_MIGHT
 	# 本局1次，发动攻击时，初始威力 = 攻击武器原本威力×1.5（向下取整）。
 	# 实现为 delta 累加：delta = floor(原威力/2)，extra_might += delta，保留猛击/聚能等其他修正。
 	# 原本威力 = 攻击武器牌面威力（不含增减衰减）；范围+3 与锁定由效果定义内 MODIFY_ATTACK_RANGE /
@@ -819,15 +819,15 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 		var p022m_weapon_id: StringName = p022m_atk.record.get("weapon_id", &"")
 		var p022m_attacker_id: StringName = p022m_atk.record.get("attacker_id", &"")
 		var p022m_attacker = context.game_state.mechs.get(p022m_attacker_id) if context.game_state != null else null
-		var p022m_printed: int = _pilot_022_printed_weapon_might(p022m_attacker, p022m_weapon_id)
+		var p022m_printed: int = _pilot_021_printed_weapon_might(p022m_attacker, p022m_weapon_id)
 		var p022m_delta: int = p022m_printed / 2  # 向下取整（1.5倍→原威力+原威力/2）
 		var p022m_prev: int = int(p022m_atk.record.get("extra_might", 0))
 		p022m_atk.record["extra_might"] = p022m_prev + p022m_delta
 		SLog.log_raw("[ACTION] %s PILOT_022 火力爆发 原威力=%d delta=%d (extra_might=%d)" % [String(p022m_atk.action_id), p022m_printed, p022m_delta, p022m_prev + p022m_delta])
 		return {"state": &"completed"}
 
-	# 提比里安 pilot_022 effect_02 本局1次标记：PILOT_022_MARK_USED
-	# 在机师牌实例 counters 写 pilot_022_effect_02_used=true，供 PILOT_022_NOT_USED_THIS_GAME
+	# 提比里安 pilot_021 effect_02 本局1次标记：PILOT_022_MARK_USED
+	# 在机师牌实例 counters 写 pilot_021_effect_02_used=true，供 PILOT_022_NOT_USED_THIS_GAME
 	# 条件在后续攻击中拦截（本局仅一次）。
 	if act_type == &"PILOT_022_MARK_USED":
 		var p022u_params: Dictionary = _resolve_atomic_params(action_def.get("params", {}), payload, parent_action)
@@ -842,7 +842,7 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 			if p022u_card != null:
 				if not "counters" in p022u_card:
 					p022u_card.counters = {}
-				p022u_card.counters["pilot_022_effect_02_used"] = true
+				p022u_card.counters["pilot_021_effect_02_used"] = true
 				SLog.log_raw("[ACTION] PILOT_022 本局1次已标记 on %s" % String(p022u_card_id))
 		return {"state": &"completed"}
 
@@ -975,7 +975,7 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 			return {"state": &"completed"}
 		var params_mk: Dictionary = action_def.get("params", {})
 		var delta: int = int(params_mk.get("delta", payload.get("delta", 0)))
-		# fork_persist=true（洛尔恩 pilot_062 效果2「掩护后损伤-1」）：写入 fork_extra_markers 而非
+		# fork_persist=true（洛尔恩 pilot_063 效果2「掩护后损伤-1」）：写入 fork_extra_markers 而非
 		# extra_markers。多目标 fork 深拷贝主攻击 record 时会清除 extra_markers（独立结算各目标），
 		# 但保留 fork_extra_markers，使「本次掩护对双连的每个复制攻击都生效」。
 		# attack_action._step_apply_damage 读取 extra_markers + fork_extra_markers 合并应用。
@@ -990,7 +990,7 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 		return {"state": &"completed"}
 
 	# 特殊处理 SET_ATTACK_NO_RESPONSE：把攻击动作（attack A）的 record["no_response"]=true。
-	# 洛尔恩 pilot_062 效果2「掩护后该攻击不能被响应」：掩护经 use_action_card 打出，
+	# 洛尔恩 pilot_063 效果2「掩护后该攻击不能被响应」：掩护经 use_action_card 打出，
 	# 在 USE_ACTION_AFTER 触发，parent_action 是 use_action_card，需经 payload.attack_action_id
 	# 定位原 attack A（仿 MODIFY_ATTACK_MARKERS）。写入后 fire_timing(ATTACK_AT) 检查
 	# action.record.no_response 抑制响应窗口（迎击/识破都不弹）。多目标 fork 深拷贝 record
@@ -1039,7 +1039,7 @@ func _execute_atomic_action(act_type: StringName, action_def: Dictionary, payloa
 
 	# 特殊处理 MODIFY_ATTACK_RANGE：把 delta 累加到目标 attack 动作的 record["extra_range"]。
 	# 狙击头部（+1）/近战头部（-2）在 ATTACK_BEFORE 时点触发，parent_action 即 attack A；
-	# 冰魄 pilot_068 e01 在 use_action_card.USE_ACTION_AT（迎击响应）触发，parent_action 是
+	# 冰魄 pilot_060 e01 在 use_action_card.USE_ACTION_AT（迎击响应）触发，parent_action 是
 	# use_action_card，此时经 payload.attack_action_id 定位原 attack（仿 MODIFY_ATTACK_MIGHT）。
 	# _step_select_target/_step_check_hit 读取 weapon_range + extra_range 做范围/命中判断。
 	# 支持 min_value 钳制（近战头部/冰魄范围最低1）。
@@ -3333,7 +3333,7 @@ func _extract_gain_card_params(action_def: Dictionary, payload: Dictionary, pare
 		var _gc_bc: Dictionary = payload.get("binding_context", {}) if payload != null else {}
 		result["player_id"] = _gc_bc.get("player_id", &"")
 	result["source"] = _build_source_from_payload(payload, parent_action)
-	# 透传 _ 前缀私有键（如 _draw_result_sink 父动作抽取结果回写、_pilot_021_draw_pending 等），
+	# 透传 _ 前缀私有键（如 _draw_result_sink 父动作抽取结果回写、_pilot_022_draw_pending 等），
 	# 供 gain_card_action._tag_draw 写回父 record（塔莉娅 effect_01 抽3张的循环回写依赖）。
 	for k in params:
 		if String(k).begins_with("_"):
@@ -3344,8 +3344,8 @@ func _extract_gain_card_params(action_def: Dictionary, payload: Dictionary, pare
 func _extract_discard_params(action_def: Dictionary, payload: Dictionary, parent_action) -> Dictionary:
 	var params: Dictionary = action_def.get("params", {})
 	var result: Dictionary = {}
-	# card_ids 支持 $runtime.xxx（提比里安 pilot_022 effect_01 弃甲铸威：CHOOSE_MANY_CARDS
-	# store_result_key 把选中牌存入 payload["pilot_022_weapon"]，此处解析为具体牌 id 数组）。
+	# card_ids 支持 $runtime.xxx（提比里安 pilot_021 effect_01 弃甲铸威：CHOOSE_MANY_CARDS
+	# store_result_key 把选中牌存入 payload["pilot_021_weapon"]，此处解析为具体牌 id 数组）。
 	result["card_ids"] = _resolve_atomic_value(params.get("card_ids", []), payload, parent_action)
 	# count 支持 $runtime.xxx（pilot_007 effect_02 弃/抽 X+1 由 PILOT_007_COMPUTE_X 写入 payload.pilot_007_flaw_count）。
 	result["count"] = int(_resolve_atomic_value(params.get("count", 1), payload, parent_action))
@@ -3710,13 +3710,13 @@ func _build_source_from_payload(payload: Dictionary, parent_action) -> Dictionar
 	return source
 
 
-## 提比里安 pilot_022 effect_02：取攻击武器「原本威力」（牌面威力，不含增减/衰减修正）。
+## 提比里安 pilot_021 effect_02：取攻击武器「原本威力」（牌面威力，不含增减/衰减修正）。
 ## 供 PILOT_022_MULTIPLY_ATTACK_MIGHT 计算 1.5 倍（delta=floor(原威力/2)）累加到 extra_might。
 ## 与 attack_action._get_weapon_stats 的读取逻辑对齐：
 ##   基础武器(frame_base_weapon_N) → base_weapon.might
 ##   实体/虚拟武器 → def.might（虚拟神莺躯干经 def.might=20）
 ## 注意：不走 get_effective_weapon_stats（那含聚能等临时修正，非「原本威力」）。
-func _pilot_022_printed_weapon_might(attacker, weapon_id: StringName) -> int:
+func _pilot_021_printed_weapon_might(attacker, weapon_id: StringName) -> int:
 	if weapon_id == &"":
 		return 0
 	var wid_str := String(weapon_id)

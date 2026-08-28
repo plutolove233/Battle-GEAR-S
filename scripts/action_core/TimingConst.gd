@@ -16,6 +16,7 @@ const MODE_AVAILABILITY := &"AVAILABILITY"  ## 可用条件型：在响应窗口
 ## ── 可用条件类型 ──
 const AVAIL_RESPOND_ATTACK := &"RESPOND_ATTACK"  ## 响应攻击：当被攻击时可用
 const AVAIL_ALLY_IN_RANGE_TARGETED := &"ALLY_IN_RANGE_TARGETED"  ## 掩护：攻击范围内友方被攻击时可用
+const AVAIL_TRANSFER_TARGET := &"TRANSFER_TARGET"  ## 转移攻击目标：相邻友方机甲被攻击时可用（转移目标窗口）
 
 ## ── 回合周期 ──
 const ROUND_START           := &"ROUND_START"             ## 新轮次开始（优先于回合开始前）
@@ -31,7 +32,7 @@ const GAIN_GOLD_AFTER       := &"GAIN_GOLD_AFTER"           ## 获得金币后�
 const GIVE_GOLD_AFTER       := &"GIVE_GOLD_AFTER"           ## 给予其他玩家金币后（payload: giver_player_id/gainer_player_id/amount）
 
 ## ── 商店购买（虚拟时点，非动作步骤时点）──
-## 购买成功后发出（ShopService 三条购买路径统一 fire），供"购买后触发"类效果（莉卡尔 pilot_054 等）监听。
+## 购买成功后发出（ShopService 三条购买路径统一 fire），供"购买后触发"类效果（莉卡尔 pilot_051 等）监听。
 ## payload: player_id（购买者）/buyer_mech_id/card_id/is_advanced（是否高级装备=SR/SSR稀有度）/price
 const SHOP_BUY_AFTER        := &"SHOP_BUY_AFTER"            ## 商店购买装备牌后
 
@@ -125,7 +126,7 @@ const VICTORY_REACHED       := &"VICTORY_REACHED"         ## 达到胜利条件
 
 ## ── 掩护窗口附加选项（虚拟时点，非动作步骤时点）──
 ## 不会被 fire_timing 正常触发：仅由掩护多选窗（CHOOSE_MANY_CARDS collect_cover_window_extras）
-## 收集窗口拥有玩家注册在此的监听效果，作为复选框附加选项展示（洛尔恩 pilot_062 转化掩护）。
+## 收集窗口拥有玩家注册在此的监听效果，作为复选框附加选项展示（洛尔恩 pilot_063 转化掩护）。
 ## 选中后由确认路径直接 _execute_actions 该效果，此时点只作存储/遍历入口。
 const COVER_WINDOW_EXTRA     := &"COVER_WINDOW_EXTRA"     ## 掩护窗口附加选项（复选框）
 const THRUST_WINDOW_EXTRA    := &"THRUST_WINDOW_EXTRA"    ## 推进窗口附加选项（复选框，温斯顿 pilot_082 转化推进）

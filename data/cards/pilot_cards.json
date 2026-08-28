@@ -8,11 +8,12 @@
     "attack_limit": 1,
     "action_card_limit": 5,
     "cost": 15,
-    "effect_text": "每回合第1张使用的行动牌，该效果可以生效2次（2次独立结算，第1次效果结算完成后，若条件满足则第2次效果立即生效）。",
+    "effect_text": "每回合1次，我方使用行动牌时，可以使该效果生效2次（2次独立结算，第1次效果结算后，若条件满足则第2次效果立即生效）。",
     "effect_ids": [
       "pilot_001_effect_01a",
       "pilot_001_effect_01b"
-    ]
+    ],
+    "en_name": "Akrom"
   },
   {
     "id": "pilot_002_莱比尔",
@@ -23,12 +24,13 @@
     "attack_limit": 1,
     "action_card_limit": 4,
     "cost": 15,
-    "effect_text": "场上所有联邦阵营的机师牌获得：可以将任意张行动牌交给5格范围内1台其他机甲并当作进攻或防御使用，之后抽2张行动牌。\n场上所有联邦阵营的机甲框架获得：机甲护甲+4。\n我方回合1次，取消或恢复1台机甲获得上述效果。",
+    "effect_text": "场上所有联邦阵营的机师牌获得：可以将任意张行动牌交给5格范围内1台其他机甲当作进攻/防御之一使用，之后抽2张行动牌。\n场上所有联邦阵营的机甲框架获得：机甲护甲+4。\n我方回合1次，取消或恢复1台机甲获得上述效果。",
     "effect_ids": [
       "pilot_002_effect_01",
       "pilot_002_effect_02",
       "pilot_002_effect_03"
-    ]
+    ],
+    "en_name": "Wrbirl"
   },
   {
     "id": "pilot_003_瑟尔基尔",
@@ -39,12 +41,13 @@
     "attack_limit": 1,
     "action_card_limit": 4,
     "cost": 15,
-    "effect_text": "我方回合1次，将任意张行动牌正面朝上随机放入行动牌堆，并可以选择其中1张放置在牌堆顶，当这些牌离开牌堆时立即由我方使用，若无法使用则改为弃置该牌并使我方抽2张行动牌。\n我方每次抽取行动牌时可以跳过牌堆正面朝上的牌，若如此做，则此次抽牌数+1。",
+    "effect_text": "我方回合1次，将任意张行动牌正面朝上随机放入行动牌堆，并可以选择其中1张放置在牌堆顶，当这些牌离开牌堆时立即由我方使用，若无法使用则改为弃置该牌并使我方抽1张行动牌。\n当有抽取行动牌的行为发生时，可以使其跳过牌堆中正面朝上的牌，若是我方跳过，则此次抽牌数+1。",
     "effect_ids": [
       "pilot_003_effect_01",
       "pilot_003_effect_02",
       "pilot_003_effect_03"
-    ]
+    ],
+    "en_name": "Serkyr"
   },
   {
     "id": "pilot_004_玛沙",
@@ -60,7 +63,8 @@
       "pilot_004_effect_01a",
       "pilot_004_effect_01b",
       "pilot_004_effect_02"
-    ]
+    ],
+    "en_name": "Marsha"
   },
   {
     "id": "pilot_005_肯特",
@@ -71,12 +75,13 @@
     "attack_limit": 1,
     "action_card_limit": 4,
     "cost": 15,
-    "effect_text": "场上所有帝国阵营的机师牌获得：攻击或被攻击时可以消耗4动力，弃置目标或攻击方2张行动牌。\n场上所有帝国阵营的机甲框架获得：机甲动力+4。\n我方回合1次，取消或恢复1台机甲获得上述效果。",
+    "effect_text": "场上所有帝国阵营的机师牌获得：攻击或被攻击时，可以消耗4动力，弃置目标或攻击方2张行动牌。\n场上所有帝国阵营的机甲框架获得：机甲动力+4。\n我方回合1次，取消或恢复1台机甲获得上述效果。",
     "effect_ids": [
       "pilot_005_effect_01",
       "pilot_005_effect_02",
       "pilot_005_effect_03"
-    ]
+    ],
+    "en_name": "Kente"
   },
   {
     "id": "pilot_006_里昂",
@@ -87,12 +92,13 @@
     "attack_limit": 1,
     "action_card_limit": 5,
     "cost": 15,
-    "effect_text": "每轮开始时，选择1台其他机甲为目标，本轮中目标被攻击时，攻击方抽1张行动牌，若抽到是攻击牌，之后对该目标使用此牌不计回合攻击数。\n每回合1次，我方攻击时，选择1台5格范围内的其他机甲，其选择立即使用1张攻击牌，或受到4伤害。",
+    "effect_text": "每轮开始时，选择1台其他机甲为目标，本轮中该目标被攻击时，攻击方抽1张行动牌，若抽到的是攻击牌，之后对该目标使用此牌不计回合攻击数。\n我方攻击结算后，可以选择1台5格范围内的其他机甲，其选择立即使用1张攻击牌，或受到4伤害。",
     "effect_ids": [
       "pilot_006_effect_01",
       "pilot_006_effect_02",
       "pilot_006_effect_03"
-    ]
+    ],
+    "en_name": "Leon"
   },
   {
     "id": "pilot_007_珀修斯",
@@ -103,11 +109,12 @@
     "attack_limit": 1,
     "action_card_limit": 5,
     "cost": 15,
-    "effect_text": "指定我方为目标的攻击牌结算后，可以获得该攻击牌并立即使用（不消耗攻击数）。\n我方使用攻击牌时，可以查看目标所持行动牌，若其中缺少X种类型(攻击，迎击，辅助)，便可弃置其中X+1张牌，之后我方抽X+1张行动牌。",
+    "effect_text": "指定我方为目标的攻击牌结算后，可以获得此攻击牌并可以立即使用。\n我方使用攻击牌时，可以查看目标所持行动牌，若其中缺少X种类型(攻击，迎击，辅助)，便可弃置其中X+1张牌，之后我方抽X+1张行动牌。",
     "effect_ids": [
       "pilot_007_effect_01",
       "pilot_007_effect_02"
-    ]
+    ],
+    "en_name": "Perseus"
   },
   {
     "id": "pilot_008_安德洛美达",
@@ -118,13 +125,14 @@
     "attack_limit": 1,
     "action_card_limit": 4,
     "cost": 15,
-    "effect_text": "每回合1次，维修被使用或弃置后，我方获得之，并使X数值+1（X初始为0）。\n每回合1次，5+X格范围内的机甲即将回复生命时，可将效果改为受到等量伤害。\n每回合1次，5+X格范围内的机甲即将移除损伤时，可将效果改为设置等量损伤（位置由我方指定）。",
+    "effect_text": "每回合1次，维修被使用或弃置后，我方获得之，并使X数值+1（X初始为0，最大为5）。\n每回合1次，5+X格范围内的机甲即将回复生命时，可将效果改为受到等量伤害。\n每回合1次，5+X格范围内的机甲即将移除损伤时，可将效果改为设置等量损伤（由我方指定位置）。",
     "effect_ids": [
       "pilot_008_effect_01a",
       "pilot_008_effect_01b",
       "pilot_008_effect_02",
       "pilot_008_effect_03"
-    ]
+    ],
+    "en_name": "Andromeda"
   },
   {
     "id": "pilot_009_美杜莎",
@@ -135,10 +143,11 @@
     "attack_limit": 2,
     "action_card_limit": 4,
     "cost": 15,
-    "effect_text": "我方回合1次，可以弃置1张行动牌并记录其类型(攻击，迎击，辅助)，之后选择1台5格范围内的其他机甲展示其持有的和记录类型相同的所有行动牌，这回合我方可以使用这些牌或立即全部弃置。",
+    "effect_text": "我方回合1次，选择1台5格范围内的其他机甲作为目标，展示其所持行动牌，之后我方可以弃置1张指定类型(攻击，迎击，辅助)的行动牌，使这回合我方可以使用或立即弃置目标机甲所持该类型的行动牌。",
     "effect_ids": [
       "pilot_009_effect_01"
-    ]
+    ],
+    "en_name": "Medusa"
   },
   {
     "id": "pilot_010_刻托",
@@ -149,11 +158,12 @@
     "attack_limit": 3,
     "action_card_limit": 1,
     "cost": 15,
-    "effect_text": "我方回合开始时，可以使我方行动牌上限与回合攻击数互换数值，之后抽取当前行动牌上限张行动牌。\n每个回合内，我方使用的第一张攻击牌视作强袭，第二张攻击牌视作闪击，第三张攻击牌视作预判。",
+    "effect_text": "我方回合开始时，可以使行动牌上限与回合攻击数互换数值，之后抽取当前行动牌上限+1张行动牌。\n每个回合，我方使用的第一张攻击牌视为强袭，第二张攻击牌视为闪击，第三张攻击牌视为预判，之后不能再使用攻击牌。",
     "effect_ids": [
       "pilot_010_effect_01",
       "pilot_010_effect_02"
-    ]
+    ],
+    "en_name": "Ceto"
   },
   {
     "id": "pilot_011_迪恩",
@@ -168,7 +178,8 @@
     "effect_ids": [
       "pilot_011_effect_01",
       "pilot_011_effect_02"
-    ]
+    ],
+    "en_name": "Dean"
   },
   {
     "id": "pilot_012_玛丽尔",
@@ -183,7 +194,8 @@
     "effect_ids": [
       "pilot_012_effect_01",
       "pilot_012_effect_02"
-    ]
+    ],
+    "en_name": "Mariel"
   },
   {
     "id": "pilot_013_巴托洛夫",
@@ -193,13 +205,14 @@
     "faction": "联邦",
     "attack_limit": 1,
     "action_card_limit": 5,
-    "cost": 10,
-    "effect_text": "我方不会受到攻击产生伤害外的任何其他伤害。\n每回合1次，我方发动攻击时，可以使我方和攻击目标动力和护甲-4（持续到下个我方回合开始），命中产生的伤害+3。",
+    "cost": 9,
+    "effect_text": "我方不会受到由攻击产生外的任何伤害。\n每回合1次，我方发动攻击时，可以使我方和攻击目标的护甲和动力-4（持续到下个我方回合开始前），命中产生的伤害+3。",
     "effect_ids": [
       "pilot_013_effect_01",
       "pilot_013_effect_02a",
       "pilot_013_effect_02b"
-    ]
+    ],
+    "en_name": "Bartolov"
   },
   {
     "id": "pilot_014_亚伦",
@@ -208,12 +221,13 @@
     "count": 1,
     "faction": "联邦",
     "attack_limit": 1,
-    "action_card_limit": 5,
+    "action_card_limit": 6,
     "cost": 10,
-    "effect_text": "我方回合2次，可以选择场上1张机师牌，使其行动牌上限+2（效果持续至下个我方回合开始）。",
+    "effect_text": "我方回合2次，可以选择场上1张机师牌，使其行动牌上限+2（效果持续到下个我方回合开始）。",
     "effect_ids": [
       "pilot_014_effect_01"
-    ]
+    ],
+    "en_name": "Aaron"
   },
   {
     "id": "pilot_015_诺拉",
@@ -224,14 +238,15 @@
     "attack_limit": 2,
     "action_card_limit": 1,
     "cost": 10,
-    "effect_text": "我方所持行动牌数为0时，指定我方为攻击目标的攻击牌全部视为进攻，并还原威力为牌面记述的数值；响应我方攻击的迎击牌全部视为防御。\n每回合1次，可以将全部行动牌（至少1张）视为进攻/防御之一使用。",
+    "effect_text": "若我方所持行动牌数为0，指定我方为目标的攻击牌视为进攻，威力也还原为武器原本数值；响应我方攻击的迎击牌视为防御。\n每回合1次，可以将全部行动牌（至少1张）当作进攻/防御之一使用。",
     "effect_ids": [
       "pilot_015_effect_01a",
       "pilot_015_effect_01b",
       "pilot_015_effect_01c",
       "pilot_015_effect_02a",
       "pilot_015_effect_02b"
-    ]
+    ],
+    "en_name": "Nora"
   },
   {
     "id": "pilot_016_默多克",
@@ -242,10 +257,11 @@
     "attack_limit": 1,
     "action_card_limit": 4,
     "cost": 10,
-    "effect_text": "每回合1次，可以展示持有的1张行动牌，之后将另外2张行动牌视为该展示的牌使用。",
+    "effect_text": "每回合1次，可以展示持有的1张行动牌，之后将另外1张行动牌当作该展示的牌使用。",
     "effect_ids": [
       "pilot_016_effect_01"
-    ]
+    ],
+    "en_name": "Murdock"
   },
   {
     "id": "pilot_017_伏特",
@@ -256,13 +272,14 @@
     "attack_limit": 1,
     "action_card_limit": 5,
     "cost": 11,
-    "effect_text": "每回合1次，可以将2张行动牌当作强袭/猛击/破甲之一使用。\n我方使用对应牌时：强袭使我方回复4动力，猛击使本次攻击威力+3，破甲命中后产生损伤+2。",
+    "effect_text": "每回合1次，可以将2张行动牌当作强袭/猛击/破甲之一使用。\n我方使用对应牌时：强袭使我方回复4动力，猛击使本次攻击威力+3，破甲命中后设置损伤+2。",
     "effect_ids": [
       "pilot_017_effect_01",
       "pilot_017_effect_02a",
       "pilot_017_effect_02b",
       "pilot_017_effect_02c"
-    ]
+    ],
+    "en_name": "Volt"
   },
   {
     "id": "pilot_018_苔丝",
@@ -272,12 +289,13 @@
     "faction": "帝国",
     "attack_limit": 1,
     "action_card_limit": 4,
-    "cost": 10,
+    "cost": 11,
     "effect_text": "每回合1次，被攻击时，可立即抽2张行动牌，若我方通过使用迎击牌响应了此攻击，则弃置攻击方的2张行动牌或1张设置损伤≥2的装备牌。",
     "effect_ids": [
       "pilot_018_effect_01a",
       "pilot_018_effect_01b"
-    ]
+    ],
+    "en_name": "Tess"
   },
   {
     "id": "pilot_019_肯耳忒",
@@ -291,7 +309,8 @@
     "effect_text": "我方回合1次，选择最多2台4格范围的其他机甲为目标，通过弃置我方X张行动牌（X最低为1），弃置目标X+1张行动牌，若因此清空目标所持行动牌（其原本行动牌至少有1张），则对其造成4伤害。",
     "effect_ids": [
       "pilot_019_effect_01"
-    ]
+    ],
+    "en_name": "Kernte"
   },
   {
     "id": "pilot_020_肯德",
@@ -301,44 +320,47 @@
     "faction": "帝国",
     "attack_limit": 1,
     "action_card_limit": 4,
-    "cost": 10,
-    "effect_text": "我方回合1次，可以弃置任意张行动牌。\n每个回合我方行动牌被弃置一定数目，可获得对应效果：\n大于1：当前回合我方护甲+3，动力+3；\n大于2：当前回合攻击时，威力+2，所有武器范围+1；\n大于3：当前回合结束后抽取被弃置数量的行动牌（最多6张）。",
+    "cost": 11,
+    "effect_text": "我方回合1次，可以弃置任意张行动牌。\n每回合我方行动牌被弃置一定数目，可获得对应效果：\n大于1：当前回合我方护甲+3，动力+3；\n大于2：当前回合攻击威力+2，范围+1；\n大于3：当前回合结束后抽取被弃置数量的行动牌（最多6张）。",
     "effect_ids": [
       "pilot_020_effect_01",
       "pilot_020_effect_02",
       "pilot_020_effect_03",
       "pilot_020_effect_04"
-    ]
+    ],
+    "en_name": "Kende"
   },
   {
-    "id": "pilot_021_塔莉娅",
+    "id": "pilot_022_塔莉娅",
     "name": "塔莉娅",
     "rarity": "SR",
     "count": 1,
     "faction": "帝国",
     "attack_limit": 1,
-    "action_card_limit": 3,
+    "action_card_limit": 4,
     "cost": 10,
     "effect_text": "我方回合1次，可以抽3张行动牌，之后可以给予4格范围内的其他机甲其中的牌，剩余的牌本回合无法使用。\n其他机甲使用从我方处获得的行动牌后，我方抽2张行动牌。",
     "effect_ids": [
-      "pilot_021_effect_01",
-      "pilot_021_effect_02"
-    ]
+      "pilot_022_effect_01",
+      "pilot_022_effect_02"
+    ],
+    "en_name": "Talia"
   },
   {
-    "id": "pilot_022_提比里安",
+    "id": "pilot_021_提比里安",
     "name": "提比里安",
     "rarity": "SR",
     "count": 1,
     "faction": "帝国",
     "attack_limit": 1,
     "action_card_limit": 4,
-    "cost": 9,
-    "effect_text": "我方回合1次，可以弃置1张武器装备牌，该武器的威力每有5点，就使本回合的下次攻击威力+3。\n本局游戏1次，发动攻击时，可以使该攻击的初始威力变成攻击武器原本威力的1.5倍(向下取整)，范围+3，对所有目标施加锁定效果。",
+    "cost": 10,
+    "effect_text": "我方回合1次，可以弃置1张武器装备牌，该武器的威力每有5点，就使本回合的下次攻击威力+3。\n本局游戏1次，发动攻击时，可以使该攻击的初始威力变成攻击武器原本威力的1.5倍(向下取整)，范围+3，对目标施加锁定效果。",
     "effect_ids": [
-      "pilot_022_effect_01",
-      "pilot_022_effect_02"
-    ]
+      "pilot_021_effect_01",
+      "pilot_021_effect_02"
+    ],
+    "en_name": "Tiberian"
   },
   {
     "id": "pilot_023_坎得",
@@ -347,17 +369,18 @@
     "count": 1,
     "faction": "秩序",
     "attack_limit": 1,
-    "action_card_limit": 4,
-    "cost": 10,
+    "action_card_limit": 5,
+    "cost": 9,
     "repair_boost": {
       "extra_removal": 2,
       "range": 4
     },
-    "effect_text": "我方回合2次，可以将1张行动牌当作维修使用。\n我方使用的维修获得以下效果：额外移去2损伤，可以对4格范围内的其他机甲使用。",
+    "effect_text": "我方回合2次，可以将1张行动牌当作维修使用。\n我方使用的维修获得以下效果：额外移除2损伤，可以对4格范围内的其他机甲使用。",
     "effect_ids": [
       "pilot_023_effect_01",
       "pilot_023_effect_02"
-    ]
+    ],
+    "en_name": "Candor"
   },
   {
     "id": "pilot_024_琳",
@@ -366,14 +389,15 @@
     "count": 1,
     "faction": "秩序",
     "attack_limit": 1,
-    "action_card_limit": 4,
+    "action_card_limit": 5,
     "cost": 9,
-    "effect_text": "每回合1次，可以将1张行动牌当作维修使用。\n我方对其他机甲使用维修后，我方与该机甲各抽2张行动牌。\n在4格范围内的其他机甲可以在其回合内1次，请求我方对其使用1次无距离限制的维修。",
+    "effect_text": "每回合1次，可以将1张行动牌当作维修使用。\n我方对其他机甲使用维修后，我方与该机甲各抽2张行动牌。\n在4格范围内的其他机甲可以在其回合内1次，可以请求我方对其使用1次无距离限制的维修。",
     "effect_ids": [
       "pilot_024_effect_01",
       "pilot_024_effect_02",
       "pilot_024_effect_03"
-    ]
+    ],
+    "en_name": "Lynn"
   },
   {
     "id": "pilot_025_约书亚",
@@ -382,13 +406,14 @@
     "count": 1,
     "faction": "秩序",
     "attack_limit": 1,
-    "action_card_limit": 4,
+    "action_card_limit": 5,
     "cost": 9,
     "effect_text": "我方攻击或被攻击时，可以选择其一：\n立即抽1张装备牌设置到区域上（否则立即弃置）；\n立即设置1张处于备用区的装备牌，并抽2张行动牌。",
     "effect_ids": [
       "pilot_025_effect_01",
       "pilot_025_effect_02"
-    ]
+    ],
+    "en_name": "Joshua"
   },
   {
     "id": "pilot_026_伊万",
@@ -398,13 +423,14 @@
     "faction": "混乱",
     "attack_limit": 1,
     "action_card_limit": 5,
-    "cost": 11,
+    "cost": 10,
     "effect_text": "每回合1次，消耗1点当前回合攻击数，视为使用出1张设陷。\n我方使用的设陷共有4次机会设置陷阱。\n陷阱对我方仅会造成伤害，不会设置损伤。",
     "effect_ids": [
       "pilot_026_effect_01",
       "pilot_026_effect_02",
       "pilot_026_effect_03"
-    ]
+    ],
+    "en_name": "Ivan"
   },
   {
     "id": "pilot_027_维罗妮卡",
@@ -415,12 +441,13 @@
     "attack_limit": 1,
     "action_card_limit": 5,
     "cost": 10,
-    "effect_text": "4+X格范围内的其他机甲获得非我方给予的金币时（X初始为0），我方获得其中一半金币（向下取整，剩下的留给该机甲）。每回合1次，我方给予其他机甲金币时，X数值+1。我方回合2次，可以给予4+X格范围内1台其他机甲至少2金币，之后可以使其立即使用1张行动牌。",
+    "effect_text": "4+X格范围内的其他机甲获得非我方给予的金币时(X初始为0)，我方获得其中的一半金币(向下取整)。\n每回合1次，我方给予其他机甲金币时，X+1。\n我方回合2次，可以给予4+X格范围内的1台其他机甲至少2金币，之后可以使其立即使用1张行动牌。",
     "effect_ids": [
       "pilot_027_effect_01",
       "pilot_027_effect_02",
       "pilot_027_effect_03"
-    ]
+    ],
+    "en_name": "Veronica"
   },
   {
     "id": "pilot_028_乌尔",
@@ -429,14 +456,15 @@
     "count": 1,
     "faction": "混乱",
     "attack_limit": 1,
-    "action_card_limit": 3,
-    "cost": 10,
-    "effect_text": "每轮开始时，可以宣言1种行动牌类型(攻击/迎击/辅助，可取消，本轮无宣言则效果2/3失效)。宣言后，本轮范围4+X内其他机甲使用宣言类型的行动牌时须交给我方2张行动牌才能生效(X初始为0)；我方使用宣言类型的行动牌时每回合1次X+1。",
+    "action_card_limit": 4,
+    "cost": 11,
+    "effect_text": "每轮开始时，可以宣言1种行动牌类型(攻击，迎击，辅助)。\n本轮中4+X格范围内的其他机甲使用宣言类型的行动牌时（X初始为0），需要交给我方2张行动牌才能生效。\n本轮中每回合1次，我方使用宣言类型的行动牌时，X+1。",
     "effect_ids": [
       "pilot_028_effect_01",
       "pilot_028_effect_02",
       "pilot_028_effect_03"
-    ]
+    ],
+    "en_name": "Ullr"
   },
   {
     "id": "pilot_029_克劳德",
@@ -448,11 +476,12 @@
     "action_card_limit": 4,
     "cost": 6,
     "passive_weapon_range_bonus": 1,
-    "effect_text": "使用远程武器攻击时，范围+1。\n每回合1次，可以将1张行动牌当作聚能使用。",
+    "effect_text": "我方远程武器范围+1。\n我方回合1次，可以将1张行动牌当作聚能使用。",
     "effect_ids": [
       "pilot_029_effect_01",
       "pilot_029_effect_02"
-    ]
+    ],
+    "en_name": "Claude"
   },
   {
     "id": "pilot_030_布鲁克",
@@ -467,7 +496,8 @@
     "effect_ids": [
       "pilot_030_effect_01",
       "pilot_030_effect_02"
-    ]
+    ],
+    "en_name": "Burook"
   },
   {
     "id": "pilot_031_莱特",
@@ -478,10 +508,11 @@
     "attack_limit": 1,
     "action_card_limit": 5,
     "cost": 6,
-    "effect_text": "我方回合1次，可以将任意张行动牌交给4格范围内1台其他机甲，每给出2张牌，之后我方和该机甲可以各抽1张行动牌，护甲+2（持续到下个我方回合开始）。",
+    "effect_text": "我方回合2次，可以将任意张行动牌交给4格范围内1台其他机甲，每给出2张牌，之后我方和该机甲可以各抽1张行动牌，护甲+2（持续到下个我方回合开始）。",
     "effect_ids": [
       "pilot_031_effect_01"
-    ]
+    ],
+    "en_name": "Wright"
   },
   {
     "id": "pilot_032_爱瑞娅",
@@ -490,12 +521,13 @@
     "count": 1,
     "faction": "联邦",
     "attack_limit": 2,
-    "action_card_limit": 3,
+    "action_card_limit": 2,
     "cost": 8,
     "effect_text": "我方回合1次，可以选择场上1张机师牌，弃置1张行动牌，使其行动牌上限+2（效果持续到下个我方回合开始）。",
     "effect_ids": [
       "pilot_032_effect_01"
-    ]
+    ],
+    "en_name": "Airia"
   },
   {
     "id": "pilot_033_尤里",
@@ -506,11 +538,12 @@
     "attack_limit": 1,
     "action_card_limit": 4,
     "cost": 7,
-    "effect_text": "我方回合2次，可以弃置1张装备牌，之后抽1张装备牌。\n本局游戏1次，可以弃置1张装备牌，之后抽1张高级装备牌。",
+    "effect_text": "我方回合2次，可以弃置1张装备牌，之后抽1张装备牌。\n本局游戏1次，可以弃置2张装备牌，之后抽1张高级装备牌。",
     "effect_ids": [
       "pilot_033_effect_01",
       "pilot_033_effect_02"
-    ]
+    ],
+    "en_name": "Uri"
   },
   {
     "id": "pilot_034_塞万提斯",
@@ -520,13 +553,14 @@
     "faction": "联邦",
     "attack_limit": 1,
     "action_card_limit": 4,
-    "cost": 7,
+    "cost": 6,
     "effect_text": "未对我方造成伤害的攻击产生的损伤-1。\n记录对我方造成过伤害的其他机甲，当我方对其攻击命中时，可额外造成3伤害，并回复我方3生命。",
     "effect_ids": [
       "pilot_034_effect_01",
       "pilot_034_effect_02",
       "pilot_034_effect_02b"
-    ]
+    ],
+    "en_name": "Cervantes"
   },
   {
     "id": "pilot_035_库马斯",
@@ -536,13 +570,14 @@
     "faction": "联邦",
     "attack_limit": 1,
     "action_card_limit": 4,
-    "cost": 6,
+    "cost": 5,
     "effect_text": "每轮开始时，可以选择1台其他机甲，本轮中该机甲每次抽取行动牌时，我方抽1张行动牌。",
     "effect_ids": [
       "pilot_035_effect_01",
       "pilot_035_effect_02",
       "pilot_035_effect_03"
-    ]
+    ],
+    "en_name": "Kumas"
   },
   {
     "id": "pilot_036_菲丽丝",
@@ -557,7 +592,8 @@
     "effect_ids": [
       "pilot_036_effect_01",
       "pilot_036_effect_02"
-    ]
+    ],
+    "en_name": "Phyllis"
   },
   {
     "id": "pilot_037_青瞳",
@@ -571,7 +607,8 @@
     "effect_text": "每回合2次，查看对我方发动攻击的机甲的所持行动牌，并选择获得其中1张，若之后我方所持行动牌数大于攻击方，则该攻击威力-4。",
     "effect_ids": [
       "pilot_037_effect_01"
-    ]
+    ],
+    "en_name": "Cyanne"
   },
   {
     "id": "pilot_038_奥黛尔",
@@ -580,12 +617,13 @@
     "count": 1,
     "faction": "联邦",
     "attack_limit": 1,
-    "action_card_limit": 5,
+    "action_card_limit": 3,
     "cost": 6,
     "effect_text": "我方回合1次，可以选择最多2台4格范围内的机甲（可以包括我方），使其抽2张行动牌，回复3动力。",
     "effect_ids": [
       "pilot_038_effect_01"
-    ]
+    ],
+    "en_name": "Odelle"
   },
   {
     "id": "pilot_039_铠威",
@@ -599,7 +637,8 @@
     "effect_text": "若发动的攻击被响应，则此攻击结算后可以抽1张行动牌，之后再立即发动1次攻击。",
     "effect_ids": [
       "pilot_039_effect_01"
-    ]
+    ],
+    "en_name": "Kaivey"
   },
   {
     "id": "pilot_040_泰格",
@@ -610,10 +649,11 @@
     "attack_limit": 1,
     "action_card_limit": 4,
     "cost": 6,
-    "effect_text": "使用近战武器攻击时，可弃置1张行动牌对目标施加锁定效果（目标可以弃置1张正面设置的装备牌取消此效果）。",
+    "effect_text": "使用近战武器攻击时，可弃置1张行动牌对目标施加锁定效果(目标可以弃置1张正面设置的装备牌取消此效果)。",
     "effect_ids": [
       "pilot_040_effect_01"
-    ]
+    ],
+    "en_name": "Tyger"
   },
   {
     "id": "pilot_041_盖奇特",
@@ -623,11 +663,12 @@
     "faction": "帝国",
     "attack_limit": 2,
     "action_card_limit": 2,
-    "cost": 8,
+    "cost": 7,
     "effect_text": "我方回合1次，可以花费3金币抽2张行动牌。",
     "effect_ids": [
       "pilot_041_effect_01"
-    ]
+    ],
+    "en_name": "Gaget"
   },
   {
     "id": "pilot_042_德伦迪",
@@ -638,11 +679,12 @@
     "attack_limit": 1,
     "action_card_limit": 4,
     "cost": 6,
-    "effect_text": "每次弃置自己的行动牌后，抽1张行动牌。\n我方回合2次，可以弃置1张或所有行动牌，若弃置所有行动牌则之后再抽1张行动牌。",
+    "effect_text": "每次弃置行动牌后，抽1张行动牌。\n我方回合2次，可以弃置1张或所有行动牌，若弃置所有行动牌则之后再抽1张行动牌。",
     "effect_ids": [
       "pilot_042_effect_01",
       "pilot_042_effect_02"
-    ]
+    ],
+    "en_name": "Derendi"
   },
   {
     "id": "pilot_043_格温",
@@ -653,11 +695,12 @@
     "attack_limit": 1,
     "action_card_limit": 4,
     "cost": 6,
-    "effect_text": "即将抽取行动牌时，可以宣言1种行动牌类型(攻击，迎击，辅助)，若之后抽到的牌中存在宣言类型，则可以再抽1张行动牌。",
+    "effect_text": "即将抽取行动牌时，可以宣言1种行动牌类型(攻击，迎击，辅助)，若之后抽到的牌中包含宣言类型，则再抽1张行动牌。",
     "effect_ids": [
       "pilot_043_effect_01",
       "pilot_043_effect_02"
-    ]
+    ],
+    "en_name": "Gwen"
   },
   {
     "id": "pilot_044_索伦",
@@ -668,11 +711,12 @@
     "attack_limit": 1,
     "action_card_limit": 4,
     "cost": 6,
-    "effect_text": "每个我方回合开始时与回合结束后，记录机甲所有区域的损伤数为X，之后抽X+1张行动牌，再弃置X张行动牌。",
+    "effect_text": "我方回合开始时与回合结束后，记录机甲所有区域的损伤数为X，之后抽X+1张行动牌，再弃置X张行动牌。",
     "effect_ids": [
       "pilot_044_effect_01",
       "pilot_044_effect_02"
-    ]
+    ],
+    "en_name": "Soren"
   },
   {
     "id": "pilot_045_肯兹尔",
@@ -683,10 +727,11 @@
     "attack_limit": 1,
     "action_card_limit": 3,
     "cost": 7,
-    "effect_text": "我方回合1次，可以弃置4格范围内所有其他机甲随机3张行动牌，之后获得被弃置牌中的所有攻击牌，本回合攻击数+1，我方也将受到3伤害。",
+    "effect_text": "我方回合1次，可以弃置4格范围内所有其他机甲随机3张行动牌，之后获得被弃置牌中的所有攻击牌，本回合攻击数+1，我方受到3伤害。",
     "effect_ids": [
       "pilot_045_effect_01"
-    ]
+    ],
+    "en_name": "Kenzel"
   },
   {
     "id": "pilot_046_霍恩",
@@ -697,10 +742,11 @@
     "attack_limit": 1,
     "action_card_limit": 4,
     "cost": 6,
-    "effect_text": "我方可以无条件查看商店和其他机甲备用区域内的隐藏装备牌（背面朝上）。我方回合1次，可以消耗隐藏装备牌其上记述的金币获得该牌，之后将其背面朝上置于我方或其他机甲的备用区域上。",
+    "effect_text": "我方可以无条件查看商店和其他机甲备用区内的隐藏装备牌（背面朝上）。我方回合1次，可以消耗上述隐藏装备牌记述的金币，之后将其背面朝上设置于我方或其他机甲的备用区域上。",
     "effect_ids": [
       "pilot_046_effect_01"
-    ]
+    ],
+    "en_name": "Hawn"
   },
   {
     "id": "pilot_047_里欧娜",
@@ -714,7 +760,8 @@
     "effect_text": "我方攻击结算后，可以选择1台4格范围内的其他机甲，其选择立即使用1张攻击牌，否则必须交给我方3张行动牌，若数量不足则每少1张该机甲将受到2伤害。",
     "effect_ids": [
       "pilot_047_effect_01"
-    ]
+    ],
+    "en_name": "Leona"
   },
   {
     "id": "pilot_048_赤牙",
@@ -725,10 +772,11 @@
     "attack_limit": 2,
     "action_card_limit": 3,
     "cost": 8,
-    "effect_text": "我方攻击造成的损伤+1。我方发动的攻击即使被目标响应，也依然由我方来决定损伤设置的位置。",
+    "effect_text": "我方攻击造成的损伤+1。我方发动的攻击即使被目标响应，也依然由我方来决定攻击损伤设置位置。",
     "effect_ids": [
       "pilot_048_effect_01"
-    ]
+    ],
+    "en_name": "Akakiba"
   },
   {
     "id": "pilot_049_杰狞",
@@ -738,13 +786,14 @@
     "faction": "帝国",
     "attack_limit": 1,
     "action_card_limit": 4,
-    "cost": 7,
+    "cost": 6,
     "effect_text": "4格范围内其他机甲即将受到伤害时，可以将该伤害转移由我方承受。\n我方受到伤害后，使下次我方造成的伤害+4（可叠加）。",
     "effect_ids": [
       "pilot_049_effect_01",
       "pilot_049_effect_02",
       "pilot_049_effect_02b"
-    ]
+    ],
+    "en_name": "Jerning"
   },
   {
     "id": "pilot_050_杰西卡",
@@ -760,25 +809,27 @@
       "pilot_050_effect_01",
       "pilot_050_effect_01b",
       "pilot_050_effect_02"
-    ]
+    ],
+    "en_name": "Jessica"
   },
   {
-    "id": "pilot_051_李",
+    "id": "pilot_053_李",
     "name": "李",
     "rarity": "R",
     "count": 1,
     "faction": "秩序",
     "attack_limit": 1,
     "action_card_limit": 4,
-    "cost": 5,
+    "cost": 6,
     "effect_text": "我方回合1次，可以抽1张事件牌设置到区域上。\n本局游戏1次，当1张事件牌被设置时，可以立即取消其效果，并弃置或设置到我方区域。",
     "effect_ids": [
-      "pilot_051_effect_01",
-      "pilot_051_effect_02"
-    ]
+      "pilot_053_effect_01",
+      "pilot_053_effect_02"
+    ],
+    "en_name": "Lee"
   },
   {
-    "id": "pilot_052_萨伊",
+    "id": "pilot_054_萨伊",
     "name": "萨伊",
     "rarity": "R",
     "count": 1,
@@ -788,11 +839,12 @@
     "cost": 6,
     "effect_text": "我方回合2次，可以弃置1张行动牌，之后抽1张装备牌。",
     "effect_ids": [
-      "pilot_052_effect_01"
-    ]
+      "pilot_054_effect_01"
+    ],
+    "en_name": "Sai"
   },
   {
-    "id": "pilot_053_亚林",
+    "id": "pilot_052_亚林",
     "name": "亚林",
     "rarity": "R",
     "count": 1,
@@ -802,12 +854,13 @@
     "cost": 6,
     "effect_text": "每回合2次，我方区域有正面朝上的装备牌被设置/弃置时，可以抽2张行动牌，行动牌上限+1（效果持续到下个我方回合开始）。",
     "effect_ids": [
-      "pilot_053_effect_01",
-      "pilot_053_effect_01b"
-    ]
+      "pilot_052_effect_01",
+      "pilot_052_effect_01b"
+    ],
+    "en_name": "Aalin"
   },
   {
-    "id": "pilot_054_莉卡尔",
+    "id": "pilot_051_莉卡尔",
     "name": "莉卡尔",
     "rarity": "R",
     "count": 1,
@@ -817,8 +870,9 @@
     "cost": 6,
     "effect_text": "我方回合2次，从商店购买装备牌后可以获得3金币，若购买的是高级装备牌，则可再抽2张行动牌。",
     "effect_ids": [
-      "pilot_054_effect_01"
-    ]
+      "pilot_051_effect_01"
+    ],
+    "en_name": "Likar"
   },
   {
     "id": "pilot_055_霍克",
@@ -832,7 +886,8 @@
     "effect_text": "我方回合1次，可以使卖出装备牌获得的金币*2，若卖出的是高级装备牌，则再获得3金币。",
     "effect_ids": [
       "pilot_055_effect_01"
-    ]
+    ],
+    "en_name": "Hawk"
   },
   {
     "id": "pilot_056_铠厉",
@@ -846,7 +901,8 @@
     "effect_text": "若发动的攻击被响应，则可以抽2张装备牌，若不立即设置，则需要直接弃置并获得牌面记述数量的金币。",
     "effect_ids": [
       "pilot_056_effect_01"
-    ]
+    ],
+    "en_name": "Kailith"
   },
   {
     "id": "pilot_057_格雷厄姆",
@@ -857,11 +913,12 @@
     "attack_limit": 1,
     "action_card_limit": 4,
     "cost": 6,
-    "effect_text": "每回合1次，可以将1张行动牌当作设陷使用。\n我方回合中，可以通过弃置任意张行动牌，选择4格范围内的1个陷阱，每弃置1张牌就可使该陷阱移动4格。",
+    "effect_text": "我方回合1次，可以将1张行动牌当作设陷使用。\n我方回合1次，可以选择4格范围内的1个陷阱，弃置任意张行动牌，每弃置1张牌就可使该陷阱移动4格。",
     "effect_ids": [
       "pilot_057_effect_01",
       "pilot_057_effect_02"
-    ]
+    ],
+    "en_name": "Graham"
   },
   {
     "id": "pilot_058_卡米拉",
@@ -871,11 +928,12 @@
     "faction": "混乱",
     "attack_limit": 1,
     "action_card_limit": 4,
-    "cost": 7,
+    "cost": 6,
     "effect_text": "发动攻击时可以展示我方所有行动牌，其中每包含1种类型(攻击，迎击，辅助)，则本次攻击威力+2；若包含3种类型，则本次攻击范围+2。",
     "effect_ids": [
       "pilot_058_effect_01"
-    ]
+    ],
+    "en_name": "Camilla"
   },
   {
     "id": "pilot_059_薇尔",
@@ -884,15 +942,16 @@
     "count": 1,
     "faction": "联邦",
     "attack_limit": 1,
-    "action_card_limit": 4,
-    "cost": 3,
-    "effect_text": "我方回合开始时，可以移除或设置我方1损伤，之后若机甲损伤数低于4则可以获得3金币/等于4则可以视为使用出1张补给/大于4则可以移除我方最多2损伤。",
+    "action_card_limit": 3,
+    "cost": 4,
+    "effect_text": "我方回合开始时，可以移除或设置我方1损伤，之后若机甲损伤数低于4则获得3金币/等于4则视为使用出1张补给/大于4则移除我方最多2损伤。",
     "effect_ids": [
       "pilot_059_effect_01"
-    ]
+    ],
+    "en_name": "Vale"
   },
   {
-    "id": "pilot_060_铠德",
+    "id": "pilot_062_铠德",
     "name": "铠德",
     "rarity": "N",
     "count": 1,
@@ -902,8 +961,9 @@
     "cost": 3,
     "effect_text": "若发动的攻击被响应，则可以选择其一：抽2张行动牌/回复3动力/获得4金币。",
     "effect_ids": [
-      "pilot_060_effect_01"
-    ]
+      "pilot_062_effect_01"
+    ],
+    "en_name": "Kade"
   },
   {
     "id": "pilot_061_艾希",
@@ -918,10 +978,11 @@
     "effect_ids": [
       "pilot_061_effect_01",
       "pilot_061_effect_02"
-    ]
+    ],
+    "en_name": "Ishe"
   },
   {
-    "id": "pilot_062_洛尔恩",
+    "id": "pilot_063_洛尔恩",
     "name": "洛尔恩",
     "rarity": "N",
     "count": 1,
@@ -929,15 +990,16 @@
     "attack_limit": 1,
     "action_card_limit": 4,
     "cost": 3,
-    "effect_text": "每回合1次，可以将1张行动牌当作掩护使用。\n我方使用掩护时，在掩护效果完成后可以选择：该攻击损伤-1，或该攻击不能被响应。",
+    "effect_text": "每回合1次，可以将1张行动牌当作掩护使用。\n我方使用的掩护获得以下效果：使用后，可选择使该攻击产生的损伤-1，或不能被响应。",
     "effect_ids": [
-      "pilot_062_effect_01",
-      "pilot_062_effect_02",
+      "pilot_063_effect_01",
+      "pilot_063_effect_02",
       "cover_window_host"
-    ]
+    ],
+    "en_name": "Lorne"
   },
   {
-    "id": "pilot_063_布彻尔",
+    "id": "pilot_064_布彻尔",
     "name": "布彻尔",
     "rarity": "N",
     "count": 1,
@@ -945,14 +1007,15 @@
     "attack_limit": 1,
     "action_card_limit": 3,
     "cost": 3,
-    "effect_text": "每回合1次，可以将1张行动牌当作进攻使用。\n我方使用的进攻获得以下效果：本次攻击被响应则抽2张行动牌，未被响应则弃置目标2张行动牌。",
+    "effect_text": "每回合1次，可以将1张行动牌当作进攻使用。\n我方使用的进攻获得以下效果：攻击时，本次攻击被响应则我方抽2张行动牌，未被响应则弃置目标2张行动牌。",
     "effect_ids": [
-      "pilot_063_effect_01",
-      "pilot_063_effect_02"
-    ]
+      "pilot_064_effect_01",
+      "pilot_064_effect_02"
+    ],
+    "en_name": "Butchel"
   },
   {
-    "id": "pilot_064_柏格",
+    "id": "pilot_065_柏格",
     "name": "柏格",
     "rarity": "N",
     "count": 1,
@@ -962,41 +1025,44 @@
     "cost": 3,
     "effect_text": "我方回合1次，可以弃置1张未设置的装备牌，获得2金币并抽1张装备牌，若该弃置的装备牌类型是武器，则再抽2张行动牌。",
     "effect_ids": [
-      "pilot_064_effect_01"
-    ]
+      "pilot_065_effect_01"
+    ],
+    "en_name": "Berg"
   },
   {
-    "id": "pilot_065_银雪",
+    "id": "pilot_066_银雪",
     "name": "银雪",
+    "rarity": "N",
+    "count": 1,
+    "faction": "联邦",
+    "attack_limit": 1,
+    "action_card_limit": 4,
+    "cost": 4,
+    "effect_text": "在3格范围内的机甲从行动牌堆抽取牌前（包括我方），我方可以弃置1张行动牌，查看行动牌堆顶3张牌，可弃置其中的任意牌，剩下的放回牌堆顶。",
+    "effect_ids": [
+      "pilot_066_effect_01",
+      "pilot_066_effect_02"
+    ],
+    "en_name": "Silvow"
+  },
+  {
+    "id": "pilot_067_骇客",
+    "name": "骇客",
     "rarity": "N",
     "count": 1,
     "faction": "联邦",
     "attack_limit": 1,
     "action_card_limit": 3,
     "cost": 4,
-    "effect_text": "每回合1次，3格范围内的机甲抽取行动牌前（包括我方），我方可以弃置1张行动牌，翻开行动牌堆顶3张牌，弃置其中的任意牌，剩下的放回牌堆顶。可随时按效果按钮启用/禁用此拦截（默认启用，禁用后不再弹窗）。",
+    "effect_text": "我方回合2次，移动后可以查看3格范围内1台其他机甲的随机2张行动牌，若其中包含对应行动牌则：攻击牌：本回合攻击次数+1；迎击牌：本回合行动牌上限+1；辅助牌：回复3动力。",
     "effect_ids": [
-      "pilot_065_effect_01",
-      "pilot_065_effect_02"
-    ]
+      "pilot_067_effect_01",
+      "pilot_067_effect_02"
+    ],
+    "en_name": "Hacke"
   },
   {
-    "id": "pilot_066_骇客",
-    "name": "骇客",
-    "rarity": "N",
-    "count": 1,
-    "faction": "联邦",
-    "attack_limit": 1,
-    "action_card_limit": 4,
-    "cost": 3,
-    "effect_text": "（开关）随时启用或禁用骇客技能（默认启用）。我方回合2次，我方机甲基础移动后，若3格范围内有持有行动牌的其他机甲，可以选择1台并随机查看其2张行动牌（不足2张看全部；0张也结算加成）：其中含攻击牌则本回合攻击次数+1；含迎击牌则本回合行动牌上限+1；含辅助牌则回复3动力。类型各计一次，可同时触发。",
-    "effect_ids": [
-      "pilot_066_effect_01",
-      "pilot_066_effect_02"
-    ]
-  },
-  {
-    "id": "pilot_067_丹",
+    "id": "pilot_068_丹",
     "name": "丹",
     "rarity": "N",
     "count": 1,
@@ -1004,14 +1070,15 @@
     "attack_limit": 1,
     "action_card_limit": 4,
     "cost": 3,
-    "effect_text": "每回合1次，可以将1张行动牌当作双连使用，若该牌指定了2台机甲为攻击目标，则威力+3，命中额外产生1损伤。",
+    "effect_text": "每回合1次，可以将1张行动牌当作双连使用。\n我方使用的双连若指定了2个目标，则威力+3，命中额外产生1损伤。",
     "effect_ids": [
-      "pilot_067_effect_01",
-      "pilot_067_effect_02"
-    ]
+      "pilot_068_effect_01",
+      "pilot_068_effect_02"
+    ],
+    "en_name": "Dan"
   },
   {
-    "id": "pilot_068_冰魄",
+    "id": "pilot_060_冰魄",
     "name": "冰魄",
     "rarity": "N",
     "count": 1,
@@ -1019,11 +1086,12 @@
     "attack_limit": 1,
     "action_card_limit": 3,
     "cost": 3,
-    "effect_text": "我方使用迎击牌响应攻击时，该攻击范围-2（不会低于1）。若该攻击没有命中，我方抽2张行动牌。",
+    "effect_text": "我方使用迎击牌响应攻击时，使该攻击范围-2（不会低于1），若该攻击没有命中，我方抽2张行动牌。",
     "effect_ids": [
-      "pilot_068_effect_01",
-      "pilot_068_effect_02"
-    ]
+      "pilot_060_effect_01",
+      "pilot_060_effect_02"
+    ],
+    "en_name": "Froster"
   },
   {
     "id": "pilot_069_影刹",
@@ -1033,13 +1101,14 @@
     "faction": "帝国",
     "attack_limit": 1,
     "action_card_limit": 3,
-    "cost": 4,
-    "effect_text": "每个我方回合结束时，若本回合未发动攻击，则下次攻击威力+3；若本回合移动未超过4格，则下次攻击范围+1。上述效果可叠加。",
+    "cost": 3,
+    "effect_text": "我方回合结束时，若本回合未发动攻击，则下次攻击威力+3；若本回合未移动超过4格，则下次攻击范围+1。上述效果可叠加。",
     "effect_ids": [
       "pilot_069_effect_01",
       "pilot_069_effect_02",
       "pilot_069_effect_03"
-    ]
+    ],
+    "en_name": "Shade"
   },
   {
     "id": "pilot_070_烈火",
@@ -1048,12 +1117,13 @@
     "count": 1,
     "faction": "帝国",
     "attack_limit": 1,
-    "action_card_limit": 4,
+    "action_card_limit": 3,
     "cost": 3,
     "effect_text": "若发动的攻击命中，则可以抽3张行动牌（这些牌本回合不占行动牌上限）。",
     "effect_ids": [
       "pilot_070_effect_01"
-    ]
+    ],
+    "en_name": "Blaze"
   },
   {
     "id": "pilot_071_弥雅",
@@ -1062,64 +1132,68 @@
     "count": 1,
     "faction": "帝国",
     "attack_limit": 1,
-    "action_card_limit": 3,
+    "action_card_limit": 4,
     "cost": 3,
-    "effect_text": "每个我方回合结束后，可以选择1台3格范围内的机甲（包括我方）使其抽3张行动牌，之后其再弃置1张牌。",
+    "effect_text": "我方回合结束后，可以选择1台3格范围内的机甲（可以是我方）使其抽3张行动牌，之后其再弃置1张牌。",
     "effect_ids": [
       "pilot_071_effect_01"
-    ]
+    ],
+    "en_name": "Mia"
   },
   {
-    "id": "pilot_072_卡修",
+    "id": "pilot_077_卡修",
     "name": "卡修",
     "rarity": "N",
     "count": 1,
     "faction": "帝国",
     "attack_limit": 1,
-    "action_card_limit": 4,
+    "action_card_limit": 3,
     "cost": 3,
     "effect_text": "每个效果每回合1次：使用攻击牌时，回复5动力；使用迎击牌时，回复4动力；使用辅助牌时，回复3动力。",
     "effect_ids": [
-      "pilot_072_effect_01a",
-      "pilot_072_effect_01b",
-      "pilot_072_effect_01c"
-    ]
+      "pilot_077_effect_01a",
+      "pilot_077_effect_01b",
+      "pilot_077_effect_01c"
+    ],
+    "en_name": "Kaysh"
   },
   {
-    "id": "pilot_073_法尔科",
+    "id": "pilot_078_法尔科",
     "name": "法尔科",
     "rarity": "N",
     "count": 1,
     "faction": "帝国",
     "attack_limit": 1,
     "action_card_limit": 3,
-    "cost": 4,
-    "effect_text": "我方回合1次，可以弃置2张行动牌，之后抽取1张高级装备牌，并背面朝上置于我方或其他机甲的备用区，直到下个我方回合结束，该高级装备牌不能主动设置与卖出。",
+    "cost": 3,
+    "effect_text": "我方回合1次，可以弃置2张行动牌，之后抽取1张高级装备牌，并背面朝上置于我方或其他机甲的备用区，直到下个我方回合开始后，该高级装备牌不能主动设置与卖出。",
     "effect_ids": [
-      "pilot_073_effect_01"
-    ]
+      "pilot_078_effect_01"
+    ],
+    "en_name": "Falco"
   },
   {
-    "id": "pilot_074_泰特",
+    "id": "pilot_073_泰特",
     "name": "泰特",
     "rarity": "N",
     "count": 1,
     "faction": "帝国",
     "attack_limit": 1,
     "action_card_limit": 3,
-    "cost": 4,
-    "effect_text": "我方回合3次，可以弃置1张行动牌，使本回合下次使用近战武器攻击时威力+3（可叠加）。\n我方回合1次，选择1台其他机甲获得上述效果，直到下个我方回合开始。",
+    "cost": 3,
+    "effect_text": "我方回合3次，可以弃置1张行动牌，使本回合下次使用近战武器攻击时威力+3（可叠加）。\n我方回合1次，选择1台其他机甲获得上述效果直到下个我方回合开始。",
     "effect_ids": [
-      "pilot_074_effect_01",
-      "pilot_074_effect_02",
-      "pilot_074_effect_01_apply",
-      "pilot_074_effect_01_consume",
-      "pilot_074_effect_01_turnend",
-      "pilot_074_effect_02_expire"
-    ]
+      "pilot_073_effect_01",
+      "pilot_073_effect_02",
+      "pilot_073_effect_01_apply",
+      "pilot_073_effect_01_consume",
+      "pilot_073_effect_01_turnend",
+      "pilot_073_effect_02_expire"
+    ],
+    "en_name": "Tyte"
   },
   {
-    "id": "pilot_075_肯尼斯",
+    "id": "pilot_072_肯尼斯",
     "name": "肯尼斯",
     "rarity": "N",
     "count": 1,
@@ -1127,15 +1201,16 @@
     "attack_limit": 1,
     "action_card_limit": 3,
     "cost": 4,
-    "effect_text": "我方回合1次，可以弃置1张行动牌。\n每次我方行动牌被弃置，可以选择抽1张行动牌或使本回合下一次攻击威力+2（可叠加）。若弃置的是辅助牌，则两个效果都执行。",
+    "effect_text": "我方回合1次，可以弃置1张行动牌。\n每次弃置行动牌后，可以选择抽1张行动牌或使本回合下一次攻击威力+2（可叠加）。若此弃置包含辅助牌，则两个效果都执行。",
     "effect_ids": [
-      "pilot_075_effect_01",
-      "pilot_075_effect_02",
-      "pilot_075_effect_02_auto",
-      "pilot_075_effect_02_apply",
-      "pilot_075_effect_02_consume",
-      "pilot_075_effect_02_turnend"
-    ]
+      "pilot_072_effect_01",
+      "pilot_072_effect_02",
+      "pilot_072_effect_02_auto",
+      "pilot_072_effect_02_apply",
+      "pilot_072_effect_02_consume",
+      "pilot_072_effect_02_turnend"
+    ],
+    "en_name": "Kenneth"
   },
   {
     "id": "pilot_076_疾风",
@@ -1150,24 +1225,26 @@
     "effect_ids": [
       "pilot_076_effect_01",
       "pilot_076_effect_02"
-    ]
+    ],
+    "en_name": "Gale"
   },
   {
-    "id": "pilot_077_维奥拉",
+    "id": "pilot_074_维奥拉",
     "name": "维奥拉",
     "rarity": "N",
     "count": 1,
     "faction": "帝国",
     "attack_limit": 1,
-    "action_card_limit": 4,
-    "cost": 3,
+    "action_card_limit": 2,
+    "cost": 4,
     "effect_text": "在3格范围内的机甲（包括我方）发动攻击结算后，我方抽1张行动牌；之后每回合1次，可以弃置2张行动牌使该机甲再立即发动1次攻击。",
     "effect_ids": [
-      "pilot_077_effect_01"
-    ]
+      "pilot_074_effect_01"
+    ],
+    "en_name": "Viola"
   },
   {
-    "id": "pilot_078_芮贝卡",
+    "id": "pilot_075_芮贝卡",
     "name": "芮贝卡",
     "rarity": "N",
     "count": 1,
@@ -1177,8 +1254,9 @@
     "cost": 3,
     "effect_text": "每回合2次，3格范围内的机甲（包括我方）受到伤害后，可以使其回复2生命并抽1张行动牌。",
     "effect_ids": [
-      "pilot_078_effect_01"
-    ]
+      "pilot_075_effect_01"
+    ],
+    "en_name": "Rebecca"
   },
   {
     "id": "pilot_079_莉诺",
@@ -1189,10 +1267,11 @@
     "attack_limit": 1,
     "action_card_limit": 3,
     "cost": 3,
-    "effect_text": "我方回合2次，可以用原价购实商店里的1张装备牌。",
+    "effect_text": "我方回合2次，可以用原价购买商店里的1张装备牌。",
     "effect_ids": [
       "pilot_079_effect_01"
-    ]
+    ],
+    "en_name": "Lino"
   },
   {
     "id": "pilot_080_墨尘",
@@ -1201,12 +1280,13 @@
     "count": 1,
     "faction": "秩序",
     "attack_limit": 1,
-    "action_card_limit": 4,
-    "cost": 2,
-    "effect_text": "我方回合中，若机甲相邻的格子上存在标记，则可以移去该标记；或立即移至该格子上，之后该标记生效后可以使该效果再生效1次。",
+    "action_card_limit": 3,
+    "cost": 3,
+    "effect_text": "我方回合中，对于相邻格子上存在的地图标记，可以移除该标记或立即移至该格子上，之后该标记生效后使该效果再生效1次。",
     "effect_ids": [
       "pilot_080_effect_01"
-    ]
+    ],
+    "en_name": "Mochen"
   },
   {
     "id": "pilot_081_汀兰",
@@ -1215,12 +1295,13 @@
     "count": 1,
     "faction": "秩序",
     "attack_limit": 1,
-    "action_card_limit": 4,
-    "cost": 2,
+    "action_card_limit": 3,
+    "cost": 4,
     "effect_text": "绿格子对我方仅消耗1动力。我方所在的格子与周围相邻的所有格子（红格子除外）视为绿格子，并获得以下效果：\n处在该格子上的机甲在其回合内1次，可以请求我方使其回复2点生命，获得2金币。",
     "effect_ids": [
       "pilot_081_effect_01"
-    ]
+    ],
+    "en_name": "Tinlara"
   },
   {
     "id": "pilot_082_温斯顿",
@@ -1231,7 +1312,7 @@
     "attack_limit": 0,
     "action_card_limit": 6,
     "cost": 3,
-    "effect_text": "我方回合1次，可以将任意张行动牌交给3格内的1台其他机甲，令其下回合的攻击次数+1。\n我方可以把攻击牌当作掩护/维修/推进之一使用。",
+    "effect_text": "我方回合1次，可以将任意张行动牌交给3格范围内的1台其他机甲，令其下回合的攻击次数+1，该机甲使用这些牌时，同时对我方施加联合效果。\n我方可以把攻击牌当作掩护/维修/推进之一使用。",
     "effect_ids": [
       "pilot_082_effect_01",
       "pilot_082_effect_02",
@@ -1240,7 +1321,8 @@
       "pilot_082_thrust_extra",
       "cover_window_host",
       "thrust_window_host"
-    ]
+    ],
+    "en_name": "Winston"
   },
   {
     "id": "pilot_083_瓦恩",
@@ -1251,12 +1333,13 @@
     "attack_limit": 1,
     "action_card_limit": 3,
     "cost": 3,
-    "effect_text": "每回合1次，可以将场上1把武器名称加上热能或光束，类型转变为近战或远程，并使威力+3或范围+1（持续到下个我方回合结束）。\n在3格内的其他机甲可以在其回合内，请求我方对其持有的武器使用上述效果（每台机甲每回合1次）。",
+    "effect_text": "每回合1次，可以将场上1把武器名称加上热能或光束，类型转变为近战或远程，并使威力+3或范围+1（上述效果持续到下个我方回合结束）。\n在3格内的其他机甲可以在其回合内，可以请求我方对其持有的武器使用上述效果。",
     "effect_ids": [
       "pilot_083_effect_01",
       "pilot_083_effect_02",
       "pilot_083_re_request"
-    ]
+    ],
+    "en_name": "Vane"
   },
   {
     "id": "pilot_084_莎菲雅",
@@ -1267,42 +1350,45 @@
     "attack_limit": 1,
     "action_card_limit": 4,
     "cost": 3,
-    "effect_text": "我方回合2次，可以将2张行动牌当作联合使用，之后抽2张行动牌。\n其他机甲因联合的效果使用攻击牌后，我方获得2金币。",
+    "effect_text": "我方回合2次，可以将2张行动牌当作联合使用，之后抽2张行动牌。\n其他机甲因联合的效果使用攻击牌时，我方获得2金币。",
     "effect_ids": [
       "pilot_084_effect_01",
       "pilot_084_effect_02"
-    ]
+    ],
+    "en_name": "Safia"
   },
   {
-    "id": "pilot_085_莽克",
+    "id": "pilot_088_莽克",
     "name": "莽克",
     "rarity": "N",
     "count": 1,
     "faction": "混乱",
     "attack_limit": 1,
     "action_card_limit": 3,
-    "cost": 4,
+    "cost": 3,
     "effect_text": "机甲上正面设置的装备牌弃置时，可立即获得4金币。场上其他机甲上正面设置的装备牌弃置时，可立即获得3金币。",
     "effect_ids": [
-      "pilot_085_effect_01"
-    ]
+      "pilot_088_effect_01"
+    ],
+    "en_name": "Morgk"
   },
   {
-    "id": "pilot_086_獠鼠",
+    "id": "pilot_085_獠鼠",
     "name": "獠鼠",
     "rarity": "N",
     "count": 1,
     "faction": "混乱",
     "attack_limit": 2,
     "action_card_limit": 1,
-    "cost": 5,
+    "cost": 3,
     "effect_text": "指定目标发动攻击时，可以投掷1个骰子：1：我方机甲设置2损伤；2~3：我方抽2张行动牌；4~5：弃置目标2张行动牌；6：对目标施加锁定效果。",
     "effect_ids": [
-      "pilot_086_effect_01"
-    ]
+      "pilot_085_effect_01"
+    ],
+    "en_name": "Fangrat"
   },
   {
-    "id": "pilot_087_塔妮拉",
+    "id": "pilot_086_塔妮拉",
     "name": "塔妮拉",
     "rarity": "N",
     "count": 1,
@@ -1312,12 +1398,13 @@
     "cost": 3,
     "effect_text": "我方回合2次，可以将1张行动牌交给1台3格范围内的其他机甲，之后我方获得2金币。\n其他机甲使用从我方处获得的行动牌后，该机甲和我方各抽1张行动牌。",
     "effect_ids": [
-      "pilot_087_effect_01",
-      "pilot_087_effect_02"
-    ]
+      "pilot_086_effect_01",
+      "pilot_086_effect_02"
+    ],
+    "en_name": "Tanila"
   },
   {
-    "id": "pilot_088_征服",
+    "id": "pilot_087_征服",
     "name": "征服",
     "rarity": "N",
     "count": 1,
@@ -1325,9 +1412,10 @@
     "attack_limit": 1,
     "action_card_limit": 3,
     "cost": 3,
-    "effect_text": "我方回合1次，可以宣言1种行动牌类型(攻击，迎击，辅助)，并展示3格范围内1台其他机甲的1张随机行动牌。若该牌类型与宣言相同，则弃置该机甲其余未展示的牌；否则弃置该展示的牌。",
+    "effect_text": "我方回合1次，可以宣言1种行动牌类型(攻击，迎击，辅助)，并随机展示3格范围内1台其他机甲的1张行动牌。若该牌类型与宣言相同，则弃置该机甲其余未展示的牌；否则弃置该展示的牌。",
     "effect_ids": [
-      "pilot_088_effect_01"
-    ]
+      "pilot_087_effect_01"
+    ],
+    "en_name": "Conquer"
   }
 ]

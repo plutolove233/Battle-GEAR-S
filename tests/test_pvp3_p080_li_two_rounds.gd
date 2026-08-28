@@ -64,9 +64,9 @@ func _setup_pilots_3(h, c1, c2) -> String:
 		gs.cards[iid080] = card080
 		app.battle.context.game_setup_service.set_pilot(mech_p.mech_id, card080)
 		var mech_e = gs.get_mech_for_player(&"enemy")
-		var pdef051 = cdb.get_card(&"pilot_051_李")
+		var pdef051 = cdb.get_card(&"pilot_053_李")
 		if pdef051 == null:
-			return "pilot_051_李 定义不存在"
+			return "pilot_053_李 定义不存在"
 		var iid051: StringName = gs.next_id(&"card")
 		var card051 = _CardInstance.new(iid051, pdef051)
 		card051.owner_player_id = &"enemy"
@@ -262,7 +262,7 @@ func _drive_use(h, c1, c2, cell: Dictionary, intercept_mode: String, d: Array) -
 			var owner_aid: StringName = app._effect_choice_action_id
 			var opt: StringName = &"option_1"
 			var opt_idx: int = 1
-			if phase == &"pilot_051_intercept":
+			if phase == &"pilot_053_intercept":
 				intercept_cnt += 1
 				if intercept_mode == &"cancel":
 					app._on_choice_cancelled()

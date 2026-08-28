@@ -59,9 +59,9 @@ func _setup_pilots_3(h, c1, c2) -> String:
 		gs.cards[iid080] = card080
 		app.battle.context.game_setup_service.set_pilot(mech_p.mech_id, card080)
 		var mech_e = gs.get_mech_for_player(&"enemy")
-		var pdef051 = cdb.get_card(&"pilot_051_李")
+		var pdef051 = cdb.get_card(&"pilot_053_李")
 		if pdef051 == null:
-			return "pilot_051_李 定义不存在"
+			return "pilot_053_李 定义不存在"
 		var iid051: StringName = gs.next_id(&"card")
 		var card051 = _CardInstance.new(iid051, pdef051)
 		card051.owner_player_id = &"enemy"
@@ -260,7 +260,7 @@ func test_postchain_sync() -> Variant:
 			var a_aid: StringName = awi.get("action_id", &"")
 			if awt == &"choose_one_effect" and a_aid != &"" and pend.has(a_aid):
 				var phase: String = String(pend[a_aid].get("phase", &""))
-				if phase == "pilot_051_intercept":
+				if phase == "pilot_053_intercept":
 					var owner_aid: StringName = app._effect_choice_action_id
 					app._on_choice_cancelled()
 					await _pump(2)
@@ -387,7 +387,7 @@ func test_postchain_sync() -> Variant:
 	# ── 阶段5：李发动 e1（抽设事件牌，DIRECT 按钮 -> equipment_active）──
 	var li_card: StringName = _pilot_instance_id(c1, &"enemy")
 	var ev_before: int = c1.battle.context.game_state.deck_state.event_deck.size()
-	await _relay3(c1, [h, c2], "equipment_active", {"card_instance_id": li_card, "effect_id": &"pilot_051_effect_01"}, 4)
+	await _relay3(c1, [h, c2], "equipment_active", {"card_instance_id": li_card, "effect_id": &"pilot_053_effect_01"}, 4)
 	# 李e1设牌触发李自己e2拦截窗（前两次cancel未消耗本局1次）：取消不拦截
 	var e1_guard: int = 0
 	while e1_guard < 6:
@@ -397,7 +397,7 @@ func test_postchain_sync() -> Variant:
 			break
 		var epend: Dictionary = c1.battle.context.timing_engine._pending_effect
 		var e_aid: StringName = ewi.get("action_id", &"")
-		if not epend.has(e_aid) or String(epend[e_aid].get("phase", &"")) != "pilot_051_intercept":
+		if not epend.has(e_aid) or String(epend[e_aid].get("phase", &"")) != "pilot_053_intercept":
 			break
 		var e_owner_aid: StringName = c1._effect_choice_action_id
 		c1._on_choice_cancelled()

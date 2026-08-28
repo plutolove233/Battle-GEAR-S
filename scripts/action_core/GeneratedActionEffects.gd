@@ -91,7 +91,7 @@ static func get_effects_for_status(status_type: StringName) -> Array[StringName]
 		&"UNITE": [&"unite_status_attack", &"unite_status_clear"],
 		&"DISCOUNT": [&"discount_clear_on_turn_end"],
 		&"SET_TRAP": [&"set_trap_clear_on_turn_end"],
-		&"PILOT_022_POWER_BONUS": [&"pilot_022_power_bonus_apply", &"pilot_022_power_bonus_tick"],
+		&"PILOT_022_POWER_BONUS": [&"pilot_021_power_bonus_apply", &"pilot_021_power_bonus_tick"],
 	}
 	var result: Array[StringName] = []
 	for eid: StringName in _status_effect_map.get(status_type, []):
@@ -632,7 +632,7 @@ static func build_all_effects() -> Dictionary:
 			"confirm_verb": "使用",
 			"cancel_label": "不使用掩护",
 			"as_use_action_card": true,
-			# 掩护窗口附加选项（洛尔恩 pilot_062 转化掩护等）：TimingEngine 扫描窗口拥有玩家
+			# 掩护窗口附加选项（洛尔恩 pilot_063 转化掩护等）：TimingEngine 扫描窗口拥有玩家
 			# 注册在 COVER_WINDOW_EXTRA 时点的监听效果，条件满足时作为复选框选项展示。
 			"collect_cover_window_extras": true,
 		},
@@ -882,7 +882,39 @@ static func build_all_effects() -> Dictionary:
 	effects[lock_status_e3.effect_id] = lock_status_e3
 
 	# ═══════════════════════════════════════════
-	# 提比里安 pilot_022 effect_01 弃甲铸威 · 威力加成状态
+	# 通用：转移攻击目标（AVAILABILITY · 转移目标窗口）
+	# ═══════════════════════════════════════════
+	# 任何携带此效果（装备/机师等，绑定到持有者 binding_context）的机甲，当相邻其他机甲被攻击
+	# 且自身在本次攻击当前武器范围内时，可在"转移目标窗口"将该攻击转移至自身。
+	# 转移不是响应：REDIRECT 置 _redirect_rewind 回退 ATTACK_PRE 重 fire，_skip_at_fire 跳过
+	# 重新触发的 ATTACK_AT，故转移后目标不可再响应。
+	# 锁定封锁：锁定方攻击被锁定目标时，任何转移效果均不可用（ConditionChecker
+	# ATTACK_HAS_ADJACENT_OTHER_MECH_TARGET 内 is_locked_by 检查，兼覆盖迪恩/布鲁克）。
+	var transfer_attack_target := ActionEffect.new()
+	transfer_attack_target.effect_id = &"transfer_attack_target"
+	transfer_attack_target.display_name = "转移攻击目标"
+	transfer_attack_target.mode = _TC.MODE_AVAILABILITY
+	transfer_attack_target.priority = 10
+	transfer_attack_target.availability_condition = _TC.AVAIL_TRANSFER_TARGET
+	transfer_attack_target.availability_priority = 10
+	transfer_attack_target.listen_timing = _TC.ATTACK_AT
+	transfer_attack_target.listen_action_type = &"attack"
+	transfer_attack_target.set_conditions([
+		{"op": &"ATTACK_HAS_ADJACENT_OTHER_MECH_TARGET"},
+		{"op": &"SELF_MECH_IN_CURRENT_ATTACK_RANGE"},
+		{"op": &"ATTACKER_IS_NOT_SELF_MECH"},
+		{"op": &"ATTACK_NOT_RESPONDED"},
+	])
+	transfer_attack_target.set_target_rules([{"rule": &"NO_TARGET"}])
+	transfer_attack_target.set_costs([])
+	transfer_attack_target.set_actions([
+		{"type": &"REDIRECT_ATTACK_TARGET_TO_SELF", "params": {"protect_target_id": "$payload.target_id"}},
+	])
+	transfer_attack_target.description = "相邻友方机甲被攻击且自身在攻击范围内时，可将该攻击转移至自身（转移后目标不可再响应）。"
+	effects[transfer_attack_target.effect_id] = transfer_attack_target
+
+	# ═══════════════════════════════════════════
+	# 提比里安 pilot_021 effect_01 弃甲铸威 · 威力加成状态
 	# ═══════════════════════════════════════════
 	# 状态施加在提比里安玩家所属机甲上（target_id=机师所属机甲，stacks=威力加成点数，
 	# duration=1）。效果1的 LISTEN 监听器从 binding_context.target_id(=机甲) 读 stacks。
@@ -894,7 +926,7 @@ static func build_all_effects() -> Dictionary:
 
 	# 应用监听：我方机甲攻击时 +stacks 威力并移除状态
 	var p022_power_apply := ActionEffect.new()
-	p022_power_apply.effect_id = &"pilot_022_power_bonus_apply"
+	p022_power_apply.effect_id = &"pilot_021_power_bonus_apply"
 	p022_power_apply.display_name = "弃甲铸威·下次攻击威力+N"
 	p022_power_apply.mode = _TC.MODE_LISTEN
 	p022_power_apply.priority = 10
@@ -922,7 +954,7 @@ static func build_all_effects() -> Dictionary:
 
 	# 持续监听：回合结束 -1 清除（兜底，正常用完即清后该状态已移除，此监听不触发）
 	var p022_power_tick := ActionEffect.new()
-	p022_power_tick.effect_id = &"pilot_022_power_bonus_tick"
+	p022_power_tick.effect_id = &"pilot_021_power_bonus_tick"
 	p022_power_tick.display_name = "弃甲铸威·回合结束清除"
 	p022_power_tick.mode = _TC.MODE_LISTEN
 	p022_power_tick.priority = 10

@@ -108,7 +108,7 @@ var _responded_equip_prompt_showing: bool = false
 ## 铠厉逐张「设置/弃置获金」面板是否在展示（面板按钮回调路由到 responded_equip_card 链而非 resume_effect）
 var _responded_equip_set_active: bool = false
 ## 铠德「被响应→三选一」弹窗是否正在展示（防 _refresh_battle 反复重弹）
-var _pilot_060_prompt_showing: bool = false
+var _pilot_062_prompt_showing: bool = false
 ## 商店购买待确认状态：{kind: "normal"|"advanced", slot_index: int}
 var _shop_buy_pending: Dictionary = {}
 ## 损伤转移弹窗上下文：{mech_id, to_slot, action_id}（A6 装备效果 redirect_select）
@@ -173,8 +173,8 @@ var _pilot_014_select_options: Array = []
 var _pilot_032_select_options: Array = []
 ## pilot_018 苔丝弃装备牌选框：缓存当前选项（card_id=装备 instance_id），供 _on_choice_made 回查。
 var _pilot_018_select_options: Array[Dictionary] = []
-## pilot_088 征服宣言类型选框：缓存当前选项（effect_id=type_攻击/迎击/辅助，declared_type=类型），供 _on_choice_made 回查。
-var _pilot_088_type_options: Array = []
+## pilot_087 征服宣言类型选框：缓存当前选项（effect_id=type_攻击/迎击/辅助，declared_type=类型），供 _on_choice_made 回查。
+var _pilot_087_type_options: Array = []
 ## 觉醒种类单选面板（觉醒效果：弃牌堆无预判/识破时选1种行动牌）
 var awaken_select_panel = null  # type: AwakenSelectPanel
 var _awaken_select_action_id: StringName = &""
@@ -1603,10 +1603,10 @@ func _dispatch_input(op: String, data: Dictionary) -> Variant:
 			_net_responded_equip_confirm(data.get("player_id", &""), data.get("mech_id", &""), bool(data.get("accept", false)))
 			_request_refresh()
 			return {}
-		"pilot_060_choice":
+		"pilot_062_choice":
 			# 铠德「被响应→三选一」触发选择（弹窗后）：choice=0/1/2 执行对应奖励（抽2行动/回3动力/获4金），
 			# 其它=放弃。双端同 player_id/mech_id/choice 执行保证锁步（抽牌走 gain_card 动作发 GAIN_CARD 时点）。
-			_net_pilot_060_choice(data.get("player_id", &""), data.get("mech_id", &""), int(data.get("choice", -1)))
+			_net_pilot_062_choice(data.get("player_id", &""), data.get("mech_id", &""), int(data.get("choice", -1)))
 			_request_refresh()
 			return {}
 		"responded_equip_card":
@@ -1652,6 +1652,14 @@ func _dispatch_input(op: String, data: Dictionary) -> Variant:
 			if ctx.action_ui_bridge:
 				ctx.action_ui_bridge.resolve_damage_placement(StringName(data.get("action_id", &"")), {"placed": true})
 			# 损伤放置不改变棋盘可视状态，轻量刷新面板即可（棋盘由后续时点 _request_refresh 补齐）
+			_refresh_panels_only()
+			return {}
+		"resolve_action_input":
+			# need_input 动作确认/取消按 action_id 精确恢复（青瞳偷牌等 STEAL/discard_card）：
+			# 不依赖共享 _waiting_action_id 槽（非持有端被 skip_remote_waiting 清槽致丢输入、
+			# 攻击牌卡临时区停 ATTACK_PRE）。与 damage_placement_done 同为按 id 路由模式。
+			if ctx.action_ui_bridge:
+				ctx.action_ui_bridge.resolve_action_input(StringName(data.get("action_id", &"")), data.get("data", {}))
 			_refresh_panels_only()
 			return {}
 		"ui_cancelled":
@@ -1790,6 +1798,7 @@ func _build_selected_cards_from_card(card_id: StringName, effect_id: StringName 
 				"availability_priority": eff.availability_priority,
 				"card_name": card.def.display_name,
 				"is_counter": is_counter_card,
+				"is_transfer": String(eff.availability_condition) == "TRANSFER_TARGET",
 			})
 			return selected_cards
 	# 退回：按 card_id 扫描行动牌 AVAILABILITY 效果（兼容未带 effect_id 的调用）
@@ -1806,6 +1815,7 @@ func _build_selected_cards_from_card(card_id: StringName, effect_id: StringName 
 				"availability_priority": effect.availability_priority,
 				"card_name": card.def.display_name,
 				"is_counter": is_counter_card,
+				"is_transfer": String(effect.availability_condition) == "TRANSFER_TARGET",
 			})
 			break
 	return selected_cards
@@ -1931,11 +1941,11 @@ func _net_responded_equip_confirm(player_id: StringName, mech_id: StringName, ac
 
 
 ## 铠德「被响应→三选一」触发选择（锁步版）：choice=0/1/2 执行对应奖励（抽2行动/回3动力/获4金），
-## 其它=放弃。三选一由 pending_choice 弹窗触发；双端执行 pilot_060_choose 保持状态同步。
-func _net_pilot_060_choice(player_id: StringName, mech_id: StringName, choice: int) -> void:
+## 其它=放弃。三选一由 pending_choice 弹窗触发；双端执行 pilot_062_choose 保持状态同步。
+func _net_pilot_062_choice(player_id: StringName, mech_id: StringName, choice: int) -> void:
 	if battle == null or battle.context == null:
 		return
-	_ActionPilotEffects.pilot_060_choose(battle.context, player_id, mech_id, choice)
+	_ActionPilotEffects.pilot_062_choose(battle.context, player_id, mech_id, choice)
 
 
 ## 铠厉逐张「设置/弃置获金」面板回调（锁步版）：从 GameState.responded_equip_chain 读当前链的归属与
@@ -2077,7 +2087,7 @@ func _popup_owner(popup_type: StringName, params: Dictionary) -> StringName:
 			return _owner_of_mech_id(params.get("target_mech_id", &""))
 		&"use_card_confirm", &"choice_select", &"effect_choice", &"mech_target_select", \
 		&"weapon_charge_select", &"repair_target_select", &"redirect_select", &"thrust_select", \
-		&"awaken_select", &"immediate_set_equipment", &"integer_select", &"map_cell_select", &"mech_multi_select", &"pilot_003_skip_players", &"pilot_003_choose_top", &"pilot_009_card_display", &"pilot_014_target_select", &"pilot_018_equipment_select", &"pilot_025_reserve_select", &"pilot_032_target_select", &"hidden_card_view_select", &"hidden_reserve_slot_select", &"damage_adjust", &"pilot_083_options", &"pilot_088_type_select":
+		&"awaken_select", &"immediate_set_equipment", &"integer_select", &"map_cell_select", &"mech_multi_select", &"pilot_003_skip_players", &"pilot_003_choose_top", &"pilot_009_card_display", &"pilot_014_target_select", &"pilot_018_equipment_select", &"pilot_025_reserve_select", &"pilot_032_target_select", &"hidden_card_view_select", &"hidden_reserve_slot_select", &"damage_adjust", &"pilot_083_options", &"pilot_087_type_select":
 			var pid: StringName = params.get("player_id", &"")
 			if pid != &"" and gs.players.has(pid):
 				return pid
@@ -2633,7 +2643,7 @@ func _on_battle_hex_clicked(hex: Dictionary) -> void:
 							battle.log.append({"message": "不能选择自己", "details": {}})
 							_request_refresh()
 							return
-						# pilot_021 塔莉娅：只允许选 valid_mech_ids（4格内其他机甲）
+						# pilot_022 塔莉娅：只允许选 valid_mech_ids（4格内其他机甲）
 						var smt_valid: Array = wait_info.get("input_params", {}).get("valid_mech_ids", [])
 						if not smt_valid.is_empty() and mech_id not in smt_valid:
 							battle.log.append({"message": "该机甲不在4格范围内，请选择范围内的机甲", "details": {}})
@@ -3753,10 +3763,10 @@ func _on_action_ui_popup_requested(popup_type: StringName, params: Dictionary) -
 					p58d_holder_name = String(p58d_mech.frame_def.display_name)
 			card_display_panel.configure(String(params.get("source_label", "展示行动牌")), p58d_holder_name, params.get("display_cards", []))
 		return
-	# pilot_066 骇客窥牌展示浮窗：只弹给查看方玩家本人（骇客自己——看别人牌，自己的牌无须隐藏）。
+	# pilot_067 骇客窥牌展示浮窗：只弹给查看方玩家本人（骇客自己——看别人牌，自己的牌无须隐藏）。
 	# 不走 _popup_owner 门控（那个按 player_id 路由会漏掉 PvP3 第三方观察者）；按 owner_player_id==local 过滤。
 	# 非阻塞：直接配置 + 显示后返回，不进入模态弹窗堆栈。
-	if popup_type == &"pilot_066_card_display":
+	if popup_type == &"pilot_067_card_display":
 		if String(params.get("owner_player_id", &"")) != String(local_player_id):
 			return  # 只有查看方（骇客玩家）端显示；PvP 双端都触发，非查看方静默
 		_update_move_overlay()
@@ -3770,10 +3780,10 @@ func _on_action_ui_popup_requested(popup_type: StringName, params: Dictionary) -
 					p66d_holder_name = String(p66d_mech.frame_def.display_name)
 			card_display_panel.configure(String(params.get("source_label", "查看目标行动牌")), p66d_holder_name, params.get("display_cards", []))
 		return
-	# pilot_088 征服宣言+随机展示浮窗：所有玩家端显示（用户决策：合成一个浮窗，宣言类型+展示牌
+	# pilot_087 征服宣言+随机展示浮窗：所有玩家端显示（用户决策：合成一个浮窗，宣言类型+展示牌
 	# 都展示；目标持有者也能看到自己牌的信息，无泄露）。不走 _popup_owner 门控，不过滤持有者。
 	# 非阻塞：直接配置 + 显示后返回，不进入模态弹窗堆栈。
-	if popup_type == &"pilot_088_conquer_display":
+	if popup_type == &"pilot_087_conquer_display":
 		_update_move_overlay()
 		if card_display_panel and battle and battle.context:
 			var gs = battle.context.game_state
@@ -3785,12 +3795,12 @@ func _on_action_ui_popup_requested(popup_type: StringName, params: Dictionary) -
 					p88d_holder_name = String(p88d_mech.frame_def.display_name)
 			card_display_panel.configure(String(params.get("source_label", "征服：宣言与目标随机展示")), p88d_holder_name, params.get("display_cards", []))
 		return
-	# pilot_088 征服宣言类型三选一（攻击/迎击/辅助，不可取消）：复用 choice_panel 单选。
+	# pilot_087 征服宣言类型三选一（攻击/迎击/辅助，不可取消）：复用 choice_panel 单选。
 	# _popup_owner 按 player_id 路由到施法者玩家端。PvP 双端/三方锁步下本信号所有端都触发，
 	# 必须在此过滤（此前漏了门控，非施法者端也弹类型框，玩家误操作/只见结果框）。
-	if popup_type == &"pilot_088_type_select":
+	if popup_type == &"pilot_087_type_select":
 		if _is_pvp_mode():
-			var p88_owner: StringName = _popup_owner(&"pilot_088_type_select", params)
+			var p88_owner: StringName = _popup_owner(&"pilot_087_type_select", params)
 			if p88_owner != &"" and p88_owner != local_player_id:
 				return  # 对方施法者的宣言类型框，本端不弹
 		if choice_panel and battle and battle.context:
@@ -3799,7 +3809,7 @@ func _on_action_ui_popup_requested(popup_type: StringName, params: Dictionary) -
 			for opt in p088_options:
 				if opt is Dictionary:
 					p088_typed.append(opt)
-			_pilot_088_type_options = p088_typed
+			_pilot_087_type_options = p088_typed
 			choice_panel.configure(p088_typed, String(params.get("source_label", "选择宣言的行动牌类型")), false)
 			# 模态入栈（遮罩阻塞，阻止框外点击穿透；选择经 choice_made 隐藏面板时自动出栈）
 			_present_popup(&"choice_prompt", choice_panel)
@@ -3826,13 +3836,13 @@ func _on_action_ui_popup_requested(popup_type: StringName, params: Dictionary) -
 		return
 	# 铠德「被响应→三选一」触发选择：仅触发归属玩家端弹三选一（PvP 双端都触发本信号，按 owner 过滤）。
 	# 非阻塞 choice_panel，不进入模态弹窗堆栈。
-	if popup_type == &"pilot_060_choice":
+	if popup_type == &"pilot_062_choice":
 		if String(params.get("player_id", &"")) != String(local_player_id):
 			return
 		if battle and battle.context and battle.context.game_state:
-			var p60_g: Dictionary = battle.context.game_state.pilot_060_pending_choice
-			if not p60_g.is_empty() and not _pilot_060_prompt_showing:
-				_show_pilot_060_choice_prompt(p60_g)
+			var p60_g: Dictionary = battle.context.game_state.pilot_062_pending_choice
+			if not p60_g.is_empty() and not _pilot_062_prompt_showing:
+				_show_pilot_062_choice_prompt(p60_g)
 		return
 	# 铠厉逐张「设置/弃置获金」面板：仅当前卡归属玩家端弹面板（双端都触发本信号，按 owner 过滤）。
 	# 复用 immediate_set_equipment_panel（allow_sell=true 且 sell_price=牌面cost，卖出按钮文案改为
@@ -4243,7 +4253,7 @@ func _show_popup(popup_type: StringName, params: Dictionary) -> void:
 				var ds_verb: StringName = params.get("action_verb", &"discard")
 				var ds_no_cancel: bool = bool(params.get("no_cancel", false))
 				var ds_exclude: Array = params.get("exclude_card_ids", [])
-				# pilot_021 塔莉娅赐予：至少选 min_count 张、自定义标题、只列 allowed_card_ids（剩余禁牌）
+				# pilot_022 塔莉娅赐予：至少选 min_count 张、自定义标题、只列 allowed_card_ids（剩余禁牌）
 				var ds_min_count: int = int(params.get("min_count", 0))
 				var ds_title_override: String = String(params.get("title_override", ""))
 				var ds_allowed: Array = params.get("allowed_card_ids", [])
@@ -4432,7 +4442,7 @@ func _show_popup(popup_type: StringName, params: Dictionary) -> void:
 		&"mech_target_select":
 			if battle_board:
 				var highlights: Array[Dictionary] = []
-				# pilot_021 塔莉娅：优先用 valid_mech_ids（4格内候选）高亮
+				# pilot_022 塔莉娅：优先用 valid_mech_ids（4格内候选）高亮
 				var _mt_valid: Array = params.get("valid_mech_ids", [])
 				if not _mt_valid.is_empty():
 					for mid: StringName in _mt_valid:
@@ -5285,7 +5295,7 @@ func _on_reserve_set_clicked(slot_id: StringName) -> void:
 	if not reserve_card or not reserve_card.def:
 		return
 
-	# "禁"标签拦截（法尔科 pilot_073 弃2抽高级装备置备用区等）：打标签玩家下个回合开始前
+	# "禁"标签拦截（法尔科 pilot_078 弃2抽高级装备置备用区等）：打标签玩家下个回合开始前
 	# 不能主动设置（含从备用区移到手牌再设置）。按钮置灰 + 此处后端双保险。
 	if _ActionPilotEffects.equip_forbid_tagged(reserve_card):
 		battle.log.append({"message": "该装备尚不能主动设置（禁标签）", "details": {}})
@@ -5438,7 +5448,14 @@ func _on_cancel_attack() -> void:
 				if not _multi_attack_target_chosen.is_empty():
 					_submit_multi_attack_targets()
 				else:
-					_net_exec("ui_cancelled", {})
+					# 引擎级挂起的多选取消（pilot_019 缴械冲击空选=中止整效果）：按 action_id
+					# 精确路由 cancelled=true（共享槽 ui_cancelled 在对端被 skip_remote_waiting
+					# 清槽后丢输入->对端停在挂起三方失步）。无挂起走原共享槽路径。
+					var _m2_aid: StringName = StringName(wait_info.get("action_id", &""))
+					if _m2_aid != &"" and battle.context.timing_engine != null and battle.context.timing_engine.has_pending_effect(_m2_aid):
+						_net_exec("resume_effect", {"action_id": _m2_aid, "data": {"cancelled": true}})
+					else:
+						_net_exec("ui_cancelled", {})
 					_clear_attack_highlights()
 				return
 			# 通用选格取消（机雷/格雷厄姆移陷/墨尘等）：同确认路径走 resume_effect 按
@@ -5634,17 +5651,17 @@ func _show_responded_equip_confirm_prompt(pending: Dictionary) -> void:
 
 ## 铠德「被响应→三选一」弹窗（choice=0/1/2 对应 抽2张行动牌/回复3动力/获得4金币；底部「取消」=放弃）。
 ## 被动效果：我方发动的攻击被响应时弹窗询问选择其一（或放弃不发动）。
-func _show_pilot_060_choice_prompt(pending: Dictionary) -> void:
+func _show_pilot_062_choice_prompt(pending: Dictionary) -> void:
 	if choice_panel == null or battle == null or battle.context == null:
 		return
-	_pilot_060_prompt_showing = true
+	_pilot_062_prompt_showing = true
 	var p60_mid: StringName = pending.get("mech_id", &"")
 	var p60_mech = battle.context.game_state.mechs.get(p60_mid) if battle.context.game_state != null else null
 	var p60_mech_name: String = String(p60_mech.frame_def.display_name) if p60_mech != null and p60_mech.frame_def != null else String(p60_mid)
 	var p60_options: Array[Dictionary] = [
-		{"label": "抽2张行动牌", "effect_id": &"__pilot_060_choice_0__"},
-		{"label": "回复3动力", "effect_id": &"__pilot_060_choice_1__"},
-		{"label": "获得4金币", "effect_id": &"__pilot_060_choice_2__"},
+		{"label": "抽2张行动牌", "effect_id": &"__pilot_062_choice_0__"},
+		{"label": "回复3动力", "effect_id": &"__pilot_062_choice_1__"},
+		{"label": "获得4金币", "effect_id": &"__pilot_062_choice_2__"},
 	]
 	choice_panel.configure(p60_options, "铠德·被响应三选一（%s）" % p60_mech_name)
 	_present_popup(&"choice_prompt", choice_panel)
@@ -5698,15 +5715,15 @@ func _maybe_update_responded_equip_ui() -> void:
 					immediate_set_equipment_panel.visible = true
 
 ## 铠德「被响应→三选一」UI 周期检查（_refresh_battle 帧末调用，幂等守卫）：
-## pilot_060_pending_choice 归属本机且未在展示 -> 弹三选一（含 request_ui_popup 触发路径兜底）。
-func _maybe_update_pilot_060_ui() -> void:
+## pilot_062_pending_choice 归属本机且未在展示 -> 弹三选一（含 request_ui_popup 触发路径兜底）。
+func _maybe_update_pilot_062_ui() -> void:
 	if battle == null or battle.context == null or battle.context.game_state == null:
 		return
 	var gs = battle.context.game_state
-	if not gs.pilot_060_pending_choice.is_empty():
-		var p60_p: Dictionary = gs.pilot_060_pending_choice
-		if String(p60_p.get("player_id", &"")) == String(local_player_id) and not _pilot_060_prompt_showing:
-			_show_pilot_060_choice_prompt(p60_p)
+	if not gs.pilot_062_pending_choice.is_empty():
+		var p60_p: Dictionary = gs.pilot_062_pending_choice
+		if String(p60_p.get("player_id", &"")) == String(local_player_id) and not _pilot_062_prompt_showing:
+			_show_pilot_062_choice_prompt(p60_p)
 
 ## 是否有进行中的单次移动动作（含逐格暂停的 waiting_timing / 效果挂起的 waiting_effect_action / waiting_input）。
 ## 用于：①"move"后仅在移动仍进行时显示取消按钮（同步完成的移动无需取消，否则按钮残留）；
@@ -5877,6 +5894,15 @@ func _submit_multi_attack_targets(precise_action_id: StringName = &"") -> void:
 	for c in _multi_attack_target_chosen:
 		target_ids.append(StringName(c.get("target_id", "")))
 	_clear_attack_highlights()
+	# precise_action_id 为空时兜底：当前等待动作若是引擎级挂起（_pending_effect，pilot_019
+	# 缴械冲击目标多选等），提交也必须按 action_id 精确路由（resume_effect 广播）——否则对端
+	# 共享槽被 skip_remote_waiting 清空后 ui_confirmed 丢输入 -> 对端停在挂起三方失步。
+	# 攻击多目标（双连等纯桥槽 need_input 无 _pending_effect）仍走共享槽 per-end 自驱。
+	if precise_action_id == &"" and battle != null and battle.context != null and battle.context.action_ui_bridge != null:
+		var mms_wi: Dictionary = battle.context.action_ui_bridge.get_waiting_action_info()
+		var mms_aid: StringName = StringName(mms_wi.get("action_id", &""))
+		if mms_aid != &"" and battle.context.timing_engine != null and battle.context.timing_engine.has_pending_effect(mms_aid):
+			precise_action_id = mms_aid
 	if precise_action_id != &"":
 		_net_exec("resume_effect", {"action_id": precise_action_id, "data": {"target_ids": target_ids}})
 		return
@@ -6054,21 +6080,21 @@ func _on_choice_made(effect_id: StringName) -> void:
 	# ── 铠德「被响应→三选一」（choice_0=抽2行动/choice_1=回3动力/choice_2=获4金）──
 	# 独立 if（不嵌套在铠威分支内）：三选一框非 ActionUIBridge 输入，且触发提示时无等待输入。
 	# 需在 wait_info 桥接处理之前，避免被当作效果选择输入误转发。
-	if effect_id == &"__pilot_060_choice_0__" or effect_id == &"__pilot_060_choice_1__" or effect_id == &"__pilot_060_choice_2__":
+	if effect_id == &"__pilot_062_choice_0__" or effect_id == &"__pilot_062_choice_1__" or effect_id == &"__pilot_062_choice_2__":
 		if battle and battle.context and battle.context.game_state:
-			var p60_pending: Dictionary = battle.context.game_state.pilot_060_pending_choice
+			var p60_pending: Dictionary = battle.context.game_state.pilot_062_pending_choice
 			if not p60_pending.is_empty() and String(p60_pending.get("player_id", &"")) == String(local_player_id):
 				var p60_pid: StringName = p60_pending.get("player_id", &"")
 				var p60_mid: StringName = p60_pending.get("mech_id", &"")
 				if choice_panel:
 					choice_panel.visible = false
-				_pilot_060_prompt_showing = false
+				_pilot_062_prompt_showing = false
 				var p60_choice: int = 0
-				if effect_id == &"__pilot_060_choice_1__":
+				if effect_id == &"__pilot_062_choice_1__":
 					p60_choice = 1
-				elif effect_id == &"__pilot_060_choice_2__":
+				elif effect_id == &"__pilot_062_choice_2__":
 					p60_choice = 2
-				_net_exec("pilot_060_choice", {"player_id": p60_pid, "mech_id": p60_mid, "choice": p60_choice})
+				_net_exec("pilot_062_choice", {"player_id": p60_pid, "mech_id": p60_mid, "choice": p60_choice})
 				return
 	# ── effect_choice（choose_one_effect 二选一/确认）：优先按弹窗打开时捕获的 action_id 精确路由 ──
 	# 共享等待槽是单槽：并发挂起（如杰狞伤害转移弹窗+损伤放置弹窗）时后者覆盖前者，槽内
@@ -6215,23 +6241,23 @@ func _on_choice_made(effect_id: StringName) -> void:
 				else:
 					_net_exec("ui_confirmed", {"data": {"pilot_014_target_pilot": p014_target, "pilot_014_player_id": p014_pid, "pilot_014_mech_id": p014_mid, "confirmed": true}})
 				return
-			if input_type == &"pilot_088_type_select":
-				# pilot_088 征服宣言类型三选一（攻击/迎击/辅助，不可取消）：effect_id 即选项中的
-				# effect_id（type_攻击/迎击/辅助），回查 _pilot_088_type_options 取 declared_type 回填。
+			if input_type == &"pilot_087_type_select":
+				# pilot_087 征服宣言类型三选一（攻击/迎击/辅助，不可取消）：effect_id 即选项中的
+				# effect_id（type_攻击/迎击/辅助），回查 _pilot_087_type_options 取 declared_type 回填。
 				if choice_panel:
 					choice_panel.visible = false
 				var p088_declared: String = ""
-				for opt in _pilot_088_type_options:
+				for opt in _pilot_087_type_options:
 					var od: Dictionary = opt if opt is Dictionary else {}
 					if String(od.get("effect_id", &"")) == String(effect_id):
 						p088_declared = String(od.get("declared_type", ""))
 						break
-				_pilot_088_type_options = []
+				_pilot_087_type_options = []
 				var p88_aid: StringName = StringName(wait_info.get("action_id", &""))
 				if p88_aid != &"":
-					_net_exec("resume_effect", {"action_id": p88_aid, "data": {"pilot_088_declared_type": p088_declared, "confirmed": true}})
+					_net_exec("resume_effect", {"action_id": p88_aid, "data": {"pilot_087_declared_type": p088_declared, "confirmed": true}})
 				else:
-					_net_exec("ui_confirmed", {"data": {"pilot_088_declared_type": p088_declared, "confirmed": true}})
+					_net_exec("ui_confirmed", {"data": {"pilot_087_declared_type": p088_declared, "confirmed": true}})
 				return
 			if input_type == &"pilot_032_target_select":
 				# pilot_032 爱瑞娅选机师牌：effect_id=选中机师牌 instance_id，回查 option 取 player_id/mech_id。
@@ -6439,12 +6465,12 @@ func _on_choice_cancelled() -> void:
 				return
 	# 铠德「被响应→三选一」框被外部关闭（未选分支，点底部「取消」）：视为放弃（choice=-1），
 	# 双端执行清 pending 保持锁步（不选任何奖励，后续触发继续处理）。
-	if _pilot_060_prompt_showing:
-		_pilot_060_prompt_showing = false
+	if _pilot_062_prompt_showing:
+		_pilot_062_prompt_showing = false
 		if battle and battle.context and battle.context.game_state:
-			var p60_pending: Dictionary = battle.context.game_state.pilot_060_pending_choice
+			var p60_pending: Dictionary = battle.context.game_state.pilot_062_pending_choice
 			if not p60_pending.is_empty() and String(p60_pending.get("player_id", &"")) == String(local_player_id):
-				_net_exec("pilot_060_choice", {"player_id": p60_pending.get("player_id", &""), "mech_id": p60_pending.get("mech_id", &""), "choice": -1})
+				_net_exec("pilot_062_choice", {"player_id": p60_pending.get("player_id", &""), "mech_id": p60_pending.get("mech_id", &""), "choice": -1})
 		return
 
 	# 损伤转移取消（A6）：不转移，回填空 redirect_plan
@@ -6479,10 +6505,10 @@ func _on_choice_cancelled() -> void:
 			if it == &"choose_one_effect" or it == &"effect_choice" or it == &"choose_one" \
 				or it == &"use_card_confirm" or it == &"confirm_use_card" or it == &"choose_integer" \
 				or it == &"pilot_014_target_select" or it == &"pilot_025_reserve_select" or it == &"pilot_032_target_select" \
-				or it == &"pilot_088_type_select":
+				or it == &"pilot_087_type_select":
 				_pilot_014_select_options = []
 				_pilot_032_select_options = []
-				_pilot_088_type_options = []
+				_pilot_087_type_options = []
 				# 引擎级挂起（_pending_effect）的效果取消：按 action_id 精确路由带 cancelled=true
 				#（同确认路径根因：共享槽 ui_cancelled 在对端被 skip_remote_waiting 清槽后
 				# 早 return 丢输入 -> 对端停在挂起三方卡死）。无挂起回退原共享槽路径。
@@ -6588,11 +6614,12 @@ func _on_discard_selection_completed(selected_card_ids: Array[StringName]) -> vo
 	# STEAL/discard_card 动作 need_input 路径：选完牌回填 determined_card_ids，
 	# ActionEngine 重跑 _step_determine_cards → _step_transfer_to_holder 完成转移。
 	if String(pending.get("mode", &"")) == &"need_input" and pending.has("action_id"):
+		var ni_aid: StringName = pending.get("action_id", &"")
 		_discard_select_pending = {}
 		var ni_ids: Array = []
 		for cid in selected_card_ids:
 			ni_ids.append(cid)
-		_net_exec("ui_confirmed", {"data": {"determined_card_ids": ni_ids}})
+		_net_exec("resolve_action_input", {"action_id": String(ni_aid), "data": {"determined_card_ids": ni_ids}})
 		return
 
 	# 闪击 optional 弃牌：玩家选了牌，续跑挂起的效果（弃牌 + 再攻）
@@ -6664,9 +6691,10 @@ func _on_discard_selection_cancelled() -> void:
 	# STEAL/discard_card need_input 取消：玩家选「不弃/不偷任何牌」-> 带 cancelled=true
 	# 让动作 _step_determine_cards 走取消分支弃0张完成（空 determined_card_ids 会被判首次运行重弹死循环）。
 	if String(pending.get("mode", &"")) == &"need_input" and pending.has("action_id"):
+		var nc_aid: StringName = pending.get("action_id", &"")
 		_discard_select_card_id = &""
 		_discard_select_pending = {}
-		_net_exec("ui_confirmed", {"data": {"determined_card_ids": [], "cancelled": true}})
+		_net_exec("resolve_action_input", {"action_id": String(nc_aid), "data": {"determined_card_ids": [], "cancelled": true}})
 		return
 	_discard_select_card_id = &""
 	_discard_select_pending = {}
@@ -6802,19 +6830,31 @@ func _on_pilot_003_choose_top_cancelled() -> void:
 
 
 ## 觉醒种类单选确认回调：把选中的 card_def_id 回填给觉醒动作（awaken 子动作 waiting_input 路径）
-## 走 ui_confirmed 网络op（与 redirect_select/steal弃牌 同路径），双端各调 on_ui_confirmed -> continue_action。
-## 两轮（预判/识破）各弹一次，每次独立 need_input 暂停/恢复。
+## 觉醒 need_input 的 input_params 含 action_id（awaken_action.gd）+ player_id，PvP 非持有端经
+## _present_popup owner 门控 skip_remote_waiting(action_id) 清共享槽 -> 共享槽 ui_confirmed 对端早退
+## 丢输入（青瞳偷牌/肯耳忒多选同款失步根因，见 pvp-engine-pending-resume-routing 记忆）。按 action_id
+## 精确路由 resolve_action_input 恢复（纯桥 need_input 无 _pending_effect 不能走 resume_effect，
+## 须 continue_action 续跑）。空捕获（单端/AI）回退共享槽。两轮（预判/识破）各弹一次独立恢复。
 func _on_awaken_selection_completed(selected_def_id: StringName) -> void:
 	awaken_select_panel.visible = false
+	var aw_selected_id: StringName = _awaken_select_action_id
 	_awaken_select_action_id = &""
-	_net_exec("ui_confirmed", {"data": {"chosen_card_def_id": selected_def_id}})
+	if aw_selected_id != &"":
+		_net_exec("resolve_action_input", {"action_id": String(aw_selected_id), "data": {"chosen_card_def_id": selected_def_id}})
+	else:
+		_net_exec("ui_confirmed", {"data": {"chosen_card_def_id": selected_def_id}})
 
 
-## 觉醒种类单选取消回调（UI 无取消按钮，留作扩展）：跳过弃牌堆选取，仅抽牌堆顶1张
+## 觉醒种类单选取消回调（UI 无取消按钮，留作扩展）：跳过弃牌堆选取，仅抽牌堆顶1张。
+## 与确认同根因（input_params 含 action_id）按 id 路由 resolve_action_input，空捕获回退共享槽。
 func _on_awaken_selection_cancelled() -> void:
 	awaken_select_panel.visible = false
+	var aw_cancel_id: StringName = _awaken_select_action_id
 	_awaken_select_action_id = &""
-	_net_exec("ui_confirmed", {"data": {"_awaken_skip_to_top": true}})
+	if aw_cancel_id != &"":
+		_net_exec("resolve_action_input", {"action_id": String(aw_cancel_id), "data": {"_awaken_skip_to_top": true}})
+	else:
+		_net_exec("ui_confirmed", {"data": {"_awaken_skip_to_top": true}})
 
 
 ## 显示迎击面板
@@ -7444,7 +7484,7 @@ func _refresh_battle() -> void:
 	_maybe_update_attack_window_ui()
 	# 铠厉通用「被响应→抽2装备设置/弃置获金」：确认弹窗 + 逐张「设置/弃置获金」面板
 	_maybe_update_responded_equip_ui()
-	_maybe_update_pilot_060_ui()
+	_maybe_update_pilot_062_ui()
 
 	# 更新开发者面板
 	if dev_panel and dev_panel.visible and battle.context:

@@ -31,6 +31,9 @@ var _selected_effect_id: StringName = &""
 var _selected_card_instance_id: StringName = &""
 ## client 模式：host 转发的可用响应牌（非空时优先用，不查 TimingEngine）
 var _override_available_cards: Array = []
+## 转移目标窗口模式：available_cards 全为转移类条目（is_transfer）时置真，
+## 标题/按钮/条目文案使用"转移目标窗口"语义（转移不是响应）。
+var _is_transfer_mode: bool = false
 ## 确认按钮
 var _confirm_btn: Button
 
@@ -67,7 +70,18 @@ func configure_with_cards(battle_state, attack_id: StringName, available_cards: 
 	_selected_effect_id = &""
 	_selected_card_instance_id = &""
 	_override_available_cards = available_cards
+	_is_transfer_mode = _detect_transfer_mode(available_cards)
 	_refresh()
+
+
+## 检测是否转移目标窗口：available_cards 非空且全为转移类条目（is_transfer）。
+func _detect_transfer_mode(available_cards: Array) -> bool:
+	if available_cards.is_empty():
+		return false
+	for c in available_cards:
+		if not (c is Dictionary) or not bool(c.get("is_transfer", false)):
+			return false
+	return true
 
 
 ## 配置面板：旧系统兼容接口（已弃用，请使用 configure）
@@ -87,11 +101,20 @@ func _refresh() -> void:
 	for child in get_children():
 		child.queue_free()
 
-	# 标题
+	# 标题（转移目标窗口与响应窗口共用本面板，按模式区分文案）
 	var title = Label.new()
-	title.text = "── 响应选择 ──"
+	title.text = "── 转移目标窗口 ──" if _is_transfer_mode else "── 响应选择 ──"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	add_child(title)
+
+	# 转移目标窗口标注：转移不是响应——转移后攻击目标变为自身，且不可再响应
+	if _is_transfer_mode:
+		var _note = Label.new()
+		_note.text = "将本次攻击转移至自身（非响应）\n转移后目标不可再响应"
+		_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_note.add_theme_color_override("font_color", Color(0.75, 0.75, 0.85))
+		_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		add_child(_note)
 
 	# 新系统模式：使用 TimingEngine 的 AVAILABILITY 牌
 	if _use_new_system:
@@ -102,7 +125,9 @@ func _refresh() -> void:
 
 	# 确认按钮（始终显示）
 	_confirm_btn = Button.new()
-	_confirm_btn.text = "确认响应" if _selected_card_instance_id != &"" else "请选择响应牌"
+	var _confirm_empty_label: String = "请选择转移目标" if _is_transfer_mode else "请选择响应牌"
+	var _confirm_label: String = "确认转移" if _is_transfer_mode else "确认响应"
+	_confirm_btn.text = _confirm_label if _selected_card_instance_id != &"" else _confirm_empty_label
 	_confirm_btn.custom_minimum_size = Vector2(240, 36)
 	_confirm_btn.disabled = _selected_card_instance_id == &""
 	_confirm_btn.add_theme_color_override("font_color", Color(0.3, 0.9, 0.4) if _selected_card_instance_id != &"" else Color(0.5, 0.5, 0.5))
@@ -111,7 +136,7 @@ func _refresh() -> void:
 
 	# 跳过按钮
 	var pass_btn = Button.new()
-	pass_btn.text = "跳过响应"
+	pass_btn.text = "跳过转移" if _is_transfer_mode else "跳过响应"
 	pass_btn.custom_minimum_size = Vector2(240, 36)
 	pass_btn.pressed.connect(func(): response_passed.emit())
 	add_child(pass_btn)
@@ -151,12 +176,15 @@ func _refresh_new_system() -> void:
 				if action:
 					available_cards = _context.timing_engine.get_available_cards(_TC.ATTACK_AT, action)
 
+	# 查询/转发来的条目未预检转移模式时按实际内容检测（转移条目全为转移类才进转移窗口）
+	_is_transfer_mode = _detect_transfer_mode(available_cards)
+
 	var has_any: bool = false
 	for card_info: Dictionary in available_cards:
 		has_any = true
 		var btn = Button.new()
 		var card_name: String = card_info.get("card_name", String(card_info.get("effect_id", &"")))
-		btn.text = "%s [响应]" % card_name
+		btn.text = ("%s [转移]" % card_name) if _is_transfer_mode else ("%s [响应]" % card_name)
 		btn.tooltip_text = card_info.get("display_name", card_name)
 		btn.custom_minimum_size = Vector2(240, 36)
 

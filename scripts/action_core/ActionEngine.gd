@@ -569,9 +569,9 @@ func _after_sub_action_finished(parent_action) -> void:
 	if context != null and context.timing_engine != null and context.timing_engine.has_method(&"_continue_seq_effect_actions"):
 		if context.timing_engine._continue_seq_effect_actions(parent_action):
 			return
-	# pilot_021 塔莉娅 effect_01：抽牌 EXECUTE_GAIN_CARD 子动作（可能异步挂起）完成后续跑打标签+进循环。
-	if parent_action.record.has("_pilot_021_draw_pending") and context != null and context.timing_engine != null and context.timing_engine.has_method(&"_continue_pilot_021_draw"):
-		if context.timing_engine._continue_pilot_021_draw(parent_action):
+	# pilot_022 塔莉娅 effect_01：抽牌 EXECUTE_GAIN_CARD 子动作（可能异步挂起）完成后续跑打标签+进循环。
+	if parent_action.record.has("_pilot_022_draw_pending") and context != null and context.timing_engine != null and context.timing_engine.has_method(&"_continue_pilot_022_draw"):
+		if context.timing_engine._continue_pilot_022_draw(parent_action):
 			return
 	# pilot_019 缴械冲击 弃牌链：EXECUTE_DISCARD 子动作（含 DISCARD_SETTLE 监听者挂起）完成后续跑链式阶段机。
 	if parent_action.record.has("_pilot_019_chain") and context != null and context.timing_engine != null and context.timing_engine.has_method(&"_continue_pilot_019_chain"):
@@ -581,7 +581,7 @@ func _after_sub_action_finished(parent_action) -> void:
 	if parent_action.record.has("_pilot_020_active_pending") and context != null and context.timing_engine != null and context.timing_engine.has_method(&"_continue_pilot_020_active"):
 		if context.timing_engine._continue_pilot_020_active(parent_action):
 			return
-	# 窗口附加选项串行续跑（洛尔恩 pilot_062 转化掩护 / 温斯顿 pilot_082 转化推进等）：真实牌
+	# 窗口附加选项串行续跑（洛尔恩 pilot_063 转化掩护 / 温斯顿 pilot_082 转化推进等）：真实牌
 	# 批量挂起-恢复完成，或转化流程完成（选牌 use_action_card 子动作结束）后，若还有 pending extra
 	# 未启动则续跑。无 pending 时本函数返回 false，继续往下恢复父动作。
 	if context != null and context.timing_engine != null and context.timing_engine.has_method(&"_run_next_window_extra_if_pending"):

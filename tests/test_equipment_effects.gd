@@ -2474,7 +2474,8 @@ func test_melee_special_suite14_structure() -> Variant:
 		return "effect_062 应监听 USE_ACTION_AT"
 	if not _action_has_param(e062, &"EXECUTE_STAT_MODIFY", &"value", 3):
 		return "effect_062 EXECUTE_STAT_MODIFY value 应=3"
-	# effect_063：近战弃1牌威力+2 + 选目标装备无效（CHOOSE_MANY_CARDS source=ATTACK_TARGET_EQUIPMENT）
+	# effect_063：近战弃1牌威力+2 + 选目标区域正面牌(装备/机师/事件)无效至本次攻击结算
+	#（CHOOSE_MANY_CARDS source=ATTACK_TARGET_FACE_UP_CARD + NEGATE duration=UNTIL_ATTACK_SETTLE）
 	var e063 = effects.get(&"equipment_effect_063")
 	if e063 == null or e063.listen_timing != _TimingConst.ATTACK_PRE:
 		return "effect_063 应监听 ATTACK_PRE"
@@ -2482,10 +2483,12 @@ func test_melee_special_suite14_structure() -> Variant:
 		return "effect_063 应含 ATTACK_EFFECTIVE_WEAPON_KIND"
 	if not _action_has_param(e063, &"MODIFY_ATTACK_MIGHT", &"delta", 2):
 		return "effect_063 MODIFY_ATTACK_MIGHT delta 应=2"
-	if not _action_has_param(e063, &"CHOOSE_MANY_CARDS", &"source", &"ATTACK_TARGET_EQUIPMENT"):
-		return "effect_063 CHOOSE_MANY_CARDS source 应=ATTACK_TARGET_EQUIPMENT"
+	if not _action_has_param(e063, &"CHOOSE_MANY_CARDS", &"source", &"ATTACK_TARGET_FACE_UP_CARD"):
+		return "effect_063 CHOOSE_MANY_CARDS source 应=ATTACK_TARGET_FACE_UP_CARD"
 	if not _action_has_param(e063, &"CHOOSE_MANY_CARDS", &"discard_selected", false):
 		return "effect_063 CHOOSE_MANY_CARDS discard_selected 应=false"
+	if not _action_has_param(e063, &"NEGATE_EQUIPMENT_EFFECT", &"duration", "UNTIL_ATTACK_SETTLE"):
+		return "effect_063 NEGATE_EQUIPMENT_EFFECT duration 应=UNTIL_ATTACK_SETTLE"
 	# effect_064：离场回复3+移动
 	var e064 = effects.get(&"equipment_effect_064")
 	if e064 == null or e064.listen_timing != _TimingConst.DISCARD_AFTER:

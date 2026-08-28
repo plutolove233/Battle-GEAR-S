@@ -26,6 +26,13 @@ var context = null  # type: GameContext
 ## 先结算，之后才弹弃超限牌窗）；AI（is_human=false，如 PvE 敌方）跳窗自动弃尾部。
 var _pending_discard_prompts: Dictionary = {}
 
+## 弃超限牌"单次不追检"守卫（key=player_id -> true）。
+## 回合末弃超限牌流程走完（resume_end_turn_discard）即置位；step5 经 _flow_resume_call
+## 重入时若已置位则跳过再弹弃置窗——修 肯尼斯 effect_02_auto / 德伦迪 effect_01 在
+## DISCARD_AFTER 抽牌致重新超限、step5 重入循环再弹弃置窗的 bug。规则书第7步为固定弃置
+## 流程，过后不追检手牌数。每回合 end_turn 起手 clear()。
+var _discard_excess_done: Dictionary = {}
+
 ## TURN_BEFORE_END 挂起组（key=组虚拟动作 action_id ->
 ## {owner_pid, turn_player_id, payload, entries, next_index, action}）。
 ## 多个玩家各设拾荒（event_005）等 TURN_BEFORE_END 事件牌时，fire_timing 顺序执行下
@@ -89,7 +96,7 @@ func start_turn(player_id: StringName) -> Dictionary:
 		if player.attack_limit != mech.max_attacks_per_turn:
 			player.attack_limit = mech.max_attacks_per_turn
 
-		# ── 下个我方回合行动牌上限加成（亚林 pilot_053 等：立即生效、下个我方回合开始到期清除）──
+		# ── 下个我方回合行动牌上限加成（亚林 pilot_052 等：立即生效、下个我方回合开始到期清除）──
 		# 通用机制：APPLY_NEXT_OWNER_TURN_ACTION_HAND_BONUS 已立即 action_card_limit += stacks 并记
 		# player.statuses 的 next_owner_turn_action_hand_bonus；此处玩家自己回合开始把待到期部分扣回。
 		# 平行于 attack bonus（布鲁克延迟生效并入），但此机制为「当下生效、到期恢复」语义。
@@ -111,7 +118,7 @@ func start_turn(player_id: StringName) -> Dictionary:
 			# 瓦恩 pilot_083 孤儿清理：新轮开始移除 owner 已无存活瓦恩持有者的施加
 			# （瓦恩被换下/机甲被毁，持续效果随持有者离场终止）。
 			_ActionPilotEffects.pilot_083_expire_orphan_apps(gs)
-			# 法尔科 pilot_073 等"禁"标签到期：下一轮开始（ROUND_START，全局一次）恢复可主动设置/卖出。
+			# 法尔科 pilot_078 等"禁"标签到期：下一轮开始（ROUND_START，全局一次）恢复可主动设置/卖出。
 			# 权威规则「直到下个我方回合开始后」，在轮次语义下=下轮开始统一到期，清除所有玩家名下标签。
 			_ActionPilotEffects.clear_all_equip_forbid(gs)
 
@@ -208,7 +215,7 @@ func start_turn(player_id: StringName) -> Dictionary:
 		"turn_number": gs.turn_number,
 	})
 
-	# ── 10.1 清理"禁"标签（装备牌通用禁标签，法尔科 pilot_073 等）──
+	# ── 10.1 清理"禁"标签（装备牌通用禁标签，法尔科 pilot_078 等）──
 	# 到期时机已移至 ROUND_START（下轮开始统一清除，见 start_turn 第3步）。此处不再按玩家回合清除，
 	# 避免 tag-owner 晚于位次1的回合内"下个我方回合"晚于下轮开始导致解除时机错误。
 	# 保留 clear_all_equip_forbid_for_player 供其他复用方（如效果主动清除）调用。
@@ -234,6 +241,8 @@ func end_turn(player_id: StringName) -> Dictionary:
 	# 防御：上一回合流程若异常残留挂起组（理论上不可能：step2 挂起时流程停在本回合），
 	# 新流程开始时清空，避免僵尸组回调续跑旧流程。
 	_before_end_groups.clear()
+	# 清空弃超限"单次不追检"守卫，新回合重新允许弃超限流程
+	_discard_excess_done.clear()
 	return _advance_end_turn(player_id, 2)
 
 
@@ -483,7 +492,9 @@ func _end_turn_discard_and_cleanup(player_id: StringName) -> Dictionary:
 	var _effective_limit: int = player.action_card_limit + _recovered_n
 	var _ran_hand: Array = _ActionPilotEffects.list_ran_tagged_hand(gs, player_id)
 	var _counted_hand: int = player.action_hand.size() - _ran_hand.size()
-	if _counted_hand > _effective_limit:
+	# 单次不追检守卫：step5 重入时（_flow_resume_call）若本回合已走过弃超限流程则跳过，
+	# 防 肯尼斯 effect_02_auto/德伦迪 effect_01 在 DISCARD_AFTER 抽牌致重新超限再弹弃置窗循环
+	if _counted_hand > _effective_limit and not _discard_excess_done.has(player_id):
 		var _excess_n: int = _counted_hand - _effective_limit
 		# 受保护牌不可选弃：回收维修（效果保留）+ 燃标签牌（不占上限）
 		var _protected: Array = []
@@ -524,8 +535,8 @@ func _end_turn_discard_and_cleanup(player_id: StringName) -> Dictionary:
 	_ActionPilotEffects.clear_all_pilot_009_control()
 	# 清理 pilot_008 安德洛美达本回合回收标记（仅 end_turn 第5步弃超限牌时用，回合结束失效）
 	_ActionPilotEffects.clear_pilot_008_recovered()
-	# 清理 pilot_021 塔莉娅"禁"标签（效果1剩余牌本回合结束后恢复可用）
-	_ActionPilotEffects.pilot_021_clear_all_jin_for_player(context.game_state, player_id)
+	# 清理 pilot_022 塔莉娅"禁"标签（效果1剩余牌本回合结束后恢复可用）
+	_ActionPilotEffects.pilot_022_clear_all_jin_for_player(context.game_state, player_id)
 	# 清理"燃"标签（烈火 pilot_070 命中抽3：本回合不占行动牌上限，回合结束后恢复计上限）。
 	# 在第5步弃超限牌之后清除——超限弃牌先按燃牌排除执行，本玩家回合结束后即失效。
 	_ActionPilotEffects.clear_all_ran_tags_for_player(context.game_state, player_id)
@@ -588,6 +599,10 @@ func resume_end_turn_discard(action_id: StringName, selected_ids: Array) -> void
 		return
 	_pending_discard_prompts.erase(action_id)
 	var player_id: StringName = prompt.get("player_id", &"")
+	# 单次不追检守卫置位：弃置流程已走完，step5 重入时跳过再弹弃置窗
+	# （肯尼斯 effect_02_auto/德伦迪 effect_01 在 DISCARD_AFTER 抽牌致重新超限，规则书
+	#  第7步为固定弃置流程，过后不追检手牌数--用户明确裁定）
+	_discard_excess_done[player_id] = true
 	var gs: GameState = context.game_state if context != null else null
 	var player: PlayerState = gs.players.get(player_id) if gs != null else null
 	if player != null:
@@ -771,7 +786,7 @@ func _clean_this_turn_durations(turn_player_id: StringName = &"") -> void:
 		# 重算 max_power 还原上限+当前动力（无 POWER_CAP_MODIFIER 变化时 delta=0 为 no-op）。
 		mech.recalc_power_limits()
 	# 清理玩家级 THIS_TURN/UNTIL_TURN_END 修饰符（player.statuses）：本回合行动牌上限±X
-	# （MODIFY_ACTION_HAND_LIMIT，如骇客 pilot_066 窥到迎击牌 +1）回合末还原 action_card_limit。
+	# （MODIFY_ACTION_HAND_LIMIT，如骇客 pilot_067 窥到迎击牌 +1）回合末还原 action_card_limit。
 	# 原实现只清理 mech.statuses，遗漏 player.statuses 致 +上限 永续——亚林 p053 上限+1、
 	# 骇客 p066 迎击+1 等 THIS_TURN 修饰符都会残留。
 	for player_id: StringName in gs.players:

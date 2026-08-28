@@ -40,8 +40,8 @@ const NONMODAL_DISPLAY_POPUPS: Dictionary = {
 	&"pilot_009_show_display": &"pilot_009_card_display",
 	&"pilot_028_show_declared": &"pilot_028_declared_display",
 	&"pilot_058_show_display": &"pilot_058_card_display",
-	&"view_random_other_hand_show_display": &"pilot_066_card_display",
-	&"pilot_088_conquer_display": &"pilot_088_conquer_display",
+	&"view_random_other_hand_show_display": &"pilot_067_card_display",
+	&"pilot_087_conquer_display": &"pilot_087_conquer_display",
 }
 
 ## ── 信号 ──
@@ -305,9 +305,9 @@ func _on_action_needs_input(action_id: StringName, input_type: StringName, input
 			# pilot_058 卡米拉展示浮窗（非阻塞，只弹给其他玩家——自己不看自己的牌）。可拖拽/可关闭。
 			request_ui_popup.emit(&"pilot_058_card_display", input_params)
 		&"view_random_other_hand_show_display":
-			# 通用「随机查看其他机甲行动牌」展示浮窗（骇客 pilot_066）：非阻塞，只弹给查看方玩家本人
+			# 通用「随机查看其他机甲行动牌」展示浮窗（骇客 pilot_067）：非阻塞，只弹给查看方玩家本人
 			# （app_root 按 owner_player_id==local 过滤；PvP 双端都触发，非所有者端静默）。可拖拽/可关闭。
-			request_ui_popup.emit(&"pilot_066_card_display", input_params)
+			request_ui_popup.emit(&"pilot_067_card_display", input_params)
 		&"select_awaken_card_type":
 			# 觉醒：弃牌堆无预判/识破时，弹框让玩家选1种行动牌（列种类+数量）。
 			# AI 自动选第一项（最小可用，避免挂死）；人类弹 awaken_select 窗。
@@ -339,21 +339,21 @@ func _on_action_needs_input(action_id: StringName, input_type: StringName, input
 				on_ui_cancelled()
 				return
 			request_ui_popup.emit(&"pilot_014_target_select", input_params)
-		&"pilot_088_type_select":
+		&"pilot_087_type_select":
 			# 征服宣言三选一（攻击/迎击/辅助，不可取消）：复用 choice_panel 单选。
-			# AI 兜底自动选第一项（AI 不点主动按钮，避免挂死）；人类走 pilot_088_type_select 弹窗。
+			# AI 兜底自动选第一项（AI 不点主动按钮，避免挂死）；人类走 pilot_087_type_select 弹窗。
 			if _is_ai_source(input_params):
 				var p088_ai_opts: Array = input_params.get("options", [])
 				if not p088_ai_opts.is_empty():
 					var p088_ai_o: Dictionary = p088_ai_opts[0] if p088_ai_opts[0] is Dictionary else {}
-					on_ui_confirmed({"pilot_088_declared_type": String(p088_ai_o.get("declared_type", "攻击"))})
+					on_ui_confirmed({"pilot_087_declared_type": String(p088_ai_o.get("declared_type", "攻击"))})
 					return
 				on_ui_cancelled()
 				return
-			request_ui_popup.emit(&"pilot_088_type_select", input_params)
-		&"pilot_088_conquer_display":
+			request_ui_popup.emit(&"pilot_087_type_select", input_params)
+		&"pilot_087_conquer_display":
 			# 征服宣言+随机展示浮窗（非阻塞，所有玩家端显示；不捕获 _waiting_action_id）。
-			request_ui_popup.emit(&"pilot_088_conquer_display", input_params)
+			request_ui_popup.emit(&"pilot_087_conquer_display", input_params)
 		&"pilot_032_pay_select":
 			# pilot_032 弹窗① 支付：爱瑞娅弃1张自己行动牌（可取消=中止，不计次数）。
 			# 复用 discard_card_select 面板；mode 非 need_input -> optional 路径，confirm/cancel 走 resume_effect。
@@ -817,8 +817,10 @@ func _auto_respond(action_id: StringName, input_params: Dictionary) -> void:
 
 ## 显示响应窗口
 func _show_response_window(action_id: StringName, params: Dictionary) -> void:
-	var available_cards: Array = []
-	if context != null and context.timing_engine != null and context.action_registry != null:
+	# 优先用 TimingEngine 传入的 available_cards（已含 owner_player_id/seq/is_transfer/effect，
+	# 转移目标窗口补弹响应窗口等场景避免重新收集混入已结算条目）；为空则回退重新收集。
+	var available_cards: Array = params.get("available_cards", [])
+	if available_cards.is_empty() and context != null and context.timing_engine != null and context.action_registry != null:
 		var action = context.action_registry.get_action(action_id)
 		if action != null:
 			available_cards = context.timing_engine.get_available_cards(_TC.ATTACK_AT, action)
@@ -858,11 +860,13 @@ func _show_response_window(action_id: StringName, params: Dictionary) -> void:
 			# - effect/availability_priority/seq：_build_selected_cards_from_card 重建 selected_cards、
 			#   handle_response_selection 排序用；display_data 即 client 端 configure_with_cards 收到的列表。
 			# - is_counter：迎击牌标注（行动牌响应牌弃置等流程区分用）。
+			# - is_transfer：转移目标窗口条目（app_root 据此分流弹窗标题/按钮文案，转移非响应）。
 			"owner_player_id": entry.get("owner_player_id", &""),
 			"effect": entry.get("effect", null),
 			"availability_priority": entry.get("availability_priority", 0),
 			"seq": entry.get("seq", 0),
 			"is_counter": bool(entry.get("is_counter", false)),
+			"is_transfer": bool(entry.get("is_transfer", false)),
 		})
 
 	request_ui_popup.emit(&"response_window", {
@@ -964,6 +968,21 @@ func resolve_damage_placement(action_id: StringName, input_data: Dictionary) -> 
 		var action = context.action_registry.get_action(action_id)
 		if action != null:
 			# _resolve_action_input 仅当共享槽仍指向本动作时清槽，否则保留并发效果弹窗的等待槽
+			_resolve_action_input(action_id, input_data)
+			return
+	on_ui_confirmed(input_data)
+
+
+## need_input 动作确认/取消按 action_id 精确恢复（不走共享 _waiting_action_id 槽）。
+## 青瞳偷牌等 STEAL/discard_card 动作 need_input：弹窗确认经 ui_confirmed 共享槽时，非持有
+## 端被 skip_remote_waiting 清槽 -> on_ui_confirmed 早退 -> 输入丢失 -> 偷牌子动作永不续跑、
+## 攻击牌卡临时区停 ATTACK_PRE。改走按 id 路由：_resolve_action_input -> _apply_action_input ->
+## continue_action，与 on_ui_confirmed 下游完全一致，仅 action_id 来源由共享槽改为按 id
+## （不影响偷牌行为，只修路由）。action_id 空/动作不存在则退回共享槽 on_ui_confirmed。
+func resolve_action_input(action_id: StringName, input_data: Dictionary) -> void:
+	if action_id != &"" and context != null and context.action_registry != null:
+		var action = context.action_registry.get_action(action_id)
+		if action != null:
 			_resolve_action_input(action_id, input_data)
 			return
 	on_ui_confirmed(input_data)

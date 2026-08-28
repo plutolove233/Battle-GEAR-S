@@ -81,15 +81,15 @@ var responded_equip_pending_confirm: Dictionary = {}
 ## 抽到的装备牌按 index 逐张处理：选槽=set_equipment 标准设置；弃置获金=discard_card + gain_gold(cost)。
 var responded_equip_chain: Dictionary = {}
 
-## 铠德「被响应→三选一」通用队列状态（pilot_060_* helpers，不绑机师）：
+## 铠德「被响应→三选一」通用队列状态（pilot_062_* helpers，不绑机师）：
 ## 待处理触发队列（攻击已结算、等待弹三选一）：[{player_id, mech_id}]。
 ## 链激活期间新触发暂留队列，处理完当前弹窗后逐条弹（递归/双连串行）。
-var pilot_060_queue: Array[Dictionary] = []
+var pilot_062_queue: Array[Dictionary] = []
 
 ## 当前待玩家选择的三选一触发（非空即等待选择）：{"player_id", "mech_id"}。
 ## 由 app_root 弹「抽2张行动牌/回复3动力/获得4金币」（底部「取消」=放弃）；
-## 确认后经 pilot_060_choice op 双端执行 pilot_060_choose。
-var pilot_060_pending_choice: Dictionary = {}
+## 确认后经 pilot_062_choice op 双端执行 pilot_062_choose。
+var pilot_062_pending_choice: Dictionary = {}
 
 ## 回合数（0 = 尚未开始任何回合；首次 start_turn("player") 递增到 1 = 第一回合）
 var turn_number: int = 0

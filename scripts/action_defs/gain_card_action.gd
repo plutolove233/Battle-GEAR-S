@@ -173,7 +173,7 @@ func _tag_draw(action: Action, player_id: StringName, from_zone: StringName, car
 		var _sink: Dictionary = action.record["_draw_result_sink"]
 		if _sink is Dictionary and context != null and context.action_registry != null:
 			# parent_action_id 缺省回退到子动作直接父动作（execute_sub_action 记录 parent_action_id），
-			# 法尔科 pilot_073 等「抽牌后立即消费」效果静态定义 sink 无需运行时注入父 id。
+			# 法尔科 pilot_078 等「抽牌后立即消费」效果静态定义 sink 无需运行时注入父 id。
 			var _sink_pid: StringName = _sink.get("parent_action_id", &"")
 			if _sink_pid == &"":
 				_sink_pid = action.record.get("parent_action_id", &"")

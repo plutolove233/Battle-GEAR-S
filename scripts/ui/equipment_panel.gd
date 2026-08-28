@@ -143,7 +143,7 @@ func _refresh() -> void:
 				# pilot_005_granted_* 帝国压制 LISTEN 也进 EX 按钮区，置灰展示）。
 				# 莱比尔自身也获 EX（去自身排除），按 effect_id 前缀判定而非来源牌 mech_id。
 				# 防御(AVAILABILITY)/被动(LISTEN) 虽不能主动点，仍渲染置灰 EX 按钮供悬停看描述。
-				# 通用化：新授予机制（泰特 pilot_074 等）在 binding 打 granted=true 标记，优先据此判定；
+				# 通用化：新授予机制（泰特 pilot_073 等）在 binding 打 granted=true 标记，优先据此判定；
 				# pilot_002/005 旧前缀保留兼容。
 				var _is_granted: bool = bool(bind_ctx.get("granted", false)) or String(eff.effect_id).begins_with("pilot_002_granted_") or String(eff.effect_id).begins_with("pilot_005_granted_")
 				if _is_granted:
@@ -365,7 +365,7 @@ func _update_slot_row(slot_id: StringName, slot, active_by_card: Dictionary, gra
 			else:
 				# 我方：显示"备用 XXX"
 				equip_label.text = "备用 %s" % slot.equipped_card.def.display_name
-				# "禁"标签（法尔科 pilot_073 弃2抽高级装备置备用区等）：打标签玩家下个回合开始前
+				# "禁"标签（法尔科 pilot_078 弃2抽高级装备置备用区等）：打标签玩家下个回合开始前
 				# 不能主动设置，备用标签追加"(禁)"并置灰提示。
 				if _ActionPilotEffects.equip_forbid_tagged(slot.equipped_card):
 					equip_label.text += "（禁）"
@@ -414,7 +414,7 @@ func _update_slot_row(slot_id: StringName, slot, active_by_card: Dictionary, gra
 	if set_btn != null:
 		set_btn.visible = (not _is_enemy) and slot.equipped_card != null
 		if set_btn.visible:
-			# "禁"标签装备不能主动设置（法尔科 pilot_073 等）：按钮置灰，后端 CardSetService 双保险。
+			# "禁"标签装备不能主动设置（法尔科 pilot_078 等）：按钮置灰，后端 CardSetService 双保险。
 			set_btn.disabled = _ActionPilotEffects.equip_forbid_tagged(slot.equipped_card)
 
 	# ── 整行悬停命中条件：有装备牌且非敌方备用区 ──
@@ -571,7 +571,7 @@ func _rebuild_row_buttons(row: Dictionary, slot_id: StringName, slot, active_by_
 					continue
 				_g_extra.append(g_eff2)
 			# 取消加成 -> EX 按钮消失（不渲染）。仅 pilot_002/005 光环授予（bind 无 granted 标记）
-			# 受光环开关控制；泰特 pilot_074 等新授予（bind.granted=true）无光环开关，直接渲染。
+			# 受光环开关控制；泰特 pilot_073 等新授予（bind.granted=true）无光环开关，直接渲染。
 			if bool(_g_main_bind.get("granted", false)) or _ActionPilotEffects.is_aura_active_for_mech(_gs, _g_mid):
 				var g_btn = Button.new()
 				g_btn.text = "EX"
@@ -926,7 +926,7 @@ func _on_pilot_effect_button_hover_entered(eff, bind_ctx: Dictionary, extra_eff 
 	# 当前可发动次数（once_per_turn）
 	if te != null and te.has_method(&"_current_turn_number") and eff.once_per_turn_key != &"":
 		var cid: StringName = bind_ctx.get("card_instance_id", &"")
-		# 授予效果（EX 按钮）：各目标独立计数，与 TimingEngine 计数键一致（泰特 pilot_074 等）。
+		# 授予效果（EX 按钮）：各目标独立计数，与 TimingEngine 计数键一致（泰特 pilot_073 等）。
 		if te.has_method(&"once_per_turn_scope_cid"):
 			cid = te.once_per_turn_scope_cid(bind_ctx, cid)
 		var turn_id: int = te._current_turn_number()
@@ -1195,7 +1195,7 @@ func _build_pilot_status_bbcode(slot, cid: StringName) -> String:
 					continue
 				# 通用显示增强：effect 级无 once_per_turn_key 时，扫描 conditions 里
 				# EFFECT_ONCE_PER_TURN_AVAILABLE 的 once_per_turn_key/once_per_turn_max
-				# （显式 MARK_EFFECT_ONCE_PER_TURN_USED 计次模式，亚林 pilot_053 等）。
+				# （显式 MARK_EFFECT_ONCE_PER_TURN_USED 计次模式，亚林 pilot_052 等）。
 				var ot_key: StringName = eff.once_per_turn_key
 				var ot_max: int = int(eff.once_per_turn_max)
 				if ot_key == &"" and eff.conditions != null:

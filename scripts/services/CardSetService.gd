@@ -42,7 +42,7 @@ func set_equipment(player_id: StringName, card_id: StringName, slot_id: StringNa
 	if card == null:
 		return {"ok": false, "message": "卡牌实例不存在"}
 
-	# ── 主动设置拦截："禁"标签装备（法尔科 pilot_073 弃2抽高级装备置备用区等）在打标签玩家
+	# ── 主动设置拦截："禁"标签装备（法尔科 pilot_078 弃2抽高级装备置备用区等）在打标签玩家
 	# 下个回合开始前不能主动设置。效果驱动设置（EXECUTE_SET_EQUIP 走 set_equipment 动作，
 	# 不经本服务）不受影响——霍恩/约书亚等效果路径正常。 ──
 	if _ActionPilotEffects.equip_forbid_tagged(card):
@@ -139,7 +139,7 @@ func sell_equipment(player_id: StringName, card_id: StringName) -> Dictionary:
 	if not in_equipment_hand and not in_reserve and not in_set_slot:
 		return {"ok": false, "message": "装备不在手牌中或备用区"}
 
-	# ── 主动卖出拦截："禁"标签装备（法尔科 pilot_073 弃2抽高级装备置备用区等）在打标签玩家
+	# ── 主动卖出拦截："禁"标签装备（法尔科 pilot_078 弃2抽高级装备置备用区等）在打标签玩家
 	# 下个回合开始前不能主动卖出。 ──
 	if _ActionPilotEffects.equip_forbid_tagged(card):
 		return {"ok": false, "message": "该装备尚不能主动卖出"}

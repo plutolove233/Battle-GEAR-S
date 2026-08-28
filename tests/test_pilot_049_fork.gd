@@ -196,6 +196,18 @@ func _drive_fork_with_jiening(battle: BattleState, fork_id: StringName, verbose:
 	var fork = ar.get_action(fork_id)
 	if fork == null:
 		return "fork 不存在 %s" % String(fork_id)
+	# 通用转移注入后（GameSetupService 为每机甲注册 transfer_attack_target），fork 的 ATTACK_AT
+	# 可能弹转移目标窗口（相邻友方在攻击范围即可转移，规则书第33行）。本测试聚焦杰狞伤害转移
+	# （hp_change），pass 放弃攻击目标转移权，让 fork 继续到 ATTACK_AFTER（杰狞受伤 -> 伤害转移弹窗）。
+	var _pass_sel: Array[Dictionary] = []
+	while String(fork.state) == &"waiting_timing" and fork.record.get("has_response_window", false):
+		te.handle_response_selection(fork_id, _pass_sel, &"enemy")
+		var _awt = Engine.get_main_loop() as SceneTree
+		if _awt != null:
+			await _awt.process_frame
+		fork = ar.get_action(fork_id)
+		if fork == null:
+			return "fork pass 转移窗口后消失"
 	var steps: Array = []
 	# 记录当前 fork 步骤：确认 hp_change 挂起 → resume；再驱动 damage_change
 	var hp_id := _find_pending_sub(battle, fork, &"hp_change", &"waiting_timing")
@@ -304,6 +316,15 @@ func test_p049_fork_enemy_jiening_transfer() -> Variant:
 	var fork1 = ar.get_action(fork1_id)
 	if String(fork1.record.get("target_id", &"")) != String(enemy2_mech.mech_id):
 		return "fork1 目标应为 enemy2，实际=%s" % String(fork1.record.get("target_id", &""))
+	# 通用转移注入后 fork1 ATTACK_AT 弹转移目标窗口（杰狞 enemy1 相邻 enemy2 且在 player 范围），
+	# pass 放弃转移让 fork1 继续到 ATTACK_AFTER（杰狞受伤 -> hp_change 挂起于伤害转移弹窗）。
+	var _f1_pass: Array[Dictionary] = []
+	while String(fork1.state) == &"waiting_timing" and fork1.record.get("has_response_window", false):
+		battle.context.timing_engine.handle_response_selection(fork1_id, _f1_pass, &"enemy")
+		var _f1wt = Engine.get_main_loop() as SceneTree
+		if _f1wt != null:
+			await _f1wt.process_frame
+		fork1 = ar.get_action(fork1_id)
 	# fork1 应已创建 hp_change 并因杰狞转移弹窗挂起（waiting_timing）
 	var fork1_hp := _find_pending_sub(battle, fork1, &"hp_change", &"waiting_timing")
 	if fork1_hp == &"":

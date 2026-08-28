@@ -525,8 +525,8 @@ func test_pilot_011_effect_02_definition() -> Variant:
 		return "缺 pilot_011_effect_02"
 	if e.mode != _TimingConst.MODE_AVAILABILITY:
 		return "effect_02 mode 应 AVAILABILITY 实=%s" % String(e.mode)
-	if e.availability_condition != &"":
-		return "effect_02 availability_condition 应为空（迪恩非攻击目标，走 set_conditions）实=%s" % String(e.availability_condition)
+	if e.availability_condition != _TimingConst.AVAIL_TRANSFER_TARGET:
+		return "effect_02 availability_condition 应=AVAIL_TRANSFER_TARGET（转移目标窗口）实=%s" % String(e.availability_condition)
 	if int(e.availability_priority) != 10:
 		return "effect_02 availability_priority 应 10 实=%d" % int(e.availability_priority)
 	if e.listen_timing != _TimingConst.ATTACK_AT:

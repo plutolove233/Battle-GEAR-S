@@ -749,6 +749,17 @@ func _step_cleanup(action: Action) -> Dictionary:
 				if grant_mech != null:
 					grant_mech.temp_armor_bonus -= int(g.get("delta", 0))
 		action.record["temp_armor_grants"] = []
+	# 恢复近战特装/极电装压制的目标牌效果（UNTIL_ATTACK_SETTLE）：本次攻击结算后还原 effect_negated。
+	# NEGATE_EQUIPMENT_EFFECT(duration=UNTIL_ATTACK_SETTLE) 把被压制牌记入本攻击 record._negated_cards
+	# （见 GameActions.negate_equipment_effect）。此步在 ATTACK_SETTLE fire 之后执行，压制已完整参与
+	# 本次攻击结算（含派生值/监听器屏蔽），此处还原使目标牌效果在下一次攻击/后续交互恢复。
+	var negated_cards: Array = action.record.get("_negated_cards", [])
+	if not negated_cards.is_empty() and context.game_state != null:
+		for nc in negated_cards:
+			var nc_card = context.game_state.get_card(StringName(nc))
+			if nc_card != null:
+				nc_card.effect_negated = false
+		action.record["_negated_cards"] = []
 	# 弃置绑定到本攻击的响应牌（反击牌）：其 use_action_card._step_settle 已跳过弃置
 	# （反击 effect2 须在本攻击 ATTACK_SETTLE 触发，故牌须留临时区到此时点之后才弃置）。
 	# 仅弃仍在临时区的响应牌（非迎击响应牌/装备已由各自路径处理）；同步移牌，避免在 cleanup

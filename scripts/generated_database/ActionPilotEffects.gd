@@ -1872,8 +1872,9 @@ static func build_pilot_effects() -> Dictionary:
 	])
 	effects[p011cs.effect_id] = p011cs
 
-	# ── pilot_011_effect_02 迪恩--挡攻（替相邻友军响应 + 转化）──
-	# AVAILABILITY ATTACK_AT（空 availability_condition，走 set_conditions fall-through：迪恩非攻击目标）。
+	# ── pilot_011_effect_02 迪恩--挡攻（转移目标窗口 + 转化响应）──
+	# AVAILABILITY ATTACK_AT（availability_condition = AVAIL_TRANSFER_TARGET：迪恩非攻击目标，
+	# 进转移目标窗口，而非响应窗口）。
 	# 相邻其他机甲被攻击 + 迪恩在攻击范围内 + 非迪恩自己攻击 + 未响应 + 持≥2行动牌 时可用。
 	# 每回合1次（与 effect_01 共享 pilot_011_effect_01 转化额度）。选择转化使用的2张行动牌
 	# （temp_zone 不触发时点），弹二选一（当作疾行/反击，optional=false 不能取消），执行前先
@@ -1885,7 +1886,7 @@ static func build_pilot_effects() -> Dictionary:
 	p011e2.description = "每回合1次，相邻其他机甲被攻击且自身在攻击范围内时，选择转化使用的2张行动牌，当作疾行/反击之一响应并将攻击目标改为自身；回复4动力，执行结算后抽1张行动牌。"
 	p011e2.mode = _TC.MODE_AVAILABILITY
 	p011e2.priority = 20
-	p011e2.availability_condition = &""  # 空：迪恩非攻击目标，不走 AVAIL_RESPOND_ATTACK，靠 set_conditions
+	p011e2.availability_condition = _TC.AVAIL_TRANSFER_TARGET  # 转移目标窗口：相邻友军被攻击时可用（非响应窗口）
 	p011e2.availability_priority = 10
 	p011e2.listen_timing = _TC.ATTACK_AT
 	p011e2.listen_action_type = &"attack"
@@ -2823,24 +2824,24 @@ static func build_pilot_effects() -> Dictionary:
 	effects[p020e4.effect_id] = p020e4
 
 	# ═══════════════════════════════════════════
-	# pilot_021 塔莉娅（帝国 SR，cost 10, attack_limit 1, action_card_limit 3）
+	# pilot_022 塔莉娅（帝国 SR，cost 10, attack_limit 1, action_card_limit 3）
 	# ═══════════════════════════════════════════
 	# 效果1（DIRECT 按钮1，我方回合1次）：抽3张行动牌（打"禁"标签，本回合塔莉娅无法使用），
 	#   之后可给予4格内其他机甲，循环：选机甲 -> 选剩余禁牌(至少1张) -> 转移（交牌打"策"标签），
 	#   直到牌给完或选机甲界面取消。选牌界面取消可重选机甲（不结束循环）。
-	#   循环 handler 在 TimingEngine：PILOT_021_LOOP_DEAL（含 resume phase：pilot_021_choose_mech/pilot_021_choose_cards）。
+	#   循环 handler 在 TimingEngine：PILOT_021_LOOP_DEAL（含 resume phase：pilot_022_choose_mech/pilot_022_choose_cards）。
 	# 效果2（LISTEN 按钮2 置灰+悬停，不注册 listener）：行动牌从塔莉娅手牌转移到其他玩家手牌
 	#   （效果1交牌/识破偷牌/玛丽尔偷牌都计入）时打"策"标签；带"策"标签的行动牌从临时区进弃牌堆
 	#   （通用"使用"判定，含转化代价牌）时塔莉娅抽2，标签随牌入弃牌堆消失。
 	#   标签/挂钩逻辑在 GameActions.transfer_action_cards / steal_action_card /
 	#   discard_card_action._step_transfer_to_pile / TurnService（清禁标签）。
 	var p021e1 := _ActionEffect.new()
-	p021e1.effect_id = &"pilot_021_effect_01"
+	p021e1.effect_id = &"pilot_022_effect_01"
 	p021e1.display_name = "赐予行动牌"
 	p021e1.description = "我方回合1次，抽3张行动牌，可给予4格内其他机甲（可循环多次），剩余牌本回合无法使用。"
 	p021e1.mode = _TC.MODE_DIRECT
 	p021e1.priority = 10
-	p021e1.once_per_turn_key = &"pilot_021_effect_01"
+	p021e1.once_per_turn_key = &"pilot_022_effect_01"
 	p021e1.once_per_turn_max = 1
 	p021e1.set_conditions([
 		{"op": &"IS_OWNER_MAIN_PHASE"},
@@ -2853,7 +2854,7 @@ static func build_pilot_effects() -> Dictionary:
 	effects[p021e1.effect_id] = p021e1
 
 	var p021e2 := _ActionEffect.new()
-	p021e2.effect_id = &"pilot_021_effect_02"
+	p021e2.effect_id = &"pilot_022_effect_02"
 	p021e2.display_name = "策略回收"
 	p021e2.description = "行动牌从我方手牌转移到其他玩家手牌后打「策」标记；其他机甲使用带「策」标记的行动牌后，我方抽2张行动牌。"
 	p021e2.mode = _TC.MODE_LISTEN
@@ -2865,7 +2866,7 @@ static func build_pilot_effects() -> Dictionary:
 	effects[p021e2.effect_id] = p021e2
 
 	# ═══════════════════════════════════════════
-	# pilot_022 提比里安（阵营待确认，cost 待确认, attack_limit 1, action_card_limit 待确认）
+	# pilot_021 提比里安（阵营待确认，cost 待确认, attack_limit 1, action_card_limit 待确认）
 	# ═══════════════════════════════════════════
 	# 2 按钮：
 	#   按钮1 = effect_01（主动 DIRECT，每我方回合1次）「弃甲铸威」：弃置1张武器装备牌（实体，
@@ -2874,22 +2875,22 @@ static func build_pilot_effects() -> Dictionary:
 	#     （stacks=加成点数，duration=1），由状态监听器在下次我方攻击 ATTACK_PRE 注入 extra_might
 	#     后移除（用完即清）；回合结束 DECREMENT_STATUS_DURATION 兜底清除（回合结束失效）。
 	#     多选窗 source=OWNER_WEAPON_EQUIPMENT_CARDS（TimingEngine 枚举：装备手牌+机甲已设置
-	#     WEAPON 槽位），store_result_key=pilot_022_weapon 供 EXECUTE_DISCARD 弃置 +
+	#     WEAPON 槽位），store_result_key=pilot_021_weapon 供 EXECUTE_DISCARD 弃置 +
 	#     PILOT_022_APPLY_POWER_BONUS（原子）算加成。
 	#   按钮2 = effect_02（被动 LISTEN，ATTACK_PRE priority 40）「本局1次·火力爆发」：
 	#     我方发动攻击时弹窗询问是否发动；确认后 PILOT_022_MULTIPLY_ATTACK_MIGHT（原子）把
 	#     攻击初始威力改为武器原本威力×1.5（delta=floor(原威力/2) 累加 extra_might，保留猛击/
 	#     聚能等其他修正）+ MODIFY_ATTACK_RANGE +3 + FOR_EACH_TARGET(全部攻击目标)→ADD_STATUS
-	#     LOCKED duration 1（预判式）+ PILOT_022_MARK_USED（原子）写 counters["pilot_022_effect_02_used"]
+	#     LOCKED duration 1（预判式）+ PILOT_022_MARK_USED（原子）写 counters["pilot_021_effect_02_used"]
 	#     本局仅一次（PILOT_022_NOT_USED_THIS_GAME 条件拦截后续攻击）。
 
 	var p022e1 := _ActionEffect.new()
-	p022e1.effect_id = &"pilot_022_effect_01"
+	p022e1.effect_id = &"pilot_021_effect_01"
 	p022e1.display_name = "弃甲铸威"
 	p022e1.description = "我方回合1次，可以弃置1张武器装备牌，该武器的威力每有5点，就使本回合的下次攻击威力+3。"
 	p022e1.mode = _TC.MODE_DIRECT
 	p022e1.priority = 10
-	p022e1.once_per_turn_key = &"pilot_022_effect_01"
+	p022e1.once_per_turn_key = &"pilot_021_effect_01"
 	p022e1.once_per_turn_max = 1
 	p022e1.set_conditions([
 		{"op": &"IS_OWNER_MAIN_PHASE"},
@@ -2902,21 +2903,21 @@ static func build_pilot_effects() -> Dictionary:
 			"source": &"OWNER_WEAPON_EQUIPMENT_CARDS",
 			"min_count": 1,
 			"max_count": 1,
-			"store_result_key": &"pilot_022_weapon",
+			"store_result_key": &"pilot_021_weapon",
 			"label": "选择1张要弃置的武器装备牌",
 			"confirm_verb": "弃置",
 			"cancel_label": "取消",
 		}},
 		{"type": &"EXECUTE_DISCARD", "params": {
-			"card_ids": "$runtime.pilot_022_weapon",
-			"reason": &"pilot_022_effect_01",
+			"card_ids": "$runtime.pilot_021_weapon",
+			"reason": &"pilot_021_effect_01",
 		}},
 		{"type": &"PILOT_022_APPLY_POWER_BONUS", "params": {}},
 	])
 	effects[p022e1.effect_id] = p022e1
 
 	var p022e2 := _ActionEffect.new()
-	p022e2.effect_id = &"pilot_022_effect_02"
+	p022e2.effect_id = &"pilot_021_effect_02"
 	p022e2.display_name = "本局1次·火力爆发"
 	p022e2.description = "本局游戏1次，发动攻击时，可以使该攻击的初始威力变成攻击武器原本威力的1.5倍(向下取整)，范围+3，对所有目标施加锁定效果。"
 	p022e2.mode = _TC.MODE_LISTEN
@@ -3453,8 +3454,9 @@ static func build_pilot_effects() -> Dictionary:
 	])
 	effects[p030e1.effect_id] = p030e1
 
-	# ── pilot_030_effect_02 布鲁克·以身作盾（挡攻防御）──
-	# AVAILABILITY ATTACK_AT（空 availability_condition，走 set_conditions fall-through：布鲁克非攻击目标）。
+	# ── pilot_030_effect_02 布鲁克·以身作盾（转移目标窗口 + 挡攻防御）──
+	# AVAILABILITY ATTACK_AT（availability_condition = AVAIL_TRANSFER_TARGET：布鲁克非攻击目标，
+	# 进转移目标窗口，而非响应窗口）。
 	# 相邻其他机甲被攻击 + 布鲁克在攻击范围内 + 非布鲁克自己攻击 + 未响应 时可用。无每回合1次限制。
 	# 选中后弹三选一防御手段：
 	#   1) 实体防御牌：选1张手牌防御牌正常打出（先选牌防取消误 REDIRECT，打出走 use_action_card 完整流程）；
@@ -3468,7 +3470,7 @@ static func build_pilot_effects() -> Dictionary:
 	p030e2.description = "相邻其他机甲被攻击且自身在此攻击范围内时，可以使用防御响应此攻击，并将目标改为自身。"
 	p030e2.mode = _TC.MODE_AVAILABILITY
 	p030e2.priority = 20
-	p030e2.availability_condition = &""  # 空：布鲁克非攻击目标，不走 AVAIL_RESPOND_ATTACK，靠 set_conditions
+	p030e2.availability_condition = _TC.AVAIL_TRANSFER_TARGET  # 转移目标窗口：相邻友军被攻击时可用（非响应窗口）
 	p030e2.availability_priority = 10
 	p030e2.listen_timing = _TC.ATTACK_AT
 	p030e2.listen_action_type = &"attack"
@@ -4962,19 +4964,19 @@ static func build_pilot_effects() -> Dictionary:
 	}])
 	effects[p050e2.effect_id] = p050e2
 
-	# ── pilot_052 萨伊 弃1行动抽1装备（我方回合2次，DIRECT 主动按钮）──
+	# ── pilot_054 萨伊 弃1行动抽1装备（我方回合2次，DIRECT 主动按钮）──
 	# 完全复用 pilot_033「弃装抽装」通用机制，仅替换弃置来源为行动牌：
 	#   我方回合2次（once_per_turn_max=2）：点击弹"选1张行动牌"窗（OWNER_ACTION_HAND 枚举
 	#   持有者所有行动牌；min_count=1 必选、可取消=中止不消耗次数，确认即 mark once_per_turn），
 	#   弃置所选行动牌后抽1张装备牌（equipment_deck）。
 	# 无行动牌可弃时按钮置灰（HAS_ACTION_CARD_IN_HAND count=1）。
 	var p052e1 := _ActionEffect.new()
-	p052e1.effect_id = &"pilot_052_effect_01"
+	p052e1.effect_id = &"pilot_054_effect_01"
 	p052e1.display_name = "弃1行动抽1装"
 	p052e1.description = "我方回合2次，可以弃置1张行动牌，之后抽1张装备牌。"
 	p052e1.mode = _TC.MODE_DIRECT
 	p052e1.priority = 10
-	p052e1.once_per_turn_key = &"pilot_052_effect_01"
+	p052e1.once_per_turn_key = &"pilot_054_effect_01"
 	p052e1.once_per_turn_max = 2
 	p052e1.set_conditions([
 		{"op": &"IS_OWNER_MAIN_PHASE"},
@@ -4989,7 +4991,7 @@ static func build_pilot_effects() -> Dictionary:
 				"source": &"OWNER_ACTION_HAND",
 				"max_count": 1,
 				"min_count": 1,
-				"store_result_key": &"pilot_052_discard_ids",
+				"store_result_key": &"pilot_054_discard_ids",
 				"discard_selected": false,
 				"label": "选择1张要弃置的行动牌",
 				"confirm_verb": "弃置",
@@ -4999,8 +5001,8 @@ static func build_pilot_effects() -> Dictionary:
 		{
 			"type": &"EXECUTE_DISCARD",
 			"params": {
-				"card_ids": "$runtime.pilot_052_discard_ids",
-				"reason": &"pilot_052_discard",
+				"card_ids": "$runtime.pilot_054_discard_ids",
+				"reason": &"pilot_054_discard",
 			}
 		},
 		{
@@ -5010,18 +5012,18 @@ static func build_pilot_effects() -> Dictionary:
 				"card_kind": &"equipment",
 				"count": 1,
 				"player_id": "$binding_context.player_id",
-				"reason": &"pilot_052_draw",
+				"reason": &"pilot_054_draw",
 			}
 		},
 	])
 	effects[p052e1.effect_id] = p052e1
 
 	# ═══════════════════════════════════════════
-	# pilot_053 亚林（秩序 R，cost 6, attack_limit 1, action_card_limit 4）
+	# pilot_052 亚林（秩序 R，cost 6, attack_limit 1, action_card_limit 4）
 	# 权威文本：每回合2次，我方区域有正面朝上的装备牌被设置/弃置时，可以抽2张行动牌，
 	#   行动牌上限+1（效果持续到下个我方回合开始）。
 	# 通用化（纯通用组件组装，不新增原子动作底层、不绑定机师——任何 effect_ids 含
-	#   pilot_053_effect_01/01b 的卡即生效，复用=整段复制改 key）：
+	#   pilot_052_effect_01/01b 的卡即生效，复用=整段复制改 key）：
 	#   · 双监听共享每回合2次额度：effect_01（显示按钮1）监听 SET_EQUIP_AT（正面设置），
 	#     effect_01b（hide_button 描述合并到按钮1）监听 DISCARD_AFTER（我方机甲正面装备被弃置，
 	#     含敌方回合损伤损坏弃置）。条件均走通用 SET_EQUIP_INCLUDES_OWNER_FACE_UP /
@@ -5035,7 +5037,7 @@ static func build_pilot_effects() -> Dictionary:
 
 	# ── effect_01 显示按钮1，监听 SET_EQUIP_AT（我方区域正面设置装备牌）──
 	var p053e1 := _ActionEffect.new()
-	p053e1.effect_id = &"pilot_053_effect_01"
+	p053e1.effect_id = &"pilot_052_effect_01"
 	p053e1.display_name = "亚林·装备联动"
 	p053e1.description = "每回合2次，我方区域有正面朝上的装备牌被设置/弃置时，可以抽2张行动牌，行动牌上限+1（效果持续到下个我方回合开始）。"
 	p053e1.mode = _TC.MODE_LISTEN
@@ -5045,7 +5047,7 @@ static func build_pilot_effects() -> Dictionary:
 	p053e1.set_conditions([
 		{"op": &"SET_EQUIP_INCLUDES_OWNER_FACE_UP"},
 		{"op": &"EFFECT_ONCE_PER_TURN_AVAILABLE", "params": {
-			"once_per_turn_key": &"pilot_053_effect_01",
+			"once_per_turn_key": &"pilot_052_effect_01",
 			"once_per_turn_max": 2,
 		}},
 	])
@@ -5058,12 +5060,12 @@ static func build_pilot_effects() -> Dictionary:
 				{
 					"label": "发动",
 					"actions": [
-						{"type": &"MARK_EFFECT_ONCE_PER_TURN_USED", "params": {"once_per_turn_key": &"pilot_053_effect_01"}},
+						{"type": &"MARK_EFFECT_ONCE_PER_TURN_USED", "params": {"once_per_turn_key": &"pilot_052_effect_01"}},
 						{"type": &"EXECUTE_GAIN_CARD", "params": {
 							"from_zone": &"action_deck", "card_kind": &"action", "count": 2,
 							"player_id": "$binding_context.player_id",
 							"mech_ids": ["$binding_context.mech_id"],
-							"reason": &"pilot_053_draw",
+							"reason": &"pilot_052_draw",
 						}},
 						{"type": &"APPLY_NEXT_OWNER_TURN_ACTION_HAND_BONUS", "params": {
 							"player_id": "$binding_context.player_id",
@@ -5079,7 +5081,7 @@ static func build_pilot_effects() -> Dictionary:
 
 	# ── effect_01b 隐藏（描述合并到按钮1），监听 DISCARD_AFTER（我方机甲正面装备被弃置）──
 	var p053e1b := _ActionEffect.new()
-	p053e1b.effect_id = &"pilot_053_effect_01b"
+	p053e1b.effect_id = &"pilot_052_effect_01b"
 	p053e1b.display_name = "亚林·装备联动(弃置)"
 	p053e1b.hide_button = true
 	p053e1b.merge_desc_into_index = 1
@@ -5091,7 +5093,7 @@ static func build_pilot_effects() -> Dictionary:
 	p053e1b.set_conditions([
 		{"op": &"DISCARD_INCLUDES_OWNER_FACE_UP_EQUIPMENT"},
 		{"op": &"EFFECT_ONCE_PER_TURN_AVAILABLE", "params": {
-			"once_per_turn_key": &"pilot_053_effect_01",
+			"once_per_turn_key": &"pilot_052_effect_01",
 			"once_per_turn_max": 2,
 		}},
 	])
@@ -5104,12 +5106,12 @@ static func build_pilot_effects() -> Dictionary:
 				{
 					"label": "发动",
 					"actions": [
-						{"type": &"MARK_EFFECT_ONCE_PER_TURN_USED", "params": {"once_per_turn_key": &"pilot_053_effect_01"}},
+						{"type": &"MARK_EFFECT_ONCE_PER_TURN_USED", "params": {"once_per_turn_key": &"pilot_052_effect_01"}},
 						{"type": &"EXECUTE_GAIN_CARD", "params": {
 							"from_zone": &"action_deck", "card_kind": &"action", "count": 2,
 							"player_id": "$binding_context.player_id",
 							"mech_ids": ["$binding_context.mech_id"],
-							"reason": &"pilot_053_draw",
+							"reason": &"pilot_052_draw",
 						}},
 						{"type": &"APPLY_NEXT_OWNER_TURN_ACTION_HAND_BONUS", "params": {
 							"player_id": "$binding_context.player_id",
@@ -5124,11 +5126,11 @@ static func build_pilot_effects() -> Dictionary:
 	effects[p053e1b.effect_id] = p053e1b
 
 	# ═══════════════════════════════════════════
-	# pilot_054 莉卡尔（秩序 R，cost 6, attack_limit 1, action_card_limit 4）
+	# pilot_051 莉卡尔（秩序 R，cost 6, attack_limit 1, action_card_limit 4）
 	# ═══════════════════════════════════════════
 	# 权威文本：我方回合2次，从商店购买装备牌后可以获得3金币，若购买的是高级装备牌，则可再抽2张行动牌。
 	# 通用化（纯通用组件组装，不新增原子动作底层、不绑定机师——任何 effect_ids 含
-	#   pilot_054_effect_01 的卡即生效，复用=整段复制改 key）：
+	#   pilot_051_effect_01 的卡即生效，复用=整段复制改 key）：
 	#   · LISTEN 监听通用商店购买时点 SHOP_BUY_AFTER（ShopService 三条购买路径统一 fire）。
 	#     条件走通用 SHOP_BUYER_IS_SELF（购买者==效果拥有者，其他玩家购买不触发）+
 	#     EFFECT_ONCE_PER_TURN_AVAILABLE(key, max2)（每回合2次，额度独立按卡实例）。
@@ -5138,7 +5140,7 @@ static func build_pilot_effects() -> Dictionary:
 	#     仅当本次购买的是高级装备牌时执行——分支动作 condition 通用机制，条件不满足跳过）。
 	#   · 效果级不设 once_per_turn_key，避免取消分支同步完成被 auto-mark 误计次（同亚林 p053）。
 	var p054e1 := _ActionEffect.new()
-	p054e1.effect_id = &"pilot_054_effect_01"
+	p054e1.effect_id = &"pilot_051_effect_01"
 	p054e1.display_name = "莉卡尔·购买返利"
 	p054e1.description = "每回合2次，我方从商店购买装备牌后可以获得3金币，若购买的是高级装备牌，则可再抽2张行动牌。"
 	p054e1.mode = _TC.MODE_LISTEN
@@ -5148,7 +5150,7 @@ static func build_pilot_effects() -> Dictionary:
 	p054e1.set_conditions([
 		{"op": &"SHOP_BUYER_IS_SELF"},
 		{"op": &"EFFECT_ONCE_PER_TURN_AVAILABLE", "params": {
-			"once_per_turn_key": &"pilot_054_effect_01",
+			"once_per_turn_key": &"pilot_051_effect_01",
 			"once_per_turn_max": 2,
 		}},
 	])
@@ -5161,7 +5163,7 @@ static func build_pilot_effects() -> Dictionary:
 				{
 					"label": "发动",
 					"actions": [
-						{"type": &"MARK_EFFECT_ONCE_PER_TURN_USED", "params": {"once_per_turn_key": &"pilot_054_effect_01"}},
+						{"type": &"MARK_EFFECT_ONCE_PER_TURN_USED", "params": {"once_per_turn_key": &"pilot_051_effect_01"}},
 						{"type": &"GAIN_GOLD", "params": {
 							"amount": 3,
 							"player_id": "$binding_context.player_id",
@@ -5170,7 +5172,7 @@ static func build_pilot_effects() -> Dictionary:
 							"from_zone": &"action_deck", "card_kind": &"action", "count": 2,
 							"player_id": "$binding_context.player_id",
 							"mech_ids": ["$binding_context.mech_id"],
-							"reason": &"pilot_054_draw",
+							"reason": &"pilot_051_draw",
 						}, "condition": [{"op": &"PAYLOAD_BOOL_IS_TRUE", "params": {"key": "is_advanced"}}]},
 					],
 				},
@@ -5274,15 +5276,15 @@ static func build_pilot_effects() -> Dictionary:
 	])
 	effects[p056e1.effect_id] = p056e1
 
-	# ── pilot_060 铠德：被响应三选一（非阻塞调度，复刻铠威/铠厉）──
+	# ── pilot_062 铠德：被响应三选一（非阻塞调度，复刻铠威/铠厉）──
 	# 效果1「被响应三选一」（MODE_LISTEN 被动按钮，置灰+悬停描述）：我方发动的攻击被响应时，
 	#   ATTACK_SETTLE（priority 30，条件 SELF_MECH_IS_ATTACKER + responded）触发 →
 	#   PILOT_060_SCHEDULE_AFTER_ATTACK 登记「攻击动作完成」钩子（非阻塞，攻击完全结算后才提示），
-	#   攻击结算后由 _ActionPilotEffects.pilot_060_after_attack_completed 入队 → 弹三选一
-	#   （抽2张行动牌/回复3动力/获得4金币，底部「取消」=放弃）。通用模块 pilot_060_*（本文件底部，
+	#   攻击结算后由 _ActionPilotEffects.pilot_062_after_attack_completed 入队 → 弹三选一
+	#   （抽2张行动牌/回复3动力/获得4金币，底部「取消」=放弃）。通用模块 pilot_062_*（本文件底部，
 	#   不绑机师）：任意含本效果的动作复用，分支原子动作走现有 EXECUTE_GAIN_CARD/RESTORE_POWER/GAIN_GOLD。
 	var p060e1 := _ActionEffect.new()
-	p060e1.effect_id = &"pilot_060_effect_01"
+	p060e1.effect_id = &"pilot_062_effect_01"
 	p060e1.display_name = "被响应三选一"
 	p060e1.description = "若发动的攻击被响应，则可以选择其一：抽2张行动牌/回复3动力/获得4金币。"
 	p060e1.mode = _TC.MODE_LISTEN
@@ -5550,11 +5552,11 @@ static func build_pilot_effects() -> Dictionary:
 	effects[p058e1.effect_id] = p058e1
 
 	# ═══════════════════════════════════════════
-	# pilot_065 银雪（联邦 N，cost 4, attack_limit 1, action_card_limit 3）
+	# pilot_066 银雪（联邦 N，cost 4, attack_limit 1, action_card_limit 3）
 	# ═══════════════════════════════════════════
 	# 效果（1 个显示按钮 + 1 个隐藏监听，描述合并到按钮1）：
 	# · effect_01（DIRECT 显示按钮，开关）：随时按按钮弹"启用/禁用窥牌拦截"二选一（可取消）。
-	#   flag 存 card.counters["pilot_065_intercept"]（默认启用=true）。禁用后 effect_02 不再弹窗。
+	#   flag 存 card.counters["pilot_066_intercept"]（默认启用=true）。禁用后 effect_02 不再弹窗。
 	# · effect_02（LISTEN GAIN_CARD_BEFORE 隐藏，merge_desc_into_index=1）：
 	#   3格内机甲（含我方）从行动牌堆抽牌前，若我方有行动牌且开关启用，弹单选窗弃1张行动牌作代价，
 	#   再弹多选窗窥行动牌堆顶3张可弃任意（剩余保持原序置顶）。代价/堆顶弃置走 EXECUTE_DISCARD
@@ -5564,7 +5566,7 @@ static func build_pilot_effects() -> Dictionary:
 
 	# ── effect_01 显示按钮：启用/禁用窥牌拦截开关（DIRECT，随时可按）──
 	var p065e1 := _ActionEffect.new()
-	p065e1.effect_id = &"pilot_065_effect_01"
+	p065e1.effect_id = &"pilot_066_effect_01"
 	p065e1.display_name = "窥牌拦截·开关"
 	p065e1.description = "随时启用或禁用窥牌拦截（默认启用）。禁用后，3格内机甲抽牌前不再弹窗。"
 	p065e1.mode = _TC.MODE_DIRECT
@@ -5580,13 +5582,13 @@ static func build_pilot_effects() -> Dictionary:
 			"options": [
 				{
 					"label": "禁用窥牌拦截（当前：启用）",
-					"condition": [{"op": &"CARD_COUNTER_IS", "params": {"key": "pilot_065_intercept", "value": true, "default_when_absent": true}}],
-					"actions": [{"type": &"SET_CARD_COUNTER", "params": {"key": "pilot_065_intercept", "value": false}}],
+					"condition": [{"op": &"CARD_COUNTER_IS", "params": {"key": "pilot_066_intercept", "value": true, "default_when_absent": true}}],
+					"actions": [{"type": &"SET_CARD_COUNTER", "params": {"key": "pilot_066_intercept", "value": false}}],
 				},
 				{
 					"label": "启用窥牌拦截（当前：禁用）",
-					"condition": [{"op": &"CARD_COUNTER_IS", "params": {"key": "pilot_065_intercept", "value": false, "default_when_absent": true}}],
-					"actions": [{"type": &"SET_CARD_COUNTER", "params": {"key": "pilot_065_intercept", "value": true}}],
+					"condition": [{"op": &"CARD_COUNTER_IS", "params": {"key": "pilot_066_intercept", "value": false, "default_when_absent": true}}],
+					"actions": [{"type": &"SET_CARD_COUNTER", "params": {"key": "pilot_066_intercept", "value": true}}],
 				},
 			],
 		},
@@ -5595,7 +5597,7 @@ static func build_pilot_effects() -> Dictionary:
 
 	# ── effect_02 隐藏监听：GAIN_CARD_BEFORE 窥牌拦截（3格内机甲抽行动牌前）──
 	var p065e2 := _ActionEffect.new()
-	p065e2.effect_id = &"pilot_065_effect_02"
+	p065e2.effect_id = &"pilot_066_effect_02"
 	p065e2.display_name = "窥牌拦截"
 	p065e2.hide_button = true
 	p065e2.merge_desc_into_index = 1
@@ -5612,7 +5614,7 @@ static func build_pilot_effects() -> Dictionary:
 		{"op": &"PAYLOAD_FROM_ZONE_IS", "params": {"zone": &"action_deck"}},
 		{"op": &"GAIN_CARD_DRAW_MECH_WITHIN_HEX_RANGE", "params": {"range": 3}},
 		{"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"count": 1}},
-		{"op": &"CARD_COUNTER_IS", "params": {"key": "pilot_065_intercept", "value": true, "default_when_absent": true}},
+		{"op": &"CARD_COUNTER_IS", "params": {"key": "pilot_066_intercept", "value": true, "default_when_absent": true}},
 	])
 	p065e2.set_target_rules([{"rule": &"NO_TARGET"}])
 	p065e2.set_costs([])
@@ -5632,11 +5634,11 @@ static func build_pilot_effects() -> Dictionary:
 	effects[p065e2.effect_id] = p065e2
 
 	# ═══════════════════════════════════════════
-	# pilot_066 骇客（联邦 N，cost 3, attack_limit 1, action_card_limit 4）
+	# pilot_067 骇客（联邦 N，cost 3, attack_limit 1, action_card_limit 4）
 	# ═══════════════════════════════════════════
 	# 效果（1 个显示按钮 + 1 个隐藏监听，描述合并到按钮1）：
 	# · effect_01（DIRECT 显示按钮，开关）：随时按按钮弹"启用/禁用骇客技能"二选一（可取消）。
-	#   flag 存 card.counters["pilot_066_hack_switch"]（默认启用=true）。禁用后 effect_02 静默。
+	#   flag 存 card.counters["pilot_067_hack_switch"]（默认启用=true）。禁用后 effect_02 静默。
 	# · effect_02（LISTEN BASIC_MOVE_AFTER 隐藏，merge_desc_into_index=1）：
 	#   我方回合2次，我方机甲基础移动后，若3格范围内有持行动牌的其他机甲，直接弹目标选择
 	#   （valid_mech_ids 只高亮可选；取消不消耗次数），选定后随机查看其2张行动牌
@@ -5650,7 +5652,7 @@ static func build_pilot_effects() -> Dictionary:
 
 	# ── effect_01 显示按钮：启用/禁用骇客技能开关（DIRECT，随时可按）──
 	var p066e1 := _ActionEffect.new()
-	p066e1.effect_id = &"pilot_066_effect_01"
+	p066e1.effect_id = &"pilot_067_effect_01"
 	p066e1.display_name = "骇客·开关"
 	p066e1.description = "随时启用或禁用骇客技能（默认启用）。禁用后，我方移动后不再弹查看目标选择。"
 	p066e1.mode = _TC.MODE_DIRECT
@@ -5666,13 +5668,13 @@ static func build_pilot_effects() -> Dictionary:
 			"options": [
 				{
 					"label": "禁用骇客技能（当前：启用）",
-					"condition": [{"op": &"CARD_COUNTER_IS", "params": {"key": "pilot_066_hack_switch", "value": true, "default_when_absent": true}}],
-					"actions": [{"type": &"SET_CARD_COUNTER", "params": {"key": "pilot_066_hack_switch", "value": false}}],
+					"condition": [{"op": &"CARD_COUNTER_IS", "params": {"key": "pilot_067_hack_switch", "value": true, "default_when_absent": true}}],
+					"actions": [{"type": &"SET_CARD_COUNTER", "params": {"key": "pilot_067_hack_switch", "value": false}}],
 				},
 				{
 					"label": "启用骇客技能（当前：禁用）",
-					"condition": [{"op": &"CARD_COUNTER_IS", "params": {"key": "pilot_066_hack_switch", "value": false, "default_when_absent": true}}],
-					"actions": [{"type": &"SET_CARD_COUNTER", "params": {"key": "pilot_066_hack_switch", "value": true}}],
+					"condition": [{"op": &"CARD_COUNTER_IS", "params": {"key": "pilot_067_hack_switch", "value": false, "default_when_absent": true}}],
+					"actions": [{"type": &"SET_CARD_COUNTER", "params": {"key": "pilot_067_hack_switch", "value": true}}],
 				},
 			],
 		},
@@ -5681,7 +5683,7 @@ static func build_pilot_effects() -> Dictionary:
 
 	# ── effect_02 隐藏监听：BASIC_MOVE_AFTER 移动窥牌（我方回合2次）──
 	var p066e2 := _ActionEffect.new()
-	p066e2.effect_id = &"pilot_066_effect_02"
+	p066e2.effect_id = &"pilot_067_effect_02"
 	p066e2.display_name = "骇客·移动窥牌"
 	p066e2.hide_button = true
 	p066e2.merge_desc_into_index = 1
@@ -5695,9 +5697,9 @@ static func build_pilot_effects() -> Dictionary:
 	p066e2.set_conditions([
 		{"op": &"IS_OWNER_TURN"},
 		{"op": &"SELF_MECH_IS_MOVE_SUBJECT"},
-		{"op": &"CARD_COUNTER_IS", "params": {"key": "pilot_066_hack_switch", "value": true, "default_when_absent": true}},
+		{"op": &"CARD_COUNTER_IS", "params": {"key": "pilot_067_hack_switch", "value": true, "default_when_absent": true}},
 		{"op": &"EFFECT_ONCE_PER_TURN_AVAILABLE", "params": {
-			"once_per_turn_key": &"pilot_066_effect_02",
+			"once_per_turn_key": &"pilot_067_effect_02",
 			"once_per_turn_max": 2,
 		}},
 		{"op": &"OTHER_MECH_WITH_ACTION_CARD_IN_HEX_RANGE", "params": {"range": 3}},
@@ -5713,15 +5715,15 @@ static func build_pilot_effects() -> Dictionary:
 				"attack_bonus": 1,
 				"action_hand_bonus": 1,
 				"support_power": 3,
-				"once_per_turn_key": &"pilot_066_effect_02",
-				"store_target_key": &"pilot_066_target_id",
+				"once_per_turn_key": &"pilot_067_effect_02",
+				"store_target_key": &"pilot_067_target_id",
 				"source_label": "骇客：查看目标行动牌",
 			},
 		},
 	])
 	effects[p066e2.effect_id] = p066e2
 
-	# ── pilot_063 布彻尔（联邦 N，cost 3, attack_limit 1, action_card_limit 3）──
+	# ── pilot_064 布彻尔（联邦 N，cost 3, attack_limit 1, action_card_limit 3）──
 	# 效果1「当作进攻」（主动 DIRECT 按钮，每玩家回合1次）：我方主阶段，可以将1张行动牌当作进攻使用。
 	# 使用条件 = 普通进攻行动牌的使用条件：本回合可攻击（CAN_ACTIVE_ATTACK：攻击数>0，凯威攻击窗口
 	# 期间豁免次数）+ 范围内有可攻击目标 + 手牌≥1张行动牌 + 每回合1次未用（EFFECT_ONCE_PER_TURN_AVAILABLE
@@ -5731,7 +5733,7 @@ static func build_pilot_effects() -> Dictionary:
 	# 通用机制（不绑机师）：CHOOSE_MANY_CARDS + MOVE_ACTION_CARDS_TO_TEMP_ZONE + PLAY_AS_NAMED +
 	# DISCARD_TEMP_ZONE_CARDS（布鲁克 pilot_030 / 诺拉 pilot_015 同款）。
 	var p063e1 := _ActionEffect.new()
-	p063e1.effect_id = &"pilot_063_effect_01"
+	p063e1.effect_id = &"pilot_064_effect_01"
 	p063e1.display_name = "当作进攻"
 	p063e1.description = "每回合1次，可以将1张行动牌当作进攻使用（选1张行动牌当作进攻牌打出，消耗1次攻击数；凯威攻击窗口期间攻击数豁免）。"
 	p063e1.mode = _TC.MODE_DIRECT
@@ -5739,7 +5741,7 @@ static func build_pilot_effects() -> Dictionary:
 	p063e1.set_conditions([
 		{"op": &"IS_OWNER_MAIN_PHASE"},
 		{"op": &"EFFECT_ONCE_PER_TURN_AVAILABLE", "params": {
-			"once_per_turn_key": &"pilot_063_effect_01",
+			"once_per_turn_key": &"pilot_064_effect_01",
 			"once_per_turn_max": 1,
 		}},
 		{"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"minimum": 1}},
@@ -5754,15 +5756,15 @@ static func build_pilot_effects() -> Dictionary:
 			"source": &"OWNER_ACTION_HAND",
 			"min_count": 1,
 			"max_count": 1,
-			"store_result_key": &"pilot_063_fuel_ids",
+			"store_result_key": &"pilot_064_fuel_ids",
 			"label": "选择当作进攻使用的1张行动牌",
 			"confirm_verb": "当作进攻",
 			"cancel_label": "取消",
 		}},
 		# ② 选中的牌移入临时区
-		{"type": &"MOVE_ACTION_CARDS_TO_TEMP_ZONE", "params": {"card_ids": "$runtime.pilot_063_fuel_ids"}},
+		{"type": &"MOVE_ACTION_CARDS_TO_TEMP_ZONE", "params": {"card_ids": "$runtime.pilot_064_fuel_ids"}},
 		# ③ 确认后消耗本次回合额度（取消选择则不计次）
-		{"type": &"MARK_EFFECT_ONCE_PER_TURN_USED", "params": {"once_per_turn_key": &"pilot_063_effect_01"}},
+		{"type": &"MARK_EFFECT_ONCE_PER_TURN_USED", "params": {"once_per_turn_key": &"pilot_064_effect_01"}},
 		# ④ 当作进攻牌打出（虚拟转化，消耗1次攻击数）
 		{"type": &"PLAY_AS_NAMED", "params": {"as_card_def_id": &"action_001_进攻", "attack_is_active": true}},
 		# ⑤ 链末：临时区牌入弃牌堆
@@ -5777,7 +5779,7 @@ static func build_pilot_effects() -> Dictionary:
 	# （_effect_flags.pilot_015_force_pure_assault）都算；强袭/猛击/破甲/掩护/闪击/反击等非进攻不算。
 	# 弃牌通用参数 auto_discard_all_if_covered：目标行动牌总数≤2 时不弹窗直接全部弃置。
 	var p063e2 := _ActionEffect.new()
-	p063e2.effect_id = &"pilot_063_effect_02"
+	p063e2.effect_id = &"pilot_064_effect_02"
 	p063e2.display_name = "进攻加成"
 	p063e2.description = "我方使用的进攻获得以下效果：本次攻击被响应则我方抽2张行动牌，未被响应则弃置目标2张行动牌。"
 	p063e2.mode = _TC.MODE_LISTEN
@@ -5800,7 +5802,7 @@ static func build_pilot_effects() -> Dictionary:
 					"card_kind": &"action",
 					"count": 2,
 					"mech_ids": ["$binding_context.mech_id"],
-					"reason": &"pilot_063_draw_on_responded",
+					"reason": &"pilot_064_draw_on_responded",
 				}},
 			],
 			"if_false_actions": [
@@ -5812,14 +5814,14 @@ static func build_pilot_effects() -> Dictionary:
 					"choose": true,
 					"face_up": false,
 					"auto_discard_all_if_covered": true,
-					"reason": &"pilot_063_discard_target",
+					"reason": &"pilot_064_discard_target",
 				}},
 			],
 		}},
 	])
 	effects[p063e2.effect_id] = p063e2
 
-	# ── pilot_088 征服（混乱 N，cost 3, attack_limit 1, action_card_limit 3）──
+	# ── pilot_087 征服（混乱 N，cost 3, attack_limit 1, action_card_limit 3）──
 	# 效果1（DIRECT 主动按钮，每我方回合1次）「征服-宣言弃置」：
 	#   我方主阶段点击按钮（3格范围内无持有行动牌的其他机甲则置灰不可点，条件
 	#   OTHER_MECH_WITH_ACTION_CARD_IN_HEX_RANGE range3）→ PILOT_088_CONQUER 模块
@@ -5831,18 +5833,18 @@ static func build_pilot_effects() -> Dictionary:
 	#      → 类型匹配：相同→弃目标除展示牌外全部行动牌；不同→弃展示牌（EXECUTE_DISCARD card_ids 显式）
 	#   按钮悬框说明 = description（主动与被动合一的单一按钮）。
 	var p088e1 := _ActionEffect.new()
-	p088e1.effect_id = &"pilot_088_effect_01"
+	p088e1.effect_id = &"pilot_087_effect_01"
 	p088e1.display_name = "征服-宣言弃置"
 	p088e1.description = "我方回合1次，可以宣言1种行动牌类型(攻击，迎击，辅助)，并展示3格范围内1台其他机甲的1张随机行动牌。若该牌类型与宣言相同，则弃置该机甲其余未展示的牌；否则弃置该展示的牌。"
 	p088e1.mode = _TC.MODE_DIRECT
 	p088e1.priority = 10
 	# once_per_turn_key 字段（_mark_once_per_turn_used 读 effect 字段，与条件里的 key 一致才能
 	# 检查可用+确认消耗；p062 同款说明）。条件 EFFECT_ONCE_PER_TURN_AVAILABLE 读条件 params。
-	p088e1.once_per_turn_key = &"pilot_088_effect_01"
+	p088e1.once_per_turn_key = &"pilot_087_effect_01"
 	p088e1.set_conditions([
 		{"op": &"IS_OWNER_MAIN_PHASE"},
 		{"op": &"EFFECT_ONCE_PER_TURN_AVAILABLE", "params": {
-			"once_per_turn_key": &"pilot_088_effect_01",
+			"once_per_turn_key": &"pilot_087_effect_01",
 			"once_per_turn_max": 1,
 		}},
 		{"op": &"OTHER_MECH_WITH_ACTION_CARD_IN_HEX_RANGE", "params": {"range": 3}},
@@ -5854,7 +5856,7 @@ static func build_pilot_effects() -> Dictionary:
 	])
 	effects[p088e1.effect_id] = p088e1
 
-	# ── pilot_062 洛尔恩（联邦 N，cost 3, attack_limit 1, action_card_limit 3）──
+	# ── pilot_063 洛尔恩（联邦 N，cost 3, attack_limit 1, action_card_limit 3）──
 	# 效果1「转化掩护」（被动，出现在掩护窗口，每任意玩家回合1次）：可以1张行动牌当作掩护使用。
 	# 通用时点机制 COVER_WINDOW_EXTRA（虚拟时点，不 fire_timing）：掩护多选窗（cover_effect1
 	# CHOOSE_MANY_CARDS collect_cover_window_extras=true）扫描窗口拥有玩家注册在此虚拟时点的
@@ -5866,7 +5868,7 @@ static func build_pilot_effects() -> Dictionary:
 	# 每回合1次计数走标准 once_per_turn（EFFECT_ONCE_PER_TURN_AVAILABLE 条件 + store_result_key
 	# 确认路径自动 _mark_once_per_turn_used：确认非空选消耗、取消/空选不计次）。
 	var p062e1 := _ActionEffect.new()
-	p062e1.effect_id = &"pilot_062_effect_01"
+	p062e1.effect_id = &"pilot_063_effect_01"
 	# display_name 即掩护窗口复选框标签（_collect_cover_window_extras 用 eff.display_name）：
 	# 规则要求显示「洛尔恩--掩护」。
 	p062e1.display_name = "洛尔恩--掩护"
@@ -5875,11 +5877,11 @@ static func build_pilot_effects() -> Dictionary:
 	p062e1.priority = 10
 	# once_per_turn_key 字段（store_result_key 确认路径 _mark_once_per_turn_used 读 effect 字段；
 	# 条件 EFFECT_ONCE_PER_TURN_AVAILABLE 读的是条件 params，两处都要有才能"检查可用+确认消耗"）
-	p062e1.once_per_turn_key = &"pilot_062_effect_01"
+	p062e1.once_per_turn_key = &"pilot_063_effect_01"
 	p062e1.listen_timing = _TC.COVER_WINDOW_EXTRA
 	p062e1.set_conditions([
 		{"op": &"EFFECT_ONCE_PER_TURN_AVAILABLE", "params": {
-			"once_per_turn_key": &"pilot_062_effect_01",
+			"once_per_turn_key": &"pilot_063_effect_01",
 			"once_per_turn_max": 1,
 		}},
 		{"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"minimum": 1}},
@@ -5892,13 +5894,13 @@ static func build_pilot_effects() -> Dictionary:
 			"source": &"OWNER_ACTION_HAND",
 			"min_count": 1,
 			"max_count": 1,
-			"store_result_key": &"pilot_062_fuel_ids",
+			"store_result_key": &"pilot_063_fuel_ids",
 			"label": "选择当作掩护使用的1张行动牌",
 			"confirm_verb": "当作掩护",
 			"cancel_label": "取消",
 		}},
 		# ② 选中的牌移入临时区（供 PLAY_AS_NAMED 取首张作虚拟牌）
-		{"type": &"MOVE_ACTION_CARDS_TO_TEMP_ZONE", "params": {"card_ids": "$runtime.pilot_062_fuel_ids"}},
+		{"type": &"MOVE_ACTION_CARDS_TO_TEMP_ZONE", "params": {"card_ids": "$runtime.pilot_063_fuel_ids"}},
 		# ③ 当作掩护牌打出（虚拟转化，防御分支不耗攻击数；attack_action_id 注入定位原攻击）
 		{"type": &"PLAY_AS_NAMED", "params": {"as_card_def_id": &"action_016_掩护", "attack_is_active": false}},
 		# ④ 链末：临时区牌入弃牌堆
@@ -5915,7 +5917,7 @@ static func build_pilot_effects() -> Dictionary:
 	# 「我方使用掩护」判定 USED_CARD_IS_COVER（card_def_id==action_016_掩护，原版与转化均命中）
 	# + USED_CARD_EXECUTOR_IS_SELF（binding_context.mech_id==执行者，排除他人打掩护）。
 	var p062e2 := _ActionEffect.new()
-	p062e2.effect_id = &"pilot_062_effect_02"
+	p062e2.effect_id = &"pilot_063_effect_02"
 	p062e2.display_name = "掩护加成"
 	p062e2.description = "我方使用掩护后二选一：该攻击损伤-1 / 该攻击不能被响应。"
 	p062e2.mode = _TC.MODE_LISTEN
@@ -5941,10 +5943,10 @@ static func build_pilot_effects() -> Dictionary:
 	effects[p062e2.effect_id] = p062e2
 
 	# ═══════════════════════════════════════════
-	# pilot_067 丹（联邦 N，cost 3, attack_limit 1, action_card_limit 4）
+	# pilot_068 丹（联邦 N，cost 3, attack_limit 1, action_card_limit 4）
 	# ═══════════════════════════════════════════
 
-	# ── pilot_067_effect_01 当作双连（主动 DIRECT 按钮，每玩家回合1次）──
+	# ── pilot_068_effect_01 当作双连（主动 DIRECT 按钮，每玩家回合1次）──
 	# 效果1「每回合1次，可以将1张行动牌当作双连使用。」每个玩家的每个回合可用1次；
 	# 只在发起者主阶段主动使用（不是我方回合不能主动使用），凯威触发效果（攻击窗口）可用
 	# （CAN_ACTIVE_ATTACK：攻击数>0，凯威攻击窗口期间豁免次数）。
@@ -5955,9 +5957,9 @@ static func build_pilot_effects() -> Dictionary:
 	# 当作双连（双连为攻击牌 action_type=攻击，attack_is_active=true 消耗1次攻击数；
 	# 凯威窗口攻击由 use_action_card 窗口豁免）→ 链末 DISCARD_TEMP_ZONE_CARDS。
 	# 通用机制（不绑机师）：CHOOSE_MANY_CARDS + MOVE_ACTION_CARDS_TO_TEMP_ZONE + PLAY_AS_NAMED +
-	# DISCARD_TEMP_ZONE_CARDS（布鲁克 pilot_030 / 诺拉 pilot_015 / 布彻尔 pilot_063 同款）。
+	# DISCARD_TEMP_ZONE_CARDS（布鲁克 pilot_030 / 诺拉 pilot_015 / 布彻尔 pilot_064 同款）。
 	var p067e1 := _ActionEffect.new()
-	p067e1.effect_id = &"pilot_067_effect_01"
+	p067e1.effect_id = &"pilot_068_effect_01"
 	p067e1.display_name = "当作双连"
 	p067e1.description = "每回合1次，可以将1张行动牌当作双连使用（选1张行动牌当作双连牌打出，对1~2台机甲发动攻击，消耗1次攻击数；凯威攻击窗口期间攻击数豁免）。"
 	p067e1.mode = _TC.MODE_DIRECT
@@ -5965,7 +5967,7 @@ static func build_pilot_effects() -> Dictionary:
 	p067e1.set_conditions([
 		{"op": &"IS_OWNER_MAIN_PHASE"},
 		{"op": &"EFFECT_ONCE_PER_TURN_AVAILABLE", "params": {
-			"once_per_turn_key": &"pilot_067_effect_01",
+			"once_per_turn_key": &"pilot_068_effect_01",
 			"once_per_turn_max": 1,
 		}},
 		{"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"minimum": 1}},
@@ -5980,15 +5982,15 @@ static func build_pilot_effects() -> Dictionary:
 			"source": &"OWNER_ACTION_HAND",
 			"min_count": 1,
 			"max_count": 1,
-			"store_result_key": &"pilot_067_fuel_ids",
+			"store_result_key": &"pilot_068_fuel_ids",
 			"label": "选择当作双连使用的1张行动牌",
 			"confirm_verb": "当作双连",
 			"cancel_label": "取消",
 		}},
 		# ② 选中的牌移入临时区
-		{"type": &"MOVE_ACTION_CARDS_TO_TEMP_ZONE", "params": {"card_ids": "$runtime.pilot_067_fuel_ids"}},
+		{"type": &"MOVE_ACTION_CARDS_TO_TEMP_ZONE", "params": {"card_ids": "$runtime.pilot_068_fuel_ids"}},
 		# ③ 确认后消耗本次回合额度（取消选择则不计次）
-		{"type": &"MARK_EFFECT_ONCE_PER_TURN_USED", "params": {"once_per_turn_key": &"pilot_067_effect_01"}},
+		{"type": &"MARK_EFFECT_ONCE_PER_TURN_USED", "params": {"once_per_turn_key": &"pilot_068_effect_01"}},
 		# ④ 当作双连牌打出（虚拟转化，消耗1次攻击数）
 		{"type": &"PLAY_AS_NAMED", "params": {"as_card_def_id": &"action_005_双连", "attack_is_active": true}},
 		# ⑤ 链末：临时区牌入弃牌堆
@@ -5996,7 +5998,7 @@ static func build_pilot_effects() -> Dictionary:
 	])
 	effects[p067e1.effect_id] = p067e1
 
-	# ── pilot_067_effect_02 双连加成（LISTEN 被动，ATTACK_PRE 优先级-1，其后触发）──
+	# ── pilot_068_effect_02 双连加成（LISTEN 被动，ATTACK_PRE 优先级-1，其后触发）──
 	# 效果2「我方使用的双连若指定了2个目标，则威力+3，命中额外产生1损伤。」
 	# 被动持续：我方使用的双连（原版双连卡 def.card_id==action_005_双连，或转化双连
 	# counters.virtual_as_def_id==action_005_双连，丹当作双连 PLAY_AS_NAMED 写入）都算；
@@ -6009,7 +6011,7 @@ static func build_pilot_effects() -> Dictionary:
 	# fork 深拷贝保留（清 extra_markers 不清 fork_extra_markers），每个复制攻击命中时+1损伤
 	# （未命中不产生）；与破甲 effect2 同机制。
 	var p067e2 := _ActionEffect.new()
-	p067e2.effect_id = &"pilot_067_effect_02"
+	p067e2.effect_id = &"pilot_068_effect_02"
 	p067e2.display_name = "双连加成"
 	p067e2.description = "我方使用的双连若指定了2个目标，则威力+3，命中额外产生1损伤。"
 	p067e2.mode = _TC.MODE_LISTEN
@@ -6030,10 +6032,10 @@ static func build_pilot_effects() -> Dictionary:
 	effects[p067e2.effect_id] = p067e2
 
 	# ═══════════════════════════════════════════
-	# pilot_064 柏格（联邦 N，cost 3, attack_limit 1, action_card_limit 4）
+	# pilot_065 柏格（联邦 N，cost 3, attack_limit 1, action_card_limit 4）
 	# ═══════════════════════════════════════════
 
-	# ── pilot_064_effect_01 弃装获金抽装（我方回合1次，DIRECT 主动按钮）──
+	# ── pilot_065_effect_01 弃装获金抽装（我方回合1次，DIRECT 主动按钮）──
 	# 我方回合1次：点击弹"选1张未设置的装备牌"窗（OWNER_UNEQUIPPED_EQUIPMENT_CARDS 仅装备手牌、
 	#   不含已设置槽位；min_count=1 必选、可取消=中止不消耗次数，确认即 mark once_per_turn），
 	#   弃置所选牌后 +2金币、抽1张装备牌；若弃置的牌是武器则再抽2张行动牌。
@@ -6041,12 +6043,12 @@ static func build_pilot_effects() -> Dictionary:
 	# 通用机制（可复用）：CHOOSE_MANY_CARDS(OWNER_UNEQUIPPED_EQUIPMENT_CARDS)+EXECUTE_DISCARD+
 	#   GAIN_GOLD+EXECUTE_GAIN_CARD+CONDITIONAL_ACTIONS(PAYLOAD_CARD_IS_WEAPON 条件分支)。
 	var p064e1 := _ActionEffect.new()
-	p064e1.effect_id = &"pilot_064_effect_01"
+	p064e1.effect_id = &"pilot_065_effect_01"
 	p064e1.display_name = "弃装获金抽装"
 	p064e1.description = "我方回合1次，可以弃置1张未设置的装备牌，获得2金币并抽1张装备牌，若弃置的是武器牌则再抽2张行动牌。"
 	p064e1.mode = _TC.MODE_DIRECT
 	p064e1.priority = 10
-	p064e1.once_per_turn_key = &"pilot_064_effect_01"
+	p064e1.once_per_turn_key = &"pilot_065_effect_01"
 	p064e1.once_per_turn_max = 1
 	p064e1.set_conditions([
 		{"op": &"IS_OWNER_MAIN_PHASE"},
@@ -6061,7 +6063,7 @@ static func build_pilot_effects() -> Dictionary:
 				"source": &"OWNER_UNEQUIPPED_EQUIPMENT_CARDS",
 				"max_count": 1,
 				"min_count": 1,
-				"store_result_key": &"pilot_064_discard_ids",
+				"store_result_key": &"pilot_065_discard_ids",
 				"discard_selected": false,
 				"label": "选择1张要弃置的未设置装备牌",
 				"confirm_verb": "弃置",
@@ -6071,8 +6073,8 @@ static func build_pilot_effects() -> Dictionary:
 		{
 			"type": &"EXECUTE_DISCARD",
 			"params": {
-				"card_ids": "$runtime.pilot_064_discard_ids",
-				"reason": &"pilot_064_discard",
+				"card_ids": "$runtime.pilot_065_discard_ids",
+				"reason": &"pilot_065_discard",
 			}
 		},
 		{
@@ -6089,18 +6091,18 @@ static func build_pilot_effects() -> Dictionary:
 				"card_kind": &"equipment",
 				"count": 1,
 				"player_id": "$binding_context.player_id",
-				"reason": &"pilot_064_draw",
+				"reason": &"pilot_065_draw",
 			}
 		},
 		# 若弃置的装备牌是武器则再抽2张行动牌（PAYLOAD_CARD_IS_WEAPON 读 store 的弃牌 id 查 def）
 		{"type": &"CONDITIONAL_ACTIONS", "params": {
-			"conditions": [{"op": &"PAYLOAD_CARD_IS_WEAPON", "params": {"key": &"pilot_064_discard_ids"}}],
+			"conditions": [{"op": &"PAYLOAD_CARD_IS_WEAPON", "params": {"key": &"pilot_065_discard_ids"}}],
 			"if_true_actions": [{"type": &"EXECUTE_GAIN_CARD", "params": {
 				"from_zone": &"action_deck",
 				"card_kind": &"action",
 				"count": 2,
 				"player_id": "$binding_context.player_id",
-				"reason": &"pilot_064_weapon_bonus",
+				"reason": &"pilot_065_weapon_bonus",
 			}}],
 			"if_false_actions": [],
 		}},
@@ -6108,10 +6110,10 @@ static func build_pilot_effects() -> Dictionary:
 	effects[p064e1.effect_id] = p064e1
 
 	# ═══════════════════════════════════════════
-	# pilot_068 冰魄（联邦 N，cost 3, attack_limit 1, action_card_limit 3）
+	# pilot_060 冰魄（联邦 N，cost 3, attack_limit 1, action_card_limit 3）
 	# ═══════════════════════════════════════════
 
-	# ── pilot_068_effect_01 迎击范围压制（LISTEN 被动，USE_ACTION_AT 自动，按钮1）──
+	# ── pilot_060_effect_01 迎击范围压制（LISTEN 被动，USE_ACTION_AT 自动，按钮1）──
 	# 我方在响应窗口使用迎击牌响应攻击时，先于迎击牌自身效果执行（USE_ACTION_AT 时点早于
 	# execute_effects 步），使被响应的攻击范围-2（不低于1），并写 flag 到该 attack.record._effect_flags
 	# （供 effect_02 判定）。无每回合限制、无弹窗确认（被动自动）。
@@ -6120,7 +6122,7 @@ static func build_pilot_effects() -> Dictionary:
 	# MODIFY_ATTACK_RANGE 在 use_action_card 上下文执行，parent 非 attack，
 	#   经 payload.attack_action_id 定位原 attack（ActionService 已扩展回退）。
 	var p068e1 := _ActionEffect.new()
-	p068e1.effect_id = &"pilot_068_effect_01"
+	p068e1.effect_id = &"pilot_060_effect_01"
 	p068e1.display_name = "迎击范围压制"
 	p068e1.description = "我方使用迎击牌响应攻击时，该攻击范围-2（不会低于1）。若该攻击没有命中，我方抽2张行动牌。"
 	p068e1.mode = _TC.MODE_LISTEN
@@ -6136,15 +6138,15 @@ static func build_pilot_effects() -> Dictionary:
 	p068e1.set_costs([])
 	p068e1.set_actions([
 		{"type": &"MODIFY_ATTACK_RANGE", "params": {"delta": -2, "min_value": 1}},
-		{"type": &"SET_ACTION_RECORD_FLAG", "params": {"flag": &"pilot_068_range_reduced", "value": true}},
+		{"type": &"SET_ACTION_RECORD_FLAG", "params": {"flag": &"pilot_060_range_reduced", "value": true}},
 	])
 	effects[p068e1.effect_id] = p068e1
 
-	# ── pilot_068_effect_02 未命中抽牌（LISTEN 被动，ATTACK_AFTER，隐藏合并到按钮1）──
+	# ── pilot_060_effect_02 未命中抽牌（LISTEN 被动，ATTACK_AFTER，隐藏合并到按钮1）──
 	# effect_01 已设 flag（我方迎击并减过范围）+ 该攻击未命中（payload.miss=true）时，我方抽2张行动牌。
 	# 挂 ATTACK_AFTER：check_hit 步已写 hit/miss；flag 经 fork 深拷贝 record 继承（双连多目标亦然）。
 	var p068e2 := _ActionEffect.new()
-	p068e2.effect_id = &"pilot_068_effect_02"
+	p068e2.effect_id = &"pilot_060_effect_02"
 	p068e2.display_name = "未命中抽牌"
 	p068e2.description = "若该攻击没有命中，我方抽2张行动牌。"
 	p068e2.mode = _TC.MODE_LISTEN
@@ -6152,7 +6154,7 @@ static func build_pilot_effects() -> Dictionary:
 	p068e2.listen_timing = _TC.ATTACK_AFTER
 	p068e2.listen_action_type = &"attack"
 	p068e2.set_conditions([
-		{"op": &"ATTACK_RECORD_FLAG_IS_SET", "params": {"flag": &"pilot_068_range_reduced"}},
+		{"op": &"ATTACK_RECORD_FLAG_IS_SET", "params": {"flag": &"pilot_060_range_reduced"}},
 		{"op": &"PAYLOAD_ATTACK_MISS"},
 	])
 	p068e2.set_target_rules([{"rule": &"NO_TARGET"}])
@@ -6164,7 +6166,7 @@ static func build_pilot_effects() -> Dictionary:
 			"card_kind": &"action",
 			"count": 2,
 			"player_id": "$binding_context.player_id",
-			"reason": &"pilot_068_miss_draw",
+			"reason": &"pilot_060_miss_draw",
 		},
 	}])
 	p068e2.hide_button = true
@@ -6297,7 +6299,7 @@ static func build_pilot_effects() -> Dictionary:
 	effects[p071e1.effect_id] = p071e1
 
 	# ═══════════════════════════════════════════
-	# pilot_072 卡修（帝国 N，cost 3, attack_limit 1, action_card_limit 4）
+	# pilot_077 卡修（帝国 N，cost 3, attack_limit 1, action_card_limit 4）
 	# ═══════════════════════════════════════════
 	# 效果「每个效果每回合1次：使用攻击牌时，回复5动力；使用迎击牌时，回复4动力；使用辅助牌时，回复3动力。」
 	# 拆为 3 个 LISTEN 效果（按钮1 + 两个隐藏合并描述），共用通用模块
@@ -6307,39 +6309,39 @@ static func build_pilot_effects() -> Dictionary:
 	# 强制自动发动、无选择。每分支各自 once_per_turn_key（attack/counter/support_restore），
 	# 3 分支每回合各 1 次互不影响。01a 建按钮1，01b/01c 隐藏合并描述。
 	var p072e1a := build_use_action_type_restore_power_effect({
-		"effect_id": &"pilot_072_effect_01a",
+		"effect_id": &"pilot_077_effect_01a",
 		"display_name": "使用攻击牌回动力",
 		"description": "每个效果每回合1次：使用攻击牌时回复5动力；使用迎击牌时回复4动力；使用辅助牌时回复3动力。",
 		"card_type": "攻击",
 		"power_amount": 5,
-		"once_per_turn_key": &"pilot_072_attack_restore",
+		"once_per_turn_key": &"pilot_077_attack_restore",
 	})
 	effects[p072e1a.effect_id] = p072e1a
 	var p072e1b := build_use_action_type_restore_power_effect({
-		"effect_id": &"pilot_072_effect_01b",
+		"effect_id": &"pilot_077_effect_01b",
 		"display_name": "使用迎击牌回动力",
 		"description": "使用迎击牌时回复4动力。",
 		"card_type": "迎击",
 		"power_amount": 4,
-		"once_per_turn_key": &"pilot_072_counter_restore",
+		"once_per_turn_key": &"pilot_077_counter_restore",
 	})
 	p072e1b.hide_button = true
 	p072e1b.merge_desc_into_index = 1
 	effects[p072e1b.effect_id] = p072e1b
 	var p072e1c := build_use_action_type_restore_power_effect({
-		"effect_id": &"pilot_072_effect_01c",
+		"effect_id": &"pilot_077_effect_01c",
 		"display_name": "使用辅助牌回动力",
 		"description": "使用辅助牌时回复3动力。",
 		"card_type": "辅助",
 		"power_amount": 3,
-		"once_per_turn_key": &"pilot_072_support_restore",
+		"once_per_turn_key": &"pilot_077_support_restore",
 	})
 	p072e1c.hide_button = true
 	p072e1c.merge_desc_into_index = 1
 	effects[p072e1c.effect_id] = p072e1c
 
 	# ═══════════════════════════════════════════
-	# pilot_073 法尔科（帝国 N，cost 4, attack_limit 1, action_card_limit 3）
+	# pilot_078 法尔科（帝国 N，cost 4, attack_limit 1, action_card_limit 3）
 	# ═══════════════════════════════════════════
 	# 效果1（1个主动 DIRECT 按钮）「弃2行动抽1高级装备背面置备用区」：
 	#   我方回合1次，弃置2张行动牌（CHOOSE_MANY_CARDS 选2可取消，取消不消耗次数，
@@ -6356,19 +6358,19 @@ static func build_pilot_effects() -> Dictionary:
 	# （discard_count/draw_count/from_zone/tag_name/reason_prefix/文案），复用=改 params 即可，
 	# 与效果绑定不绑机师。禁标签生命周期帮助函数见本文件"禁"标签段。
 	var p073e1 := build_discard_draw_advanced_equip_set_reserve_effect({
-		"effect_id": &"pilot_073_effect_01",
+		"effect_id": &"pilot_078_effect_01",
 		"display_name": "弃2抽高级装置备用区",
 		"description": "我方回合1次，可以弃置2张行动牌，之后抽取1张高级装备牌，并背面朝上置于我方或其他机甲的备用区，直到下个我方回合开始后，该高级装备牌不能主动设置与卖出。",
 		"discard_count": 2,
 		"draw_count": 1,
 		"from_zone": &"advanced_equipment_deck",
 		"tag_name": EQUIP_FORBID_TAG,
-		"reason_prefix": &"pilot_073",
+		"reason_prefix": &"pilot_078",
 	})
 	effects[p073e1.effect_id] = p073e1
 
 	# ═══════════════════════════════════════════
-	# pilot_074 泰特（帝国 N，cost 4, attack_limit 1, action_card_limit 3）
+	# pilot_073 泰特（帝国 N，cost 4, attack_limit 1, action_card_limit 3）
 	# ═══════════════════════════════════════════
 	# 效果1（按钮1 DIRECT 主动）「近战弃1+3威力」：我方回合3次，可以弃置1张行动牌，
 	#   使本回合下次使用近战武器攻击时威力+3（可叠加）。
@@ -6391,14 +6393,14 @@ static func build_pilot_effects() -> Dictionary:
 	#   grant_melee_might_to_mech/expire_melee_might_grants 帮助函数（见本文件"近战弃牌威力"模块），
 	#   与效果绑定不绑机师；复用=改 params 复制即可。
 
-	# ── pilot_074_effect_01 近战弃1+3威力（DIRECT 按钮1）──
+	# ── pilot_073_effect_01 近战弃1+3威力（DIRECT 按钮1）──
 	var p074e1 := _ActionEffect.new()
-	p074e1.effect_id = &"pilot_074_effect_01"
+	p074e1.effect_id = &"pilot_073_effect_01"
 	p074e1.display_name = "近战弃1+3威力"
 	p074e1.description = "我方回合3次，可以弃置1张行动牌，使本回合下次使用近战武器攻击时威力+3（可叠加）。"
 	p074e1.mode = _TC.MODE_DIRECT
 	p074e1.priority = 10
-	p074e1.once_per_turn_key = &"pilot_074_effect_01"
+	p074e1.once_per_turn_key = &"pilot_073_effect_01"
 	p074e1.once_per_turn_max = 3
 	p074e1.set_conditions([
 		{"op": &"IS_OWNER_MAIN_PHASE"},
@@ -6412,7 +6414,7 @@ static func build_pilot_effects() -> Dictionary:
 			"source": &"OWNER_ACTION_HAND",
 			"min_count": 1,
 			"max_count": 1,
-			"store_result_key": &"pilot_074_discard_ids",
+			"store_result_key": &"pilot_073_discard_ids",
 			"discard_selected": false,
 			"label": "选择要弃置的1张行动牌",
 			"confirm_verb": "弃置",
@@ -6420,8 +6422,8 @@ static func build_pilot_effects() -> Dictionary:
 		}},
 		# ② 弃置选中行动牌
 		{"type": &"EXECUTE_DISCARD", "params": {
-			"card_ids": "$runtime.pilot_074_discard_ids",
-			"reason": &"pilot_074_discard",
+			"card_ids": "$runtime.pilot_073_discard_ids",
+			"reason": &"pilot_073_discard",
 		}},
 		# ③ 本机甲累积待发近战威力 +3（可叠加）
 		{"type": &"ACCUMULATE_MELEE_MIGHT", "params": {
@@ -6432,11 +6434,11 @@ static func build_pilot_effects() -> Dictionary:
 	])
 	effects[p074e1.effect_id] = p074e1
 
-	# ── pilot_074_effect_01_apply 近战攻击应用（LISTEN ATTACK_BEFORE，隐藏合并到按钮1）──
+	# ── pilot_073_effect_01_apply 近战攻击应用（LISTEN ATTACK_BEFORE，隐藏合并到按钮1）──
 	# 自己发动近战攻击时（ATTACK_BEFORE，早于选目标/双连 fork），读 _melee_buff 累加进
 	# attack.record.extra_might。不清空——取消攻击保留；近战结算由 consume 消耗。
 	var p074e1a := _ActionEffect.new()
-	p074e1a.effect_id = &"pilot_074_effect_01_apply"
+	p074e1a.effect_id = &"pilot_073_effect_01_apply"
 	p074e1a.display_name = "近战加成应用"
 	p074e1a.description = "加成在我方近战攻击选目标前生效，近战攻击完全结算后消失（取消攻击不消耗）。"
 	p074e1a.mode = _TC.MODE_LISTEN
@@ -6459,11 +6461,11 @@ static func build_pilot_effects() -> Dictionary:
 	p074e1a.merge_desc_into_index = 1
 	effects[p074e1a.effect_id] = p074e1a
 
-	# ── pilot_074_effect_01_consume 近战结算消耗（LISTEN ATTACK_SETTLE，隐藏合并到按钮1）──
+	# ── pilot_073_effect_01_consume 近战结算消耗（LISTEN ATTACK_SETTLE，隐藏合并到按钮1）──
 	# 近战攻击完全结算后清空待发威力——「本回合下次近战攻击」用完即消失。
 	# 取消攻击时 SETTLE 不触发，加成保留；双连 fork 深拷贝 record 各带加成，任一枚结算清空不影响其他。
 	var p074e1c := _ActionEffect.new()
-	p074e1c.effect_id = &"pilot_074_effect_01_consume"
+	p074e1c.effect_id = &"pilot_073_effect_01_consume"
 	p074e1c.display_name = "近战结算消耗"
 	p074e1c.description = ""
 	p074e1c.mode = _TC.MODE_LISTEN
@@ -6486,11 +6488,11 @@ static func build_pilot_effects() -> Dictionary:
 	p074e1c.merge_desc_into_index = 1
 	effects[p074e1c.effect_id] = p074e1c
 
-	# ── pilot_074_effect_01_turnend 回合后清空（LISTEN TURN_AFTER_END，隐藏合并到按钮1）──
+	# ── pilot_073_effect_01_turnend 回合后清空（LISTEN TURN_AFTER_END，隐藏合并到按钮1）──
 	# 持有者自己回合结束后清空待发威力——"本回合"限定，未使用的加成不带到下回合。
 	# 泰特自己的 buff 在泰特回合后清空；被授予机甲 A 的 buff 在 A 回合后清空（各自独立）。
 	var p074e1t := _ActionEffect.new()
-	p074e1t.effect_id = &"pilot_074_effect_01_turnend"
+	p074e1t.effect_id = &"pilot_073_effect_01_turnend"
 	p074e1t.display_name = "回合后清空"
 	p074e1t.description = "待发的近战威力加成在本回合结束后消失（未使用不带到下回合）。"
 	p074e1t.mode = _TC.MODE_LISTEN
@@ -6512,14 +6514,14 @@ static func build_pilot_effects() -> Dictionary:
 	p074e1t.merge_desc_into_index = 1
 	effects[p074e1t.effect_id] = p074e1t
 
-	# ── pilot_074_effect_02 授予他机获效（DIRECT 按钮2）──
+	# ── pilot_073_effect_02 授予他机获效（DIRECT 按钮2）──
 	var p074e2 := _ActionEffect.new()
-	p074e2.effect_id = &"pilot_074_effect_02"
+	p074e2.effect_id = &"pilot_073_effect_02"
 	p074e2.display_name = "授予近战弃牌加成"
 	p074e2.description = "我方回合1次，选择1台其他机甲获得效果「近战弃1+3威力」，直到下个我方回合开始。"
 	p074e2.mode = _TC.MODE_DIRECT
 	p074e2.priority = 10
-	p074e2.once_per_turn_key = &"pilot_074_effect_02"
+	p074e2.once_per_turn_key = &"pilot_073_effect_02"
 	p074e2.once_per_turn_max = 1
 	p074e2.set_conditions([
 		{"op": &"IS_OWNER_MAIN_PHASE"},
@@ -6534,10 +6536,10 @@ static func build_pilot_effects() -> Dictionary:
 	])
 	effects[p074e2.effect_id] = p074e2
 
-	# ── pilot_074_effect_02_expire 授予到期（LISTEN TURN_AFTER_START，隐藏合并到按钮2）──
+	# ── pilot_073_effect_02_expire 授予到期（LISTEN TURN_AFTER_START，隐藏合并到按钮2）──
 	# 泰特自己下个回合开始后（TURN_AFTER_START）注销全部授予 + 清待发威力（EX 按钮消失）。
 	var p074e2x := _ActionEffect.new()
-	p074e2x.effect_id = &"pilot_074_effect_02_expire"
+	p074e2x.effect_id = &"pilot_073_effect_02_expire"
 	p074e2x.display_name = "授予到期"
 	p074e2x.description = "授予的效果在我方下个回合开始后到期（EX 按钮消失）。"
 	p074e2x.mode = _TC.MODE_LISTEN
@@ -6559,7 +6561,7 @@ static func build_pilot_effects() -> Dictionary:
 	effects[p074e2x.effect_id] = p074e2x
 
 	# ═══════════════════════════════════════════
-	# pilot_075 肯尼斯（帝国 N，cost 4, attack_limit 1, action_card_limit 3）
+	# pilot_072 肯尼斯（帝国 N，cost 4, attack_limit 1, action_card_limit 3）
 	# ═══════════════════════════════════════════
 	# 效果1（按钮1 DIRECT 主动）「弃1行动牌」：我方回合1次，可以弃置1张行动牌。
 	#   弃置本身无直接奖励——目的是喂给效果2（每次弃牌后二选一）及其他弃牌类效果。
@@ -6588,16 +6590,16 @@ static func build_pilot_effects() -> Dictionary:
 	#   "弃置含辅助牌"判定复用 DISCARD_INCLUDED_OWNER_ACTION_CARD 的 action_type+negate 参数
 	#   （ConditionChecker 通用扩展，任何"弃置含X类型牌"效果可复制复用）。
 
-	# ── pilot_075_effect_01 弃1行动牌（DIRECT 按钮1）──
+	# ── pilot_072_effect_01 弃1行动牌（DIRECT 按钮1）──
 	var p075e1 := _ActionEffect.new()
-	p075e1.effect_id = &"pilot_075_effect_01"
+	p075e1.effect_id = &"pilot_072_effect_01"
 	p075e1.display_name = "弃1行动牌"
 	p075e1.description = "我方回合1次，可以弃置1张行动牌。弃置后触发被动效果的选择（抽1张行动牌或本回合下次攻击威力+2）。"
 	p075e1.mode = _TC.MODE_DIRECT
 	p075e1.priority = 10
 	p075e1.set_conditions([
 		{"op": &"IS_OWNER_MAIN_PHASE"},
-		{"op": &"EFFECT_ONCE_PER_TURN_AVAILABLE", "params": {"once_per_turn_key": &"pilot_075_effect_01", "once_per_turn_max": 1}},
+		{"op": &"EFFECT_ONCE_PER_TURN_AVAILABLE", "params": {"once_per_turn_key": &"pilot_072_effect_01", "once_per_turn_max": 1}},
 		{"op": &"HAS_ACTION_CARD_IN_HAND", "params": {"count": 1}},
 	])
 	p075e1.set_target_rules([{"rule": &"NO_TARGET"}])
@@ -6608,26 +6610,26 @@ static func build_pilot_effects() -> Dictionary:
 			"source": &"OWNER_ACTION_HAND",
 			"min_count": 1,
 			"max_count": 1,
-			"store_result_key": &"pilot_075_discard_ids",
+			"store_result_key": &"pilot_072_discard_ids",
 			"discard_selected": false,
 			"label": "选择要弃置的1张行动牌",
 			"confirm_verb": "弃置",
 			"cancel_label": "取消",
 		}},
 		# ② 确认即计次（显式 mark——效果挂起于子动作末尾自动 mark 可能不执行，德伦迪同款）
-		{"type": &"MARK_EFFECT_ONCE_PER_TURN_USED", "params": {"once_per_turn_key": &"pilot_075_effect_01"}},
+		{"type": &"MARK_EFFECT_ONCE_PER_TURN_USED", "params": {"once_per_turn_key": &"pilot_072_effect_01"}},
 		# ③ 弃置选中行动牌（触发效果2：含辅助牌自动双效果 / 否则弹窗二选一）
 		{"type": &"EXECUTE_DISCARD", "params": {
-			"card_ids": "$runtime.pilot_075_discard_ids",
-			"reason": &"pilot_075_discard",
+			"card_ids": "$runtime.pilot_072_discard_ids",
+			"reason": &"pilot_072_discard",
 		}},
 	])
 	effects[p075e1.effect_id] = p075e1
 
-	# ── pilot_075_effect_02 弃置加成（LISTEN DISCARD_AFTER，按钮2被动置灰）──
+	# ── pilot_072_effect_02 弃置加成（LISTEN DISCARD_AFTER，按钮2被动置灰）──
 	# 仅在不含辅助牌时弹窗（含辅助牌由 effect_02_auto 自动双效果，两个监听条件互斥）。
 	var p075e2 := _ActionEffect.new()
-	p075e2.effect_id = &"pilot_075_effect_02"
+	p075e2.effect_id = &"pilot_072_effect_02"
 	p075e2.display_name = "弃置加成"
 	p075e2.description = "每次弃置自己的行动牌后，可以选择抽1张行动牌或使本回合下一次攻击威力+2（可叠加），也可取消不发动。若弃置的牌中包含辅助牌，则两个效果都自动执行。"
 	p075e2.mode = _TC.MODE_LISTEN
@@ -6649,7 +6651,7 @@ static func build_pilot_effects() -> Dictionary:
 					{"type": &"EXECUTE_GAIN_CARD", "params": {
 						"from_zone": &"action_deck", "card_kind": &"action", "count": 1,
 						"player_id": "$binding_context.player_id", "mech_ids": ["$binding_context.mech_id"],
-						"reason": &"pilot_075_draw",
+						"reason": &"pilot_072_draw",
 					}},
 				]
 			},
@@ -6666,9 +6668,9 @@ static func build_pilot_effects() -> Dictionary:
 	}])
 	effects[p075e2.effect_id] = p075e2
 
-	# ── pilot_075_effect_02_auto 含辅助牌自动双效果（LISTEN DISCARD_AFTER，隐藏并入按钮2）──
+	# ── pilot_072_effect_02_auto 含辅助牌自动双效果（LISTEN DISCARD_AFTER，隐藏并入按钮2）──
 	var p075e2a := _ActionEffect.new()
-	p075e2a.effect_id = &"pilot_075_effect_02_auto"
+	p075e2a.effect_id = &"pilot_072_effect_02_auto"
 	p075e2a.display_name = "辅助双效果"
 	p075e2a.description = "弃置的行动牌中包含辅助牌时，自动执行抽1张行动牌 + 本回合下次攻击威力+2（不弹窗）。"
 	p075e2a.mode = _TC.MODE_LISTEN
@@ -6684,7 +6686,7 @@ static func build_pilot_effects() -> Dictionary:
 		{"type": &"EXECUTE_GAIN_CARD", "params": {
 			"from_zone": &"action_deck", "card_kind": &"action", "count": 1,
 			"player_id": "$binding_context.player_id", "mech_ids": ["$binding_context.mech_id"],
-			"reason": &"pilot_075_auto_draw",
+			"reason": &"pilot_072_auto_draw",
 		}},
 		{"type": &"INCREMENT_VARIABLE", "params": {
 			"source_card_instance_id": "$binding_context.card_instance_id",
@@ -6695,12 +6697,12 @@ static func build_pilot_effects() -> Dictionary:
 	p075e2a.merge_desc_into_index = 2
 	effects[p075e2a.effect_id] = p075e2a
 
-	# ── pilot_075_effect_02_apply 下次攻击威力应用（LISTEN ATTACK_BEFORE，隐藏并入按钮2）──
+	# ── pilot_072_effect_02_apply 下次攻击威力应用（LISTEN ATTACK_BEFORE，隐藏并入按钮2）──
 	# 自己发动攻击时（ATTACK_BEFORE，早于选目标/双连 fork），读牌计数器累加进
 	# attack.record.extra_might（任意武器，近战/远程均生效）。不清空——取消攻击保留；
 	# 攻击完全结算由 _consume 消耗，回合末由 _turnend 清空"本回合"待发。
 	var p075e2b := _ActionEffect.new()
-	p075e2b.effect_id = &"pilot_075_effect_02_apply"
+	p075e2b.effect_id = &"pilot_072_effect_02_apply"
 	p075e2b.display_name = "攻击威力应用"
 	p075e2b.description = "待发的攻击威力加成在本方下次攻击选目标前生效（任意武器），攻击完全结算后消失（取消攻击不消耗）。"
 	p075e2b.mode = _TC.MODE_LISTEN
@@ -6722,11 +6724,11 @@ static func build_pilot_effects() -> Dictionary:
 	p075e2b.merge_desc_into_index = 2
 	effects[p075e2b.effect_id] = p075e2b
 
-	# ── pilot_075_effect_02_consume 攻击结算消耗（LISTEN ATTACK_SETTLE，隐藏并入按钮2）──
+	# ── pilot_072_effect_02_consume 攻击结算消耗（LISTEN ATTACK_SETTLE，隐藏并入按钮2）──
 	# 攻击完全结算后清空待发威力——「本回合下次攻击」用完即消失。取消攻击时 SETTLE 不触发，
 	# 加成保留；双连 fork 深拷贝 record 各带加成，任一枚结算清空不影响其他。
 	var p075e2c := _ActionEffect.new()
-	p075e2c.effect_id = &"pilot_075_effect_02_consume"
+	p075e2c.effect_id = &"pilot_072_effect_02_consume"
 	p075e2c.display_name = "攻击结算消耗"
 	p075e2c.description = ""
 	p075e2c.mode = _TC.MODE_LISTEN
@@ -6745,10 +6747,10 @@ static func build_pilot_effects() -> Dictionary:
 	p075e2c.merge_desc_into_index = 2
 	effects[p075e2c.effect_id] = p075e2c
 
-	# ── pilot_075_effect_02_turnend 回合后清空（LISTEN TURN_AFTER_END，隐藏并入按钮2）──
+	# ── pilot_072_effect_02_turnend 回合后清空（LISTEN TURN_AFTER_END，隐藏并入按钮2）──
 	# 持有者自己回合结束后清空待发威力——"本回合"限定，未使用的加成不带到下回合。
 	var p075e2d := _ActionEffect.new()
-	p075e2d.effect_id = &"pilot_075_effect_02_turnend"
+	p075e2d.effect_id = &"pilot_072_effect_02_turnend"
 	p075e2d.display_name = "回合后清空"
 	p075e2d.description = "待发的攻击威力加成在本方回合结束后消失（本回合限定，未使用不带到下回合）。"
 	p075e2d.mode = _TC.MODE_LISTEN
@@ -6958,38 +6960,38 @@ static func build_pilot_effects() -> Dictionary:
 	effects[p083re.effect_id] = p083re
 
 	# ═══════════════════════════════════════════════════════════
-	# pilot_077 维奥拉（帝国 N，cost 3, attack_limit 1, action_card_limit 4）
+	# pilot_074 维奥拉（帝国 N，cost 3, attack_limit 1, action_card_limit 4）
 	# 在3格范围内的机甲（包括我方）发动攻击结算后，我方抽1张行动牌；之后每回合1次，可以弃置2张
 	# 行动牌使该机甲再立即发动1次攻击。
 	# 唯一1个按钮（effect_01）：被动（LISTEN，置灰+悬停说明）。触发走通用
 	#   ATTACK_SETTLE_DRAW_REATTACK 状态机：抽牌强制（无次数限制）→ 每回合1次多选弃2张
 	#   （取消不计次数）→ 给攻击方开凯威攻击窗口（攻击次数豁免，可中途取消）。
-	# ── pilot_077_effect_01 攻击结算抽牌+弃2再攻（通用模块：范围内攻击结算→抽牌→弃X再攻） ──
-	effects[&"pilot_077_effect_01"] = build_attack_settle_draw_discard_reattack_effect({
-		"effect_id": &"pilot_077_effect_01",
+	# ── pilot_074_effect_01 攻击结算抽牌+弃2再攻（通用模块：范围内攻击结算→抽牌→弃X再攻） ──
+	effects[&"pilot_074_effect_01"] = build_attack_settle_draw_discard_reattack_effect({
+		"effect_id": &"pilot_074_effect_01",
 		"display_name": "维奥拉-攻击结算抽牌再攻",
 		"description": "在3格范围内的机甲（包括我方）发动攻击结算后，我方抽1张行动牌；之后每回合1次，可以弃置2张行动牌使该机甲再立即发动1次攻击。",
 		"base_range": 3,
 		"draw_count": 1,
 		"discard_count": 2,
-		"once_per_turn_key": &"pilot_077_effect_01",
+		"once_per_turn_key": &"pilot_074_effect_01",
 		"priority": 10,
 	})
 
 	# ═══════════════════════════════════════════════════════════
-	# pilot_078 芮贝卡（帝国 N，cost 3, attack_limit 1, action_card_limit 3）
+	# pilot_075 芮贝卡（帝国 N，cost 3, attack_limit 1, action_card_limit 3）
 	# 每回合2次，3格范围内的机甲（包括我方）受到伤害后，可以使其回复2生命并抽1张行动牌。
 	# 唯一1个按钮（effect_01）：被动（LISTEN，置灰+悬停说明+剩余次数）；触发走通用
 	#   INJURY_HEAL_DRAW 状态机（确认弹窗给持有者；确认发动才消耗1次，取消不消耗）。
-	# ── pilot_078_effect_01 受伤回复（通用模块：范围内含自身受伤→确认→回血+抽牌） ──
-	effects[&"pilot_078_effect_01"] = build_injury_heal_draw_effect({
-		"effect_id": &"pilot_078_effect_01",
+	# ── pilot_075_effect_01 受伤回复（通用模块：范围内含自身受伤→确认→回血+抽牌） ──
+	effects[&"pilot_075_effect_01"] = build_injury_heal_draw_effect({
+		"effect_id": &"pilot_075_effect_01",
 		"display_name": "芮贝卡-受伤回复",
 		"description": "每回合2次，3格范围内的机甲（包括我方）受到伤害后，可以使其回复2生命并抽1张行动牌。",
 		"base_range": 3,
 		"heal_amount": 2,
 		"draw_count": 1,
-		"once_per_turn_key": &"pilot_078_effect_01",
+		"once_per_turn_key": &"pilot_075_effect_01",
 		"once_per_turn_max": 2,
 		"priority": 10,
 	})
@@ -7250,7 +7252,7 @@ static func build_pilot_effects() -> Dictionary:
 	#     之后抽2张行动牌。
 	#   effect_02 被动（按钮2，置灰+悬停）「联合获金」：其他机甲因联合的效果使用攻击牌后，
 	#     我方获得2金币。
-	# effect_01 走通用"当作X"链（丹 pilot_067 / 布彻尔 pilot_063 同款）：
+	# effect_01 走通用"当作X"链（丹 pilot_068 / 布彻尔 pilot_064 同款）：
 	#   CHOOSE_MANY_CARDS(必选恰好2张，取消=中止不计次数) -> MOVE_ACTION_CARDS_TO_TEMP_ZONE ->
 	#   MARK_EFFECT_ONCE_PER_TURN_USED(确认后计次) -> PLAY_AS_NAMED(as_card_def_id=联合，
 	#   attack_is_active=false 辅助不耗攻击数) -> EXECUTE_GAIN_CARD(抽2行动牌) ->
@@ -7324,15 +7326,15 @@ static func build_pilot_effects() -> Dictionary:
 	])
 	effects[p084e2.effect_id] = p084e2
 
-	# ── pilot_085 莽克（混乱 N，cost 4, attack_limit 1, action_card_limit 3）──
-	# ── pilot_085_effect_01 弃装获金（LISTEN 被动，按钮1）──
+	# ── pilot_088 莽克（混乱 N，cost 4, attack_limit 1, action_card_limit 3）──
+	# ── pilot_088_effect_01 弃装获金（LISTEN 被动，按钮1）──
 	# 持续被动：监听所有弃置牌动作的结算时点（DISCARD_SETTLE）。本次弃置中每张「原先正面设置在
 	# 机甲上」的装备牌：原先属于我方机甲 → 我方立即获得4金币；其他机甲 → 我方立即获得3金币。
 	# 每张都发、按类型累加后一次发放（PILOT_085_DISCARD_GOLD handler 统计）。
 	# 覆盖被新牌顶掉(equipment_replace)、损坏弃置(damage_durability)、量产装卖出(sell_set_equipment)等；
 	# 手上未设置(from_zone=equipment_hand)/备用区背面(face_down)不计（条件 DISCARD_CONTAINS_FACEUP_EQUIPMENT 已过滤）。
 	var p085e1 := _ActionEffect.new()
-	p085e1.effect_id = &"pilot_085_effect_01"
+	p085e1.effect_id = &"pilot_088_effect_01"
 	p085e1.display_name = "莽克-装弃获金"
 	p085e1.description = "机甲上正面设置的装备牌弃置时，可立即获得4金币；场上其他机甲上正面设置的装备牌弃置时，可立即获得3金币。"
 	p085e1.mode = _TC.MODE_LISTEN
@@ -7349,14 +7351,14 @@ static func build_pilot_effects() -> Dictionary:
 	])
 	effects[p085e1.effect_id] = p085e1
 
-	# ── pilot_086 獠鼠（混乱 N，cost 5, attack_limit 2, action_card_limit 1）──
-	# ── pilot_086_effect_01 攻击骰子分支（LISTEN 被动，按钮1）──
+	# ── pilot_085 獠鼠（混乱 N，cost 5, attack_limit 2, action_card_limit 1）──
+	# ── pilot_085_effect_01 攻击骰子分支（LISTEN 被动，按钮1）──
 	# 「指定目标发动攻击时，可以投掷1个骰子：1：我方机甲设置2损伤；2~3：我方抽2张行动牌；
 	#  4~5：弃置目标2张行动牌；6：对目标施加锁定效果。」
 	# 触发：我方机甲指定目标攻击的 ATTACK_PRE（priority 40；此时 payload.target_ids 已就绪）。
-	# 流程（PILOT_086_DICE_BRANCH handler，TimingEngine._pilot_086_dice_branch）：
+	# 流程（PILOT_086_DICE_BRANCH handler，TimingEngine._pilot_085_dice_branch）：
 	#   ① 弹「发动/取消」二选一确认窗（choose_one_effect）；取消=无事发生不耗资源。
-	#   ② 确认后掷 1d6（context.synced_randi_range(1,6)，测试可经 payload.pilot_086_forced_dice 注入）。
+	#   ② 确认后掷 1d6（context.synced_randi_range(1,6)，测试可经 payload.pilot_085_forced_dice 注入）。
 	#   ③ 按点数分支出 _seq 动作链串行执行：
 	#      1  → EXECUTE_DAMAGE_CHANGE 我方机甲+2损伤（逐点弹放置UI，executor=我方）；
 	#      2~3→ EXECUTE_GAIN_CARD 我方抽2张行动牌（走 GAIN_CARD 时点）；
@@ -7366,7 +7368,7 @@ static func build_pilot_effects() -> Dictionary:
 	#      6  → FOR_EACH_TARGET($payload.target_ids)：APPLY_OR_CHECK_LOCKED 预判样式（duration=1,
 	#            skip_clear_on_hit=false：本攻击命中即清除，与预判一致）。
 	var p086e1 := _ActionEffect.new()
-	p086e1.effect_id = &"pilot_086_effect_01"
+	p086e1.effect_id = &"pilot_085_effect_01"
 	p086e1.display_name = "獠鼠-骰子攻击"
 	p086e1.description = "指定目标发动攻击时，可以投掷1个骰子：1：我方机甲设置2损伤；2~3：我方抽2张行动牌；4~5：弃置目标2张行动牌；6：对目标施加锁定效果。"
 	p086e1.mode = _TC.MODE_LISTEN
@@ -7384,7 +7386,7 @@ static func build_pilot_effects() -> Dictionary:
 	effects[p086e1.effect_id] = p086e1
 
 	# ═══════════════════════════════════════════════════════════
-	# pilot_087 塔妮拉（混乱 N，cost 3, attack_limit 1, action_card_limit 4）
+	# pilot_086 塔妮拉（混乱 N，cost 3, attack_limit 1, action_card_limit 4）
 	# ═══════════════════════════════════════════════════════════
 	# 效果1（DIRECT 按钮1，每我方回合2次）「交牌获2金」：
 	#   选3格内1台其他机甲（可取消=不扣次数）→ 从我方手牌选1张行动牌（不可取消，必须确定）
@@ -7397,17 +7399,17 @@ static func build_pilot_effects() -> Dictionary:
 	#   标签 owner=塔妮拉玩家）后，使用方先抽1张行动牌 + 塔妮拉后抽1张行动牌（两张分开发两个
 	#   gain_card 串行，确保各自走 GAIN_CARD 时点）。
 	#   实际触发在 discard_card_action._step_transfer_to_pile 挂钩：牌 from_zone==temp_zone
-	#   且带"交"标签 → pilot_087_trigger_jiao_draw(context, card) 双方抽1，标签入弃牌堆即消失。
+	#   且带"交"标签 → pilot_086_trigger_jiao_draw(context, card) 双方抽1，标签入弃牌堆即消失。
 	#   手牌直接弃置（from_zone==action_hand）不触发抽牌，仅清"交"标签。
 	# 标签生命周期：转移/偷牌挂钩打"交"标签；牌入弃牌堆（无论使用/直接弃置）标签消失；
 	#   塔妮拉离场清其名下全部"交"标签（见 GameSetupService._on_pilot_unset）。
 	var p087e1 := _ActionEffect.new()
-	p087e1.effect_id = &"pilot_087_effect_01"
+	p087e1.effect_id = &"pilot_086_effect_01"
 	p087e1.display_name = "交牌获2金"
 	p087e1.description = "我方回合2次，可以将1张行动牌交给1台3格范围内的其他机甲，之后我方获得2金币。"
 	p087e1.mode = _TC.MODE_DIRECT
 	p087e1.priority = 10
-	p087e1.once_per_turn_key = &"pilot_087_effect_01"
+	p087e1.once_per_turn_key = &"pilot_086_effect_01"
 	p087e1.once_per_turn_max = 2
 	p087e1.set_conditions([
 		{"op": &"IS_OWNER_MAIN_PHASE"},
@@ -7441,7 +7443,7 @@ static func build_pilot_effects() -> Dictionary:
 				{"type": &"GAIN_GOLD", "params": {
 					"amount": 2,
 					"player_id": "$binding_context.player_id",
-					"reason": &"pilot_087_effect_01",
+					"reason": &"pilot_086_effect_01",
 				}},
 			],
 		},
@@ -7451,7 +7453,7 @@ static func build_pilot_effects() -> Dictionary:
 	# 效果2：被动 LISTEN（仅作按钮2展示，actions 为空，实际逻辑在 discard 挂钩）。
 	# 不注册 listener（避免 USE_ACTION_SETTLE 监听器与 discard 挂钩双触发）。
 	var p087e2 := _ActionEffect.new()
-	p087e2.effect_id = &"pilot_087_effect_02"
+	p087e2.effect_id = &"pilot_086_effect_02"
 	p087e2.display_name = "他用交牌各抽1"
 	p087e2.description = "其他机甲使用从我方处获得的行动牌后，该机甲和我方各抽1张行动牌。"
 	p087e2.mode = _TC.MODE_LISTEN
@@ -7463,7 +7465,7 @@ static func build_pilot_effects() -> Dictionary:
 	effects[p087e2.effect_id] = p087e2
 
 	# ═══════════════════════════════════════════
-	# pilot_051 李（秩序 R，cost 5, attack_limit 1, action_card_limit 4）
+	# pilot_053 李（秩序 R，cost 5, attack_limit 1, action_card_limit 4）
 	# ═══════════════════════════════════════════
 	# 效果1「抽设事件牌」（DIRECT 按钮1，每我方回合1次）：抽事件牌堆顶1张直接设置到
 	#   我方机甲事件区域（事件牌无手牌区，「抽」即设置；完整流程含顶旧牌+注册+instant结算）。
@@ -7471,12 +7473,12 @@ static func build_pilot_effects() -> Dictionary:
 	#   计次：链首 MARK 显式标记（EXECUTE_SET_EVENT_CARD 产生挂起子动作致
 	#   _execute_effect 末尾自动 mark 不执行，p057e2 同款），1429 行预检拦截二次点击。
 	var p051e1 := _ActionEffect.new()
-	p051e1.effect_id = &"pilot_051_effect_01"
+	p051e1.effect_id = &"pilot_053_effect_01"
 	p051e1.display_name = "抽设事件牌"
 	p051e1.description = "我方回合1次，可以抽1张事件牌设置到区域上。"
 	p051e1.mode = _TC.MODE_DIRECT
 	p051e1.priority = 10
-	p051e1.once_per_turn_key = &"pilot_051_effect_01"
+	p051e1.once_per_turn_key = &"pilot_053_effect_01"
 	p051e1.once_per_turn_max = 1
 	p051e1.set_conditions([
 		{"op": &"IS_OWNER_MAIN_PHASE"},
@@ -7488,7 +7490,7 @@ static func build_pilot_effects() -> Dictionary:
 		{
 			# 无输入环节（点击即发动），链首显式计次防自动 mark 缺失
 			"type": &"MARK_EFFECT_ONCE_PER_TURN_USED",
-			"params": {"once_per_turn_key": &"pilot_051_effect_01"},
+			"params": {"once_per_turn_key": &"pilot_053_effect_01"},
 		},
 		{
 			# event_card_id 省略 = 抽事件牌堆顶1张（set_event_card._step_resolve_card）
@@ -7504,13 +7506,13 @@ static func build_pilot_effects() -> Dictionary:
 	#   转设内层会再 fire EVENT_SET_BEFORE，但 once_per_game 已标记 -> 1434 行自动跳过，无递归。
 	#   OWNER_IS_HUMAN：AI 拥有者不触发（条件先于 handler，不影响本局次数）。
 	var p051e2 := _ActionEffect.new()
-	p051e2.effect_id = &"pilot_051_effect_02"
+	p051e2.effect_id = &"pilot_053_effect_02"
 	p051e2.display_name = "拦截事件牌设置"
 	p051e2.description = "本局游戏1次，当1张事件牌被设置时，可以立即取消其效果，并弃置或设置到我方区域。"
 	p051e2.mode = _TC.MODE_LISTEN
 	p051e2.priority = 10
 	p051e2.listen_timing = _TC.EVENT_SET_BEFORE
-	p051e2.once_per_game_key = &"pilot_051_effect_02"
+	p051e2.once_per_game_key = &"pilot_053_effect_02"
 	p051e2.set_conditions([
 		{"op": &"OWNER_IS_HUMAN"},
 	])
@@ -7518,8 +7520,8 @@ static func build_pilot_effects() -> Dictionary:
 	p051e2.set_costs([])
 	p051e2.set_actions([
 		{
-			# 拦截弹窗+中止旗+摘牌+分支 _seq 全在 TimingEngine._handle_pilot_051_intercept
-			#（挂起模块，resume phase=pilot_051_intercept）
+			# 拦截弹窗+中止旗+摘牌+分支 _seq 全在 TimingEngine._handle_pilot_053_intercept
+			#（挂起模块，resume phase=pilot_053_intercept）
 			"type": &"PILOT_051_INTERCEPT_EVENT_SET",
 			"params": {},
 		},
@@ -7570,7 +7572,7 @@ static func build_pilot_effects() -> Dictionary:
 	# ════════════════════════════════════════════════════════════
 	# 问题：掩护/推进多选窗由 cover_effect1 / thrust_effect2（真实牌手牌监听器）驱动，
 	# 玩家没有真实掩护/推进牌时窗口不弹，机师的「当作掩护/推进」附加选项
-	# （COVER_WINDOW_EXTRA / THRUST_WINDOW_EXTRA 虚拟时点）无处展示（洛尔恩 pilot_062
+	# （COVER_WINDOW_EXTRA / THRUST_WINDOW_EXTRA 虚拟时点）无处展示（洛尔恩 pilot_063
 	# 转化掩护实机 bug：无掩护牌时窗口永不出现）。
 	# 本组宿主效果由机师 effect_ids 引用、GameSetupService._register_pilot_effects 注册为
 	# permanent listener：ATTACK_PRE / USE_ACTION_AT 触发同款 CHOOSE_MANY_CARDS
@@ -7901,7 +7903,7 @@ static func build_discard_draw_advanced_equip_set_reserve_effect(params: Diction
 
 
 # ════════════════════════════════════════════════════════════
-# "近战弃牌威力"模块（泰特 pilot_074：弃1行动牌使本回合下次近战攻击威力+3，可叠加；
+# "近战弃牌威力"模块（泰特 pilot_073：弃1行动牌使本回合下次近战攻击威力+3，可叠加；
 # 效果2把整个效果1授予其他机甲直到下个我方回合开始，EX 按钮）
 # ════════════════════════════════════════════════════════════
 # 通用可复用、与效果绑定不绑机师：
@@ -7970,10 +7972,10 @@ static func grant_melee_might_to_mech(context, source_cid: StringName, target_me
 	if target_mech == null:
 		return
 	var all_effects: Dictionary = build_pilot_effects()
-	var e1_direct = all_effects.get(&"pilot_074_effect_01")
-	var e1_apply = all_effects.get(&"pilot_074_effect_01_apply")
-	var e1_consume = all_effects.get(&"pilot_074_effect_01_consume")
-	var e1_turnend = all_effects.get(&"pilot_074_effect_01_turnend")
+	var e1_direct = all_effects.get(&"pilot_073_effect_01")
+	var e1_apply = all_effects.get(&"pilot_073_effect_01_apply")
+	var e1_consume = all_effects.get(&"pilot_073_effect_01_consume")
+	var e1_turnend = all_effects.get(&"pilot_073_effect_01_turnend")
 	if e1_direct == null or e1_apply == null or e1_consume == null or e1_turnend == null:
 		return
 	var bind: Dictionary = {
@@ -7983,7 +7985,7 @@ static func grant_melee_might_to_mech(context, source_cid: StringName, target_me
 		"slot_id": &"pilot",
 		"granted": true,
 	}
-	context.timing_engine.register_permanent_listener(&"pilot_074_effect_01", e1_direct, bind)
+	context.timing_engine.register_permanent_listener(&"pilot_073_effect_01", e1_direct, bind)
 	context.timing_engine.register_permanent_listener(_TC.ATTACK_BEFORE, e1_apply, bind)
 	context.timing_engine.register_permanent_listener(_TC.ATTACK_SETTLE, e1_consume, bind)
 	context.timing_engine.register_permanent_listener(_TC.TURN_AFTER_END, e1_turnend, bind)
@@ -8390,7 +8392,7 @@ static func get_pilot_passive_weapon_range_bonus(mech) -> int:
 
 
 # ════════════════════════════════════════════════════════════
-# pilot_021 塔莉娅：禁/策 标签系统
+# pilot_022 塔莉娅：禁/策 标签系统
 # ════════════════════════════════════════════════════════════
 # PILOT_021_JIN_TAG "禁"：效果1抽的3张行动牌打上（owner=塔莉娅玩家），本回合塔莉娅无法使用；
 #   牌离开塔莉娅手牌（转移）时清除；回合结束清塔莉娅全部禁标签（剩余牌恢复可用）。
@@ -8399,8 +8401,8 @@ static func get_pilot_passive_weapon_range_bonus(mech) -> int:
 #   时塔莉娅抽2，标签随牌入弃牌堆消失。一张牌可带多个 owner 的标签（多塔莉娅场景），用 owner_pid 区分
 #   （仿 pilot_006 狩猎标签）。
 
-const PILOT_021_JIN_TAG := &"pilot_021_jin_tag"
-const PILOT_021_CE_TAG := &"pilot_021_ce_tag"
+const PILOT_021_JIN_TAG := &"pilot_022_jin_tag"
+const PILOT_021_CE_TAG := &"pilot_022_ce_tag"
 
 ## 温斯顿 pilot_082「联」标签：交牌时打在行动牌上（owner=温斯顿玩家），
 ## 持有者使用联牌时对温斯顿施加联合状态。牌离开持有者手牌/临时区即清除。
@@ -8408,35 +8410,35 @@ const LIAN_TAG := &"pilot_082_lian_tag"
 
 
 ## 打"禁"标签（效果1抽的3张行动牌）。
-static func pilot_021_tag_jin(card, owner_pid: StringName) -> void:
+static func pilot_022_tag_jin(card, owner_pid: StringName) -> void:
 	if card == null or owner_pid == &"" or not card.has_method(&"add_tag"):
 		return
 	card.add_tag(PILOT_021_JIN_TAG, owner_pid, {"jin": true})
 
 
 ## 该 owner 是否有"禁"标签（use_action_card validate 用：塔莉娅本回合无法使用）。
-static func pilot_021_has_jin(card, owner_pid: StringName) -> bool:
+static func pilot_022_has_jin(card, owner_pid: StringName) -> bool:
 	if card == null or owner_pid == &"" or not card.has_method(&"has_tag"):
 		return false
 	return card.has_tag(PILOT_021_JIN_TAG, owner_pid)
 
 
 ## 牌是否有任意 owner 的"禁"标签（UI 显示"牌名(禁)"后缀）。
-static func pilot_021_card_has_any_jin(card) -> bool:
+static func pilot_022_card_has_any_jin(card) -> bool:
 	if card == null or not card.has_method(&"has_tag"):
 		return false
 	return card.has_tag(PILOT_021_JIN_TAG)
 
 
 ## 清指定 owner 的"禁"标签（转移时/回合结束时）。
-static func pilot_021_clear_jin(card, owner_pid: StringName) -> void:
+static func pilot_022_clear_jin(card, owner_pid: StringName) -> void:
 	if card == null or owner_pid == &"" or not card.has_method(&"remove_tag"):
 		return
 	card.remove_tag(PILOT_021_JIN_TAG, owner_pid)
 
 
 ## 清指定玩家全部"禁"标签（回合结束：效果1剩余牌恢复可用）。
-static func pilot_021_clear_all_jin_for_player(game_state, player_id: StringName) -> void:
+static func pilot_022_clear_all_jin_for_player(game_state, player_id: StringName) -> void:
 	if game_state == null or player_id == &"":
 		return
 	var cards_dict: Dictionary = game_state.cards if "cards" in game_state else {}
@@ -8448,7 +8450,7 @@ static func pilot_021_clear_all_jin_for_player(game_state, player_id: StringName
 
 
 ## 清指定玩家（塔莉娅拥有者）名下的全部"策"标签（离场时：他人持有的策牌不再触发其抽2）。
-static func pilot_021_clear_all_ce_for_player(game_state, player_id: StringName) -> void:
+static func pilot_022_clear_all_ce_for_player(game_state, player_id: StringName) -> void:
 	if game_state == null or player_id == &"":
 		return
 	var cards_dict: Dictionary = game_state.cards if "cards" in game_state else {}
@@ -8461,7 +8463,7 @@ static func pilot_021_clear_all_ce_for_player(game_state, player_id: StringName)
 
 ## 牌从塔莉娅手牌转移到其他玩家手牌时调用：清"禁"标签 + 打"策"标签。
 ## 禁标签牌离开塔莉娅手牌后消失；策标签记录来源（owner=塔莉娅玩家）。
-static func pilot_021_on_card_left_taliyah_hand(card, taliyah_pid: StringName) -> void:
+static func pilot_022_on_card_left_taliyah_hand(card, taliyah_pid: StringName) -> void:
 	if card == null or taliyah_pid == &"" or not card.has_method(&"add_tag"):
 		return
 	card.remove_tag(PILOT_021_JIN_TAG, taliyah_pid)
@@ -8469,14 +8471,14 @@ static func pilot_021_on_card_left_taliyah_hand(card, taliyah_pid: StringName) -
 
 
 ## 牌是否有任意 owner 的"策"标签（UI 显示"牌名(策)"后缀）。
-static func pilot_021_card_has_any_ce(card) -> bool:
+static func pilot_022_card_has_any_ce(card) -> bool:
 	if card == null or not card.has_method(&"has_tag"):
 		return false
 	return card.has_tag(PILOT_021_CE_TAG)
 
 
 ## 清全部 owner 的"策"标签（牌进入弃牌堆标签即消失，无论使用/直接弃置）。
-static func pilot_021_clear_all_ce(card) -> void:
+static func pilot_022_clear_all_ce(card) -> void:
 	if card == null or not card.has_method(&"remove_tag"):
 		return
 	card.remove_tag(PILOT_021_CE_TAG)
@@ -8486,7 +8488,7 @@ static func pilot_021_clear_all_ce(card) -> void:
 ## 多塔莉娅：按 owner 各自抽2。返回触发次数。由 discard_card_action._step_transfer_to_pile 调用。
 ## 统一走 gain_card 动作（发 GAIN_CARD_BEFORE/AFTER/SETTLE 时点 + 抽取标），库马斯 pilot_035 等
 ## GAIN_CARD_AFTER 监听器可响应"塔莉娅策略回收抽2"（用户要求全抽取路径统一覆盖）。
-static func pilot_021_trigger_ce_draw(context, card) -> int:
+static func pilot_022_trigger_ce_draw(context, card) -> int:
 	if context == null or context.game_state == null or card == null:
 		return 0
 	if not card.has_tag(PILOT_021_CE_TAG):
@@ -8499,7 +8501,7 @@ static func pilot_021_trigger_ce_draw(context, card) -> int:
 		if context != null and context.action_service != null:
 			context.action_service.execute(&"gain_card", {
 				"from_zone": &"action_deck", "card_kind": &"action",
-				"count": 2, "player_id": owner_pid, "reason": &"pilot_021_ce_draw",
+				"count": 2, "player_id": owner_pid, "reason": &"pilot_022_ce_draw",
 			})
 		count += 1
 	# 清全部策标签（牌入弃牌堆，标签消失）
@@ -8509,7 +8511,7 @@ static func pilot_021_trigger_ce_draw(context, card) -> int:
 
 ## from_player 是否装备塔莉娅机师牌（转移挂钩条件判断：只有塔莉娅手牌转出才打策标签）。
 ## 返回 player_id（装备塔莉娅则原样返回，否则 &""）。
-static func pilot_021_taliyah_owner_for_player(game_state, player_id: StringName) -> StringName:
+static func pilot_022_taliyah_owner_for_player(game_state, player_id: StringName) -> StringName:
 	if game_state == null or player_id == &"":
 		return &""
 	var mech = game_state.get_mech_for_player(player_id) if game_state.has_method(&"get_mech_for_player") else null
@@ -8518,7 +8520,7 @@ static func pilot_021_taliyah_owner_for_player(game_state, player_id: StringName
 	var slot = mech.slots.get(&"pilot") if "slots" in mech and mech.slots != null else null
 	if slot == null or slot.equipped_card == null or slot.equipped_card.def == null:
 		return &""
-	if String(slot.equipped_card.def.card_id) == "pilot_021_塔莉娅":
+	if String(slot.equipped_card.def.card_id) == "pilot_022_塔莉娅":
 		return player_id
 	return &""
 
@@ -9687,74 +9689,74 @@ static func responded_equip_confirm(context, player_id: StringName, mech_id: Str
 
 
 ## ────────────────────────────────────────────────────────────
-## 铠德 pilot_060 通用「被响应→三选一」非阻塞模块（pilot_060_*，不绑机师）
+## 铠德 pilot_062 通用「被响应→三选一」非阻塞模块（pilot_062_*，不绑机师）
 ## 复刻铠厉 responded_equip_chain_* 结构：攻击结算后入队 → 弹三选一 → 执行所选分支原子动作。
 ## 分支：0=抽2张行动牌（gain_card 动作，发 GAIN_CARD 时点/统一抽牌口径）/
 ##       1=回复3动力（restore_power）/ 2=获得4金币（gain_gold）/ 其它=放弃。
 ## 只处理人类玩家（PvP/PvP3），AI 触发直接丢弃防卡死。
-static func pilot_060_after_attack_completed(context, player_id: StringName, mech_id: StringName) -> void:
+static func pilot_062_after_attack_completed(context, player_id: StringName, mech_id: StringName) -> void:
 	if context == null or context.game_state == null:
 		return
-	context.game_state.pilot_060_queue.append({"player_id": player_id, "mech_id": mech_id})
-	pilot_060_process_next(context)
+	context.game_state.pilot_062_queue.append({"player_id": player_id, "mech_id": mech_id})
+	pilot_062_process_next(context)
 
 
 ## 推进三选一队列：进行中有 pending 不弹新；队列空/条目无效/AI 触发直接跳过。
-static func pilot_060_process_next(context) -> void:
+static func pilot_062_process_next(context) -> void:
 	if context == null or context.game_state == null:
 		return
 	var gs = context.game_state
 	# 已有待选弹窗：等当前处理完再弹下一个（串行防重叠）
-	if not gs.pilot_060_pending_choice.is_empty():
+	if not gs.pilot_062_pending_choice.is_empty():
 		return
-	if gs.pilot_060_queue.is_empty():
+	if gs.pilot_062_queue.is_empty():
 		return
-	var entry: Dictionary = gs.pilot_060_queue.pop_front()
+	var entry: Dictionary = gs.pilot_062_queue.pop_front()
 	var pid: StringName = entry.get("player_id", &"")
 	var mid: StringName = entry.get("mech_id", &"")
 	if pid == &"" or mid == &"":
-		pilot_060_process_next(context)
+		pilot_062_process_next(context)
 		return
 	var player = gs.players.get(pid)
 	if player == null or not player.is_human:
 		# AI 玩家触发：先不处理（用户指定忽略 AI），直接丢弃防卡死
-		pilot_060_process_next(context)
+		pilot_062_process_next(context)
 		return
-	gs.pilot_060_pending_choice = {"player_id": pid, "mech_id": mid}
+	gs.pilot_062_pending_choice = {"player_id": pid, "mech_id": mid}
 	if context.action_ui_bridge != null:
-		context.action_ui_bridge.request_ui_popup.emit(&"pilot_060_choice", {"player_id": pid, "mech_id": mid})
+		context.action_ui_bridge.request_ui_popup.emit(&"pilot_062_choice", {"player_id": pid, "mech_id": mid})
 
 
-## 三选一确认（app_root 弹窗后经 pilot_060_choice op 双端执行）：choice=0/1/2 执行对应奖励，其它=放弃。
-static func pilot_060_choose(context, player_id: StringName, mech_id: StringName, choice: int) -> void:
+## 三选一确认（app_root 弹窗后经 pilot_062_choice op 双端执行）：choice=0/1/2 执行对应奖励，其它=放弃。
+static func pilot_062_choose(context, player_id: StringName, mech_id: StringName, choice: int) -> void:
 	if context == null or context.game_state == null:
 		return
 	var gs = context.game_state
-	var pending: Dictionary = gs.pilot_060_pending_choice
+	var pending: Dictionary = gs.pilot_062_pending_choice
 	if not (pending is Dictionary) or pending.is_empty():
 		return
 	# 陈旧确认守卫：确认的 mech/player 与待选触发一致才处理
 	if String(pending.get("player_id", &"")) != String(player_id) or String(pending.get("mech_id", &"")) != String(mech_id):
 		return
-	gs.pilot_060_pending_choice = {}
+	gs.pilot_062_pending_choice = {}
 	if choice == 0:
 		# 抽2张行动牌：走 gain_card 动作（发 GAIN_CARD 时点，统一抽牌口径）。
 		# 暂停（GAIN_CARD 时点监听挂起）则动作自行完成，无链式处理，忽略返回值。
 		if context.action_service != null:
 			context.action_service.execute(&"gain_card", {
 				"from_zone": &"action_deck", "card_kind": &"action", "count": 2,
-				"player_id": player_id, "reason": &"pilot_060_draw",
+				"player_id": player_id, "reason": &"pilot_062_draw",
 			})
 	elif choice == 1:
 		# 回复3动力（走 restore_power，受 CANNOT_RESTORE_POWER/最大动力限制）
 		if context.game_actions != null:
-			context.game_actions.restore_power({"mech_id": mech_id, "amount": 3, "reason": &"pilot_060_power"})
+			context.game_actions.restore_power({"mech_id": mech_id, "amount": 3, "reason": &"pilot_062_power"})
 	elif choice == 2:
 		# 获得4金币
 		if context.game_actions != null:
-			context.game_actions.gain_gold({"player_id": player_id, "amount": 4, "reason": &"pilot_060_gold"})
+			context.game_actions.gain_gold({"player_id": player_id, "amount": 4, "reason": &"pilot_062_gold"})
 	# 其它 choice（放弃）：无事发生
-	pilot_060_process_next(context)
+	pilot_062_process_next(context)
 
 
 # ════════════════════════════════════════════════════════════
@@ -9800,7 +9802,7 @@ static func build_injury_heal_draw_effect(params: Dictionary) -> _ActionEffect:
 	return e
 
 
-## 通用「范围内攻击结算→抽牌+每回合1次弃X再开攻击窗口」效果构建器（维奥拉 pilot_077 等）。
+## 通用「范围内攻击结算→抽牌+每回合1次弃X再开攻击窗口」效果构建器（维奥拉 pilot_074 等）。
 ## 参数化复用：改 params 即可（effect_id/display_name/description/base_range/draw_count/
 ## discard_count/once_per_turn_key/once_per_turn_max/priority）。
 ## LISTEN ATTACK_SETTLE（条件 ATTACK_ATTACKER_WITHIN_RANGE_INCLUDING_SELF 已校验攻击方在
@@ -9916,7 +9918,7 @@ static func build_face_value_buy_effect(params: Dictionary) -> _ActionEffect:
 
 
 # ════════════════════════════════════════════════════════════
-# pilot_087 塔妮拉「交」标签系统
+# pilot_086 塔妮拉「交」标签系统
 # ════════════════════════════════════════════════════════════
 # PILOT_087_JIAO_TAG "交"：塔妮拉效果1交牌时（GameActions.transfer_action_cards 挂钩）打在
 #   行动牌上（owner=塔妮拉玩家），跨玩家转出/被偷（steal_action_card 挂钩）也计入。
@@ -9928,32 +9930,32 @@ static func build_face_value_buy_effect(params: Dictionary) -> _ActionEffect:
 #   塔妮拉离场（GameSetupService _on_pilot_unset）清其名下全部"交"标签（他人持有的交牌
 #   不再触发其抽1）。
 
-const PILOT_087_JIAO_TAG := &"pilot_087_jiao_tag"
+const PILOT_087_JIAO_TAG := &"pilot_086_jiao_tag"
 
 
 ## 打"交"标签（效果1交牌 / 识破偷牌 / 玛丽尔偷牌等 transfer/steal 挂钩调用）。
-static func pilot_087_tag_jiao(card, owner_pid: StringName) -> void:
+static func pilot_086_tag_jiao(card, owner_pid: StringName) -> void:
 	if card == null or owner_pid == &"" or not card.has_method(&"add_tag"):
 		return
 	card.add_tag(PILOT_087_JIAO_TAG, owner_pid, {"jiao": true})
 
 
 ## 牌是否有任意 owner 的"交"标签（UI 显示"牌名(交)"后缀）。
-static func pilot_087_card_has_any_jiao(card) -> bool:
+static func pilot_086_card_has_any_jiao(card) -> bool:
 	if card == null or not card.has_method(&"has_tag"):
 		return false
 	return card.has_tag(PILOT_087_JIAO_TAG)
 
 
 ## 清全部 owner 的"交"标签（牌入弃牌堆标签即消失，无论使用/直接弃置）。
-static func pilot_087_clear_all_jiao(card) -> void:
+static func pilot_086_clear_all_jiao(card) -> void:
 	if card == null or not card.has_method(&"remove_tag"):
 		return
 	card.remove_tag(PILOT_087_JIAO_TAG)
 
 
 ## 清指定玩家（塔妮拉拥有者）名下的全部"交"标签（塔妮拉离场时：他人持有的交牌不再触发其抽1）。
-static func pilot_087_clear_all_jiao_for_player(game_state, player_id: StringName) -> void:
+static func pilot_086_clear_all_jiao_for_player(game_state, player_id: StringName) -> void:
 	if game_state == null or player_id == &"":
 		return
 	var cards_dict: Dictionary = game_state.cards if "cards" in game_state else {}
@@ -9965,8 +9967,8 @@ static func pilot_087_clear_all_jiao_for_player(game_state, player_id: StringNam
 
 
 ## from_player 是否装备塔妮拉机师牌（转移/偷牌挂钩条件判断：只有塔妮拉手牌转出才打交标签）。
-## 返回 player_id（装备塔妮拉则原样返回，否则 &""）。仿 pilot_021_taliyah_owner_for_player 模板。
-static func pilot_087_tanila_owner_for_player(game_state, player_id: StringName) -> StringName:
+## 返回 player_id（装备塔妮拉则原样返回，否则 &""）。仿 pilot_022_taliyah_owner_for_player 模板。
+static func pilot_086_tanila_owner_for_player(game_state, player_id: StringName) -> StringName:
 	if game_state == null or player_id == &"":
 		return &""
 	var mech = game_state.get_mech_for_player(player_id) if game_state.has_method(&"get_mech_for_player") else null
@@ -9975,7 +9977,7 @@ static func pilot_087_tanila_owner_for_player(game_state, player_id: StringName)
 	var slot = mech.slots.get(&"pilot") if "slots" in mech and mech.slots != null else null
 	if slot == null or slot.equipped_card == null or slot.equipped_card.def == null:
 		return &""
-	if String(slot.equipped_card.def.card_id) == "pilot_087_塔妮拉":
+	if String(slot.equipped_card.def.card_id) == "pilot_086_塔妮拉":
 		return player_id
 	return &""
 
@@ -9984,7 +9986,7 @@ static func pilot_087_tanila_owner_for_player(game_state, player_id: StringName)
 ## 牌从 temp_zone 进 discard 堆时由 discard_card_action._step_transfer_to_pile 调用。
 ## 多塔妮拉场景：按 owner 各自作为"塔妮拉"抽1（每 owner 独立发一次塔妮拉抽）。
 ## 返回触发抽牌的 owner 数（用于日志）。使用方为卡牌当前 owner_player_id（使用时刻）。
-static func pilot_087_trigger_jiao_draw(context, card) -> int:
+static func pilot_086_trigger_jiao_draw(context, card) -> int:
 	if context == null or context.game_state == null or card == null:
 		return 0
 	if not card.has_tag(PILOT_087_JIAO_TAG):
@@ -10001,7 +10003,7 @@ static func pilot_087_trigger_jiao_draw(context, card) -> int:
 		if context.action_service != null:
 			context.action_service.execute(&"gain_card", {
 				"from_zone": &"action_deck", "card_kind": &"action",
-				"count": 1, "player_id": user_pid, "reason": &"pilot_087_jiao_draw_user",
+				"count": 1, "player_id": user_pid, "reason": &"pilot_086_jiao_draw_user",
 			})
 	# 2) 每个 owner 各抽1（塔妮拉后抽1；与使用方同 owner 时不重复抽）
 	for owner_pid: StringName in owners:
@@ -10014,7 +10016,7 @@ static func pilot_087_trigger_jiao_draw(context, card) -> int:
 		if context.action_service != null:
 			context.action_service.execute(&"gain_card", {
 				"from_zone": &"action_deck", "card_kind": &"action",
-				"count": 1, "player_id": owner_pid, "reason": &"pilot_087_jiao_draw_tanila",
+				"count": 1, "player_id": owner_pid, "reason": &"pilot_086_jiao_draw_tanila",
 			})
 		count += 1
 	# 清全部交标签（牌入弃牌堆，标签消失）

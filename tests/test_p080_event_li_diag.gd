@@ -159,7 +159,7 @@ func test_diag_move_event_with_li() -> Variant:
 	var mo = _setup_pilot(battle, &"player", "pilot_080_墨尘")
 	if mo == null:
 		return "缺 墨尘"
-	var li = _setup_pilot(battle, &"enemy", "pilot_051_李")
+	var li = _setup_pilot(battle, &"enemy", "pilot_053_李")
 	if li == null:
 		return "缺 李"
 	var gs = mo.gs
@@ -236,7 +236,7 @@ func test_diag_move_event_with_li() -> Variant:
 			var s0: Dictionary = susp[0]
 			var phase: String = s0["phase"]
 			var a0 = s0["a"]
-			if phase == "pilot_051_intercept":
+			if phase == "pilot_053_intercept":
 				intercept_count += 1
 				te.resume_pending_effect(a0.action_id, {"cancelled": true})
 			elif phase == "pre_actions_target":

@@ -213,7 +213,7 @@ func buy_hidden_advanced(player_id: StringName) -> Dictionary:
 
 
 ## 购买成功后发出 SHOP_BUY_AFTER 时点（虚拟 action fire，仿 GameActions._fire_gold_virtual / TurnService._fire_timing）。
-## 供"购买后触发"类效果（莉卡尔 pilot_054 等）监听。普通/高级/隐藏高级三条购买路径统一调用。
+## 供"购买后触发"类效果（莉卡尔 pilot_051 等）监听。普通/高级/隐藏高级三条购买路径统一调用。
 ## 高级装备判断 = SR/SSR 稀有度（规则书：高级装备牌堆包含 SR、SSR 装备牌，二者相互独立）。
 ## payload: player_id/buyer_player_id/buyer_mech_id/card_id/price/is_advanced
 func _fire_shop_buy_after(player_id: StringName, card_id: StringName, price: int) -> void:

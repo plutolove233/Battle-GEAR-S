@@ -460,7 +460,7 @@ func test_bug3_place_tokens_below_durability_no_break() -> Variant:
 # ═══════════════════════════════════════════
 
 ## Bug4 配套：cover_window_host / thrust_window_host 定义形状正确（真实路径行为
-## 由 test_pilot_062_realpath.gd 覆盖：无掩护牌也弹窗 + extra 选项展示）。
+## 由 test_pilot_063_realpath.gd 覆盖：无掩护牌也弹窗 + extra 选项展示）。
 func test_bug4_window_host_effect_definitions() -> Variant:
 	var effects = _ActionPilotEffects.build_pilot_effects()
 	var ch = effects.get(&"cover_window_host")
@@ -508,7 +508,7 @@ func test_bug4_window_host_effect_definitions() -> Variant:
 	return true
 
 
-## Bug4 配套：pilot_062/pilot_082 JSON effect_ids 引用宿主效果（两份数据目录一致）。
+## Bug4 配套：pilot_063/pilot_082 JSON effect_ids 引用宿主效果（两份数据目录一致）。
 func test_bug4_pilot_json_references_hosts() -> Variant:
 	for base in ["res://data/cards/pilot_cards.json", "res://data/new_cards/pilot_cards.json"]:
 		var f = FileAccess.open(base, FileAccess.READ)
@@ -521,9 +521,9 @@ func test_bug4_pilot_json_references_hosts() -> Variant:
 		var by_id: Dictionary = {}
 		for rec in parsed:
 			by_id[String(rec.get("id", ""))] = rec
-		var p062: Dictionary = by_id.get("pilot_062_洛尔恩", {})
+		var p062: Dictionary = by_id.get("pilot_063_洛尔恩", {})
 		if not p062.get("effect_ids", []).has("cover_window_host"):
-			return "%s：pilot_062 effect_ids 应含 cover_window_host" % base
+			return "%s：pilot_063 effect_ids 应含 cover_window_host" % base
 		var p082: Dictionary = by_id.get("pilot_082_温斯顿", {})
 		var p082_ids: Array = p082.get("effect_ids", [])
 		if not p082_ids.has("cover_window_host"):

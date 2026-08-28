@@ -287,7 +287,7 @@ func test_pilot_084_effect_definitions() -> Variant:
 		return "缺 pilot_084_effect_01"
 	if e1.mode != _TimingConst.MODE_DIRECT:
 		return "e1 mode 应 DIRECT 实=%s" % String(e1.mode)
-	# 每回合2次通过 EFFECT_ONCE_PER_TURN_AVAILABLE 条件 params 实现（丹 pilot_067 同款），
+	# 每回合2次通过 EFFECT_ONCE_PER_TURN_AVAILABLE 条件 params 实现（丹 pilot_068 同款），
 	# 效果级 once_per_turn_key 不设（设了会在 TimingEngine 1403 双重计次）。
 	var ops: Array = []
 	for c in e1.conditions:

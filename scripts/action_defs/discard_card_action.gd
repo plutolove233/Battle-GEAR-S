@@ -164,7 +164,7 @@ func _step_determine_cards(action: Action) -> Dictionary:
 		# 实际可弃数 = min(指定数, 手牌数)。扭转钢鞭 effect_100 count=2 但目标可能仅1张行动牌：
 		# 按拆解歧义1「有几张弃几张」，UI 强制精确 count 张，若不减会 confirm disabled 卡死。
 		var _eff_count: int = min(count, _hand_owner.action_hand.size())
-		# 布彻尔 pilot_063「未响应弃目标2张」：目标行动牌总数≤count 时不弹窗直接全部弃置
+		# 布彻尔 pilot_064「未响应弃目标2张」：目标行动牌总数≤count 时不弹窗直接全部弃置
 		# （有几张弃几张，含0张提前返回）。手牌>count 仍需弹窗选 count 张。
 		# 通用参数 auto_discard_all_if_covered，任何弃牌效果可复用。
 		if bool(action.record.get("auto_discard_all_if_covered", false)) and _hand_owner.action_hand.size() <= count:
@@ -237,7 +237,7 @@ func _snapshot_discard_sources(action: Action, card_ids: Array) -> void:
 			snap["from_zone"] = card.zone
 			snap["def_id"] = card.def.card_id if card.def != null else &""
 			snap["card_kind"] = card.def.card_kind if card.def != null else &""
-			# 背面朝上（备用区白板）标记：供弃装获金类效果（pilot_085 莽克）判断「正面设置」排除备用区
+			# 背面朝上（备用区白板）标记：供弃装获金类效果（pilot_088 莽克）判断「正面设置」排除备用区
 			snap["face_down"] = card.get("face_down") == true
 		snapshots.append(snap)
 	action.record["discard_snapshots"] = snapshots
@@ -289,30 +289,30 @@ func _step_transfer_to_pile(action: Action) -> Dictionary:
 		if card == null:
 			continue
 
-		# pilot_021 塔莉娅"策"标签：带"策"标签的行动牌从临时区进弃牌堆（通用"使用"判定，
+		# pilot_022 塔莉娅"策"标签：带"策"标签的行动牌从临时区进弃牌堆（通用"使用"判定，
 		# 含迪恩转化代价牌）时，塔莉娅抽2；标签入弃牌堆即消失（无论使用/直接弃置）。
 		# 用快照 from_zone 而非 card.zone 判定：move_to_tmp 已把 card.zone 置 temp_zone，
 		# 直接弃置（action_hand，未经过使用）也会命中 card.zone，故看 discard 动作开始时的 zone。
 		# 使用中的牌（use_action_card _step_card_to_temp_zone）from_zone=temp_zone 计入；
 		# 手牌直接弃置 from_zone=action_hand 不计入（回合超限/预判/肯特压制等），仅清标签。
 		var _snap_idx: Dictionary = snapshots[idx] if idx < snapshots.size() else {}
-		if card.def != null and card.def.card_kind == &"action" and _ActionPilotEffects.pilot_021_card_has_any_ce(card):
+		if card.def != null and card.def.card_kind == &"action" and _ActionPilotEffects.pilot_022_card_has_any_ce(card):
 			if _snap_idx.get("from_zone", &"") == &"temp_zone":
-				var _p021_ce_drawn: int = _ActionPilotEffects.pilot_021_trigger_ce_draw(context, card)
+				var _p021_ce_drawn: int = _ActionPilotEffects.pilot_022_trigger_ce_draw(context, card)
 				if _p021_ce_drawn > 0:
-					SLog.log_raw("[pilot_021] 策标签牌使用后塔莉娅抽2 x%d card=%s" % [_p021_ce_drawn, String(card_id)])
+					SLog.log_raw("[pilot_022] 策标签牌使用后塔莉娅抽2 x%d card=%s" % [_p021_ce_drawn, String(card_id)])
 			else:
-				_ActionPilotEffects.pilot_021_clear_all_ce(card)
-		# pilot_087 塔妮拉"交"标签：带"交"标签的行动牌从临时区进弃牌堆（通用"使用"判定，
+				_ActionPilotEffects.pilot_022_clear_all_ce(card)
+		# pilot_086 塔妮拉"交"标签：带"交"标签的行动牌从临时区进弃牌堆（通用"使用"判定，
 		# 含迪恩转化代价牌等）时，使用方先抽1 + 塔妮拉后抽1，标签入弃牌堆即消失。
 		# from_zone==temp_zone 计入（使用中），from_zone==action_hand 仅清标签不抽。
-		if card.def != null and card.def.card_kind == &"action" and _ActionPilotEffects.pilot_087_card_has_any_jiao(card):
+		if card.def != null and card.def.card_kind == &"action" and _ActionPilotEffects.pilot_086_card_has_any_jiao(card):
 			if _snap_idx.get("from_zone", &"") == &"temp_zone":
-				var _p087_jiao_drawn: int = _ActionPilotEffects.pilot_087_trigger_jiao_draw(context, card)
+				var _p087_jiao_drawn: int = _ActionPilotEffects.pilot_086_trigger_jiao_draw(context, card)
 				if _p087_jiao_drawn > 0:
-					SLog.log_raw("[pilot_087] 交标签牌使用后双方各抽1 x%d card=%s" % [_p087_jiao_drawn, String(card_id)])
+					SLog.log_raw("[pilot_086] 交标签牌使用后双方各抽1 x%d card=%s" % [_p087_jiao_drawn, String(card_id)])
 			else:
-				_ActionPilotEffects.pilot_087_clear_all_jiao(card)
+				_ActionPilotEffects.pilot_086_clear_all_jiao(card)
 		# 温斯顿 pilot_082"联"标签：联牌离开持有者手牌/临时区进弃牌堆（使用/弃置）即消失。
 		# 使用路径在 USE_ACTION_AT 已触发施加联合状态，入弃牌堆无需再保留标签。
 		if card.def != null and card.def.card_kind == &"action" and _ActionPilotEffects.pilot_082_card_has_any_lian(card):

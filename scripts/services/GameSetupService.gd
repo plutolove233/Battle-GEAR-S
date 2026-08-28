@@ -370,21 +370,21 @@ func unset_pilot(mech_id: StringName) -> void:
 	# pilot_035 库马斯离场：清除本轮标记机甲（持续效果随离场终止）
 	if old_card.def != null and String(old_card.def.card_id) == "pilot_035_库马斯":
 		_ActionPilotEffects.clear_pilot_035_mark(old_card.instance_id)
-	# pilot_021 塔莉娅离场：清除其玩家手牌的"禁"标签（剩余赐予牌恢复可用）
+	# pilot_022 塔莉娅离场：清除其玩家手牌的"禁"标签（剩余赐予牌恢复可用）
 	# + 清其名下"策"标签（他人持有的赐予牌不再触发其抽2）
-	if old_card.def != null and String(old_card.def.card_id) == "pilot_021_塔莉娅":
-		_ActionPilotEffects.pilot_021_clear_all_jin_for_player(context.game_state, old_card.owner_player_id)
-		_ActionPilotEffects.pilot_021_clear_all_ce_for_player(context.game_state, old_card.owner_player_id)
+	if old_card.def != null and String(old_card.def.card_id) == "pilot_022_塔莉娅":
+		_ActionPilotEffects.pilot_022_clear_all_jin_for_player(context.game_state, old_card.owner_player_id)
+		_ActionPilotEffects.pilot_022_clear_all_ce_for_player(context.game_state, old_card.owner_player_id)
 	# pilot_082 温斯顿离场：清除其名下全部"联"标签（他人持有的联牌不再触发对其施加联合）。
 	if old_card.def != null and String(old_card.def.card_id) == "pilot_082_温斯顿":
 		_ActionPilotEffects.pilot_082_clear_all_lian_for_player(context.game_state, old_card.owner_player_id)
-	# pilot_087 塔妮拉离场：清除其名下全部"交"标签（他人持有的交牌不再触发其抽1）。
-	if old_card.def != null and String(old_card.def.card_id) == "pilot_087_塔妮拉":
-		_ActionPilotEffects.pilot_087_clear_all_jiao_for_player(context.game_state, old_card.owner_player_id)
-	# pilot_074 泰特离场：清除近战弃牌威力状态（待发 buff + 授予登记）。
+	# pilot_086 塔妮拉离场：清除其名下全部"交"标签（他人持有的交牌不再触发其抽1）。
+	if old_card.def != null and String(old_card.def.card_id) == "pilot_086_塔妮拉":
+		_ActionPilotEffects.pilot_086_clear_all_jiao_for_player(context.game_state, old_card.owner_player_id)
+	# pilot_073 泰特离场：清除近战弃牌威力状态（待发 buff + 授予登记）。
 	# unregister_permanent_listeners_for_card 已注销全部绑定该实例的监听器（含他机授予），
 	# 静态 registry 须手动清，避免残留（换回泰特时旧 buff/授予不复活）。
-	if old_card.def != null and String(old_card.def.card_id) == "pilot_074_泰特":
+	if old_card.def != null and String(old_card.def.card_id) == "pilot_073_泰特":
 		_ActionPilotEffects.clear_melee_might_for_source(old_card.instance_id)
 	slot.equipped_card = null
 	old_card.zone = &""
@@ -511,6 +511,15 @@ func _register_pilot_effects(card, mech_id: StringName) -> void:
 				"card_def_id": card.def.card_id,
 				"slot_id": &"pilot",
 			})
+	# 通用转移攻击目标（规则书第33行：相邻其他机甲被攻击时，可将该攻击转移至自身，但无法响应该攻击）。
+	# 所有机甲均可--不绑特定机师；与机师自带的转移效果（迪恩 effect_02 / 布鲁克 effect_02）并行共存：
+	# 迪恩窗口同时呈现「通用转移(纯REDIRECT不响应)」+「迪恩特殊转移(REDIRECT+RESPOND_ATTACK+转化响应)」
+	# 两个选项，玩家任选其一。转移目标窗口与响应窗口同级并行--谁先确认谁执行，其他人窗口失效；
+	# 任一玩家 pass 只放弃自身机会，不影响其他窗口；全部 pass 或有人执行效果，流程继续。
+	# 载体用机师牌实例（card_instance_id），confirm 走非迎击牌分支执行 REDIRECT_ATTACK_TARGET_TO_SELF。
+	var _transfer_eff = _GeneratedActionEffects.build_all_effects().get(&"transfer_attack_target")
+	if _transfer_eff != null and _transfer_eff.listen_timing != &"":
+		context.timing_engine.register_permanent_listener(_transfer_eff.listen_timing, _transfer_eff, binding_ctx)
 
 
 ## pilot_005 effect_01 授予机制：向所有帝国阵营机甲注册 granted ATTACK_PRE 弃牌 listener。

@@ -1648,14 +1648,15 @@ static func build_equipment_effects() -> Dictionary:
 	effects[meleesp_torso.effect_id] = meleesp_torso
 
 	# ═══════════════════════════════════════════
-	# 063 近战特装·臂：近战攻击弃1牌威力+2，之后选目标区域最多1张装备效果无效至本回合结束
-	# 诱发型 -- 监听 ATTACK_PRE；CHOOSE_MANY_CARDS source=ATTACK_TARGET_EQUIPMENT + NEGATE_EQUIPMENT_EFFECT
+	# 063 近战特装·臂：近战攻击弃1牌威力+2，之后选目标区域最多1张牌效果无效至本次攻击结算
+	# 诱发型 -- 监听 ATTACK_PRE；CHOOSE_MANY_CARDS source=ATTACK_TARGET_FACE_UP_CARD + NEGATE_EQUIPMENT_EFFECT
+	# （目标区域正面朝上的装备/机师/事件牌均可选；duration=UNTIL_ATTACK_SETTLE 攻击结算时恢复）
 	# ═══════════════════════════════════════════
 	var meleesp_arm := _ActionEffect.new()
 	meleesp_arm.effect_id = &"equipment_effect_063"
-	meleesp_arm.display_name = "近战特装·臂·近战弃1牌威力+2并无效目标装备"
+	meleesp_arm.display_name = "近战特装·臂·近战弃1牌威力+2并无效目标牌"
 	meleesp_arm.mode = _TC.MODE_LISTEN
-	meleesp_arm.priority = 30  # 先于目标躯干效果(ATTACK_PRE)：无效目标装备须先于躯干效果触发
+	meleesp_arm.priority = 30  # 先于目标躯干效果(ATTACK_PRE)：无效目标牌须先于躯干效果触发
 	meleesp_arm.listen_timing = _TC.ATTACK_PRE
 	meleesp_arm.listen_action_type = &"attack"
 	meleesp_arm.set_conditions([
@@ -1672,20 +1673,20 @@ static func build_equipment_effects() -> Dictionary:
 		{
 			"type": &"CHOOSE_MANY_CARDS",
 			"params": {
-				"source": &"ATTACK_TARGET_EQUIPMENT",
+				"source": &"ATTACK_TARGET_FACE_UP_CARD",
 				"max_count": 1,
 				"min_count": 0,
 				"discard_selected": false,
-				"label": "选择至多1张装备，使其效果无效至本回合结束",
+				"label": "选择至多1张牌，使其效果无效至本次攻击结算",
 				"confirm_verb": "无效",
 				"cancel_label": "不选择",
 				"per_card_actions": [
-					{"type": &"NEGATE_EQUIPMENT_EFFECT", "params": {"target_card_id": "$chosen_card.card_instance_id", "duration": "UNTIL_TURN_END"}}
+					{"type": &"NEGATE_EQUIPMENT_EFFECT", "params": {"target_card_id": "$chosen_card.card_instance_id", "duration": "UNTIL_ATTACK_SETTLE", "action_id": "$payload.action_id"}}
 				],
 			},
 		},
 	])
-	meleesp_arm.description = "使用近战武器发动攻击时，可以弃置1张行动牌，使威力+2，之后可以选择攻击目标区域最多1张牌效果无效直到本回合结束。"
+	meleesp_arm.description = "使用近战武器发动攻击时，可以弃置1张行动牌，使威力+2，之后可以选择攻击目标区域最多1张牌效果无效直到本次攻击结算。"
 	effects[meleesp_arm.effect_id] = meleesp_arm
 
 	# ═══════════════════════════════════════════
@@ -2084,14 +2085,14 @@ static func build_equipment_effects() -> Dictionary:
 	effects[polar_torso.effect_id] = polar_torso
 
 	# ═══════════════════════════════════════════
-	# 078 极电装·臂：近战攻击弃2牌威力+3，之后选目标区域最多2张装备效果无效至本回合结束
+	# 078 极电装·臂：近战攻击弃2牌威力+3，之后选目标区域最多2张牌效果无效至本次攻击结算
 	# 诱发型 -- 监听 ATTACK_PRE（仿 effect_063，威力 2->3 / cost 1->2 / max_count 1->2）
 	# ═══════════════════════════════════════════
 	var polar_arm := _ActionEffect.new()
 	polar_arm.effect_id = &"equipment_effect_078"
-	polar_arm.display_name = "极电装·臂·近战弃2牌威力+3并无效2张目标装备"
+	polar_arm.display_name = "极电装·臂·近战弃2牌威力+3并无效2张目标牌"
 	polar_arm.mode = _TC.MODE_LISTEN
-	polar_arm.priority = 30  # 先于目标躯干效果(ATTACK_PRE)：无效目标装备须先于躯干效果触发
+	polar_arm.priority = 30  # 先于目标躯干效果(ATTACK_PRE)：无效目标牌须先于躯干效果触发
 	polar_arm.listen_timing = _TC.ATTACK_PRE
 	polar_arm.listen_action_type = &"attack"
 	polar_arm.set_conditions([
@@ -2108,20 +2109,20 @@ static func build_equipment_effects() -> Dictionary:
 		{
 			"type": &"CHOOSE_MANY_CARDS",
 			"params": {
-				"source": &"ATTACK_TARGET_EQUIPMENT",
+				"source": &"ATTACK_TARGET_FACE_UP_CARD",
 				"max_count": 2,
 				"min_count": 0,
 				"discard_selected": false,
-				"label": "选择至多2张装备，使其效果无效至本回合结束",
+				"label": "选择至多2张牌，使其效果无效至本次攻击结算",
 				"confirm_verb": "无效",
 				"cancel_label": "不选择",
 				"per_card_actions": [
-					{"type": &"NEGATE_EQUIPMENT_EFFECT", "params": {"target_card_id": "$chosen_card.card_instance_id", "duration": "UNTIL_TURN_END"}}
+					{"type": &"NEGATE_EQUIPMENT_EFFECT", "params": {"target_card_id": "$chosen_card.card_instance_id", "duration": "UNTIL_ATTACK_SETTLE", "action_id": "$payload.action_id"}}
 				],
 			},
 		},
 	])
-	polar_arm.description = "使用近战武器发动攻击时，可以弃置2张行动牌，使威力+3，之后可以选择攻击目标区域最多2张牌效果无效直到本回合结束。"
+	polar_arm.description = "使用近战武器发动攻击时，可以弃置2张行动牌，使威力+3，之后可以选择攻击目标区域最多2张牌效果无效直到本次攻击结算。"
 	effects[polar_arm.effect_id] = polar_arm
 
 	# ═══════════════════════════════════════════

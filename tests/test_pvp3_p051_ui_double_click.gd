@@ -53,7 +53,7 @@ func _build(seed_val: int, local_pid: StringName):
 	return app_root
 
 
-## 三端都给 player 机甲设李 pilot_051（走 set_pilot 保持三端注册一致）
+## 三端都给 player 机甲设李 pilot_053（走 set_pilot 保持三端注册一致）
 func _setup_li_3(h, c1, c2) -> String:
 	for app in [h, c1, c2]:
 		var gs = app.battle.context.game_state
@@ -61,9 +61,9 @@ func _setup_li_3(h, c1, c2) -> String:
 		if mech == null:
 			return "player 机甲不存在"
 		var cdb = app.battle.context.card_database
-		var pdef = cdb.get_card(&"pilot_051_李")
+		var pdef = cdb.get_card(&"pilot_053_李")
 		if pdef == null:
-			return "pilot_051_李 定义不存在"
+			return "pilot_053_李 定义不存在"
 		var inst_id: StringName = gs.next_id(&"card")
 		var card = _CardInstance.new(inst_id, pdef)
 		card.owner_player_id = &"player"
@@ -200,10 +200,10 @@ func test_p051_e1_button_then_intercept() -> Variant:
 		ds.event_deck.insert(0, li_card_id)
 
 	# host 点 e1 按钮：equipment_active op 三端执行
-	h._net_exec("equipment_active", {"card_instance_id": _li_instance_id(h), "effect_id": &"pilot_051_effect_01"})
+	h._net_exec("equipment_active", {"card_instance_id": _li_instance_id(h), "effect_id": &"pilot_053_effect_01"})
 	await _pump(3)
-	c1._apply_remote_input("equipment_active", {"card_instance_id": _li_instance_id(h), "effect_id": &"pilot_051_effect_01"})
-	c2._apply_remote_input("equipment_active", {"card_instance_id": _li_instance_id(h), "effect_id": &"pilot_051_effect_01"})
+	c1._apply_remote_input("equipment_active", {"card_instance_id": _li_instance_id(h), "effect_id": &"pilot_053_effect_01"})
+	c2._apply_remote_input("equipment_active", {"card_instance_id": _li_instance_id(h), "effect_id": &"pilot_053_effect_01"})
 	await _pump(5)
 
 	var diag: Array = []
@@ -316,7 +316,7 @@ func test_p051_e2_transfer_double_window() -> Variant:
 	var opg: Dictionary = te_h._once_per_game_used
 	var li_id: StringName = _li_instance_id(h)
 	diag.append("once_per_game_used=%s 李实例=%s 期望key=%s" % [
-		str(opg), String(li_id), "%s:pilot_051_effect_02" % String(li_id)])
+		str(opg), String(li_id), "%s:pilot_053_effect_02" % String(li_id)])
 	var e2def = null
 	var all_p: Dictionary = h.battle.context.timing_engine._generate_all_effects() if h.battle.context.timing_engine.has_method("_generate_all_effects") else {}
 	diag.append("e2max=%s" % str(e2def))
@@ -341,7 +341,7 @@ func test_p051_e2_transfer_double_window() -> Variant:
 	var q_c2: String = _event_slot_card_name(c2, &"player")
 	if not (q_h == q_c1 and q_c1 == q_c2 and q_h != "空"):
 		errs3.append("转设后player槽不同步: %s/%s/%s" % [q_h, q_c1, q_c2])
-	var want_key: String = "%s:pilot_051_effect_02" % String(li_id)
+	var want_key: String = "%s:pilot_053_effect_02" % String(li_id)
 	if not opg.has(want_key):
 		errs3.append("once_per_game键缺失: 期望=%s 实际=%s" % [want_key, str(opg.keys())])
 	await _free3(h, c1, c2)

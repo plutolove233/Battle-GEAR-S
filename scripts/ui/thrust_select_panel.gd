@@ -7,7 +7,7 @@ extends PanelContainer
 class_name ThrustSelectPanel
 
 ## 选择完成时发射（玩家点确认后，可能为空数组=不打出）。
-## selected_extra_ids：掩护窗口附加复选框选项选中的 effect_id（洛尔恩 pilot_062 转化掩护等）。
+## selected_extra_ids：掩护窗口附加复选框选项选中的 effect_id（洛尔恩 pilot_063 转化掩护等）。
 signal selection_completed(selected_card_ids: Array[StringName], selected_extra_ids: Array[StringName])
 ## 取消
 signal selection_cancelled()
@@ -135,7 +135,7 @@ func _refresh() -> void:
 			btn.modulate = Color(1.2, 1.2, 0.8)
 		btn.pressed.connect(func(): _on_card_toggle(cid))
 		scroll_content.add_child(btn)
-	# 附加复选框选项（洛尔恩 pilot_062 转化掩护等）：独立 toggle，与卡牌多选互不影响。
+	# 附加复选框选项（洛尔恩 pilot_063 转化掩护等）：独立 toggle，与卡牌多选互不影响。
 	for opt in _extra_options:
 		var eid: StringName = StringName(opt.get("effect_id", &""))
 		if eid == &"":

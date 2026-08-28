@@ -953,23 +953,23 @@ func transfer_action_cards(params: Dictionary) -> void:
 				context.unregister_hand_card_availability(card_id)
 			if card.def != null and card.def.card_kind == &"action" and context.has_method("register_hand_card_availability"):
 				context.register_hand_card_availability(card_id)
-			# pilot_021 塔莉娅"策"标签：行动牌从塔莉娅手牌转移到其他玩家手牌（效果1交牌/
+			# pilot_022 塔莉娅"策"标签：行动牌从塔莉娅手牌转移到其他玩家手牌（效果1交牌/
 			# 识破偷牌/玛丽尔偷牌都计入）时打"策"标签 + 清"禁"标签。
 			# from_player 装备塔莉娅才打（多塔莉娅各记各的，owner=塔莉娅拥有者）。
 			if card.def != null and card.def.card_kind == &"action":
-				var _p021_taliyah_from: StringName = _ActionPilotEffects.pilot_021_taliyah_owner_for_player(context.game_state, from_player_id)
+				var _p021_taliyah_from: StringName = _ActionPilotEffects.pilot_022_taliyah_owner_for_player(context.game_state, from_player_id)
 				if _p021_taliyah_from != &"":
-					_ActionPilotEffects.pilot_021_on_card_left_taliyah_hand(card, _p021_taliyah_from)
+					_ActionPilotEffects.pilot_022_on_card_left_taliyah_hand(card, _p021_taliyah_from)
 				# 温斯顿"联"标签：牌离开当前持有者手牌即失效（再转移/离场清标签）。
 				# 若本转移是温斯顿效果1交牌，下面按 _lian_tag_on_transfer 重新打新 owner 的标签。
 				if card.has_method(&"remove_tag"):
 					card.remove_tag(_ActionPilotEffects.LIAN_TAG)
-				# pilot_087 塔妮拉"交"标签：行动牌从塔妮拉手牌转移到其他玩家手牌时打"交"标签
+				# pilot_086 塔妮拉"交"标签：行动牌从塔妮拉手牌转移到其他玩家手牌时打"交"标签
 				# （效果1主动交牌计入；跨玩家 transfer 天然触发）。从塔妮拉手牌转出时打
 				# （owner=塔妮拉拥有者），供 USE_ACTION_SETTLE 挂钩触发双方各抽1。
-				var _p087_jiao_from: StringName = _ActionPilotEffects.pilot_087_tanila_owner_for_player(context.game_state, from_player_id)
+				var _p087_jiao_from: StringName = _ActionPilotEffects.pilot_086_tanila_owner_for_player(context.game_state, from_player_id)
 				if _p087_jiao_from != &"" and card.has_method(&"add_tag"):
-					_ActionPilotEffects.pilot_087_tag_jiao(card, _p087_jiao_from)
+					_ActionPilotEffects.pilot_086_tag_jiao(card, _p087_jiao_from)
 			# 温斯顿效果1交牌：打"联"标签（owner=温斯顿玩家），转移完成即生效
 			if not _lian_tag_on_transfer.is_empty() and card != null and card.has_method(&"add_tag"):
 				# 参数结构嵌套：{lian_tag: {owner: ...}}（_resolve_atomic_params 已递归解析 $ 表达式）
@@ -2267,20 +2267,20 @@ func steal_action_card(params: Dictionary) -> void:
 		var card = context.game_state.cards.get(card_id)
 		if card != null:
 			card.owner_player_id = to_player_id
-			# pilot_021 塔莉娅"策"标签：从塔莉娅手牌偷走（识破/玛丽尔偷牌）也计入，
+			# pilot_022 塔莉娅"策"标签：从塔莉娅手牌偷走（识破/玛丽尔偷牌）也计入，
 			# 打"策"标签 + 清"禁"标签（from_player 装备塔莉娅才打）。
 			if card.def != null and card.def.card_kind == &"action":
-				var _p021_taliyah_stolen: StringName = _ActionPilotEffects.pilot_021_taliyah_owner_for_player(context.game_state, from_player_id)
+				var _p021_taliyah_stolen: StringName = _ActionPilotEffects.pilot_022_taliyah_owner_for_player(context.game_state, from_player_id)
 				if _p021_taliyah_stolen != &"":
-					_ActionPilotEffects.pilot_021_on_card_left_taliyah_hand(card, _p021_taliyah_stolen)
+					_ActionPilotEffects.pilot_022_on_card_left_taliyah_hand(card, _p021_taliyah_stolen)
 				# 温斯顿"联"标签：牌离开当前持有者手牌（被偷走）即失效。
 				if card.has_method(&"remove_tag"):
 					card.remove_tag(_ActionPilotEffects.LIAN_TAG)
-				# pilot_087 塔妮拉"交"标签：被偷走也计入（from_player 装备塔妮拉时打，
+				# pilot_086 塔妮拉"交"标签：被偷走也计入（from_player 装备塔妮拉时打，
 				# owner=塔妮拉拥有者）。
-				var _p087_jiao_stolen: StringName = _ActionPilotEffects.pilot_087_tanila_owner_for_player(context.game_state, from_player_id)
+				var _p087_jiao_stolen: StringName = _ActionPilotEffects.pilot_086_tanila_owner_for_player(context.game_state, from_player_id)
 				if _p087_jiao_stolen != &"" and card.has_method(&"add_tag"):
-					_ActionPilotEffects.pilot_087_tag_jiao(card, _p087_jiao_stolen)
+					_ActionPilotEffects.pilot_086_tag_jiao(card, _p087_jiao_stolen)
 
 	for card_id in stolen:
 		context.effect_engine.fire_hook(&"ON_CARD_TRANSFERRED", {
@@ -3475,9 +3475,9 @@ func increment_variable(params: Dictionary, payload: Dictionary = {}) -> void:
 
 ## 通用：在来源牌实例的 counters 上设置一个键值（布尔/整数）。
 ## 用于"开关型"效果：DIRECT 按钮翻转 flag，LISTEN 效果用 CARD_COUNTER_IS 条件读取 flag 决定是否发动。
-## 如银雪 pilot_065 窥牌拦截开关（默认启用，可手动禁用以免频繁弹窗阻塞）。
+## 如银雪 pilot_066 窥牌拦截开关（默认启用，可手动禁用以免频繁弹窗阻塞）。
 ## params: {key, value(默认true), card_instance_id(可选，$-表达式或回退 binding_context.card_instance_id)}
-## 键名建议带来源前缀避免冲突（如 "pilot_065_intercept"）。
+## 键名建议带来源前缀避免冲突（如 "pilot_066_intercept"）。
 func set_card_counter(params: Dictionary, payload: Dictionary = {}) -> void:
 	if context == null or context.game_state == null:
 		return
@@ -3604,7 +3604,7 @@ func toggle_effect_on_mech(params: Dictionary) -> void:
 		mech.statuses = mech.statuses.filter(func(s): return not (s.get("type", &"") == &"effect_cancelled" and s.get("effect_id", &"") == effect_id))
 
 
-## 使装备效果无效直到回合结束
+## 使装备效果无效（UNTIL_TURN_END 回合结束清除 / UNTIL_ATTACK_SETTLE 本次攻击结算清除）
 func negate_equipment_effect(params: Dictionary) -> void:
 	var target_card_id: StringName = params.get("target_card_id", params.get("card_instance_id", &""))
 	var duration: String = String(params.get("duration", "THIS_TURN"))
@@ -3615,7 +3615,22 @@ func negate_equipment_effect(params: Dictionary) -> void:
 	var card = context.game_state.get_card(target_card_id)
 	if card == null:
 		return
-	card.effect_negated = true  # TurnService 回合结束统一清除（UNTIL_TURN_END 语义）
+	card.effect_negated = true
+	# UNTIL_ATTACK_SETTLE（近战特装/极电装臂）：本次攻击结算时恢复。
+	# 通过 params.action_id（=触发攻击动作 id）把被压制牌记录到攻击动作 record._negated_cards，
+	# 由 attack_action._step_cleanup 在 ATTACK_SETTLE 后统一还原。攻击动作不可达（单测/registry
+	# 缺失）时回退本回合结束清除（TurnService 兜底）。
+	if duration == "UNTIL_ATTACK_SETTLE":
+		var aid: StringName = StringName(params.get("action_id", params.get("attack_action_id", &"")))
+		if aid != &"" and context != null and context.action_registry != null:
+			var atk = context.action_registry.get_action(aid)
+			if atk != null:
+				var negated: Array = atk.record.get("_negated_cards", [])
+				if not negated.has(target_card_id):
+					negated.append(target_card_id)
+				atk.record["_negated_cards"] = negated
+				return
+	# THIS_TURN / UNTIL_TURN_END / 攻击动作不可达：TurnService 回合结束统一清除
 
 
 ## 无视动力移动

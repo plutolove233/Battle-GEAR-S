@@ -61,9 +61,9 @@ func _setup_pilots_3(h, c1, c2) -> String:
 		app.battle.context.game_setup_service.set_pilot(mech_p.mech_id, card080)
 		# 李 -> enemy 方
 		var mech_e = gs.get_mech_for_player(&"enemy")
-		var pdef051 = cdb.get_card(&"pilot_051_李")
+		var pdef051 = cdb.get_card(&"pilot_053_李")
 		if pdef051 == null:
-			return "pilot_051_李 定义不存在"
+			return "pilot_053_李 定义不存在"
 		var iid051: StringName = gs.next_id(&"card")
 		var card051 = _CardInstance.new(iid051, pdef051)
 		card051.owner_player_id = &"enemy"
@@ -243,7 +243,7 @@ func test_p080_event_li_3ends() -> Variant:
 				var phase: String = ""
 				if pend.has(a_aid):
 					phase = String(pend[a_aid].get("phase", &""))
-				if phase == "pilot_051_intercept":
+				if phase == "pilot_053_intercept":
 					intercept_cnt += 1
 					# 归属端真实取消路径：_on_choice_cancelled -> _net_exec(resume_effect cancelled)
 					var owner_aid: StringName = app._effect_choice_action_id

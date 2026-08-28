@@ -115,7 +115,7 @@ func _step_replace_place(action: Action) -> Dictionary:
 ## LISTEN -> register_permanent_listener(listen_timing)；DIRECT 无 listen_timing ->
 ## 注册到 effect_id 虚拟时点（equipment_panel 扫描建按钮）；派生型（强化/陷落限制）
 ## 跳过监听器（数值实时重算 / 状态由 apply_status_grants 施加）。
-## 李 pilot_051 e2 在 EVENT_SET_BEFORE 拦截取消时写 record.event_set_cancelled=true
+## 李 pilot_053 e2 在 EVENT_SET_BEFORE 拦截取消时写 record.event_set_cancelled=true
 ## 并自行摘牌（弃置/转设我方区域），此后本动作剩余步骤全部空跑（不注册/不结算/不弃置）。
 func _step_activate(action: Action) -> Dictionary:
 	if bool(action.record.get("event_set_cancelled", false)):

@@ -98,10 +98,10 @@ func _step_validate_card(action: Action) -> Dictionary:
 		if not _ActionPilotEffects.is_card_type_controlled_by(_ctrl_owner_mech.mech_id, _ctrl_type, player_id):
 			return {"error": "无权使用此受控牌（未控制该类型）"}
 
-	# pilot_021 塔莉娅"禁"标签：效果1抽的3张行动牌本回合塔莉娅无法使用（使用前检查）。
+	# pilot_022 塔莉娅"禁"标签：效果1抽的3张行动牌本回合塔莉娅无法使用（使用前检查）。
 	# 禁标签 owner=塔莉娅玩家（打标签时的持有者），牌离开塔莉娅手牌（转移）时清除，
 	# 故仅塔莉娅本回合手牌中的禁牌会命中。转化/受控路径的牌若带禁标签同样不可用。
-	if _ActionPilotEffects.pilot_021_has_jin(card, player_id):
+	if _ActionPilotEffects.pilot_022_has_jin(card, player_id):
 		return {"error": "本回合无法使用（塔莉娅赐予牌）"}
 
 	# 检查攻击牌的攻击次数限制
